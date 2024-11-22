@@ -1,0 +1,1 @@
+# Initialize self_awareness as a Python package
