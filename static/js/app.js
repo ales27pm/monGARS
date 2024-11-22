@@ -1,7 +1,10 @@
 
-import MemoryForm from '../components/MemoryForm.vue';
-import GraphView from '../components/GraphView.vue';
-import SearchView from '../components/SearchView.vue';
+import Vue from 'vue';
+
+// Dynamically import Vue components
+const MemoryForm = () => import('./components/MemoryForm.vue');
+const GraphView = () => import('./components/GraphView.vue');
+const SearchView = () => import('./components/SearchView.vue');
 
 new Vue({
   el: '#app',
