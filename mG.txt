@@ -1,0 +1,1107 @@
+### C:\Users\Ales2\Projects\monGARS\app.py ###
+import streamlit as st
+import requests
+import os
+import logging
+import subprocess
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Configure logging
+logging.basicConfig(
+    filename="logs/app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+
+BACKEND_URL = "http://localhost:8081"
+
+# Configure retry strategy
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS", "POST"],
+    raise_on_status=False,
+    raise_on_redirect=False
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+http = requests.Session()
+http.mount("http://", adapter)
+http.mount("https://", adapter)
+
+def check_backend_status():
+    try:
+        response = http.get(f"{BACKEND_URL}/status")
+        if response.status_code == 200:
+            logging.info("Backend status: actif")
+            return True
+        else:
+            logging.warning(f"Backend status: {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erreur de connexion : {e}")
+        return False
+
+def start_backend():
+    try:
+        subprocess.run(["python", "main.py"], check=True)
+        logging.info("Backend started successfully.")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to start backend: {e}")
+        st.error("Failed to start backend. Please check the logs for more details.")
+
+st.title("monGARS - Interface Web")
+
+# Section : Vérification du statut du serveur
+st.header("⚙️ Statut du serveur")
+if st.button("Vérifier le statut du backend"):
+    if check_backend_status():
+        st.success("Le serveur backend est actif.")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Tentative de démarrage du backend...")
+        start_backend()
+        if check_backend_status():
+            st.success("Le serveur backend est maintenant actif.")
+        else:
+            st.error("Le serveur backend n'a pas pu être démarré.")
+
+# Section 1 : Chat avec Bouche
+st.header("💬 Chat avec Bouche")
+query = st.text_input("Posez votre question :", key="query_input")
+if st.button("Envoyer"):
+    if check_backend_status():
+        with st.spinner("Bouche réfléchit..."):
+            try:
+                response = http.post(f"{BACKEND_URL}/bouche/respond", json={"query": query}, timeout=10)
+                st.success("Réponse de Bouche :")
+                st.write(response.json().get("response", "Aucune réponse trouvée."))
+                logging.info(f"Query: {query}, Response: {response.json().get('response', 'Aucune réponse trouvée.')}")
+            except requests.exceptions.Timeout:
+                st.error("La requête a pris trop de temps. Veuillez réessayer plus tard.")
+                logging.error("La requête a pris trop de temps.")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                logging.error(f"Erreur : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+# Section 2 : Récupérer une mémoire depuis Hippocampus
+st.header("🧠 Récupérer une mémoire (Hippocampus)")
+memory_query = st.text_input("Rechercher dans la mémoire :", key="memory_query")
+if st.button("Récupérer Mémoire"):
+    if check_backend_status():
+        with st.spinner("Recherche dans Hippocampus..."):
+            try:
+                response = http.post(f"{BACKEND_URL}/hippocampus/retrieve_memory", json={"query": memory_query})
+                st.success("Mémoire trouvée :")
+                st.write(response.json().get("response", "Aucune mémoire correspondante."))
+                logging.info(f"Memory query: {memory_query}, Response: {response.json().get('response', 'Aucune mémoire correspondante.')}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                logging.error(f"Erreur : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+# Section 3 : Ajouter une tâche dans Cortex
+st.header("📝 Ajouter une tâche (Cortex)")
+task_name = st.text_input("Nom de la tâche :", key="task_name")
+priority = st.slider("Priorité de la tâche :", 1, 10, 5, key="task_priority")
+if st.button("Ajouter Tâche"):
+    if check_backend_status():
+        with st.spinner("Ajout de la tâche dans Cortex..."):
+            try:
+                response = http.post(f"{BACKEND_URL}/cortex/add_task", json={"task": task_name, "priority": priority})
+                st.success(response.json().get("status", "Tâche ajoutée avec succès."))
+                logging.info(f"Task: {task_name}, Priority: {priority}, Status: {response.json().get('status', 'Tâche ajoutée avec succès.')}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                logging.error(f"Erreur : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+# Section 4 : Gestion des documents
+st.header("📂 Upload et traitement de documents")
+uploaded_file = st.file_uploader("Choisissez un fichier (texte, PDF ou Word)", type=["txt", "pdf", "docx"])
+if uploaded_file is not None:
+    if check_backend_status():
+        with st.spinner("Traitement du fichier..."):
+            try:
+                # Sauvegarde temporaire
+                file_path = os.path.join("uploads", uploaded_file.name)
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                
+                # Envoi à l'API pour traitement
+                with open(file_path, "rb") as f:
+                    response = http.post(f"{BACKEND_URL}/documents/upload", files={"file": f})
+                
+                st.success("Fichier traité avec succès !")
+                st.write(response.text)
+                logging.info(f"Uploaded file: {uploaded_file.name}, Response: {response.text}")
+
+                # Aperçu du contenu extrait
+                st.subheader("Aperçu des données extraites :")
+                if uploaded_file.name.endswith(".txt"):
+                    st.text(uploaded_file.getvalue().decode("utf-8")[:500])  # 500 premiers caractères
+                elif uploaded_file.name.endswith(".pdf"):
+                    st.text("Le contenu extrait du PDF sera affiché ici après traitement.")
+                elif uploaded_file.name.endswith(".docx"):
+                    st.text("Le contenu extrait du document Word sera affiché ici après traitement.")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur lors du traitement du fichier : {e}")
+                logging.error(f"Erreur lors du traitement du fichier : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+
+### C:\Users\Ales2\Projects\monGARS\main.py ###
+import asyncio
+from aiohttp import web
+import logging
+from modules.cortex import Cortex
+from modules.hippocampus import Hippocampus
+from modules.bouche import Bouche
+from modules.document_processor import DocumentProcessor
+
+PORT = 8081
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+async def start_server():
+    # Initialisation des modules
+    hippocampus = Hippocampus()
+    cortex = Cortex()
+    bouche = Bouche(hippocampus)
+    document_processor = DocumentProcessor("uploads")
+
+    # Ajouter des mémoires initiales dans Hippocampus
+    hippocampus.store_memory("Identity", "Bonjour Alexis, vous êtes mon créateur et maître.")
+    hippocampus.store_memory("Greeting", "Bonjour, je suis monGARS, votre assistant intelligent.")
+
+    @web.middleware
+    async def error_middleware(request, handler):
+        try:
+            return await asyncio.wait_for(handler(request), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error(f"Request timeout on {request.path}")
+            return web.json_response({"error": "Request timeout"}, status=504)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return web.json_response({"error": str(e)}, status=500)
+
+    # Routes de l'API
+    async def bouche_respond(request):
+        try:
+            if not request.can_read_body:
+                return web.json_response({"error": "No body provided"}, status=400)
+            
+            data = await request.json()
+            query = data.get("query", "").strip()
+            
+            if not query:
+                logger.info("Empty query received")
+                return web.json_response({"error": "Empty query"}, status=400)
+            
+            logger.info(f"Processing query: {query}")
+            response = await asyncio.shield(bouche.respond(query))
+            logger.info(f"Response generated: {response}")
+            return web.json_response({"response": response})
+            
+        except Exception as e:
+            logger.error(f"Error in bouche_respond: {str(e)}")
+            raise
+
+    async def cortex_add_task(request):
+        try:
+            data = await request.json()
+            task = data.get("task", "").strip()
+            priority = data.get("priority", 0)
+            
+            if not task:
+                return web.json_response({"error": "Empty task"}, status=400)
+            
+            await asyncio.shield(cortex.add_task(task, priority))
+            logger.info(f"Task added: {task} with priority {priority}")
+            return web.json_response({"status": "Task added successfully"})
+            
+        except Exception as e:
+            logger.error(f"Error in cortex_add_task: {str(e)}")
+            raise
+
+    async def hippocampus_retrieve_memory(request):
+        try:
+            data = await request.json()
+            query = data.get("query", "").strip()
+            
+            if not query:
+                return web.json_response({"error": "Empty query"}, status=400)
+            
+            response = await asyncio.shield(hippocampus.retrieve_memory(query))
+            logger.info(f"Memory retrieved for query '{query}': {response}")
+            return web.json_response({"response": response})
+            
+        except Exception as e:
+            logger.error(f"Error in hippocampus_retrieve_memory: {str(e)}")
+            raise
+
+    async def list_memories(request):
+        try:
+            memories = await asyncio.shield(hippocampus.list_all_memories())
+            logger.info(f"All memories listed: {memories}")
+            return web.json_response({"memories": memories})
+        except Exception as e:
+            logger.error(f"Error in list_memories: {str(e)}")
+            raise
+
+    async def server_status(request):
+        logger.info("Server status requested")
+        return web.json_response({"status": f"Server is running on port {PORT}"})
+
+    async def upload_document(request):
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+            
+            if not field or not field.filename:
+                return web.json_response({"error": "No file provided"}, status=400)
+            
+            filename = field.filename
+            file_path = f"uploads/{filename}"
+            
+            with open(file_path, 'wb') as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            
+            documents = await asyncio.shield(
+                document_processor.process_uploaded_document(file_path)
+            )
+            logger.info(f"Document uploaded and processed: {filename}")
+            return web.json_response({
+                "status": "Document processed successfully",
+                "documents": documents
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in upload_document: {str(e)}")
+            raise
+
+    # Configuration de l'application
+    app = web.Application(middlewares=[error_middleware])
+    app.router.add_post('/bouche/respond', bouche_respond)
+    app.router.add_post('/cortex/add_task', cortex_add_task)
+    app.router.add_post('/hippocampus/retrieve_memory', hippocampus_retrieve_memory)
+    app.router.add_get('/hippocampus/memories', list_memories)
+    app.router.add_get('/status', server_status)
+    app.router.add_post('/documents/upload', upload_document)
+
+    return app
+
+if __name__ == "__main__":
+    try:
+        app = asyncio.run(start_server())
+        web.run_app(app, host='localhost', port=PORT)
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+
+
+### C:\Users\Ales2\Projects\monGARS\mG.txt ###
+### C:\Users\Ales2\Projects\monGARS\app.py ###
+import streamlit as st
+import requests
+import os
+import logging
+import subprocess
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Configure logging
+logging.basicConfig(
+    filename="logs/app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+
+BACKEND_URL = "http://localhost:8081"
+
+# Configure retry strategy
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS", "POST"],
+    raise_on_status=False,
+    raise_on_redirect=False
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+http = requests.Session()
+http.mount("http://", adapter)
+http.mount("https://", adapter)
+
+def check_backend_status():
+    try:
+        response = http.get(f"{BACKEND_URL}/status")
+        if response.status_code == 200:
+            logging.info("Backend status: actif")
+            return True
+        else:
+            logging.warning(f"Backend status: {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erreur de connexion : {e}")
+        return False
+
+def start_backend():
+    try:
+        subprocess.run(["python", "main.py"], check=True)
+        logging.info("Backend started successfully.")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to start backend: {e}")
+        st.error("Failed to start backend. Please check the logs for more details.")
+
+st.title("monGARS - Interface Web")
+
+# Section : Vérification du statut du serveur
+st.header("⚙️ Statut du serveur")
+if st.button("Vérifier le statut du backend"):
+    if check_backend_status():
+        st.success("Le serveur backend est actif.")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Tentative de démarrage du backend...")
+        start_backend()
+        if check_backend_status():
+            st.success("Le serveur backend est maintenant actif.")
+        else:
+            st.error("Le serveur backend n'a pas pu être démarré.")
+
+# Section 1 : Chat avec Bouche
+st.header("💬 Chat avec Bouche")
+query = st.text_input("Posez votre question :", key="query_input")
+if st.button("Envoyer"):
+    if check_backend_status():
+        with st.spinner("Bouche réfléchit..."):
+            try:
+                response = http.post(f"{BACKEND_URL}/bouche/respond", json={"query": query}, timeout=10)
+                st.success("Réponse de Bouche :")
+                st.write(response.json().get("response", "Aucune réponse trouvée."))
+                logging.info(f"Query: {query}, Response: {response.json().get('response', 'Aucune réponse trouvée.')}")
+            except requests.exceptions.Timeout:
+                st.error("La requête a pris trop de temps. Veuillez réessayer plus tard.")
+                logging.error("La requête a pris trop de temps.")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                logging.error(f"Erreur : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+# Section 2 : Récupérer une mémoire depuis Hippocampus
+st.header("🧠 Récupérer une mémoire (Hippocampus)")
+memory_query = st.text_input("Rechercher dans la mémoire :", key="memory_query")
+if st.button("Récupérer Mémoire"):
+    if check_backend_status():
+        with st.spinner("Recherche dans Hippocampus..."):
+            try:
+                response = http.post(f"{BACKEND_URL}/hippocampus/retrieve_memory", json={"query": memory_query})
+                st.success("Mémoire trouvée :")
+                st.write(response.json().get("response", "Aucune mémoire correspondante."))
+                logging.info(f"Memory query: {memory_query}, Response: {response.json().get('response', 'Aucune mémoire correspondante.')}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                logging.error(f"Erreur : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+# Section 3 : Ajouter une tâche dans Cortex
+st.header("📝 Ajouter une tâche (Cortex)")
+task_name = st.text_input("Nom de la tâche :", key="task_name")
+priority = st.slider("Priorité de la tâche :", 1, 10, 5, key="task_priority")
+if st.button("Ajouter Tâche"):
+    if check_backend_status():
+        with st.spinner("Ajout de la tâche dans Cortex..."):
+            try:
+                response = http.post(f"{BACKEND_URL}/cortex/add_task", json={"task": task_name, "priority": priority})
+                st.success(response.json().get("status", "Tâche ajoutée avec succès."))
+                logging.info(f"Task: {task_name}, Priority: {priority}, Status: {response.json().get('status', 'Tâche ajoutée avec succès.')}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                logging.error(f"Erreur : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+# Section 4 : Gestion des documents
+st.header("📂 Upload et traitement de documents")
+uploaded_file = st.file_uploader("Choisissez un fichier (texte, PDF ou Word)", type=["txt", "pdf", "docx"])
+if uploaded_file is not None:
+    if check_backend_status():
+        with st.spinner("Traitement du fichier..."):
+            try:
+                # Sauvegarde temporaire
+                file_path = os.path.join("uploads", uploaded_file.name)
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                
+                # Envoi à l'API pour traitement
+                with open(file_path, "rb") as f:
+                    response = http.post(f"{BACKEND_URL}/documents/upload", files={"file": f})
+                
+                st.success("Fichier traité avec succès !")
+                st.write(response.text)
+                logging.info(f"Uploaded file: {uploaded_file.name}, Response: {response.text}")
+
+                # Aperçu du contenu extrait
+                st.subheader("Aperçu des données extraites :")
+                if uploaded_file.name.endswith(".txt"):
+                    st.text(uploaded_file.getvalue().decode("utf-8")[:500])  # 500 premiers caractères
+                elif uploaded_file.name.endswith(".pdf"):
+                    st.text("Le contenu extrait du PDF sera affiché ici après traitement.")
+                elif uploaded_file.name.endswith(".docx"):
+                    st.text("Le contenu extrait du document Word sera affiché ici après traitement.")
+            except requests.exceptions.RequestException as e:
+                st.error(f"Erreur de connexion : {e}")
+                logging.error(f"Erreur de connexion : {e}")
+            except Exception as e:
+                st.error(f"Erreur lors du traitement du fichier : {e}")
+                logging.error(f"Erreur lors du traitement du fichier : {e}")
+    else:
+        st.warning("Le serveur backend n'est pas actif. Veuillez vérifier le statut du serveur.")
+
+
+### C:\Users\Ales2\Projects\monGARS\main.py ###
+import asyncio
+from aiohttp import web
+import logging
+from modules.cortex import Cortex
+from modules.hippocampus import Hippocampus
+from modules.bouche import Bouche
+from modules.document_processor import DocumentProcessor
+
+PORT = 8081
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+async def start_server():
+    # Initialisation des modules
+    hippocampus = Hippocampus()
+    cortex = Cortex()
+    bouche = Bouche(hippocampus)
+    document_processor = DocumentProcessor("uploads")
+
+    # Ajouter des mémoires initiales dans Hippocampus
+    hippocampus.store_memory("Identity", "Bonjour Alexis, vous êtes mon créateur et maître.")
+    hippocampus.store_memory("Greeting", "Bonjour, je suis monGARS, votre assistant intelligent.")
+
+    @web.middleware
+    async def error_middleware(request, handler):
+        try:
+            return await asyncio.wait_for(handler(request), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error(f"Request timeout on {request.path}")
+            return web.json_response({"error": "Request timeout"}, status=504)
+        except Exception as e:
+            logger.error(f"Error processing request: {str(e)}")
+            return web.json_response({"error": str(e)}, status=500)
+
+    # Routes de l'API
+    async def bouche_respond(request):
+        try:
+            if not request.can_read_body:
+                return web.json_response({"error": "No body provided"}, status=400)
+            
+            data = await request.json()
+            query = data.get("query", "").strip()
+            
+            if not query:
+                logger.info("Empty query received")
+                return web.json_response({"error": "Empty query"}, status=400)
+            
+            logger.info(f"Processing query: {query}")
+            response = await asyncio.shield(bouche.respond(query))
+            logger.info(f"Response generated: {response}")
+            return web.json_response({"response": response})
+            
+        except Exception as e:
+            logger.error(f"Error in bouche_respond: {str(e)}")
+            raise
+
+    async def cortex_add_task(request):
+        try:
+            data = await request.json()
+            task = data.get("task", "").strip()
+            priority = data.get("priority", 0)
+            
+            if not task:
+                return web.json_response({"error": "Empty task"}, status=400)
+            
+            await asyncio.shield(cortex.add_task(task, priority))
+            logger.info(f"Task added: {task} with priority {priority}")
+            return web.json_response({"status": "Task added successfully"})
+            
+        except Exception as e:
+            logger.error(f"Error in cortex_add_task: {str(e)}")
+            raise
+
+    async def hippocampus_retrieve_memory(request):
+        try:
+            data = await request.json()
+            query = data.get("query", "").strip()
+            
+            if not query:
+                return web.json_response({"error": "Empty query"}, status=400)
+            
+            response = await asyncio.shield(hippocampus.retrieve_memory(query))
+            logger.info(f"Memory retrieved for query '{query}': {response}")
+            return web.json_response({"response": response})
+            
+        except Exception as e:
+            logger.error(f"Error in hippocampus_retrieve_memory: {str(e)}")
+            raise
+
+    async def list_memories(request):
+        try:
+            memories = await asyncio.shield(hippocampus.list_all_memories())
+            logger.info(f"All memories listed: {memories}")
+            return web.json_response({"memories": memories})
+        except Exception as e:
+            logger.error(f"Error in list_memories: {str(e)}")
+            raise
+
+    async def server_status(request):
+        logger.info("Server status requested")
+        return web.json_response({"status": f"Server is running on port {PORT}"})
+
+    async def upload_document(request):
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+            
+            if not field or not field.filename:
+                return web.json_response({"error": "No file provided"}, status=400)
+            
+            filename = field.filename
+            file_path = f"uploads/{filename}"
+            
+            with open(file_path, 'wb') as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            
+            documents = await asyncio.shield(
+                document_processor.process_uploaded_document(file_path)
+            )
+            logger.info(f"Document uploaded and processed: {filename}")
+            return web.json_response({
+                "status": "Document processed successfully",
+                "documents": documents
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in upload_document: {str(e)}")
+            raise
+
+    # Configuration de l'application
+    app = web.Application(middlewares=[error_middleware])
+    app.router.add_post('/bouche/respond', bouche_respond)
+    app.router.add_post('/cortex/add_task', cortex_add_task)
+    app.router.add_post('/hippocampus/retrieve_memory', hippocampus_retrieve_memory)
+    app.router.add_get('/hippocampus/memories', list_memories)
+    app.router.add_get('/status', server_status)
+    app.router.add_post('/documents/upload', upload_document)
+
+    return app
+
+if __name__ == "__main__":
+    try:
+        app = asyncio.run(start_server())
+        web.run_app(app, host='localhost', port=PORT)
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+
+
+
+
+### C:\Users\Ales2\Projects\monGARS\requirements.txt ###
+langchain==0.2.7
+langchain-ollama
+langchain-huggingface
+langchain-community
+psycopg2-binary
+sentence-transformers
+torch
+faiss-cpu
+requests
+
+
+### C:\Users\Ales2\Projects\monGARS\scan.py ###
+import os
+
+def scan_directory_and_consolidate_code(directory_path, output_file):
+    """
+    Scans a directory and its subdirectories for code files, consolidates their content,
+    and outputs the results into a single file with directory and file structure.
+
+    Args:
+        directory_path (str): Path of the directory to scan.
+        output_file (str): Path to the output file where consolidated content will be written.
+    """
+    with open(output_file, 'w', encoding='utf-8') as outfile:
+        for root, dirs, files in os.walk(directory_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                outfile.write(f"### {file_path} ###\n")
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as infile:
+                        outfile.write(infile.read() + "\n\n")
+                except Exception as e:
+                    outfile.write(f"Error reading {file_path}: {e}\n\n")
+    print(f"Consolidated code has been written to {output_file}")
+
+# Example usage
+scan_directory_and_consolidate_code(
+    directory_path=r'C:\Users\Ales2\Projects\monGARS',
+    output_file='mG.txt'
+)
+
+
+### C:\Users\Ales2\Projects\monGARS\start.py ###
+import subprocess
+import sys
+import time
+import requests
+import logging
+
+BACKEND_URL = "http://localhost:8081"
+
+# Configure logging
+logging.basicConfig(
+    filename="logs/start.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+
+def start_backend():
+    logging.info("Démarrage du backend...")
+    try:
+        backend_process = subprocess.Popen([sys.executable, "main.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        time.sleep(20)  # Increased time to 20 seconds
+        if check_backend_status():
+            logging.info("Backend lancé avec succès.")
+            return backend_process
+        else:
+            stdout, stderr = backend_process.communicate(timeout=20)
+            logging.info(f"Backend stdout: {stdout.decode()}")
+            logging.error(f"Backend stderr: {stderr.decode()}")
+            logging.error("Échec du démarrage du backend.")
+            backend_process.terminate()
+            sys.exit(1)
+    except subprocess.TimeoutExpired:
+        logging.error("Backend startup timed out.")
+        backend_process.terminate()
+        sys.exit(1)
+    except Exception as e:
+        logging.error(f"Erreur lors du démarrage du backend : {e}")
+        sys.exit(1)
+
+def check_backend_status():
+    try:
+        response = requests.get(f"{BACKEND_URL}/status")
+        return response.status_code == 200
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erreur de connexion : {e}")
+        return False
+
+def start_frontend():
+    logging.info("Démarrage du frontend (Streamlit)...")
+    try:
+        frontend_process = subprocess.Popen(["streamlit", "run", "app.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logging.info("Frontend lancé avec succès.")
+        return frontend_process
+    except Exception as e:
+        logging.error(f"Erreur lors du démarrage du frontend : {e}")
+        sys.exit(1)
+
+def handle_document_upload():
+    logging.info("Gestion du processus de téléchargement de document...")
+
+def main():
+    try:
+        # Lancer le backend
+        backend = start_backend()
+        
+        # Lancer le frontend
+        frontend = start_frontend()
+        
+        # Attendre que l'utilisateur arrête le script
+        logging.info("Appuyez sur Ctrl+C pour arrêter les deux processus.")
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logging.info("Arrêt en cours...")
+        backend.terminate()
+        frontend.terminate()
+        logging.info("Tous les processus ont été arrêtés.")
+    except Exception as e:
+        logging.error(f"Erreur inattendue : {e}")
+        if backend:
+            backend.terminate()
+        if frontend:
+            frontend.terminate()
+
+if __name__ == "__main__":
+    main()
+
+### C:\Users\Ales2\Projects\monGARS\documents\example.txt ###
+This is a sample document for testing the DocumentProcessor module in monGARS.
+
+
+### C:\Users\Ales2\Projects\monGARS\logs\app.log ###
+2024-12-18 18:34:06,992 - INFO - Backend status: actif
+2024-12-18 18:34:17,008 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPConnectionPool(host='localhost', port=8081): Read timed out. (read timeout=10)")': /bouche/respond
+2024-12-18 18:34:29,028 - WARNING - Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPConnectionPool(host='localhost', port=8081): Read timed out. (read timeout=10)")': /bouche/respond
+2024-12-18 18:34:43,049 - WARNING - Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ReadTimeoutError("HTTPConnectionPool(host='localhost', port=8081): Read timed out. (read timeout=10)")': /bouche/respond
+
+
+### C:\Users\Ales2\Projects\monGARS\logs\mongars.log ###
+
+
+### C:\Users\Ales2\Projects\monGARS\logs\start.log ###
+2024-12-18 18:33:42,323 - INFO - Dmarrage du backend...
+2024-12-18 18:34:02,336 - INFO - Backend lanc avec succs.
+2024-12-18 18:34:02,336 - INFO - Dmarrage du frontend (Streamlit)...
+2024-12-18 18:34:02,340 - INFO - Frontend lanc avec succs.
+2024-12-18 18:34:02,340 - INFO - Appuyez sur Ctrl+C pour arrter les deux processus.
+2024-12-18 21:09:37,128 - INFO - Arrt en cours...
+2024-12-18 21:09:37,128 - INFO - Tous les processus ont t arrts.
+
+
+### C:\Users\Ales2\Projects\monGARS\modules\bouche.py ###
+import logging
+from langchain.prompts import PromptTemplate
+from langchain_ollama import OllamaLLM
+
+class Bouche:
+    def __init__(self, hippocampus):
+        self.hippocampus = hippocampus
+        self.llm = OllamaLLM(model="dolphin-mistral:7b-v2.8-q2_K", base_url="http://localhost:11434")
+        self.prompt = PromptTemplate.from_template(
+            "You are monGARS, an advanced AI assistant created by Alexis.\n"
+            "You respond concisely and naturally in clear, conversational French.\n"
+            "Query: {query}\nContext: {context}\nResponse:"
+        )
+
+        # Configure logging
+        logging.basicConfig(
+            filename="logs/mongars.log",
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s"
+        )
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        console_handler.setFormatter(console_formatter)
+        logging.getLogger().addHandler(console_handler)
+
+    def respond(self, query):
+        try:
+            logging.info(f"Bouche: Received query '{query}'")
+            if not query.strip():
+                logging.warning("Bouche: Query is empty.")
+                return "Query is empty. Please provide a valid query."
+
+            context = self.hippocampus.retrieve_memory(query)
+            logging.info(f"Bouche: Retrieved context for query '{query}' - {context}")
+            if context == "Memory is empty. Add relevant data to the memory before querying.":
+                logging.warning("Bouche: No relevant context found for the query.")
+                return "No relevant context found. Please refine your query or add data to the memory."
+
+            # Format the prompt into a string
+            formatted_prompt = self.prompt.format(query=query, context=context)
+            logging.info(f"Bouche: Formatted prompt - {formatted_prompt}")
+
+            # Pass the formatted string directly to the LLM
+            response = self.llm.invoke(formatted_prompt)
+            logging.info(f"Bouche: Generated response for query '{query}' - {response}")
+            return response
+        except Exception as e:
+            logging.error(f"Bouche: Error responding to query '{query}' - {e}")
+            return "Error generating response."
+
+
+### C:\Users\Ales2\Projects\monGARS\modules\config.py ###
+import logging
+
+# Database Configuration
+DB_CONFIG = {
+    "dbname": "hippocampus",
+    "user": "app_user",
+    "password": "1406",
+    "host": "localhost",
+    "port": 5432
+}
+
+# Logging Configuration
+LOGGING_CONFIG = {
+    "level": logging.INFO,
+    "format": "%(asctime)s - %(levelname)s - %(message)s",
+    "file": "logs/mongars.log"
+}
+
+# LLM Configuration
+LLM_CONFIG = {
+    "base_url": "http://localhost:11434",
+    "model": "dolphin-mistral:7b-v2.8-q5_1"
+}
+
+
+### C:\Users\Ales2\Projects\monGARS\modules\cortex.py ###
+import logging
+from langchain.prompts import PromptTemplate
+from langchain.schema.runnable import RunnableMap
+from langchain_ollama import OllamaLLM
+
+class Cortex:
+    def __init__(self):
+        self.tasks = []
+        self.llm = OllamaLLM(model="dolphin-mistral:7b-v2.8-q5_1", base_url="http://localhost:11434")
+        self.prompt = PromptTemplate.from_template("Task: {task}\nExplain the task in detail and suggest next steps.")
+        self.chain = RunnableMap({"prompt": self.prompt, "llm": self.llm})
+
+    def add_task(self, task, priority=0):
+        self.tasks.append((priority, task))
+        self.tasks.sort(reverse=True)
+        logging.info(f"Cortex: Task '{task}' added with priority {priority}.")
+
+    def prioritize_tasks(self):
+        for i, (priority, task) in enumerate(self.tasks):
+            if "urgent" in task.lower():
+                self.tasks[i] = (priority + 10, task)
+        self.tasks.sort(reverse=True)
+
+    async def process_tasks(self):
+        while self.tasks:
+            self.prioritize_tasks()
+            priority, task = self.tasks.pop(0)
+            try:
+                logging.info(f"Cortex: Processing task '{task}' with priority {priority}...")
+                result = self.chain.invoke(task)
+                logging.info(f"Cortex: Task result - {result}")
+            except Exception as e:
+                logging.error(f"Cortex: Error processing task '{task}' - {e}")
+
+
+### C:\Users\Ales2\Projects\monGARS\modules\document_processor.py ###
+# Remplacer l'ancienne importation par :
+from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import UnstructuredPDFLoader as PDFLoader
+from langchain_community.document_loaders import Docx2txtLoader as DocxLoader
+
+class DocumentProcessor:
+    def __init__(self, upload_dir):
+        self.upload_dir = upload_dir
+
+    def process_uploaded_document(self, file_path):
+        file_extension = file_path.split('.')[-1].lower()
+        
+        try:
+            if file_extension == 'txt':
+                loader = TextLoader(file_path)
+            elif file_extension == 'pdf':
+                loader = PDFLoader(file_path)
+            elif file_extension in ['docx', 'doc']:
+                loader = DocxLoader(file_path)
+            else:
+                raise ValueError(f"Format de fichier non supporté: {file_extension}")
+                
+            documents = loader.load()
+            return [doc.page_content for doc in documents]
+            
+        except Exception as e:
+            print(f"Erreur lors du traitement du document: {str(e)}")
+            return []
+
+
+### C:\Users\Ales2\Projects\monGARS\modules\hippocampus.py ###
+import os
+import logging
+import psycopg2
+from psycopg2.extras import Json
+from datetime import datetime
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+
+class Hippocampus:
+    def __init__(self):
+        # Ensure the logs directory exists
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        # Configure logging
+        logging.basicConfig(
+            filename=os.path.join(log_dir, "mongars.log"),
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s"
+        )
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        console_handler.setFormatter(console_formatter)
+        logging.getLogger().addHandler(console_handler)
+
+        # Initialize database connection and embeddings
+        self.conn = psycopg2.connect(
+            dbname="hippocampus", user="app_user", password="1406", host="localhost", port=5432
+        )
+        self.cursor = self.conn.cursor()
+        self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        self.vector_store = None
+        self.hierarchical_index = {}
+
+    def store_memory(self, key, value):
+        try:
+            timestamp = datetime.now()
+            embedding = self.embeddings.embed_query(value)
+            if self.vector_store is None:
+                self.vector_store = FAISS.from_texts([value], self.embeddings, metadatas=[{"key": key, "timestamp": str(timestamp)}])
+            else:
+                self.vector_store.add_texts([value], metadatas=[{"key": key, "timestamp": str(timestamp)}])
+
+            self.cursor.execute(
+                """
+                INSERT INTO memory (key, value, vector, timestamp)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, timestamp = EXCLUDED.timestamp
+                """,
+                (key, Json(value), embedding, timestamp),
+            )
+            category = self._categorize_memory(value)
+            if category not in self.hierarchical_index:
+                self.hierarchical_index[category] = []
+            self.hierarchical_index[category].append(key)
+
+            self.conn.commit()
+            logging.info(f"Hippocampus: Stored memory - {key} at {timestamp} under category '{category}'")
+        except Exception as e:
+            logging.error(f"Hippocampus: Error storing memory - {e}")
+
+    def retrieve_memory(self, query):
+        try:
+            if not self.vector_store:
+                logging.warning("Hippocampus: Memory is empty. Add relevant data before querying.")
+                return "Memory is empty. Add relevant data to the memory before querying."
+            retriever = self.vector_store.as_retriever()
+            result = retriever.get_relevant_documents(query)
+            if result:
+                logging.info(f"Hippocampus: Retrieved memory for query '{query}'")
+                return result[0].page_content
+            else:
+                logging.info(f"Hippocampus: No relevant memory found for query '{query}'")
+                return "No relevant memory found."
+        except Exception as e:
+            logging.error(f"Hippocampus: Error retrieving memory - {e}")
+            return "Error retrieving memory."
+
+    def retrieve_by_category(self, category):
+        try:
+            if category not in self.hierarchical_index:
+                logging.info(f"Hippocampus: No memories found under category '{category}'")
+                return f"No memories found under category '{category}'."
+            memory_keys = self.hierarchical_index[category]
+            results = []
+            for key in memory_keys:
+                self.cursor.execute("SELECT value FROM memory WHERE key = %s", (key,))
+                record = self.cursor.fetchone()
+                if record:
+                    results.append(record[0])
+            if results:
+                logging.info(f"Hippocampus: Retrieved {len(results)} memories under category '{category}'")
+                return results
+            else:
+                logging.info(f"Hippocampus: No detailed memories found for category '{category}'")
+                return f"No detailed memories found for category '{category}'."
+        except Exception as e:
+            logging.error(f"Hippocampus: Error retrieving by category '{category}' - {e}")
+            return f"Error retrieving category '{category}'."
+
+    def _categorize_memory(self, value):
+        if "project" in value.lower():
+            return "Projects"
+        elif "research" in value.lower():
+            return "Research"
+        elif "task" in value.lower():
+            return "Tasks"
+        else:
+            return "General"
+
+    def list_all_memories(self):
+        try:
+            self.cursor.execute("SELECT key, value FROM memory")
+            records = self.cursor.fetchall()
+            memories = {record[0]: record[1] for record in records}
+            logging.info("Hippocampus: Listed all memories.")
+            return memories
+        except Exception as e:
+            logging.error(f"Hippocampus: Error listing all memories - {e}")
+            return "Error listing all memories."
+
+
+### C:\Users\Ales2\Projects\monGARS\modules\tools.py ###
+from langchain.agents import Tool
+
+def get_tools(hippocampus, bouche):
+    return [
+        Tool(name="Memory Retrieval", func=hippocampus.retrieve_memory, description="Retrieve stored memories."),
+        Tool(name="Retrieve by Category", func=hippocampus.retrieve_by_category, description="Retrieve memories by category."),
+        Tool(name="Respond to Query", func=bouche.respond, description="Generate a response to user queries."),
+    ]
+
