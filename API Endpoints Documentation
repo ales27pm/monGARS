@@ -1,0 +1,39 @@
+#### **GET /api/v1/conversation/history**
+- **Description:** Retrieve the conversation history for a user.
+- **Parameters:**
+  - `user_id` (query): The ID of the user.
+- **Response:**
+  - `200 OK`: A list of conversation history entries.
+  - `403 Forbidden`: If the user is not authenticated.
+
+#### **POST /api/v1/conversation/chat**
+- **Description:** Send a chat message and receive a response.
+- **Request Body:**
+  - `message` (string): The chat message.
+  - `context` (object): Additional context for the conversation.
+  - `personality_traits` (object): Personality traits of the user.
+- **Response:**
+  - `200 OK`: The chat response.
+  - `400 Bad Request`: If the input is invalid.
+  - `401 Unauthorized`: If the user is not authenticated.
+
+#### **POST /token**
+- **Description:** Obtain an access token for authentication.
+- **Request Body:**
+  - `username` (string): The username.
+  - `password` (string): The password.
+- **Response:**
+  - `200 OK`: The access token.
+  - `401 Unauthorized`: If the credentials are invalid.
+
+#### **GET /healthz**
+- **Description:** Health check endpoint.
+- **Response:**
+  - `200 OK`: If the service is healthy.
+
+#### **GET /ready**
+- **Description:** Readiness check endpoint.
+- **Response:**
+  - `200 OK`: If the service is ready.
+  - `503 Service Unavailable`: If the service is not ready.
+```

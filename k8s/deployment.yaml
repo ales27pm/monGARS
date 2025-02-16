@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongars-workers
+  labels:
+    app: mongars-workers
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mongars-workers
+  template:
+    metadata:
+      labels:
+        app: mongars-workers
+    spec:
+      nodeSelector:
+        hardware-type: "gpu"
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+      - name: mongars-workers
+        image: yourrepo/mongars:latest
+        resources:
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+            nvidia.com/gpu: 2
+          requests:
+            cpu: "2"
+            memory: "8Gi"
+        ports:
+        - containerPort: 8000
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 3
+          periodSeconds: 5
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mongars-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mongars-workers
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60

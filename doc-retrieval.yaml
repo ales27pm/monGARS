@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doc-retrieval
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doc-retrieval
+  template:
+    metadata:
+      labels:
+        app: doc-retrieval
+    spec:
+      containers:
+      - name: doc-retrieval
+        image: yourrepo/doc-retrieval:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doc-retrieval-service
+spec:
+  selector:
+    app: doc-retrieval
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80

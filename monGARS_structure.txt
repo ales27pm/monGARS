@@ -1,0 +1,74 @@
+monGARS/
+├── .env
+├── .gitignore
+├── alembic.ini
+├── config.py
+├── docker-compose.yml
+├── Dockerfile
+├── init_db.py
+├── main.py
+├── monGARS_structure.txt
+├── pyproject.toml
+├── requirements.txt
+├── setup.py
+├── tasks.py
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── integration_test.py
+│   ├── self_training_test.py
+│   ├── property_test.py
+│   └── chaos_test.py
+├── k8s/
+│   ├── deployment.yaml
+│   ├── prometheus.yaml
+│   └── secrets.yaml
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml
+└── monGARS/
+    ├── __init__.py
+    ├── api/
+    │   ├── __init__.py
+    │   ├── authentication.py
+    │   ├── dependencies.py
+    │   └── web_api.py
+    ├── core/
+    │   ├── __init__.py
+    │   ├── caching/
+    │   │   ├── __init__.py
+    │   │   └── tiered_cache.py
+    │   ├── conversation.py
+    │   ├── evolution_engine.py
+    │   ├── llm_integration.py
+    │   ├── logging.py
+    │   ├── monitor.py
+    │   ├── neuro_symbolic/
+    │   │   ├── __init__.py
+    │   │   └── advanced_reasoner.py
+    │   ├── neurones.py
+    │   ├── personality.py
+    │   ├── security.py
+    │   ├── self_training.py
+    │   ├── social.py
+    │   ├── utils.py
+    │   ├── cortex/
+    │   │   ├── __init__.py
+    │   │   └── curiosity_engine.py
+    │   ├── mains_virtuelles.py
+    │   ├── mimicry.py
+    │   └── orchestrator.py
+└── webapp/
+    ├── manage.py
+    ├── webapp/
+    │   ├── __init__.py
+    │   ├── settings.py
+    │   ├── urls.py
+    │   └── wsgi.py
+    └── chat/
+        ├── __init__.py
+        ├── urls.py
+        ├── views.py
+        └── templates/
+            └── chat/
+                └── index.html
