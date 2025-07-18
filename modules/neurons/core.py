@@ -32,7 +32,10 @@ class NeuronManager:
                 device_map="cpu",
             )
             print("Encodeur chargé avec succès.")
-        except Exception as exc:  # pragma: no cover - library may be absent
+        except (
+            OSError,
+            ImportError,
+        ) as exc:  # pragma: no cover - expected model loading errors
             print(f"Impossible de charger l'encodeur: {exc}")
             self.model = None
 
@@ -47,7 +50,10 @@ class NeuronManager:
             raise RuntimeError("Encoder not loaded")
 
         formatted_texts = [[instruction, text] for text in texts]
-        with self.model.disable_gradient():  # type: ignore[attr-defined]
-            return self.model.encode(
-                formatted_texts, batch_size=8, show_progress_bar=False
-            )
+        disable_cm = getattr(self.model, "disable_gradient", None)
+        if disable_cm:
+            with disable_cm():
+                return self.model.encode(
+                    formatted_texts, batch_size=8, show_progress_bar=False
+                )
+        return self.model.encode(formatted_texts, batch_size=8, show_progress_bar=False)

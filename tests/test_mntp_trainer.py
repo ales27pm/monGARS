@@ -1,5 +1,4 @@
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ def temp_dir(tmp_path: Path):
     d = tmp_path / "encoders"
     d.mkdir()
     yield d
-    shutil.rmtree(d)
 
 
 def test_orchestrator_creates_encoder(temp_dir: Path, monkeypatch):
