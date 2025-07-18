@@ -1,3 +1,1 @@
-def test_placeholder():
-    assert True
-
+"""Shared pytest configuration and fixtures."""

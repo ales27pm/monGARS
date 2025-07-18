@@ -1,3 +1,1 @@
-def test_placeholder():
-    assert True
-
+"""Test package for monGARS."""
