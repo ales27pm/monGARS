@@ -1,14 +1,18 @@
 import asyncio
 import logging
-import spacy
+
 import httpx
-from monGARS.core.neurones import EmbeddingSystem
-from monGARS.config import get_settings
-from monGARS.core.init_db import async_session_factory
+import spacy
 from sqlalchemy import text
+
+from monGARS.config import get_settings
+from monGARS.core.neurones import EmbeddingSystem
+
+from ...init_db import async_session_factory
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
 
 class CuriosityEngine:
     def __init__(self):
@@ -29,14 +33,22 @@ class CuriosityEngine:
             if not await self._check_entity_in_kg(entity):
                 missing_entities.append(entity)
         if missing_entities:
-            research_query = self._formulate_research_query(missing_entities, last_query)
+            research_query = self._formulate_research_query(
+                missing_entities, last_query
+            )
             additional_context = await self._perform_research(research_query)
-            return {"status": "insufficient_knowledge", "additional_context": additional_context, "research_query": research_query}
+            return {
+                "status": "insufficient_knowledge",
+                "additional_context": additional_context,
+                "research_query": research_query,
+            }
         return {"status": "sufficient_knowledge"}
 
     async def _vector_similarity_search(self, embedding: list) -> int:
         async with async_session_factory() as session:
-            query = text("SELECT COUNT(*) FROM conversation_history WHERE vector <-> :embedding < 0.5")
+            query = text(
+                "SELECT COUNT(*) FROM conversation_history WHERE vector <-> :embedding < 0.5"
+            )
             result = await session.execute(query, {"embedding": embedding})
             count = result.scalar() or 0
             return count
@@ -44,14 +56,19 @@ class CuriosityEngine:
     async def _check_entity_in_kg(self, entity: str) -> bool:
         try:
             async with self.embedding_system.driver.session() as session:
-                result = await session.run("MATCH (n) WHERE toLower(n.name) CONTAINS toLower($entity) RETURN count(n) > 0 AS exists", entity=entity)
+                result = await session.run(
+                    "MATCH (n) WHERE toLower(n.name) CONTAINS toLower($entity) RETURN count(n) > 0 AS exists",
+                    entity=entity,
+                )
                 record = await result.single()
                 return record["exists"]
         except Exception as e:
             logger.error(f"Error checking entity in KG: {e}")
             return False
 
-    def _formulate_research_query(self, missing_entities: list, original_query: str) -> str:
+    def _formulate_research_query(
+        self, missing_entities: list, original_query: str
+    ) -> str:
         return original_query + " " + " ".join(missing_entities)
 
     async def _perform_research(self, query: str) -> str:
@@ -60,7 +77,7 @@ class CuriosityEngine:
                 response = await client.post(
                     f"{settings.DOC_RETRIEVAL_URL}/api/search",
                     json={"query": query},
-                    timeout=10
+                    timeout=10,
                 )
                 response.raise_for_status()
                 documents = response.json().get("documents", [])
