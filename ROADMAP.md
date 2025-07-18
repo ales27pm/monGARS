@@ -1,6 +1,6 @@
 # monGARS Detailed Roadmap
 
-monGARS is a modular, privacy-first AI system. The roadmap below outlines major development phases. Items marked with [x] are complete.
+monGARS is a modular, privacy-first AI system. The roadmap below outlines major development phases. Items marked with ✅ are complete.
 
 ## Phase 1 – Core Infrastructure ✅ (completed Q1 2025)
 - Establish the Cortex, Hippocampus, Neurons and Bouche modules ([#1](https://github.com/ales27pm/monGARS/pull/1)).
@@ -19,7 +19,7 @@ Milestone: system stable with extended capabilities.
 ## Phase 3 – Hardware & Performance Optimization (current – target Q3 2025)
 - Optimize CPU and memory usage for low-resource devices such as Raspberry Pi and Jetson boards.
 - Build container images for embedded hardware targets.
-- Integrate the LLM2Vec training pipeline for encoder models ([#7](https://github.com/ales27pm/monGARS/pull/7)).
+- Integrate the LLM2Vec training pipeline for encoder models ([#7](https://github.com/ales27pm/monGARS/pull/7)). ✅
 - Improve telemetry in `config.py` and finalize tiered caching.
 - Harden security policies and RBAC rules.
 
