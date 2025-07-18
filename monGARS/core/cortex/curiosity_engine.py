@@ -6,6 +6,7 @@ import spacy
 from sqlalchemy import text
 
 from monGARS.config import get_settings
+from monGARS.core.iris import Iris
 from monGARS.core.neurones import EmbeddingSystem
 
 from ...init_db import async_session_factory
@@ -15,10 +16,11 @@ settings = get_settings()
 
 
 class CuriosityEngine:
-    def __init__(self):
+    def __init__(self, iris: Iris | None = None):
         self.embedding_system = EmbeddingSystem()
         self.knowledge_gap_threshold = 0.65
         self.nlp = spacy.load("fr_core_news_sm")
+        self.iris = iris or Iris()
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         last_query = conversation_context.get("last_query", "")
@@ -84,7 +86,11 @@ class CuriosityEngine:
                 if documents:
                     summary = " ".join(doc["summary"] for doc in documents)
                     return f"Contexte supplémentaire: {summary}"
-                return "Aucun contexte supplémentaire trouvé."
             except Exception as e:
                 logger.error(f"Document retrieval error: {e}")
-                return "Échec de la récupération de documents."
+
+            logger.info("Falling back to Iris for query: %s", query)
+            result = await self.iris.search(query)
+            if result:
+                return f"Contexte supplémentaire: {result}"
+            return "Aucun contexte supplémentaire trouvé."
