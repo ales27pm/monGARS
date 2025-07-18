@@ -3,7 +3,7 @@ import logging
 import random
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -49,49 +49,51 @@ class PersonalityEngine:
         )
 
     async def load_profile(self, user_id: str) -> PersonalityProfile:
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(UserPersonality).where(UserPersonality.user_id == user_id)
-            )
-            record = result.scalar_one_or_none()
-            if record:
-                profile = PersonalityProfile(
-                    traits=record.traits,
-                    interaction_style=record.interaction_style,
-                    context_preferences=getattr(record, "context_preferences", {}),
-                    adaptation_rate=getattr(record, "adaptation_rate", 0.1),
-                    confidence=getattr(record, "confidence", 0.5),
-                )
-                self.user_profiles[user_id] = profile
-        return self.user_profiles[user_id]
+        async with self._lock:
+            try:
+                async with self._session_factory() as session:
+                    result = await session.execute(
+                        select(UserPersonality).where(
+                            UserPersonality.user_id == user_id
+                        )
+                    )
+                    record = result.scalar_one_or_none()
+                    if record:
+                        profile = PersonalityProfile(
+                            traits=record.traits,
+                            interaction_style=record.interaction_style,
+                            context_preferences=record.context_preferences,
+                            adaptation_rate=record.adaptation_rate,
+                            confidence=record.confidence,
+                        )
+                        self.user_profiles[user_id] = profile
+            except Exception as exc:
+                logger.exception("Failed to load profile for %s: %s", user_id, exc)
+            if user_id not in self.user_profiles:
+                self.user_profiles[user_id] = self._generate_default_profile()
+            return self.user_profiles[user_id]
 
     async def save_profile(self, user_id: str) -> None:
-        profile = self.user_profiles[user_id]
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(UserPersonality).where(UserPersonality.user_id == user_id)
-            )
-            record = result.scalar_one_or_none()
-            if record:
-                record.traits = profile.traits
-                record.interaction_style = profile.interaction_style
-                record.context_preferences = profile.context_preferences
-                record.adaptation_rate = profile.adaptation_rate
-                record.confidence = profile.confidence
-                record.last_updated = datetime.utcnow()
-            else:
-                session.add(
-                    UserPersonality(
-                        user_id=user_id,
-                        traits=profile.traits,
-                        interaction_style=profile.interaction_style,
-                        context_preferences=profile.context_preferences,
-                        adaptation_rate=profile.adaptation_rate,
-                        confidence=profile.confidence,
-                        last_updated=datetime.utcnow(),
+        async with self._lock:
+            if user_id not in self.user_profiles:
+                self.user_profiles[user_id] = self._generate_default_profile()
+            profile = self.user_profiles[user_id]
+            try:
+                async with self._session_factory() as session:
+                    await session.merge(
+                        UserPersonality(
+                            user_id=user_id,
+                            traits=profile.traits,
+                            interaction_style=profile.interaction_style,
+                            context_preferences=profile.context_preferences,
+                            adaptation_rate=profile.adaptation_rate,
+                            confidence=profile.confidence,
+                            last_updated=datetime.now(timezone.utc),
+                        )
                     )
-                )
-            await session.commit()
+                    await session.commit()
+            except Exception as exc:
+                logger.exception("Failed to save profile for %s: %s", user_id, exc)
 
     async def analyze_personality(self, user_id: str, interactions: list) -> dict:
         if user_id not in self.user_profiles:

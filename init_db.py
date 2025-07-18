@@ -46,7 +46,7 @@ class UserPersonality(Base):
     user_id: Mapped[str] = mapped_column(String, index=True, unique=True)
     traits: Mapped[dict] = mapped_column(JSON)
     interaction_style: Mapped[dict] = mapped_column(JSON)
-    context_preferences: Mapped[dict] = mapped_column(JSON, default=dict)
+    context_preferences: Mapped[dict] = mapped_column(JSON, default=lambda: {})
     adaptation_rate: Mapped[float] = mapped_column(Float, default=0.1)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
