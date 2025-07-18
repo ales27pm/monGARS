@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 from typing import Optional
@@ -18,31 +19,27 @@ logger = logging.getLogger(__name__)
 class ImageCaptioning:
     """Generate captions for images using a pretrained BLIP model."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        model_name: str = "Salesforce/blip-image-captioning-base",
+        device: str | None = None,
+    ) -> None:
         if not torch or not BlipProcessor or not BlipForConditionalGeneration:
             logger.warning("Image captioning dependencies unavailable.")
             self.processor = None
             self.model = None
             return
         try:
-            self.processor = BlipProcessor.from_pretrained(
-                "Salesforce/blip-image-captioning-base"
-            )
-            self.model = BlipForConditionalGeneration.from_pretrained(
-                "Salesforce/blip-image-captioning-base"
-            )
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.processor = BlipProcessor.from_pretrained(model_name)
+            self.model = BlipForConditionalGeneration.from_pretrained(model_name)
+            self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
         except Exception as e:  # pragma: no cover - model may not be available
             logger.error("Failed to load image captioning model: %s", e)
             self.processor = None
             self.model = None
 
-    async def generate_caption(self, image_data: bytes) -> Optional[str]:
-        """Return a caption for the provided image bytes."""
-        if not self.model or not self.processor:
-            logger.warning("Image captioning model not loaded.")
-            return None
+    def _sync_generate_caption(self, image_data: bytes) -> Optional[str]:
         try:
             image = Image.open(io.BytesIO(image_data))
             inputs = self.processor(image, return_tensors="pt", truncation=True).to(
@@ -55,11 +52,26 @@ class ImageCaptioning:
             logger.error("Error generating caption: %s", e)
             return None
 
+    async def generate_caption(self, image_data: bytes) -> Optional[str]:
+        """Return a caption for the provided image bytes."""
+        if not self.model or not self.processor:
+            logger.warning("Image captioning model not loaded.")
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(
+                None, self._sync_generate_caption, image_data
+            )
+        except Exception as e:
+            logger.error("Error generating caption: %s", e)
+            return None
+
     async def process_image_file(self, image_path: str) -> Optional[str]:
         """Load an image from disk and produce a caption."""
+        loop = asyncio.get_running_loop()
         try:
             with open(image_path, "rb") as image_file:
-                data = image_file.read()
+                data = await loop.run_in_executor(None, image_file.read)
             return await self.generate_caption(data)
         except FileNotFoundError:
             logger.error("Image file not found: %s", image_path)

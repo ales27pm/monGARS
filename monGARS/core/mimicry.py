@@ -10,6 +10,11 @@ from ..init_db import UserPreferences, async_session_factory
 logger = logging.getLogger(__name__)
 
 
+def _make_default_profile(history_length: int) -> dict:
+    """Return a new default mimicry profile."""
+    return {"long_term": {}, "short_term": deque(maxlen=history_length)}
+
+
 class MimicryModule:
     def __init__(
         self,
@@ -31,26 +36,24 @@ class MimicryModule:
                 )
                 user_preferences = result.scalars().first()
                 if user_preferences and user_preferences.interaction_style:
-                    return user_preferences.interaction_style
-                else:
-                    return {
-                        "long_term": {},
-                        "short_term": deque(maxlen=self.history_length),
-                    }
+                    stored = user_preferences.interaction_style
+                    short_term = stored.get("short_term", [])
+                    stored["short_term"] = deque(short_term, maxlen=self.history_length)
+                    return stored
+                return _make_default_profile(self.history_length)
             except Exception as e:
                 logger.error(f"Error retrieving profile for user {user_id}: {e}")
-                return {
-                    "long_term": {},
-                    "short_term": deque(maxlen=self.history_length),
-                }
+                return _make_default_profile(self.history_length)
 
     async def _update_profile_db(self, user_id: str, profile: dict):
         async with async_session_factory() as session:
             try:
+                payload = dict(profile)
+                payload["short_term"] = list(profile.get("short_term", []))
                 stmt = (
                     update(UserPreferences)
                     .where(UserPreferences.user_id == user_id)
-                    .values(interaction_style=profile)
+                    .values(interaction_style=payload)
                 )
                 await session.execute(stmt)
                 await session.commit()
