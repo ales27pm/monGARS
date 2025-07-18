@@ -29,5 +29,8 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 1. Keep PRs focused on a single topic.
 2. Include a clear description of your change and testing performed.
 3. Ensure `pytest` passes and code is formatted with `black` before requesting review.
+4. Name branches using `feature/<topic>` or `fix/<issue>` for clarity.
+
+Issue and pull request templates are provided in `.github/`. Use them to maintain a consistent workflow.
 
 For questions or discussion, open an issue or reach out to the maintainers.

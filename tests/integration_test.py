@@ -1,3 +1,3 @@
-*(Already provided above in section 16)*
+def test_placeholder():
+    assert True
 
----
