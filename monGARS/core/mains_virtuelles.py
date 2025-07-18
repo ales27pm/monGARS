@@ -7,7 +7,7 @@ try:  # heavy deps may be unavailable during testing
     import torch
     from PIL import Image
     from transformers import BlipForConditionalGeneration, BlipProcessor
-except Exception:  # pragma: no cover - optional dependencies
+except ImportError:  # pragma: no cover - optional dependencies
     torch = None
     Image = None
     BlipForConditionalGeneration = None
@@ -70,8 +70,12 @@ class ImageCaptioning:
         """Load an image from disk and produce a caption."""
         loop = asyncio.get_running_loop()
         try:
-            with open(image_path, "rb") as image_file:
-                data = await loop.run_in_executor(None, image_file.read)
+
+            def read_file() -> bytes:
+                with open(image_path, "rb") as f:
+                    return f.read()
+
+            data = await loop.run_in_executor(None, read_file)
             return await self.generate_caption(data)
         except FileNotFoundError:
             logger.error("Image file not found: %s", image_path)

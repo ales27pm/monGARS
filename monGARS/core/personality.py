@@ -3,11 +3,8 @@ import logging
 import random
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
 
-from sqlalchemy.future import select
-
-from ..init_db import UserPersonality, async_session_factory
+# TODO: add database-backed persistence in future iteration
 
 logger = logging.getLogger(__name__)
 
