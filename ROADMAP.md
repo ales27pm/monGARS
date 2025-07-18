@@ -36,7 +36,7 @@ Milestone: system stable with extended capabilities.
 - Document the API and publish example clients.
 
 ## Phase 6 – Self‑Improvement and Research (target Q2 2026)
-- Persist personality profiles using a database (see TODO in `personality.py`).
+- Persist personality profiles using a database (implemented via `PersonalityEngine`). ✅
 - Expand the self-training engine and integrate real metrics from the Evolution Engine.
 - Replace stubbed tests (`chaos_test.py`, `self_training_test.py`, `property_test.py`) with meaningful coverage.
 - Explore reinforcement learning for continuous improvement.
