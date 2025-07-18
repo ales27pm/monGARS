@@ -36,3 +36,10 @@ async def test_history_limit():
     # Should return the most recent entries up to MAX_HISTORY
     assert len(history) == h.MAX_HISTORY
     assert history[0].query == f"q{h.MAX_HISTORY + 4}"
+
+
+@pytest.mark.asyncio
+async def test_empty_history():
+    h = Hippocampus()
+    history = await h.history("nouser")
+    assert history == []

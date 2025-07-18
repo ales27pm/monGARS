@@ -36,10 +36,13 @@ class Hippocampus:
             history = self._memory.setdefault(user_id, [])
             history.append(MemoryItem(user_id=user_id, query=query, response=response))
             if len(history) > self.MAX_HISTORY:
-                history.pop(0)
+                history[:] = history[-self.MAX_HISTORY :]
 
     async def history(self, user_id: str, limit: int = 10) -> List[MemoryItem]:
         """Return recent conversation history."""
         async with self._get_lock(user_id):
             history = self._memory.get(user_id, [])
-            return list(reversed(history[-limit:]))
+            sorted_history = sorted(
+                history, key=lambda item: item.timestamp, reverse=True
+            )
+            return sorted_history[:limit]
