@@ -1,15 +1,20 @@
 import asyncio
 import logging
-from monGARS.core.init_db import init_db
+
+import uvicorn
+
+from init_db import init_db
+from monGARS.config import get_settings
 from monGARS.core.monitor import SystemMonitor
+from monGARS.core.orchestrator import Orchestrator
 from monGARS.core.self_training import SelfTrainingEngine
 from monGARS.mlops.training_pipeline import training_workflow
-from monGARS.core.orchestrator import Orchestrator
-import uvicorn
-from monGARS.config import get_settings
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 settings = get_settings()
+
 
 async def main():
     await init_db()
@@ -25,6 +30,7 @@ async def main():
     except Exception as e:
         logging.error(f"Error in task group: {e}")
     uvicorn.run("monGARS.api.web_api:app", host="0.0.0.0", port=settings.port)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

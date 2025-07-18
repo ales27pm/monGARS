@@ -1,13 +1,16 @@
-import random
 import asyncio
 import logging
+import random
 from collections import defaultdict
-from datetime import datetime
-from sqlalchemy.future import select
-from monGARS.core.init_db import async_session_factory, UserPersonality
 from dataclasses import dataclass
+from datetime import datetime
+
+from sqlalchemy.future import select
+
+from ..init_db import UserPersonality, async_session_factory
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class PersonalityProfile:
@@ -16,6 +19,7 @@ class PersonalityProfile:
     context_preferences: dict
     adaptation_rate: float
     confidence: float
+
 
 class PersonalityEngine:
     def __init__(self):
@@ -30,11 +34,18 @@ class PersonalityEngine:
             "conscientiousness": random.uniform(0.4, 0.7),
             "extraversion": random.uniform(0.4, 0.7),
             "agreeableness": random.uniform(0.4, 0.7),
-            "neuroticism": random.uniform(0.4, 0.7)
+            "neuroticism": random.uniform(0.4, 0.7),
         }
-        default_style = {"formality": 0.5, "humor": 0.5, "enthusiasm": 0.5, "directness": 0.5}
+        default_style = {
+            "formality": 0.5,
+            "humor": 0.5,
+            "enthusiasm": 0.5,
+            "directness": 0.5,
+        }
         default_preferences = {"technical": 0.5, "casual": 0.5, "professional": 0.5}
-        return PersonalityProfile(default_traits, default_style, default_preferences, 0.1, 0.5)
+        return PersonalityProfile(
+            default_traits, default_style, default_preferences, 0.1, 0.5
+        )
 
     async def analyze_personality(self, user_id: str, interactions: list) -> dict:
         return self.user_profiles[user_id].traits

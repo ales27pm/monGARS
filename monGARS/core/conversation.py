@@ -7,7 +7,6 @@ from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.evolution_engine import EvolutionEngine
 from monGARS.core.hippocampus import Hippocampus
-from monGARS.core.init_db import Interaction
 from monGARS.core.llm_integration import LLMIntegration
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
@@ -16,6 +15,8 @@ from monGARS.core.neurones import EmbeddingSystem
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.services import MemoryService, SpeakerService
+
+from ..init_db import Interaction
 
 logger = logging.getLogger(__name__)
 

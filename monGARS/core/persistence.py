@@ -1,6 +1,6 @@
 from sqlalchemy import desc, select
 
-from monGARS.core.init_db import ConversationHistory, Interaction, async_session_factory
+from ..init_db import ConversationHistory, Interaction, async_session_factory
 
 
 class PersistenceRepository:
