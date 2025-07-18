@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,7 @@ class MemoryItem:
     user_id: str
     query: str
     response: str
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Hippocampus:
@@ -36,9 +36,13 @@ class Hippocampus:
             history = self._memory.setdefault(user_id, [])
             history.append(MemoryItem(user_id=user_id, query=query, response=response))
             if len(history) > self.MAX_HISTORY:
-                history.pop(0)
+                history[:] = history[-self.MAX_HISTORY :]
 
     async def history(self, user_id: str, limit: int = 10) -> List[MemoryItem]:
         """Return recent conversation history."""
         async with self._get_lock(user_id):
-            return list(reversed(self._memory.get(user_id, [])))[:limit]
+            history = self._memory.get(user_id, [])
+            sorted_history = sorted(
+                history, key=lambda item: item.timestamp, reverse=True
+            )
+            return sorted_history[:limit]
