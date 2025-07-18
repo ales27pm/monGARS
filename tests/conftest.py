@@ -1,3 +1,1 @@
-*(Already provided above in section 15)*
-
----
+"""Shared pytest configuration and fixtures."""

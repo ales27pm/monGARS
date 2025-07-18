@@ -1,3 +1,1 @@
-*(Already provided above in section 14)*
-
----
+"""Test package for monGARS."""
