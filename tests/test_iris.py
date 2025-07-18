@@ -3,6 +3,7 @@ import types
 
 import httpx
 import pytest
+import trafilatura
 
 sys.modules.setdefault("spacy", types.ModuleType("spacy"))
 sys.modules["spacy"].load = lambda name: object()
@@ -35,10 +36,14 @@ async def test_fetch_text_success(monkeypatch):
 
         return Resp()
 
+    def fake_extract(html):
+        return "hello world"
+
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(trafilatura, "extract", fake_extract)
     iris = Iris()
     result = await iris.fetch_text("http://example.com")
-    assert "hello world" in result
+    assert result == "hello world"
 
 
 @pytest.mark.asyncio

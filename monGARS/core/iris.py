@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 
 import httpx
+import trafilatura
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -15,8 +16,8 @@ class Iris:
             try:
                 response = await client.get(url, timeout=10)
                 response.raise_for_status()
-                soup = BeautifulSoup(response.text, "html.parser")
-                return soup.get_text(separator=" ", strip=True)
+                text = trafilatura.extract(response.text)
+                return text.strip() if text else None
             except Exception as e:  # pragma: no cover - network issues
                 logger.error("Iris fetch error for %s: %s", url, e)
                 return None
