@@ -86,15 +86,11 @@ class CuriosityEngine:
                 if documents:
                     summary = " ".join(doc["summary"] for doc in documents)
                     return f"Contexte supplémentaire: {summary}"
-                result = await self.iris.search(query)
-                if result:
-                    return f"Contexte supplémentaire: {result}"
-                return "Aucun contexte supplémentaire trouvé."
             except Exception as e:
                 logger.error(f"Document retrieval error: {e}")
-                result = await self.iris.search(query)
-                return (
-                    f"Contexte supplémentaire: {result}"
-                    if result
-                    else "Échec de la récupération de documents."
-                )
+
+            logger.info("Falling back to Iris for query: %s", query)
+            result = await self.iris.search(query)
+            if result:
+                return f"Contexte supplémentaire: {result}"
+            return "Aucun contexte supplémentaire trouvé."
