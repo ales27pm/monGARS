@@ -3,9 +3,9 @@
 This roadmap summarizes the planned phases for monGARS based on the current architecture and goals.
 
 ## Phase 1 – Core Infrastructure
-- Establish module framework (Cortex, Hippocampus, Neurons, Bouche).
-- Integrate basic memory storage and conversation flow.
-- Provide Docker Compose and initial deployment scripts.
+- [x] Establish module framework (Cortex, Hippocampus, Neurons, Bouche).
+- [x] Integrate basic memory storage and conversation flow.
+- [ ] Provide Docker Compose and initial deployment scripts.
 
 ## Phase 2 – Functional Expansion
 - Add Mimicry for behavioral adaptation and Mains Virtuelles for executing user-defined code.
