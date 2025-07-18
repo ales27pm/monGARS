@@ -1,5 +1,6 @@
-import sys
 import asyncio
+import sys
+import types
 
 import pytest
 
@@ -11,11 +12,19 @@ def test_system_monitor_collects_stats(monkeypatch):
         def getGPUs(self):
             return []
 
-    # Provide a dummy GPUtil before importing the monitor module
+    # Provide dummy dependencies before importing the monitor module
     monkeypatch.setitem(sys.modules, "GPUtil", DummyGPUtil())
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        types.SimpleNamespace(
+            cpu_percent=lambda interval: 0,
+            virtual_memory=lambda: type("mem", (), {"percent": 0.0})(),
+            disk_usage=lambda _: type("disk", (), {"percent": 0.0})(),
+        ),
+    )
 
     # Stub monGARS.config to satisfy monitor import
-    import types
 
     dummy_config = types.ModuleType("monGARS.config")
     dummy_config.get_settings = lambda: None

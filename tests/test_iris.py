@@ -35,6 +35,11 @@ def patch_dependencies(monkeypatch):
         "monGARS.core.neurones",
         types.SimpleNamespace(EmbeddingSystem=lambda *a, **k: None),
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "bs4",
+        types.SimpleNamespace(BeautifulSoup=lambda *a, **k: None),
+    )
     yield
 
 
