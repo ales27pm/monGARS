@@ -125,3 +125,12 @@ async def test_peer_register_and_list(client):
     )
     assert list_resp.status_code == 200
     assert list_resp.json() == ["http://test/api/v1/peer/message"]
+
+    unreg = await client.post(
+        "/api/v1/peer/unregister",
+        json={"url": "http://test/api/v1/peer/message"},
+        headers={"Authorization": "Bearer token"},
+    )
+    assert unreg.status_code == 200
+    assert unreg.json()["status"] == "unregistered"
+    assert unreg.json()["count"] == 0

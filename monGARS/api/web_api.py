@@ -105,6 +105,20 @@ async def peer_register(
     return {"status": "registered", "count": len(communicator.peers)}
 
 
+@app.post("/api/v1/peer/unregister")
+async def peer_unregister(
+    registration: PeerRegistration,
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> dict:
+    """Remove a previously registered peer URL."""
+    url = registration.url
+    if url in communicator.peers:
+        communicator.peers.remove(url)
+        return {"status": "unregistered", "count": len(communicator.peers)}
+    return {"status": "not registered", "count": len(communicator.peers)}
+
+
 @app.get("/api/v1/peer/list", response_model=List[str])
 async def peer_list(
     current_user: dict = Depends(get_current_user),
