@@ -19,7 +19,7 @@ Milestone: architecture scaffolding in place.
 Milestone: proof-of-concept functionality established, real AI features still missing.
 
 ## Phase 3 - Hardware & Performance Optimization (current - target Q3 2025)
-- Finish the LLM2Vec training pipeline and Ray Serve inference integration.
+- **[Completed]** Finish the LLM2Vec training pipeline and Ray Serve inference integration.
 - **[Completed]** Implement the conversation history endpoint.
 - **[Completed]** Add encrypted token handling for social media integration.
 - **[Completed]** Improve error handling and tests for social posting.
