@@ -30,6 +30,7 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 - Hardware-specific optimisations automatically adjust worker count using
   `monGARS.utils.hardware`. Physical cores are preferred but the helper
   falls back to logical CPUs when necessary. See `README.md` for details.
+- Use `build_embedded.sh` to create multi-arch images for Raspberry Pi and Jetson using Docker Buildx.
 - Kubernetes RBAC policies were tightened. Refer to `rbac.yaml`.
  - Record common errors and the strategies developed to resolve them here so
   future contributors don't repeat the same investigation.

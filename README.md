@@ -67,6 +67,7 @@ Code style is enforced using `black` and `isort` as outlined in `AGENTS.md`.
 ## Deployment
 
 Production deployments can be containerised via the provided `Dockerfile`. Kubernetes manifests live in `k8s/` for cluster environments. Adjust resource limits and RBAC rules as required for your infrastructure.
+Use `./build_embedded.sh` with Docker Buildx to build multi-architecture images for Raspberry Pi and Jetson using `Dockerfile.embedded`.
 
 ## Contributing
 
