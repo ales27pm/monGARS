@@ -23,10 +23,11 @@ class SommeilParadoxal:
         self.evolution = evolution or EvolutionEngine()
         self.check_interval = check_interval
         self._task: asyncio.Task[Any] | None = None
+        self._running = False
 
     async def _loop(self) -> None:
         try:
-            while True:
+            while self._running:
                 await self.scheduler.queue.join()
                 await self.evolution.safe_apply_optimizations()
                 await asyncio.sleep(self.check_interval)
@@ -34,9 +35,25 @@ class SommeilParadoxal:
             pass
 
     def start(self) -> None:
-        if not self._task or self._task.done():
+        if self._running:
+            return
+        self._running = True
+        try:
             self._task = asyncio.create_task(self._loop())
+        except Exception as exc:  # pragma: no cover - unlikely
+            self._running = False
+            logger.error("Failed to start SommeilParadoxal: %s", exc)
+            raise
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
+        if not self._running:
+            return
+        self._running = False
         if self._task:
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # pragma: no cover - unexpected
+                logger.error("Error stopping SommeilParadoxal: %s", exc)

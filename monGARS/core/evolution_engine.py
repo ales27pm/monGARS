@@ -16,18 +16,52 @@ class EvolutionEngine:
         """Return a list of performance issues."""
         return ["High CPU", "Memory spike"]
 
-    async def _scale_workers(self, delta: int) -> None:
+    async def _scale_workers(
+        self,
+        delta: int,
+        name: str | None = None,
+        namespace: str | None = None,
+    ) -> None:
+        """Adjust worker replicas by ``delta`` safely."""
+        if delta == 0:
+            return
+
+        if name is None:
+            name = settings.worker_deployment_name
+        if namespace is None:
+            namespace = settings.worker_deployment_namespace
+
         config.load_incluster_config()
         apps_v1 = client.AppsV1Api()
-        deployment = apps_v1.read_namespaced_deployment(
-            name="mongars-workers", namespace="default"
-        )
+        loop = asyncio.get_running_loop()
+
+        try:
+            deployment = await loop.run_in_executor(
+                None, apps_v1.read_namespaced_deployment, name, namespace
+            )
+        except client.exceptions.ApiException as exc:
+            logger.error("Failed to read deployment: %s", exc)
+            raise
+
         current = deployment.spec.replicas or 0
-        patch = {"spec": {"replicas": current + delta}}
-        apps_v1.patch_namespaced_deployment(
-            name="mongars-workers", namespace="default", body=patch
-        )
-        logger.info("Scaled workers by %s", delta)
+        new_count = current + delta
+        if new_count < 0:
+            raise ValueError("Resulting replica count cannot be negative")
+
+        patch = {"spec": {"replicas": new_count}}
+        try:
+            await loop.run_in_executor(
+                None,
+                apps_v1.patch_namespaced_deployment,
+                name,
+                namespace,
+                patch,
+            )
+        except client.exceptions.ApiException as exc:
+            logger.error("Failed to patch deployment: %s", exc)
+            raise
+
+        logger.info("Scaled workers from %s to %s", current, new_count)
 
     async def _clear_caches(self) -> None:
         from monGARS.core.caching.tiered_cache import clear_cache

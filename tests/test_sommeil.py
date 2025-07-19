@@ -25,7 +25,7 @@ async def test_sommeil_runs_when_idle(monkeypatch):
     sommeil = SommeilParadoxal(scheduler, FakeEngine(), check_interval=0)
     sommeil.start()
     await asyncio.sleep(0.02)
-    sommeil.stop()
+    await sommeil.stop()
     assert called.get("ok")
 
 
@@ -56,4 +56,4 @@ async def test_sommeil_skips_when_busy(monkeypatch):
     assert not called
     scheduler.stop()
     await run
-    sommeil.stop()
+    await sommeil.stop()

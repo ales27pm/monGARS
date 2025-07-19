@@ -24,12 +24,9 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
  - Update relevant documentation when modifying or adding functionality.
  - High-level architectural notes are located in `monGARS_structure.txt` and the project ROADMAP.
  - Keep the `README.md` up to date when behaviour or setup steps change.
-- Keep this `AGENTS.md` and the `ROADMAP.md` synchronized with the current
-  project state. Document new modules, tasks and design decisions as they are
-  introduced.
-- Hardware-specific optimizations automatically adjust worker count using
-  `monGARS.utils.hardware`. Physical cores are preferred but the helper
-  falls back to logical CPUs when necessary. See `README.md` for details.
+- Keep this `AGENTS.md` and the `ROADMAP.md` synchronized with the current project state. Document new modules, tasks and design decisions as they are introduced.
+- Hardware-specific optimizations automatically adjust worker count using `monGARS.utils.hardware`. Physical cores are preferred but the helper falls back to logical CPUs when necessary. See `README.md` for details.
+- Evolution Engine scales Kubernetes workers defined by `WORKER_DEPLOYMENT_NAME` and `WORKER_DEPLOYMENT_NAMESPACE`.
 - Use `build_embedded.sh` to create and push multi-arch images for Raspberry Pi and Jetson using Docker Buildx. Ensure you are logged in to your registry before running the script.
 - Use `build_native.sh` to build an optimized x86_64 image leveraging all CPU cores on a developer workstation.
 - Kubernetes RBAC policies were tightened. Refer to `rbac.yaml`.
@@ -38,10 +35,8 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 - A `DistributedScheduler` coordinates tasks across peers.
 - `SommeilParadoxal` triggers background optimizations when idle.
 - `EvolutionEngine.safe_apply_optimizations` wraps upgrades in a sandbox.
- - Record common errors and the strategies developed to resolve them here so
-  future contributors don't repeat the same investigation.
- - Keep a running log of new ideas and experimental results. Note what works well
-  and what doesn't so the team can build on prior lessons.
+- Record common errors and the strategies developed to resolve them here so future contributors don't repeat the same investigation.
+- Keep a running log of new ideas and experimental results. Note what works well and what doesn't so the team can build on prior lessons.
 
 ## Pull Requests
 
