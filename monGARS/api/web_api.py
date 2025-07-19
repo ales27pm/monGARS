@@ -1,3 +1,48 @@
-*(Already provided above in section 53)*
+from __future__ import annotations
 
----
+from typing import List
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
+
+from monGARS.api.authentication import get_current_user
+from monGARS.api.dependencies import get_hippocampus
+from monGARS.core.hippocampus import MemoryItem
+from monGARS.core.security import SecurityManager
+
+app = FastAPI(title="monGARS API")
+sec_manager = SecurityManager()
+
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
+    """Return a simple access token."""
+    token = sec_manager.create_access_token({"sub": form_data.username})
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready() -> dict:
+    return {"status": "ready"}
+
+
+@app.get("/api/v1/conversation/history", response_model=List[MemoryItem])
+async def conversation_history(
+    user_id: str,
+    limit: int = 10,
+    current_user: dict = Depends(get_current_user),
+    store=Depends(get_hippocampus),
+) -> List[MemoryItem]:
+    if limit <= 0:
+        raise HTTPException(status_code=400, detail="limit must be positive")
+    try:
+        return await store.history(user_id, limit=limit)
+    except Exception as exc:  # pragma: no cover - unexpected errors
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc

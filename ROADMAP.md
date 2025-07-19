@@ -20,7 +20,7 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 
 ## Phase 3 - Hardware & Performance Optimization (current - target Q3 2025)
 - Finish the LLM2Vec training pipeline and Ray Serve inference integration.
-- Implement the conversation history endpoint and fix social media token handling.
+- **[Completed]** Implement the conversation history endpoint. Social media token handling pending.
 - Optimize CPU and memory usage for Raspberry Pi and Jetson boards.
 - Build container images for embedded hardware targets.
 - Improve telemetry and finalize tiered caching and PostgreSQL migrations.

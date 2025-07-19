@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Deque, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class Hippocampus:
     MAX_HISTORY = 100
 
     def __init__(self) -> None:
-        self._memory: Dict[str, List[MemoryItem]] = {}
+        self._memory: Dict[str, Deque[MemoryItem]] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _get_lock(self, user_id: str) -> asyncio.Lock:
@@ -33,16 +34,15 @@ class Hippocampus:
         """Persist a query/response pair for a user."""
         logger.debug("Storing interaction for %s", user_id)
         async with self._get_lock(user_id):
-            history = self._memory.setdefault(user_id, [])
+            history = self._memory.setdefault(user_id, deque(maxlen=self.MAX_HISTORY))
             history.append(MemoryItem(user_id=user_id, query=query, response=response))
-            if len(history) > self.MAX_HISTORY:
-                history[:] = history[-self.MAX_HISTORY :]
 
     async def history(self, user_id: str, limit: int = 10) -> List[MemoryItem]:
         """Return recent conversation history."""
+        if limit <= 0:
+            return []
+        limit = min(limit, self.MAX_HISTORY)
         async with self._get_lock(user_id):
-            history = self._memory.get(user_id, [])
-            sorted_history = sorted(
-                history, key=lambda item: item.timestamp, reverse=True
-            )
-            return sorted_history[:limit]
+            history = self._memory.get(user_id, deque())
+            items = list(history)[-limit:]
+            return list(reversed(items))
