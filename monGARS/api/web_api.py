@@ -4,7 +4,7 @@ from typing import Dict, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import get_current_user
 from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
@@ -68,6 +68,15 @@ class PeerMessage(BaseModel):
     payload: str
 
 
+class PeerRegistration(BaseModel):
+    url: HttpUrl
+
+    @field_validator("url")
+    @classmethod
+    def normalize(cls, v: HttpUrl) -> str:
+        return str(v).rstrip("/")
+
+
 @app.post("/api/v1/peer/message")
 async def peer_message(
     message: PeerMessage,
@@ -80,3 +89,40 @@ async def peer_message(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "received", "data": data}
+
+
+@app.post("/api/v1/peer/register")
+async def peer_register(
+    registration: PeerRegistration,
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> dict:
+    """Register a peer URL for future broadcasts."""
+    url = registration.url
+    if url in communicator.peers:
+        return {"status": "already registered", "count": len(communicator.peers)}
+    communicator.peers.add(url)
+    return {"status": "registered", "count": len(communicator.peers)}
+
+
+@app.post("/api/v1/peer/unregister")
+async def peer_unregister(
+    registration: PeerRegistration,
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> dict:
+    """Remove a previously registered peer URL."""
+    url = registration.url
+    if url in communicator.peers:
+        communicator.peers.remove(url)
+        return {"status": "unregistered", "count": len(communicator.peers)}
+    return {"status": "not registered", "count": len(communicator.peers)}
+
+
+@app.get("/api/v1/peer/list", response_model=List[str])
+async def peer_list(
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> List[str]:
+    """Return the list of registered peer URLs."""
+    return sorted(communicator.peers)
