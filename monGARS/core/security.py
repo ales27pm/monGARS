@@ -5,6 +5,9 @@ from typing import Optional, Union
 
 import bleach
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -44,7 +47,7 @@ class SecurityManager:
                 raise ValueError("Token expired")
             return payload
         except JWTError as exc:
-            raise ValueError(f"Token verification failed: {exc}")
+            raise ValueError(f"Token verification failed: {exc}") from exc
 
     def get_password_hash(self, password: str) -> str:
         return self.pwd_context.hash(password)
@@ -54,14 +57,21 @@ class SecurityManager:
 
 
 def _get_fernet(key: Union[str, bytes, None] = None) -> Fernet:
-    key_bytes = (
+    """Return a Fernet instance derived from the provided key."""
+    raw_key = (
         key.encode()
         if isinstance(key, str)
         else key if key is not None else settings.SECRET_KEY.encode()
     )
-    if len(key_bytes) != 32:
-        key_bytes = urlsafe_b64encode(key_bytes[:32])
-    return Fernet(key_bytes)
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"monGARS-fernet-salt",
+        iterations=390000,
+        backend=default_backend(),
+    )
+    derived = kdf.derive(raw_key)
+    return Fernet(urlsafe_b64encode(derived))
 
 
 def encrypt_token(token: str, key: Union[str, bytes, None] = None) -> str:
