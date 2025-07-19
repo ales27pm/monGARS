@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import types
 
 import httpx
 import spacy
@@ -19,7 +20,14 @@ class CuriosityEngine:
     def __init__(self, iris: Iris | None = None):
         self.embedding_system = EmbeddingSystem()
         self.knowledge_gap_threshold = 0.65
-        self.nlp = spacy.load("fr_core_news_sm")
+        try:
+            self.nlp = spacy.load("fr_core_news_sm")
+        except Exception:  # pragma: no cover - optional model
+
+            def _dummy(text: str):
+                return types.SimpleNamespace(ents=[])
+
+            self.nlp = _dummy
         self.iris = iris or Iris()
 
     async def detect_gaps(self, conversation_context: dict) -> dict:

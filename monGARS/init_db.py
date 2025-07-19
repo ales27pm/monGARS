@@ -19,19 +19,16 @@ class UserPersonality:
     pass
 
 
-@asynccontextmanager
-async def async_session_factory():
-    class DummySession:
-        async def execute(self, *a, **k):
-            return []
-
-        async def scalar_one_or_none(self):
+class DummySession:
+    def __getattr__(self, name):
+        async def _stub(*_, **__):
+            if name == "execute":
+                return []
             return None
 
-        async def commit(self):
-            pass
+        return _stub
 
-        async def merge(self, *a, **k):
-            pass
 
+@asynccontextmanager
+async def async_session_factory():
     yield DummySession()

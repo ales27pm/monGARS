@@ -53,6 +53,12 @@ async def test_chat_returns_response(client: TestClient):
     )
     assert resp.status_code == 200
     data = resp.json()
+    # Validate response fields and types
+    assert set(data) == {"response", "confidence", "processing_time"}
+    assert isinstance(data["response"], str)
+    assert isinstance(data["confidence"], float)
+    assert isinstance(data["processing_time"], float)
+
     assert data["response"] == "ok"
     assert data["confidence"] == pytest.approx(0.9)
 

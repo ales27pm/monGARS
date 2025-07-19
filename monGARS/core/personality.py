@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from monGARS.init_db import UserPersonality, async_session_factory
+try:  # prefer patched init_db in tests
+    from init_db import UserPersonality, async_session_factory
+except Exception:  # pragma: no cover - fallback for runtime use
+    from monGARS.init_db import UserPersonality, async_session_factory
 
 logger = logging.getLogger(__name__)
 
