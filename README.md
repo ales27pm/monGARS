@@ -39,6 +39,10 @@ A high level component overview can be found in `monGARS_structure.txt`.
    ```bash
    pip install -r requirements.txt
    ```
+   Or run the helper script:
+   ```bash
+   ./setup.sh
+   ```
 2. Copy `.env.example` to `.env` and adjust configuration values.
 3. Initialize the database:
    ```bash
