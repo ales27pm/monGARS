@@ -90,6 +90,6 @@ Please read `AGENTS.md` for the contribution guide. Pull requests should be focu
 
 ## Roadmap
 
-Development milestones are tracked in `ROADMAP.md`. Upcoming phases include hardware optimization, collaborative networking and a full web API.
+Development milestones are tracked in `ROADMAP.md`. Upcoming phases include hardware optimization, collaborative networking and a full web API. A detailed plan for fine-tuning and distributed inference is available in `docs/advanced_fine_tuning.md`.
 
 Community feedback and contributions are welcome!
