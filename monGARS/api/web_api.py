@@ -8,6 +8,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from monGARS.api.authentication import get_current_user
 from monGARS.api.dependencies import get_hippocampus
 from monGARS.core.hippocampus import MemoryItem
+from monGARS.core.peer import PeerCommunicator
 from monGARS.core.security import SecurityManager
 
 app = FastAPI(title="monGARS API")
@@ -57,3 +58,13 @@ async def conversation_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
+
+
+peer_comm = PeerCommunicator()
+
+
+@app.post("/api/v1/peer/message")
+async def peer_message(payload: str) -> dict:
+    """Receive an encrypted message from a peer."""
+    data = peer_comm.decode(payload)
+    return {"status": "received", "data": data}

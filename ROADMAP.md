@@ -33,7 +33,7 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - **[Completed]** Harden security policies and RBAC rules.
 
 ## Phase 4 - Collaborative Networking (planned - target Q4 2025)
-- Enable peer-to-peer coordination with encrypted communication channels.
+**[In Progress]** Enable peer-to-peer coordination with encrypted communication channels. Initial `PeerCommunicator` and `/api/v1/peer/message` endpoint added for encrypted messaging.
 - Introduce a distributed scheduler for cooperative tasks across nodes.
 - Extend Sommeil Paradoxal for idle-time optimization and auto-updates.
 - Stabilize the Evolution Engine for safe sandboxed upgrades.
