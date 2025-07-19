@@ -23,13 +23,13 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 
  - Update relevant documentation when modifying or adding functionality.
  - High-level architectural notes are located in `monGARS_structure.txt` and the project ROADMAP.
-- Keep the `README.md` up to date when behaviour or setup steps change.
-- Keep this `AGENTS.md` and the `ROADMAP.md` synchronized with the current
+ - Keep the `README.md` up to date when behaviour or setup steps change.
+ - Keep this `AGENTS.md` and the `ROADMAP.md` synchronized with the current
   project state. Document new modules, tasks and design decisions as they are
   introduced.
-- Record common errors and the strategies developed to resolve them here so
+ - Record common errors and the strategies developed to resolve them here so
   future contributors don't repeat the same investigation.
-- Keep a running log of new ideas and experimental results. Note what works well
+ - Keep a running log of new ideas and experimental results. Note what works well
   and what doesn't so the team can build on prior lessons.
 
 ## Pull Requests
