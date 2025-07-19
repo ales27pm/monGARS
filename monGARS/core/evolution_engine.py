@@ -22,9 +22,10 @@ class EvolutionEngine:
         deployment = apps_v1.read_namespaced_deployment(
             name="mongars-workers", namespace="default"
         )
-        deployment.spec.replicas += delta
+        current = deployment.spec.replicas or 0
+        patch = {"spec": {"replicas": current + delta}}
         apps_v1.patch_namespaced_deployment(
-            name="mongars-workers", namespace="default", body=deployment
+            name="mongars-workers", namespace="default", body=patch
         )
         logger.info("Scaled workers by %s", delta)
 
@@ -46,6 +47,6 @@ class EvolutionEngine:
         try:
             await self.apply_optimizations()
             return True
-        except Exception as exc:  # pragma: no cover - unexpected errors
-            logger.error("Optimization failed: %s", exc)
+        except Exception:  # pragma: no cover - unexpected errors
+            logger.exception("Optimization failed")
             return False

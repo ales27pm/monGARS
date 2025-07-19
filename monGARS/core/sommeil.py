@@ -25,10 +25,13 @@ class SommeilParadoxal:
         self._task: asyncio.Task[Any] | None = None
 
     async def _loop(self) -> None:
-        while True:
-            if self.scheduler.queue.empty():
+        try:
+            while True:
+                await self.scheduler.queue.join()
                 await self.evolution.safe_apply_optimizations()
-            await asyncio.sleep(self.check_interval)
+                await asyncio.sleep(self.check_interval)
+        except asyncio.CancelledError:
+            pass
 
     def start(self) -> None:
         if not self._task or self._task.done():

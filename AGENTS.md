@@ -27,16 +27,16 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 - Keep this `AGENTS.md` and the `ROADMAP.md` synchronized with the current
   project state. Document new modules, tasks and design decisions as they are
   introduced.
-- Hardware-specific optimisations automatically adjust worker count using
+- Hardware-specific optimizations automatically adjust worker count using
   `monGARS.utils.hardware`. Physical cores are preferred but the helper
   falls back to logical CPUs when necessary. See `README.md` for details.
 - Use `build_embedded.sh` to create and push multi-arch images for Raspberry Pi and Jetson using Docker Buildx. Ensure you are logged in to your registry before running the script.
 - Use `build_native.sh` to build an optimized x86_64 image leveraging all CPU cores on a developer workstation.
 - Kubernetes RBAC policies were tightened. Refer to `rbac.yaml`.
 - A `PeerCommunicator` module provides encrypted message passing between nodes. Use `/api/v1/peer/message` to receive messages. The route requires authentication and the JSON body `{ "payload": "..." }`.
-- The `Evolution Engine` runs automated diagnostics and applies performance tweaks. Review logs in `Mémoire Autobiographique` for optimisation history.
+- The `Evolution Engine` runs automated diagnostics and applies performance tweaks. Review logs in `Mémoire Autobiographique` for optimization history.
 - A `DistributedScheduler` coordinates tasks across peers.
-- `SommeilParadoxal` triggers background optimisations when idle.
+- `SommeilParadoxal` triggers background optimizations when idle.
 - `EvolutionEngine.safe_apply_optimizations` wraps upgrades in a sandbox.
  - Record common errors and the strategies developed to resolve them here so
   future contributors don't repeat the same investigation.

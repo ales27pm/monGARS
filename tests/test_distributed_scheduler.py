@@ -26,3 +26,32 @@ async def test_scheduler_broadcasts(monkeypatch):
     scheduler.stop()
     await run_task
     assert calls[0] == {"result": "done"}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_concurrent(monkeypatch):
+    communicator = PeerCommunicator([])
+    results: list[int] = []
+
+    async def fake_send(msg):
+        results.append(msg["result"])
+        return [True]
+
+    monkeypatch.setattr(communicator, "send", fake_send)
+    scheduler = DistributedScheduler(communicator, concurrency=2)
+
+    def make_task(n: int):
+        async def _task():
+            await asyncio.sleep(0.01)
+            return n
+
+        return _task
+
+    for i in range(5):
+        await scheduler.add_task(make_task(i))
+
+    run = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.1)
+    scheduler.stop()
+    await run
+    assert sorted(results) == list(range(5))
