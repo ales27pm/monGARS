@@ -29,3 +29,4 @@ uvicorn
 llm2vec
 pytest
 pytest-asyncio
+cryptography
