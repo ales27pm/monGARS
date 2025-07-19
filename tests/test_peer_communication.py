@@ -29,7 +29,7 @@ async def client(secret_key_env):
     ) as async_client:
         app.dependency_overrides[get_current_user] = lambda: {"sub": "u1"}
         comm = get_peer_communicator()
-        comm.peers = ["http://test/api/v1/peer/message"]
+        comm.peers = set()
         comm._client = async_client
         yield async_client
         app.dependency_overrides.clear()
@@ -108,10 +108,20 @@ async def test_peer_register_and_list(client):
         headers={"Authorization": "Bearer token"},
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] in {"registered", "already registered"}
+    assert resp.json()["status"] == "registered"
+    assert resp.json()["count"] == 1
+
+    again = await client.post(
+        "/api/v1/peer/register",
+        json={"url": "http://test/api/v1/peer/message"},
+        headers={"Authorization": "Bearer token"},
+    )
+    assert again.status_code == 200
+    assert again.json()["status"] == "already registered"
+    assert again.json()["count"] == 1
 
     list_resp = await client.get(
         "/api/v1/peer/list", headers={"Authorization": "Bearer token"}
     )
     assert list_resp.status_code == 200
-    assert "http://test/api/v1/peer/message" in list_resp.json()
+    assert list_resp.json() == ["http://test/api/v1/peer/message"]

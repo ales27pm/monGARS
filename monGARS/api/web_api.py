@@ -4,7 +4,7 @@ from typing import Dict, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import get_current_user
 from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
@@ -69,7 +69,12 @@ class PeerMessage(BaseModel):
 
 
 class PeerRegistration(BaseModel):
-    url: str
+    url: HttpUrl
+
+    @field_validator("url")
+    @classmethod
+    def normalize(cls, v: HttpUrl) -> str:
+        return str(v).rstrip("/")
 
 
 @app.post("/api/v1/peer/message")
@@ -93,9 +98,10 @@ async def peer_register(
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Register a peer URL for future broadcasts."""
-    if registration.url in communicator.peers:
+    url = registration.url
+    if url in communicator.peers:
         return {"status": "already registered", "count": len(communicator.peers)}
-    communicator.peers.append(registration.url)
+    communicator.peers.add(url)
     return {"status": "registered", "count": len(communicator.peers)}
 
 
@@ -105,4 +111,4 @@ async def peer_list(
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> List[str]:
     """Return the list of registered peer URLs."""
-    return communicator.peers
+    return sorted(communicator.peers)

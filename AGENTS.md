@@ -32,7 +32,8 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 - Kubernetes RBAC policies were tightened. Refer to `rbac.yaml`.
 - A `PeerCommunicator` module provides encrypted message passing between nodes. Use `/api/v1/peer/message` to receive messages. The route requires authentication and the JSON body `{ "payload": "..." }`.
 - Peers can be added or queried via `/api/v1/peer/register` and
-  `/api/v1/peer/list` which update the shared `PeerCommunicator`.
+  `/api/v1/peer/list` which update the shared `PeerCommunicator`. Registration
+  URLs are validated and normalized, and duplicates are ignored.
 - The `Evolution Engine` runs automated diagnostics and applies performance tweaks. Review logs in `Mémoire Autobiographique` for optimization history.
 - A `DistributedScheduler` coordinates tasks across peers.
 - `SommeilParadoxal` triggers background optimizations when idle.

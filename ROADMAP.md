@@ -34,8 +34,8 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 
 ## Phase 4 - Collaborative Networking (planned - target Q4 2025)
 **[In Progress]** Enable peer-to-peer coordination with encrypted communication channels. `PeerCommunicator` now dispatches requests concurrently and `/api/v1/peer/message` requires authentication.
-**[Completed]** Added peer registration and listing endpoints to dynamically
-update known peers.
+**[Completed]** Added peer registration and listing endpoints with URL
+validation and duplicate handling to dynamically update known peers.
 **[Completed]** Introduced a `DistributedScheduler` for cooperative tasks across nodes.
 **[Completed]** Extended Sommeil Paradoxal for idle-time optimization and auto-updates.
 **[Completed]** Added `safe_apply_optimizations` to Evolution Engine for sandboxed upgrades.
