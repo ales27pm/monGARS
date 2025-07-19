@@ -1,0 +1,70 @@
+# monGARS
+
+monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI system designed for experimentation on low-resource hardware. The project bundles Python services, a Django web interface and container orchestration files so contributors can run or deploy the stack with minimal setup.
+
+## Features
+
+- **Conversational engine** powered by `LLMIntegration` with optional Ray Serve integration.
+- **Memory management** through the in-memory `Hippocampus` and persistent storage via `PersistenceRepository`.
+- **Adaptive behaviour** using the `MimicryModule`, `PersonalityEngine` and `AdaptiveResponseGenerator`.
+- **Web scraping** utilities provided by `Iris` for retrieving external context.
+- **Tiered caching** (memory, Redis and disk) with graceful fallback handling.
+- **Self‑training and monitoring** via `SelfTrainingEngine` and `SystemMonitor`.
+- **Web interface** implemented with Django (located in `webapp/`).
+
+A high level component overview can be found in `monGARS_structure.txt`.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.10+
+- Docker and Docker Compose (for local development)
+- Optional: GPU drivers for Nvidia containers
+
+### Installation
+
+1. Clone the repository and install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Copy `.env.example` to `.env` and adjust configuration values.
+3. Initialize the database:
+   ```bash
+   python init_db.py
+   ```
+4. Launch services:
+   ```bash
+   docker-compose up
+   ```
+   This starts PostgreSQL, Redis, MLflow, Vault and an Ollama model server alongside the application.
+
+### Running the Application
+
+The main entry point is `main.py` which bootstraps monitoring tasks and exposes the FastAPI app under `monGARS.api.web_api`. During development you can run:
+
+```bash
+python main.py
+```
+
+Unit and integration tests are located in the `tests/` directory. Execute them with:
+
+```bash
+pytest
+```
+
+Code style is enforced using `black` and `isort` as outlined in `AGENTS.md`.
+
+## Deployment
+
+Production deployments can be containerised via the provided `Dockerfile`. Kubernetes manifests live in `k8s/` for cluster environments. Adjust resource limits and RBAC rules as required for your infrastructure.
+
+## Contributing
+
+Please read `AGENTS.md` for the contribution guide. Pull requests should be focused, include relevant tests and ensure `pytest` passes before submission. Documentation updates are encouraged whenever behaviour changes.
+
+## Roadmap
+
+Development milestones are tracked in `ROADMAP.md`. Upcoming phases include hardware optimisation, collaborative networking and a full web API.
+
+Community feedback and contributions are welcome!

@@ -21,8 +21,9 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 
 ## Documentation
 
-- Update relevant documentation when modifying or adding functionality.
-- High-level architectural notes are located in `monGARS_structure.txt` and the project ROADMAP.
+ - Update relevant documentation when modifying or adding functionality.
+ - High-level architectural notes are located in `monGARS_structure.txt` and the project ROADMAP.
+ - Keep the `README.md` up to date when behaviour or setup steps change.
 
 ## Pull Requests
 

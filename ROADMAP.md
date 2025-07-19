@@ -22,6 +22,7 @@ Milestone: system stable with extended capabilities.
 - Integrate the LLM2Vec training pipeline for encoder models ([#7](https://github.com/ales27pm/monGARS/pull/7)). ✅
 - Improve telemetry in `config.py` and finalize tiered caching.
 - Harden security policies and RBAC rules.
+- Expand developer documentation and publish a comprehensive `README`.
 
 ## Phase 4 – Collaborative Networking (planned – target Q4 2025)
 - Enable peer-to-peer coordination across monGARS instances.
