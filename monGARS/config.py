@@ -11,7 +11,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from pydantic import Field, PostgresDsn, RedisDsn
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger(__name__)
@@ -39,11 +39,16 @@ class Settings(BaseSettings):
     database_url: PostgresDsn = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost/mongars_db"
     )
+    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", 5))
+    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", 10))
+    db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", 30))
     redis_url: RedisDsn = Field(default="redis://localhost:6379/0")
 
     IN_MEMORY_CACHE_SIZE: int = int(os.getenv("IN_MEMORY_CACHE_SIZE", 10000))
     DISK_CACHE_PATH: str = os.getenv("DISK_CACHE_PATH", "/tmp/mongars_cache")
     DOC_RETRIEVAL_URL: str = os.getenv("DOC_RETRIEVAL_URL", "http://localhost:8080")
+    MLFLOW_TRACKING_URI: str = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    FASTAPI_URL: str = os.getenv("FASTAPI_URL", "http://localhost:8000")
 
     otel_service_name: str = os.getenv("OTEL_SERVICE_NAME", "mongars-api")
     otel_debug: bool = os.getenv("OTEL_DEBUG", "False").lower() in ("true", "1")
@@ -59,6 +64,22 @@ class Settings(BaseSettings):
 
     VAULT_URL: str = os.getenv("VAULT_URL", "")
     VAULT_TOKEN: str = os.getenv("VAULT_TOKEN", "")
+
+    AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "gpt-3.5-turbo")
+    AI_MODEL_TEMPERATURE: float = float(os.getenv("AI_MODEL_TEMPERATURE", 0.7))
+    USE_GPU: bool = os.getenv("USE_GPU", "False").lower() in ("true", "1")
+    default_language: str = "fr-CA"
+    otel_logs_enabled: bool = os.getenv("OTEL_LOGS_ENABLED", "True").lower() in (
+        "true",
+        "1",
+    )
+
+    @field_validator("database_url")
+    @classmethod
+    def validate_db(cls, value: PostgresDsn) -> PostgresDsn:
+        if "postgresql+asyncpg" not in str(value):
+            raise ValueError("Invalid async PostgreSQL URL")
+        return value
 
 
 async def fetch_secrets_from_vault(settings: Settings) -> dict:
@@ -115,10 +136,16 @@ def configure_telemetry(settings: Settings) -> None:
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
-    loop = asyncio.get_event_loop()
-    vault_secrets = loop.run_until_complete(fetch_secrets_from_vault(settings))
+    try:
+        loop = asyncio.get_running_loop()
+        vault_secrets = {}
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        vault_secrets = loop.run_until_complete(fetch_secrets_from_vault(settings))
     for key, value in vault_secrets.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
+    if settings.SECRET_KEY == "unsafe-secret" and not settings.debug:
+        raise ValueError("Default SECRET_KEY must be overridden in production")
     configure_telemetry(settings)
     return settings

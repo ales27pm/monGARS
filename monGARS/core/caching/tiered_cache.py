@@ -1,32 +1,17 @@
+import asyncio
+import hashlib
 import logging
 import pickle
+import time
 from pathlib import Path
 from typing import Any
 
 from aiocache import Cache, caches
-from aiocache.serializers import PickleSerializer
 
 from monGARS.config import get_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
-
-caches.set_config(
-    {
-        "default": {
-            "cache": "aiocache.SimpleMemoryCache",
-            "serializer": {"class": "aiocache.serializers.PickleSerializer"},
-        },
-        "redis": {
-            "cache": "aiocache.RedisCache",
-            "endpoint": settings.redis_url.host,
-            "port": settings.redis_url.port,
-            "db": int(settings.redis_url.path.strip("/")),
-            "serializer": {"class": "aiocache.serializers.PickleSerializer"},
-            "timeout": 1,
-        },
-    }
-)
+settings: Any | None = None
 
 
 class SimpleDiskCache:
@@ -35,66 +20,106 @@ class SimpleDiskCache:
     def __init__(self, directory: str) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        self.lock = asyncio.Lock()
+
+    def _path(self, key: str) -> Path:
+        name = hashlib.sha256(key.encode()).hexdigest()
+        return self.directory / f"{name}.pkl"
 
     async def get(self, key: str) -> Any:
-        path = self.directory / f"{key}.pkl"
-        if path.exists():
+        async with self.lock:
+            path = self._path(key)
+            if not path.exists():
+                return None
             with path.open("rb") as fh:
-                return pickle.load(fh)
-        return None
+                data = pickle.load(fh)
+            expires = data.get("expires")
+            if expires and expires <= time.time():
+                path.unlink(missing_ok=True)
+                return None
+            return data.get("value")
 
-    async def set(
-        self, key: str, value: Any, ttl: int | None = None
-    ) -> None:  # noqa: ARG002
-        self.directory.mkdir(parents=True, exist_ok=True)
-        with (self.directory / f"{key}.pkl").open("wb") as fh:
-            pickle.dump(value, fh)
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        async with self.lock:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            path = self._path(key)
+            data = {"value": value, "expires": time.time() + ttl if ttl else None}
+            with path.open("wb") as fh:
+                pickle.dump(data, fh)
 
     async def clear(self) -> None:
-        for file in self.directory.glob("*.pkl"):
-            file.unlink(missing_ok=True)
+        async with self.lock:
+            for file in self.directory.glob("*.pkl"):
+                file.unlink(missing_ok=True)
 
 
 class TieredCache:
     """Memory, Redis and disk-backed cache with graceful fallbacks."""
 
     def __init__(self, directory: str | None = None) -> None:
+        global settings
+        if settings is None:
+            settings = get_settings()
+            caches.set_config(
+                {
+                    "default": {
+                        "cache": "aiocache.SimpleMemoryCache",
+                        "serializer": {
+                            "class": "aiocache.serializers.PickleSerializer"
+                        },
+                    },
+                    "redis": {
+                        "cache": "aiocache.RedisCache",
+                        "endpoint": settings.redis_url.host,
+                        "port": settings.redis_url.port,
+                        "db": int(settings.redis_url.path.strip("/")),
+                        "serializer": {
+                            "class": "aiocache.serializers.PickleSerializer"
+                        },
+                        "timeout": 1,
+                    },
+                }
+            )
         self.memory = caches.get("default")
         self.redis = caches.get("redis")
         self.disk = SimpleDiskCache(directory or settings.DISK_CACHE_PATH)
+        self.caches = [self.memory, self.redis, self.disk]
 
     async def _safe(self, cache: Cache, method: str, *args: Any, **kwargs: Any) -> Any:
         try:
             func = getattr(cache, method)
             return await func(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as exc:  # pragma: no cover - depends on external services
-            logger.debug("Cache %s error: %s", method, exc)
+            logger.warning("Cache %s error: %s", method, exc, exc_info=True)
             return None
 
     async def get(self, key: str) -> Any:
-        value = await self._safe(self.memory, "get", key)
-        if value is not None:
-            logger.debug("Memory hit for %s", key)
-            return value
-
-        value = await self._safe(self.redis, "get", key)
-        if value is not None:
-            logger.debug("Redis hit for %s", key)
-            await self._safe(self.memory, "set", key, value)
-            return value
-
-        value = await self._safe(self.disk, "get", key)
-        if value is not None:
-            logger.debug("Disk hit for %s", key)
-            await self._safe(self.redis, "set", key, value)
-            await self._safe(self.memory, "set", key, value)
-        return value
+        for idx, cache in enumerate(self.caches):
+            value = await self._safe(cache, "get", key)
+            if value is not None:
+                logger.debug("%s hit for %s", cache.__class__.__name__, key)
+                for prev in self.caches[:idx]:
+                    await self._safe(prev, "set", key, value)
+                return value
+        return None
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        await self._safe(self.memory, "set", key, value, ttl=ttl)
-        await self._safe(self.redis, "set", key, value, ttl=ttl)
-        await self._safe(self.disk, "set", key, value, ttl=ttl)
+        for cache in self.caches:
+            try:
+                await getattr(cache, "set")(key, value, ttl=ttl)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:  # pragma: no cover - individual logging
+                logger.error(
+                    "Failed to set key '%s' in %s cache: %s",
+                    key,
+                    cache.__class__.__name__,
+                    exc,
+                    exc_info=True,
+                )
 
     async def clear_all(self) -> None:
-        for cache in (self.memory, self.redis, self.disk):
+        for cache in self.caches:
             await self._safe(cache, "clear")
