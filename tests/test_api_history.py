@@ -10,18 +10,98 @@ from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app
 
 
+@pytest.fixture
+def client() -> TestClient:
+    hippocampus._memory.clear()
+    hippocampus._locks.clear()
+    return TestClient(app)
+
+
 @pytest.mark.asyncio
-async def test_history_endpoint_returns_records():
+async def test_history_endpoint_returns_records(client: TestClient):
     await hippocampus.store("u1", "q1", "r1")
-    client = TestClient(app)
-    token_resp = client.post("/token", data={"username": "u1", "password": "x"})
-    assert token_resp.status_code == 200
-    token = token_resp.json()["access_token"]
+    await hippocampus.store("u1", "q2", "r2")
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
     resp = client.get(
         "/api/v1/conversation/history",
-        params={"user_id": "u1"},
+        params={"user_id": "u1", "limit": 2},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data[0]["query"] == "q1"
+    assert [item["query"] for item in data] == ["q2", "q1"]
+
+
+@pytest.mark.asyncio
+async def test_history_negative_limit_returns_400(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "u1", "limit": -1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_history_limit_capped(client: TestClient):
+    for i in range(hippocampus.MAX_HISTORY + 5):
+        await hippocampus.store("u1", f"q{i}", f"r{i}")
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "u1", "limit": hippocampus.MAX_HISTORY + 10},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()) == hippocampus.MAX_HISTORY
+
+
+@pytest.mark.asyncio
+async def test_history_forbidden_other_user(client: TestClient):
+    await hippocampus.store("u1", "q1", "r1")
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "u2"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_history_no_token_returns_401(client: TestClient):
+    resp = client.get("/api/v1/conversation/history", params={"user_id": "u1"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_history_invalid_token_returns_401(client: TestClient):
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "u1"},
+        headers={"Authorization": "Bearer bad"},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_history_no_records_returns_empty_list(client: TestClient):
+    token = client.post("/token", data={"username": "u2", "password": "y"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "u2"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []

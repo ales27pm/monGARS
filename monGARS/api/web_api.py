@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -12,11 +12,20 @@ from monGARS.core.security import SecurityManager
 
 app = FastAPI(title="monGARS API")
 sec_manager = SecurityManager()
+users_db: Dict[str, str] = {
+    "u1": sec_manager.get_password_hash("x"),
+    "u2": sec_manager.get_password_hash("y"),
+}
 
 
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
     """Return a simple access token."""
+    hashed = users_db.get(form_data.username)
+    if not hashed or not sec_manager.verify_password(form_data.password, hashed):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
     token = sec_manager.create_access_token({"sub": form_data.username})
     return {"access_token": token, "token_type": "bearer"}
 
@@ -38,6 +47,8 @@ async def conversation_history(
     current_user: dict = Depends(get_current_user),
     store=Depends(get_hippocampus),
 ) -> List[MemoryItem]:
+    if user_id != current_user.get("sub"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     if limit <= 0:
         raise HTTPException(status_code=400, detail="limit must be positive")
     try:
