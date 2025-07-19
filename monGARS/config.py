@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", 8000))
     workers: int = recommended_worker_count()
+    worker_deployment_name: str = Field(
+        default="mongars-workers", validation_alias="WORKER_DEPLOYMENT_NAME"
+    )
+    worker_deployment_namespace: str = Field(
+        default="default", validation_alias="WORKER_DEPLOYMENT_NAMESPACE"
+    )
 
     SECRET_KEY: str = Field(..., min_length=1)
     JWT_ALGORITHM: str = "RS256"

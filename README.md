@@ -4,19 +4,21 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 
 ## Features
 
- - **Conversational engine** powered by `LLMIntegration` with optional Ray Serve integration (URL configured via `RAY_SERVE_URL`).
+- **Conversational engine** powered by `LLMIntegration` with optional Ray Serve integration (URL configured via `RAY_SERVE_URL`).
 - **Memory management** through the in-memory `Hippocampus` and persistent storage via `PersistenceRepository`.
 - **Adaptive behaviour** using the `MimicryModule`, `PersonalityEngine` and `AdaptiveResponseGenerator`.
 - **Web scraping** utilities provided by `Iris` for retrieving external context.
 - **Tiered caching** (memory, Redis and disk) with graceful fallback handling.
 - **Self‑training and monitoring** via `SelfTrainingEngine` and `SystemMonitor`.
-- **Evolution Engine** for autonomous diagnostics and code optimisation.
+- **Evolution Engine** for autonomous diagnostics and code optimization.
 - **Web interface** implemented with Django (located in `webapp/`).
-- **Automatic worker tuning** for Raspberry Pi and Jetson devices via
-  `recommended_worker_count()`.
-- **Robust core detection** falls back to logical CPUs if physical cores
-  cannot be determined.
+- **Automatic worker tuning** for Raspberry Pi and Jetson devices via `recommended_worker_count()`.
+- **Worker deployment settings** configurable through `WORKER_DEPLOYMENT_NAME` and `WORKER_DEPLOYMENT_NAMESPACE` environment variables used by the Evolution Engine.
+- **Robust core detection** falls back to logical CPUs if physical cores cannot be determined.
 - **Encrypted peer-to-peer messaging** via `PeerCommunicator` for basic node coordination.
+- **Distributed task scheduling** handled by `DistributedScheduler` to share work between peers.
+- **Idle-time optimization** through `SommeilParadoxal` which triggers upgrades when the system is quiet.
+- **Safe optimization cycles** executed by `EvolutionEngine.safe_apply_optimizations`.
 
 A high level component overview can be found in `monGARS_structure.txt`.
 
@@ -82,6 +84,6 @@ Please read `AGENTS.md` for the contribution guide. Pull requests should be focu
 
 ## Roadmap
 
-Development milestones are tracked in `ROADMAP.md`. Upcoming phases include hardware optimisation, collaborative networking and a full web API.
+Development milestones are tracked in `ROADMAP.md`. Upcoming phases include hardware optimization, collaborative networking and a full web API.
 
 Community feedback and contributions are welcome!

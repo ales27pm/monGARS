@@ -34,9 +34,9 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 
 ## Phase 4 - Collaborative Networking (planned - target Q4 2025)
 **[In Progress]** Enable peer-to-peer coordination with encrypted communication channels. `PeerCommunicator` now dispatches requests concurrently and `/api/v1/peer/message` requires authentication.
-- Introduce a distributed scheduler for cooperative tasks across nodes.
-- Extend Sommeil Paradoxal for idle-time optimization and auto-updates.
-- Stabilize the Evolution Engine for safe sandboxed upgrades.
+**[Completed]** Introduced a `DistributedScheduler` for cooperative tasks across nodes.
+**[Completed]** Extended Sommeil Paradoxal for idle-time optimization and auto-updates.
+**[Completed]** Added `safe_apply_optimizations` to Evolution Engine for sandboxed upgrades.
 
 ## Phase 5 - Web Interface & API (target Q1 2026)
 - Replace placeholder routes with full REST endpoints and robust input validation.
@@ -51,8 +51,8 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - Explore reinforcement learning and dynamic scaling for continuous improvement.
 
 ## Phase 7 - Sustainability & Longevity (future)
-- Integrate the Evolution Engine into routine optimisation cycles.
+- Integrate the Evolution Engine into routine optimization cycles.
 - Automate energy usage reporting and hardware-aware scaling.
-- Share optimisation results between nodes to accelerate improvements.
+- Share optimization results between nodes to accelerate improvements.
 
 This roadmap will evolve as monGARS matures. Community feedback and contributions are welcome.
