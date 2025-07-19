@@ -12,9 +12,15 @@ from monGARS.api.web_api import app
 
 @pytest.fixture
 def client() -> TestClient:
+    """Return a test client with isolated hippocampus state."""
     hippocampus._memory.clear()
     hippocampus._locks.clear()
-    return TestClient(app)
+    client = TestClient(app)
+    try:
+        yield client
+    finally:
+        hippocampus._memory.clear()
+        hippocampus._locks.clear()
 
 
 @pytest.mark.asyncio
