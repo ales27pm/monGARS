@@ -38,6 +38,10 @@ class AsyncTTLCache:
 _RESPONSE_CACHE = AsyncTTLCache()
 
 
+class CircuitBreakerOpenError(Exception):
+    """Raised when a circuit breaker is open."""
+
+
 class CircuitBreaker:
     def __init__(self, fail_max: int = 3, reset_timeout: int = 60):
         self.fail_max = fail_max
@@ -52,7 +56,7 @@ class CircuitBreaker:
                 self.last_failure_time
                 and (current_time - self.last_failure_time) < self.reset_timeout
             ):
-                raise Exception("Circuit breaker open: too many failures")
+                raise CircuitBreakerOpenError("Circuit breaker open: too many failures")
             else:
                 self.failure_count = 0
         try:

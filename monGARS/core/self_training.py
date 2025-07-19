@@ -22,13 +22,18 @@ class SelfTrainingEngine:
         self.last_retrain_time: float = 0.0
         self._embedding_model = EmbeddingSystem()
         self.lock = asyncio.Lock()
+        self._shutdown_event = asyncio.Event()
         logger.info("SelfTrainingEngine initialized.")
 
     async def auto_improve(self) -> None:
-        """Periodically trigger training cycles."""
-        while True:
-            await asyncio.sleep(self.retrain_interval)
-            await self._run_training_cycle()
+        """Periodically trigger training cycles until shutdown."""
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(), timeout=self.retrain_interval
+                )
+            except asyncio.TimeoutError:
+                await self._run_training_cycle()
 
     async def _run_training_cycle(self) -> None:
         batch = []
@@ -44,3 +49,7 @@ class SelfTrainingEngine:
             }
             logger.info("Training complete. New model version: v%s", new_version)
             self.last_retrain_time = asyncio.get_event_loop().time()
+
+    def shutdown(self) -> None:
+        """Signal the auto improvement loop to stop."""
+        self._shutdown_event.set()

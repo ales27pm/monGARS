@@ -1,12 +1,26 @@
 import asyncio
 import os
+import sys
+import types
 
 import pytest
 
 os.environ.setdefault("SECRET_KEY", "test")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
+os.environ.setdefault("OTEL_METRICS_ENABLED", "False")
+os.environ.setdefault("OTEL_SDK_DISABLED", "True")
+metric_module = types.ModuleType(
+    "opentelemetry.exporter.otlp.proto.http.metric_exporter"
+)
+metric_module.OTLPMetricExporter = lambda *a, **k: types.SimpleNamespace(
+    export=lambda *x, **y: None
+)
+sys.modules["opentelemetry.exporter.otlp.proto.http.metric_exporter"] = metric_module
 
-from monGARS.core.llm_integration import CircuitBreaker
+module = types.ModuleType("ollama")
+sys.modules.setdefault("ollama", module)
+
+from monGARS.core.llm_integration import CircuitBreaker, CircuitBreakerOpenError
 
 
 @pytest.mark.asyncio
@@ -23,7 +37,7 @@ async def test_circuit_breaker_trips_and_recovers():
         await cb.call(fail)
     with pytest.raises(RuntimeError):
         await cb.call(fail)
-    with pytest.raises(Exception):
+    with pytest.raises(CircuitBreakerOpenError):
         await cb.call(succeed)
 
     await asyncio.sleep(1.1)
