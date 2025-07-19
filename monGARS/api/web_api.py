@@ -4,10 +4,12 @@ from typing import Dict, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
 
 from monGARS.api.authentication import get_current_user
-from monGARS.api.dependencies import get_hippocampus
+from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
 from monGARS.core.hippocampus import MemoryItem
+from monGARS.core.peer import PeerCommunicator
 from monGARS.core.security import SecurityManager
 
 app = FastAPI(title="monGARS API")
@@ -57,3 +59,24 @@ async def conversation_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
+
+
+peer_comm = PeerCommunicator()
+
+
+class PeerMessage(BaseModel):
+    payload: str
+
+
+@app.post("/api/v1/peer/message")
+async def peer_message(
+    message: PeerMessage,
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> dict:
+    """Receive an encrypted message from a peer."""
+    try:
+        data = communicator.decode(message.payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "received", "data": data}

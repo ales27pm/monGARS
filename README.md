@@ -15,6 +15,7 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
   `recommended_worker_count()`.
 - **Robust core detection** falls back to logical CPUs if physical cores
   cannot be determined.
+- **Encrypted peer-to-peer messaging** via `PeerCommunicator` for basic node coordination.
 
 A high level component overview can be found in `monGARS_structure.txt`.
 
@@ -55,6 +56,10 @@ On Raspberry Pi or Jetson boards the number of Uvicorn workers is
 automatically reduced using `monGARS.utils.hardware.recommended_worker_count`.
 The helper checks physical cores first and falls back to logical CPUs when
 necessary.
+
+The `/api/v1/peer/message` endpoint allows nodes to exchange encrypted messages
+for basic coordination. This authenticated POST route accepts a JSON body of the
+form `{"payload": "<encrypted>"}`.
 
 Unit and integration tests are located in the `tests/` directory. Execute them with:
 
