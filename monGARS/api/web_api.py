@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Annotated, Dict, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -8,12 +8,20 @@ from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import get_current_user
 from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
+from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
-from monGARS.core.security import SecurityManager
+from monGARS.core.security import SecurityManager, validate_user_input
 
 app = FastAPI(title="monGARS API")
 sec_manager = SecurityManager()
+conversation_module = ConversationalModule()
+
+
+def get_conversational_module() -> ConversationalModule:
+    return conversation_module
+
+
 users_db: Dict[str, str] = {
     "u1": sec_manager.get_password_hash("x"),
     "u2": sec_manager.get_password_hash("y"),
@@ -45,9 +53,9 @@ async def ready() -> dict:
 @app.get("/api/v1/conversation/history", response_model=List[MemoryItem])
 async def conversation_history(
     user_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    store: Annotated[Any, Depends(get_hippocampus)],
     limit: int = 10,
-    current_user: dict = Depends(get_current_user),
-    store=Depends(get_hippocampus),
 ) -> List[MemoryItem]:
     if user_id != current_user.get("sub"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
@@ -59,6 +67,47 @@ async def conversation_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("message cannot be empty")
+        return v
+
+
+class ChatResponse(BaseModel):
+    response: str
+    confidence: float
+    processing_time: float
+
+
+@app.post("/api/v1/conversation/chat", response_model=ChatResponse)
+async def chat(
+    chat: ChatRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    conv: Annotated[ConversationalModule, Depends(get_conversational_module)],
+) -> ChatResponse:
+    data = validate_user_input(
+        {"user_id": current_user.get("sub"), "query": chat.message}
+    )
+    try:
+        result = await conv.generate_response(
+            current_user.get("sub"), data["query"], session_id=chat.session_id
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ChatResponse(
+        response=result.get("text", ""),
+        confidence=result.get("confidence", 0.0),
+        processing_time=result.get("processing_time", 0.0),
+    )
 
 
 peer_comm = PeerCommunicator()
