@@ -38,6 +38,29 @@ class AsyncTTLCache:
 _RESPONSE_CACHE = AsyncTTLCache()
 
 
+class CircuitBreakerOpen(Exception):
+    """Raised when the circuit breaker is open."""
+
+    pass
+
+
+async def call_with_fallback(
+    call_api,
+    cache_key: str,
+    fallback: Dict,
+) -> tuple[Dict, bool]:
+    try:
+        result = await cb.call(call_api)
+        return result, True
+    except RetryError:
+        logger.error("Retries exhausted for %s", cache_key)
+    except CircuitBreakerOpen:
+        logger.error("Circuit breaker open for %s", cache_key)
+    except Exception as e:
+        logger.error("Error during call %s: %s", cache_key, e, exc_info=True)
+    return fallback, False
+
+
 class CircuitBreaker:
     def __init__(self, fail_max: int = 3, reset_timeout: int = 60):
         self.fail_max = fail_max
@@ -52,7 +75,7 @@ class CircuitBreaker:
                 self.last_failure_time
                 and (current_time - self.last_failure_time) < self.reset_timeout
             ):
-                raise Exception("Circuit breaker open: too many failures")
+                raise CircuitBreakerOpen("Circuit breaker open: too many failures")
             else:
                 self.failure_count = 0
         try:
@@ -69,51 +92,52 @@ cb = CircuitBreaker(fail_max=3, reset_timeout=60)
 
 
 class LLMIntegration:
-    def __init__(self):
+    def __init__(self, http_client: httpx.AsyncClient | None = None):
         self.general_model = "dolphin-mistral:7b-v2.8-q4_K_M"
         self.coding_model = "qwen2.5-coder:7b-instruct-q6_K"
         self.use_ray = os.getenv("USE_RAY_SERVE", "False").lower() in ("true", "1")
         self.ray_url = os.getenv("RAY_SERVE_URL", "http://localhost:8000/generate")
+        self.http_client = http_client or httpx.AsyncClient()
         if self.use_ray:
             logger.info("Ray Serve integration enabled at %s", self.ray_url)
+
+    async def aclose(self) -> None:
+        await self.http_client.aclose()
 
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
     )
     async def _ollama_call(self, model: str, prompt: str) -> Dict:
-        async def call_api():
-            response = await ollama.chat(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                options={
-                    "temperature": settings.ai_model_temperature,
-                    "top_p": 0.9,
-                    "num_predict": 512,
-                    "stream": False,
-                },
-            )
-            return response
-
-        return await cb.call(call_api)
+        response = await ollama.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            options={
+                "temperature": settings.AI_MODEL_TEMPERATURE,
+                "top_p": 0.9,
+                "num_predict": 512,
+                "stream": False,
+            },
+        )
+        return response
 
     async def generate_response(self, prompt: str, task_type: str = "general") -> Dict:
         cache_key = f"{task_type}:{prompt}"
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:
             return cached_response
+
         if self.use_ray:
             logger.info("Using Ray Serve for inference")
-            try:
-                response = await self._ray_call(prompt, task_type)
-            except Exception as e:
-                logger.error("Ray Serve request failed: %s", e, exc_info=True)
-                fallback = {
-                    "text": "Ray Serve unavailable.",
-                    "confidence": 0.0,
-                    "tokens_used": 0,
-                }
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
+            fallback = {
+                "text": "Ray Serve unavailable.",
+                "confidence": 0.0,
+                "tokens_used": 0,
+            }
+
+            async def call_api():
+                return await self._ray_call(prompt, task_type)
+
+            response, success = await call_with_fallback(call_api, cache_key, fallback)
         else:
             model_name = (
                 self.general_model
@@ -121,52 +145,50 @@ class LLMIntegration:
                 else self.coding_model
             )
             logger.info(f"Using model {model_name} for prompt: {prompt}")
-            try:
-                response = await self._ollama_call(model_name, prompt)
-            except RetryError:
-                logger.error(
-                    f"Retries exhausted for model {model_name} with prompt: {prompt}"
-                )
-                fallback = {
-                    "text": "Unable to generate response at this time.",
-                    "confidence": 0.0,
-                    "tokens_used": 0,
-                }
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
-            except Exception as e:
-                logger.error(f"Error during LLM call: {e}", exc_info=True)
-                fallback = {
-                    "text": "An error occurred while generating the response.",
-                    "confidence": 0.0,
-                    "tokens_used": 0,
-                }
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
-        generated_text = response.get("content", "")
-        confidence = self._calculate_confidence(generated_text)
-        tokens_used = len(generated_text.split())
-        result = {
-            "text": generated_text,
-            "confidence": confidence,
-            "tokens_used": tokens_used,
-        }
-        await _RESPONSE_CACHE.set(cache_key, result, ttl=300)
+            fallback = {
+                "text": "Unable to generate response.",
+                "confidence": 0.0,
+                "tokens_used": 0,
+            }
+
+            async def call_api():
+                return await self._ollama_call(model_name, prompt)
+
+            response, success = await call_with_fallback(call_api, cache_key, fallback)
+
+        text = (
+            response.get("content")
+            or response.get("text")
+            or (
+                response.get("message", {}).get("content")
+                if isinstance(response.get("message"), dict)
+                else ""
+            )
+        )
+        confidence = self._calculate_confidence(text)
+        tokens_used = len(text.split())
+        result = {"text": text, "confidence": confidence, "tokens_used": tokens_used}
+        await _RESPONSE_CACHE.set(cache_key, result, ttl=300 if success else 60)
         return result
 
     def _calculate_confidence(self, text: str) -> float:
         token_count = len(text.split())
         return min(1.0, token_count / 512)
 
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
+    )
     async def _ray_call(self, prompt: str, task_type: str) -> Dict:
-        async def call_api() -> Dict:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    self.ray_url,
-                    json={"prompt": prompt, "task_type": task_type},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                return resp.json()
-
-        return await cb.call(call_api)
+        resp = await self.http_client.post(
+            self.ray_url,
+            json={"prompt": prompt, "task_type": task_type},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise ValueError("Invalid JSON from Ray Serve") from e
+        if not isinstance(data, dict):
+            raise ValueError("Unexpected Ray Serve response")
+        return data
