@@ -4,7 +4,7 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 
 ## Features
 
-- **Conversational engine** powered by `LLMIntegration` with optional Ray Serve integration.
+ - **Conversational engine** powered by `LLMIntegration` with optional Ray Serve integration (URL configured via `RAY_SERVE_URL`).
 - **Memory management** through the in-memory `Hippocampus` and persistent storage via `PersistenceRepository`.
 - **Adaptive behaviour** using the `MimicryModule`, `PersonalityEngine` and `AdaptiveResponseGenerator`.
 - **Web scraping** utilities provided by `Iris` for retrieving external context.
