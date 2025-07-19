@@ -4,6 +4,7 @@ beautifulsoup4
 bleach
 django
 fastapi
+python-multipart
 GPUtil
 httpx
 hvac
