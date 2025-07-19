@@ -1,6 +1,7 @@
 # Advanced Fine-Tuning and Distributed Inference Roadmap
 
 This document outlines the planned steps for incorporating robust fine-tuning workflows, pretraining data curation, and distributed inference into **monGARS**.
+For current implementation details, see [implementation_status.md](implementation_status.md).
 
 ## Current Architecture Overview
 
@@ -12,7 +13,7 @@ The project is structured into modular components such as `Hippocampus`, `Neuron
 
 1. **Data Collection and Cleaning**
    - Aggregate conversation data stored by `PersistenceRepository` and user interactions in `Hippocampus`.
-   - Implement preprocessing scripts to remove personally identifiable information and low quality text.
+   - Implement preprocessing scripts to remove personally identifiable information and low-quality text.
    - Maintain a versioned dataset catalog under `models/datasets/`.
 2. **Fine-Tuning Workflow**
    - Extend `MNTPTrainer` to perform real masked next token prediction training.
