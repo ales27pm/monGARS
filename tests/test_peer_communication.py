@@ -98,3 +98,20 @@ async def test_peer_missing_message(client):
     communicator = PeerCommunicator(["http://test/api/v1/peer/message"], client)
     results = await communicator.send(None)
     assert results == [False]
+
+
+@pytest.mark.asyncio
+async def test_peer_register_and_list(client):
+    resp = await client.post(
+        "/api/v1/peer/register",
+        json={"url": "http://test/api/v1/peer/message"},
+        headers={"Authorization": "Bearer token"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] in {"registered", "already registered"}
+
+    list_resp = await client.get(
+        "/api/v1/peer/list", headers={"Authorization": "Bearer token"}
+    )
+    assert list_resp.status_code == 200
+    assert "http://test/api/v1/peer/message" in list_resp.json()

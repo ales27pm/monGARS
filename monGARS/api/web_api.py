@@ -68,6 +68,10 @@ class PeerMessage(BaseModel):
     payload: str
 
 
+class PeerRegistration(BaseModel):
+    url: str
+
+
 @app.post("/api/v1/peer/message")
 async def peer_message(
     message: PeerMessage,
@@ -80,3 +84,25 @@ async def peer_message(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "received", "data": data}
+
+
+@app.post("/api/v1/peer/register")
+async def peer_register(
+    registration: PeerRegistration,
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> dict:
+    """Register a peer URL for future broadcasts."""
+    if registration.url in communicator.peers:
+        return {"status": "already registered", "count": len(communicator.peers)}
+    communicator.peers.append(registration.url)
+    return {"status": "registered", "count": len(communicator.peers)}
+
+
+@app.get("/api/v1/peer/list", response_model=List[str])
+async def peer_list(
+    current_user: dict = Depends(get_current_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> List[str]:
+    """Return the list of registered peer URLs."""
+    return communicator.peers
