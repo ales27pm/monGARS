@@ -132,7 +132,7 @@ def configure_telemetry(settings: Settings) -> None:
 
     meter_provider = MeterProvider(
         resource=resource,
-        metric_readers=metric_readers or None,
+        metric_readers=metric_readers or [],
     )
 
     trace_provider = TracerProvider(resource=resource)

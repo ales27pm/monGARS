@@ -70,3 +70,17 @@ async def test_tiered_cache_set_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(cache.redis, "set", broken_set)
     await cache.set("fail", "ok")
     assert await cache.get("fail") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_tiered_cache_metrics(tmp_path):
+    cache = TieredCache(directory=str(tmp_path))
+    await cache.clear_all()
+
+    await cache.set("a", 1)
+    await cache.get("a")
+    await cache.get("missing")
+
+    metrics = cache.get_metrics()
+    assert metrics["hits"] == 1
+    assert metrics["misses"] == 1

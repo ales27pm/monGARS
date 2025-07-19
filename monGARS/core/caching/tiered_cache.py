@@ -7,11 +7,16 @@ from pathlib import Path
 from typing import Any
 
 from aiocache import Cache, caches
+from opentelemetry import metrics
 
 from monGARS.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings: Any | None = None
+
+meter = metrics.get_meter(__name__)
+_hit_counter = meter.create_counter("tiered_cache_hits")
+_miss_counter = meter.create_counter("tiered_cache_misses")
 
 
 class SimpleDiskCache:
@@ -94,6 +99,8 @@ class TieredCache:
             self.redis = caches.get("default")
         self.disk = SimpleDiskCache(directory or settings.DISK_CACHE_PATH)
         self.caches = [self.memory, self.redis, self.disk]
+        self.hits = 0
+        self.misses = 0
 
     async def _safe(self, cache: Cache, method: str, *args: Any, **kwargs: Any) -> Any:
         try:
@@ -110,9 +117,13 @@ class TieredCache:
             value = await self._safe(cache, "get", key)
             if value is not None:
                 logger.debug("%s hit for %s", cache.__class__.__name__, key)
+                self.hits += 1
+                _hit_counter.add(1, {"layer": cache.__class__.__name__})
                 for prev in self.caches[:idx]:
                     await self._safe(prev, "set", key, value)
                 return value
+        self.misses += 1
+        _miss_counter.add(1)
         return None
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
@@ -133,3 +144,7 @@ class TieredCache:
     async def clear_all(self) -> None:
         for cache in self.caches:
             await self._safe(cache, "clear")
+
+    def get_metrics(self) -> dict:
+        """Return cache hit and miss counts."""
+        return {"hits": self.hits, "misses": self.misses}
