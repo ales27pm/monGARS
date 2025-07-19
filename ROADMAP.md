@@ -24,6 +24,8 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - **[Completed]** Add encrypted token handling for social media integration.
 - **[Completed]** Improve error handling and tests for social posting.
 - **[Completed]** Optimize CPU and memory usage for Raspberry Pi and Jetson boards.
+  Worker auto-tuning now falls back to logical CPUs when physical core count is
+  unavailable.
 - Build container images for embedded hardware targets.
 - **[Completed]** Added cache hit/miss metrics with OTEL units and layer labels. PostgreSQL migrations pending.
 - **[Completed]** Harden security policies and RBAC rules.

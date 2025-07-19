@@ -22,7 +22,11 @@ def recommended_worker_count(default: int = 4) -> int:
     if not device:
         return default
 
-    cores = psutil.cpu_count(logical=False) or 1
+    cores = psutil.cpu_count(logical=False)
+    if cores is None:
+        cores = psutil.cpu_count(logical=True)
+    if cores is None or cores == 0:
+        cores = 1
     if device == "armv7l":
         return 1
     return max(1, min(2, cores))
