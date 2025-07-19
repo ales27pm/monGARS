@@ -23,7 +23,7 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - **[Completed]** Implement the conversation history endpoint. Social media token handling pending.
 - Optimize CPU and memory usage for Raspberry Pi and Jetson boards.
 - Build container images for embedded hardware targets.
-- Improve telemetry and finalize tiered caching and PostgreSQL migrations.
+- **[Completed]** Added cache hit/miss metrics with OTEL units and layer labels. PostgreSQL migrations pending.
 - Harden security policies and RBAC rules.
 
 ## Phase 4 - Collaborative Networking (planned - target Q4 2025)
