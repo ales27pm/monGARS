@@ -58,7 +58,8 @@ The helper checks physical cores first and falls back to logical CPUs when
 necessary.
 
 The `/api/v1/peer/message` endpoint allows nodes to exchange encrypted messages
-for basic coordination.
+for basic coordination. This authenticated POST route accepts a JSON body of the
+form `{"payload": "<encrypted>"}`.
 
 Unit and integration tests are located in the `tests/` directory. Execute them with:
 
