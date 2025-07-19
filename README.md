@@ -11,6 +11,8 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Tiered caching** (memory, Redis and disk) with graceful fallback handling.
 - **Self‑training and monitoring** via `SelfTrainingEngine` and `SystemMonitor`.
 - **Web interface** implemented with Django (located in `webapp/`).
+- **Automatic worker tuning** for Raspberry Pi and Jetson devices via
+  `recommended_worker_count()`.
 
 A high level component overview can be found in `monGARS_structure.txt`.
 
@@ -46,6 +48,9 @@ The main entry point is `main.py` which bootstraps monitoring tasks and exposes 
 ```bash
 python main.py
 ```
+
+On Raspberry Pi or Jetson boards the number of Uvicorn workers is
+automatically reduced using `monGARS.utils.hardware.recommended_worker_count`.
 
 Unit and integration tests are located in the `tests/` directory. Execute them with:
 

@@ -14,6 +14,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from monGARS.utils.hardware import recommended_worker_count
+
 log = logging.getLogger(__name__)
 
 
@@ -30,7 +32,7 @@ class Settings(BaseSettings):
     debug: bool = os.getenv("DEBUG", "False").lower() in ("true", "1")
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", 8000))
-    workers: int = 4
+    workers: int = recommended_worker_count()
 
     SECRET_KEY: str = Field(..., min_length=1)
     JWT_ALGORITHM: str = "RS256"
