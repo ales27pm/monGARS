@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Set
 
 import httpx
 
@@ -20,7 +20,8 @@ class PeerCommunicator:
         peers: Iterable[str] | None = None,
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
-        self.peers = list(peers or [])
+        # Store peers in a set to avoid duplicates
+        self.peers: Set[str] = {p.rstrip("/") for p in peers or []}
         self._client = client
 
     async def send(self, message: Optional[dict]) -> List[bool]:
