@@ -27,6 +27,7 @@ Milestone: proof-of-concept functionality established, real AI features still mi
   Worker auto-tuning now falls back to logical CPUs when physical core count is
   unavailable.
 - **[Completed]** Build container images for embedded hardware targets.
+- **[Completed]** Provide a host-optimized build script for Intel i7 developer workstations.
 - **[Completed]** Added cache hit/miss metrics with OTEL units and layer labels. PostgreSQL migrations pending.
 - **[Completed]** Harden security policies and RBAC rules.
 

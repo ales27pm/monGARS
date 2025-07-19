@@ -1,5 +1,7 @@
 # --- Build Stage ---
 FROM nvcr.io/nvidia/pytorch:23.10-py3 AS builder
+ARG JOBS=1
+ENV MAKEFLAGS="-j${JOBS}"
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
