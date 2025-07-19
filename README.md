@@ -10,6 +10,7 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Web scraping** utilities provided by `Iris` for retrieving external context.
 - **Tiered caching** (memory, Redis and disk) with graceful fallback handling.
 - **Self‑training and monitoring** via `SelfTrainingEngine` and `SystemMonitor`.
+- **Evolution Engine** for autonomous diagnostics and code optimisation.
 - **Web interface** implemented with Django (located in `webapp/`).
 - **Automatic worker tuning** for Raspberry Pi and Jetson devices via
   `recommended_worker_count()`.

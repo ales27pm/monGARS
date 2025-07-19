@@ -34,6 +34,7 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 - Use `build_native.sh` to build an optimized x86_64 image leveraging all CPU cores on a developer workstation.
 - Kubernetes RBAC policies were tightened. Refer to `rbac.yaml`.
 - A `PeerCommunicator` module provides encrypted message passing between nodes. Use `/api/v1/peer/message` to receive messages. The route requires authentication and the JSON body `{ "payload": "..." }`.
+- The `Evolution Engine` runs automated diagnostics and applies performance tweaks. Review logs in `Mémoire Autobiographique` for optimisation history.
  - Record common errors and the strategies developed to resolve them here so
   future contributors don't repeat the same investigation.
  - Keep a running log of new ideas and experimental results. Note what works well

@@ -50,4 +50,9 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - Replace stubbed tests (`chaos_test.py`, `self_training_test.py`, `property_test.py`) with meaningful coverage.
 - Explore reinforcement learning and dynamic scaling for continuous improvement.
 
+## Phase 7 - Sustainability & Longevity (future)
+- Integrate the Evolution Engine into routine optimisation cycles.
+- Automate energy usage reporting and hardware-aware scaling.
+- Share optimisation results between nodes to accelerate improvements.
+
 This roadmap will evolve as monGARS matures. Community feedback and contributions are welcome.
