@@ -8,9 +8,10 @@ from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import get_current_user
 from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
+from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
-from monGARS.core.security import SecurityManager
+from monGARS.core.security import SecurityManager, validate_user_input
 
 app = FastAPI(title="monGARS API")
 sec_manager = SecurityManager()
@@ -59,6 +60,44 @@ async def conversation_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("message cannot be empty")
+        return v
+
+
+class ChatResponse(BaseModel):
+    response: str
+    confidence: float
+    processing_time: float
+
+
+@app.post("/api/v1/conversation/chat", response_model=ChatResponse)
+async def chat(
+    chat: ChatRequest,
+    current_user: dict = Depends(get_current_user),
+) -> ChatResponse:
+    data = validate_user_input(
+        {"user_id": current_user.get("sub"), "query": chat.message}
+    )
+    conv = ConversationalModule()
+    result = await conv.generate_response(
+        current_user.get("sub"), data["query"], session_id=chat.session_id
+    )
+    return ChatResponse(
+        response=result.get("text", ""),
+        confidence=result.get("confidence", 0.0),
+        processing_time=result.get("processing_time", 0.0),
+    )
 
 
 peer_comm = PeerCommunicator()

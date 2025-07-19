@@ -35,7 +35,7 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - ✅ Extended Sommeil Paradoxal for idle-time optimization and auto-updates.
 - ✅ Added `safe_apply_optimizations` to Evolution Engine for sandboxed upgrades.
 
-## Phase 5 - Web Interface & API (target Q1 2026)
+- ✅ Added `/api/v1/conversation/chat` endpoint with input sanitization.
 - 🚧 Refine existing REST endpoints with robust input validation and error handling.
 - 🚧 Backend WebSocket handler to complete the Django chat application and expose a history view.
 - 🚧 Authentication, user management and permission checks.

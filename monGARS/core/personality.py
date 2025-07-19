@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from init_db import UserPersonality, async_session_factory
+from monGARS.init_db import UserPersonality, async_session_factory
 
 logger = logging.getLogger(__name__)
 
