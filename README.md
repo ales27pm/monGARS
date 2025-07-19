@@ -17,6 +17,9 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Robust core detection** falls back to logical CPUs if physical cores
   cannot be determined.
 - **Encrypted peer-to-peer messaging** via `PeerCommunicator` for basic node coordination.
+- **Distributed task scheduling** handled by `DistributedScheduler` to share work between peers.
+- **Idle-time optimisation** through `SommeilParadoxal` which triggers upgrades when the system is quiet.
+- **Safe optimisation cycles** executed by `EvolutionEngine.safe_apply_optimizations`.
 
 A high level component overview can be found in `monGARS_structure.txt`.
 
