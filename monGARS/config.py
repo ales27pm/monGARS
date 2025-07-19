@@ -28,11 +28,11 @@ class Settings(BaseSettings):
     api_version: str = "1.0.0"
 
     debug: bool = os.getenv("DEBUG", "False").lower() in ("true", "1")
-    host: str = os.getenv("HOST", "0.0.0.0")
+    host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", 8000))
     workers: int = 4
 
-    SECRET_KEY: str = Field("unsafe-secret", min_length=1)
+    SECRET_KEY: str = Field(..., min_length=1)
     JWT_ALGORITHM: str = "RS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
@@ -82,20 +82,32 @@ class Settings(BaseSettings):
         return value
 
 
-async def fetch_secrets_from_vault(settings: Settings) -> dict:
+async def fetch_secrets_from_vault(
+    settings: Settings, attempts: int = 3, delay: float = 1.0
+) -> dict:
     if not settings.VAULT_URL or not settings.VAULT_TOKEN:
         log.warning("Vault not configured; using .env values.")
         return {}
 
-    try:
-        client = hvac.Client(url=settings.VAULT_URL, token=settings.VAULT_TOKEN)
-        secret_response = client.secrets.kv.v2.read_secret_version(path="monGARS")
-        secrets = secret_response["data"]["data"]
-        log.info("Secrets successfully fetched from Vault.")
-        return secrets
-    except Exception as exc:  # pragma: no cover - vault not used in tests
-        log.error("Error fetching secrets from Vault: %s", exc)
-        return {}
+    for attempt in range(1, attempts + 1):
+        try:
+            client = hvac.Client(url=settings.VAULT_URL, token=settings.VAULT_TOKEN)
+            secret_response = client.secrets.kv.v2.read_secret_version(path="monGARS")
+            secrets = secret_response["data"]["data"]
+            log.info("Secrets successfully fetched from Vault.")
+            return secrets
+        except Exception as exc:  # pragma: no cover - vault not used in tests
+            log.error(
+                "Error fetching secrets from Vault (attempt %s/%s): %s",
+                attempt,
+                attempts,
+                exc,
+            )
+            if attempt < attempts:
+                await asyncio.sleep(delay)
+
+    log.critical("Failed to fetch secrets from Vault after %s attempts", attempts)
+    return {}
 
 
 def configure_telemetry(settings: Settings) -> None:
@@ -105,9 +117,25 @@ def configure_telemetry(settings: Settings) -> None:
             "service.version": settings.api_version,
         }
     )
-    trace_provider = TracerProvider(resource=resource)
-    meter_provider = MeterProvider(resource=resource)
 
+    metric_readers = []
+    if settings.otel_metrics_enabled and not settings.otel_debug:
+        try:
+            metric_exporter = OTLPMetricExporter(
+                endpoint=f"{settings.otel_collector_url}/v1/metrics"
+            )
+            from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+            metric_readers.append(PeriodicExportingMetricReader(metric_exporter))
+        except Exception as exc:  # pragma: no cover - optional metrics
+            log.warning("Failed to configure metrics: %s", exc)
+
+    meter_provider = MeterProvider(
+        resource=resource,
+        metric_readers=metric_readers or None,
+    )
+
+    trace_provider = TracerProvider(resource=resource)
     if settings.otel_traces_enabled:
         exporter = (
             ConsoleSpanExporter()
@@ -115,19 +143,6 @@ def configure_telemetry(settings: Settings) -> None:
             else OTLPSpanExporter(endpoint=settings.otel_collector_url)
         )
         trace_provider.add_span_processor(BatchSpanProcessor(exporter))
-
-    if settings.otel_metrics_enabled and not settings.otel_debug:
-        try:
-            metric_exporter = OTLPMetricExporter(
-                endpoint=f"{settings.otel_collector_url}/v1/metrics"
-            )
-            meter_provider = MeterProvider(
-                resource=resource,
-                metric_readers=[metric_exporter],
-            )
-        except Exception as exc:  # pragma: no cover - optional metrics
-            log.warning("Failed to configure metrics: %s", exc)
-            meter_provider = MeterProvider(resource=resource)
 
     trace.set_tracer_provider(trace_provider)
     metrics.set_meter_provider(meter_provider)
@@ -141,11 +156,13 @@ def get_settings() -> Settings:
         vault_secrets = {}
     except RuntimeError:
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         vault_secrets = loop.run_until_complete(fetch_secrets_from_vault(settings))
+        loop.close()
     for key, value in vault_secrets.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
-    if settings.SECRET_KEY == "unsafe-secret" and not settings.debug:
-        raise ValueError("Default SECRET_KEY must be overridden in production")
+    if not settings.SECRET_KEY and not settings.debug:
+        raise ValueError("SECRET_KEY must be provided in production")
     configure_telemetry(settings)
     return settings

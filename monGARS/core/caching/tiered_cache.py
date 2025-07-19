@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
+import json
 import logging
-import pickle
 import time
 from pathlib import Path
 from typing import Any
@@ -24,15 +24,15 @@ class SimpleDiskCache:
 
     def _path(self, key: str) -> Path:
         name = hashlib.sha256(key.encode()).hexdigest()
-        return self.directory / f"{name}.pkl"
+        return self.directory / f"{name}.json"
 
     async def get(self, key: str) -> Any:
         async with self.lock:
             path = self._path(key)
             if not path.exists():
                 return None
-            with path.open("rb") as fh:
-                data = pickle.load(fh)
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
             expires = data.get("expires")
             if expires and expires <= time.time():
                 path.unlink(missing_ok=True)
@@ -43,13 +43,16 @@ class SimpleDiskCache:
         async with self.lock:
             self.directory.mkdir(parents=True, exist_ok=True)
             path = self._path(key)
-            data = {"value": value, "expires": time.time() + ttl if ttl else None}
-            with path.open("wb") as fh:
-                pickle.dump(data, fh)
+            data = {
+                "value": value,
+                "expires": time.time() + ttl if ttl else None,
+            }
+            with path.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh)
 
     async def clear(self) -> None:
         async with self.lock:
-            for file in self.directory.glob("*.pkl"):
+            for file in self.directory.glob("*.json"):
                 file.unlink(missing_ok=True)
 
 
@@ -72,7 +75,11 @@ class TieredCache:
                         "cache": "aiocache.RedisCache",
                         "endpoint": settings.redis_url.host,
                         "port": settings.redis_url.port,
-                        "db": int(settings.redis_url.path.strip("/")),
+                        "db": (
+                            int(db)
+                            if (db := settings.redis_url.path.lstrip("/")).isdigit()
+                            else 0
+                        ),
                         "serializer": {
                             "class": "aiocache.serializers.PickleSerializer"
                         },
@@ -81,7 +88,10 @@ class TieredCache:
                 }
             )
         self.memory = caches.get("default")
-        self.redis = caches.get("redis")
+        if hasattr(__import__("aiocache"), "RedisCache"):
+            self.redis = caches.get("redis")
+        else:
+            self.redis = caches.get("default")
         self.disk = SimpleDiskCache(directory or settings.DISK_CACHE_PATH)
         self.caches = [self.memory, self.redis, self.disk]
 
