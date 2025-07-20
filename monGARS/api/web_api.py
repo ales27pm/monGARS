@@ -61,9 +61,6 @@ async def conversation_history(
         ) from exc
 
 
-peer_comm = PeerCommunicator()
-
-
 class PeerMessage(BaseModel):
     payload: str
 
