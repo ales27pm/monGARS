@@ -1,3 +1,1 @@
-*(Already provided above in section 21)*
-
----
+"""Django project package."""
