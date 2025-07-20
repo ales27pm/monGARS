@@ -30,3 +30,8 @@ llm2vec
 pytest
 pytest-asyncio
 cryptography
+durationpy==0.10
+kubernetes==33.1.0
+oauthlib==3.3.1
+requests-oauthlib==2.0.0
+websocket-client==1.8.0
