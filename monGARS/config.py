@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     AI_MODEL_TEMPERATURE: float = float(os.getenv("AI_MODEL_TEMPERATURE", 0.7))
     USE_GPU: bool = os.getenv("USE_GPU", "False").lower() in ("true", "1")
     default_language: str = "fr-CA"
+    caption_prefix: str = os.getenv(
+        "CAPTION_PREFIX",
+        "Description de l'image:",
+    )
     otel_logs_enabled: bool = os.getenv("OTEL_LOGS_ENABLED", "True").lower() in (
         "true",
         "1",

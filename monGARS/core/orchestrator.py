@@ -39,58 +39,69 @@ class Orchestrator:
     ) -> dict:
         """Process a user query end-to-end."""
         start_time = datetime.utcnow()
-        if image_data:
-            caption = await self.captioner.generate_caption(image_data)
-            if caption:
-                logger.info("Image caption generated: %s", caption)
-                query = f"{query} Description de l'image: {caption}"
+        try:
+            if image_data:
+                caption = await self.captioner.generate_caption(image_data)
+                if caption:
+                    logger.info("Image caption generated: %s", caption)
+                    query = f"{query} {settings.caption_prefix} {caption}"
 
-        conversation_context = {"last_query": query}
-        gap_info = await self.curiosity.detect_gaps(conversation_context)
-        if gap_info.get("status") == "insufficient_knowledge":
-            query += " " + gap_info.get("additional_context", "")
-            logger.info(
-                "Query augmented with additional context from curiosity engine."
+            conversation_context = {"last_query": query}
+            gap_info = await self.curiosity.detect_gaps(conversation_context)
+            if gap_info.get("status") == "insufficient_knowledge":
+                query += " " + gap_info.get("additional_context", "")
+                logger.info(
+                    "Query augmented with additional context from curiosity engine."
+                )
+
+            reason_result = await self.reasoner.reason(query, user_id)
+            if "result" in reason_result:
+                refined_query = f"{query} {reason_result['result']}"
+                logger.info(
+                    "Query refined with neuro-symbolic reasoning: %s", refined_query
+                )
+            else:
+                refined_query = query
+
+            llm_response = await self.llm.generate_response(refined_query)
+            base_response = llm_response.get("text", "")
+            user_personality = await self.personality.analyze_personality(user_id, [])
+            adapted_response = await self.dynamic_response.generate_adaptive_response(
+                base_response, user_personality
             )
-
-        reason_result = await self.reasoner.reason(query, user_id)
-        if "result" in reason_result:
-            refined_query = f"{query} {reason_result['result']}"
-            logger.info(
-                "Query refined with neuro-symbolic reasoning: %s", refined_query
+            interaction_data = {
+                # Using a neutral baseline until real feedback collection is implemented
+                "feedback": 0.8,
+                "response_time": (datetime.utcnow() - start_time).total_seconds(),
+            }
+            await self.mimicry.update_profile(user_id, interaction_data)
+            final_response = await self.mimicry.adapt_response_style(
+                adapted_response, user_id
             )
-        else:
-            refined_query = query
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            self.log_interaction(
+                user_id,
+                refined_query,
+                final_response,
+                llm_response.get("confidence", 0.9),
+                processing_time,
+            )
+            return {
+                "text": final_response,
+                "confidence": llm_response.get("confidence", 0.9),
+                "processing_time": processing_time,
+            }
+        except Exception as exc:  # pragma: no cover - unexpected failure
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            logger.error("Process query failed for %s: %s", user_id, exc, exc_info=True)
+            return {
+                "text": "An error occurred while processing your request.",
+                "confidence": 0.0,
+                "processing_time": processing_time,
+                "error": str(exc),
+            }
 
-        llm_response = await self.llm.generate_response(refined_query)
-        base_response = llm_response.get("text", "")
-        user_personality = await self.personality.analyze_personality(user_id, [])
-        adapted_response = await self.dynamic_response.generate_adaptive_response(
-            base_response, user_personality
-        )
-        interaction_data = {
-            "feedback": 0.8,
-            "response_time": (datetime.utcnow() - start_time).total_seconds(),
-        }
-        await self.mimicry.update_profile(user_id, interaction_data)
-        final_response = await self.mimicry.adapt_response_style(
-            adapted_response, user_id
-        )
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
-        await self.log_interaction(
-            user_id,
-            refined_query,
-            final_response,
-            llm_response.get("confidence", 0.9),
-            processing_time,
-        )
-        return {
-            "text": final_response,
-            "confidence": llm_response.get("confidence", 0.9),
-            "processing_time": processing_time,
-        }
-
-    async def log_interaction(
+    def log_interaction(
         self,
         user_id: str,
         query: str,
@@ -98,11 +109,13 @@ class Orchestrator:
         confidence: float,
         processing_time: float,
     ) -> None:
-        logger.info(
+        safe_query = query[:100]
+        safe_response = response[:100]
+        logger.debug(
             "User: %s | Query: %s | Response: %s | Confidence: %s | Processing Time: %.2fs",
             user_id,
-            query,
-            response,
+            safe_query,
+            safe_response,
             confidence,
             processing_time,
         )

@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from monGARS.config import get_settings
 from monGARS.core.bouche import Bouche
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
@@ -19,6 +20,7 @@ from monGARS.core.services import MemoryService, SpeakerService
 from ..init_db import Interaction
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class ConversationalModule:
@@ -52,7 +54,7 @@ class ConversationalModule:
         if not image_data:
             return query
         caption = await self.captioner.generate_caption(image_data)
-        return f"{query} Description de l'image: {caption}"
+        return f"{query} {settings.caption_prefix} {caption}"
 
     async def _augment_with_curiosity(
         self, query: str, history: list[tuple[str, str]]
