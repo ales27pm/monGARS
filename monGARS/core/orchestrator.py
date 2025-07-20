@@ -41,20 +41,38 @@ class Orchestrator:
         start_time = datetime.utcnow()
         try:
             if image_data:
-                caption = await self.captioner.generate_caption(image_data)
+                try:
+                    caption = await asyncio.wait_for(
+                        self.captioner.generate_caption(image_data), timeout=5
+                    )
+                except Exception as exc:
+                    logger.error("Captioning failed: %s", exc)
+                    caption = ""
                 if caption:
                     logger.info("Image caption generated: %s", caption)
                     query = f"{query} {settings.caption_prefix} {caption}"
 
             conversation_context = {"last_query": query}
-            gap_info = await self.curiosity.detect_gaps(conversation_context)
+            try:
+                gap_info = await asyncio.wait_for(
+                    self.curiosity.detect_gaps(conversation_context), timeout=5
+                )
+            except Exception as exc:
+                logger.error("Curiosity engine failed: %s", exc)
+                gap_info = {}
             if gap_info.get("status") == "insufficient_knowledge":
                 query += " " + gap_info.get("additional_context", "")
                 logger.info(
                     "Query augmented with additional context from curiosity engine."
                 )
 
-            reason_result = await self.reasoner.reason(query, user_id)
+            try:
+                reason_result = await asyncio.wait_for(
+                    self.reasoner.reason(query, user_id), timeout=10
+                )
+            except Exception as exc:
+                logger.error("Reasoner failed: %s", exc)
+                reason_result = {}
             if "result" in reason_result:
                 refined_query = f"{query} {reason_result['result']}"
                 logger.info(
@@ -63,21 +81,51 @@ class Orchestrator:
             else:
                 refined_query = query
 
-            llm_response = await self.llm.generate_response(refined_query)
+            try:
+                llm_response = await asyncio.wait_for(
+                    self.llm.generate_response(refined_query), timeout=30
+                )
+            except Exception as exc:
+                logger.error("LLM call failed: %s", exc)
+                llm_response = {"text": "", "confidence": 0.0}
             base_response = llm_response.get("text", "")
-            user_personality = await self.personality.analyze_personality(user_id, [])
-            adapted_response = await self.dynamic_response.generate_adaptive_response(
-                base_response, user_personality
-            )
+            try:
+                user_personality = await asyncio.wait_for(
+                    self.personality.analyze_personality(user_id, []), timeout=5
+                )
+            except Exception as exc:
+                logger.error("Personality analysis failed: %s", exc)
+                user_personality = {}
+            try:
+                adapted_response = await asyncio.wait_for(
+                    self.dynamic_response.generate_adaptive_response(
+                        base_response, user_personality
+                    ),
+                    timeout=5,
+                )
+            except Exception as exc:
+                logger.error("Adaptive response generation failed: %s", exc)
+                adapted_response = base_response
             interaction_data = {
                 # Using a neutral baseline until real feedback collection is implemented
                 "feedback": 0.8,
                 "response_time": (datetime.utcnow() - start_time).total_seconds(),
             }
-            await self.mimicry.update_profile(user_id, interaction_data)
-            final_response = await self.mimicry.adapt_response_style(
-                adapted_response, user_id
-            )
+            try:
+                await asyncio.wait_for(
+                    self.mimicry.update_profile(user_id, interaction_data),
+                    timeout=5,
+                )
+            except Exception as exc:
+                logger.error("Mimicry update failed: %s", exc)
+            try:
+                final_response = await asyncio.wait_for(
+                    self.mimicry.adapt_response_style(adapted_response, user_id),
+                    timeout=5,
+                )
+            except Exception as exc:
+                logger.error("Mimicry adaptation failed: %s", exc)
+                final_response = adapted_response
             processing_time = (datetime.utcnow() - start_time).total_seconds()
             self.log_interaction(
                 user_id,
