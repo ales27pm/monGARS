@@ -1,0 +1,33 @@
+body.dark-mode {
+  background-color: #121212;
+  color: #e0e0e0;
+}
+#chat-box {
+  height: 500px;
+  overflow-y: auto;
+  background-color: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 0.25rem;
+  padding: 1rem;
+  transition: background-color 0.3s ease;
+}
+body.dark-mode #chat-box {
+  background-color: #1e1e1e;
+  border-color: #333;
+}
+.message {
+  margin-bottom: 1rem;
+  opacity: 0;
+  animation: fadeIn 0.5s forwards;
+}
+.message .time {
+  font-size: 0.8rem;
+  color: #6c757d;
+}
+@keyframes fadeIn {
+  to { opacity: 1; }
+}
+#status-indicator {
+  font-size: 0.9rem;
+  color: #0d6efd;
+}
