@@ -4,7 +4,7 @@ from __future__ import annotations
 class AdaptiveResponseGenerator:
     """Simple adaptive response generator based on personality."""
 
-    async def generate_adaptive_response(self, text: str, personality: dict) -> str:
+    def generate_adaptive_response(self, text: str, personality: dict) -> str:
         """Return an adapted response based on user personality."""
 
         formality = personality.get("formality", 0.5)
