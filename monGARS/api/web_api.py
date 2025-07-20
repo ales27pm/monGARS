@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Annotated, Dict, List
+from typing import Annotated, Any, Dict, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -108,9 +108,6 @@ async def chat(
         confidence=result.get("confidence", 0.0),
         processing_time=result.get("processing_time", 0.0),
     )
-
-
-peer_comm = PeerCommunicator()
 
 
 class PeerMessage(BaseModel):
