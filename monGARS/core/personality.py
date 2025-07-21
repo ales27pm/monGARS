@@ -7,6 +7,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+try:
+    from textblob import TextBlob
+    from textblob_fr import PatternTagger as PatternTaggerFr
+except ImportError:  # pragma: no cover
+    TextBlob = None
+    PatternTaggerFr = None
+
 try:  # prefer patched init_db in tests
     from init_db import UserPersonality, async_session_factory
 except Exception:  # pragma: no cover - fallback for runtime use
@@ -27,9 +34,13 @@ class PersonalityProfile:
 class PersonalityEngine:
     def __init__(self, session_factory=async_session_factory) -> None:
         self.user_profiles = defaultdict(lambda: self._generate_default_profile())
-        self.learning_rate = 0.1
+        self.learning_rate = 0.05
         self._lock = asyncio.Lock()
         self._session_factory = session_factory
+        if not TextBlob:  # pragma: no cover
+            logger.warning(
+                "textblob or textblob-fr not installed. Personality analysis will be disabled."
+            )
         logger.info("PersonalityEngine initialized.")
 
     def _generate_default_profile(self) -> PersonalityProfile:
@@ -99,6 +110,41 @@ class PersonalityEngine:
                 logger.exception("Failed to save profile for %s: %s", user_id, exc)
 
     async def analyze_personality(self, user_id: str, interactions: list) -> dict:
-        if user_id not in self.user_profiles:
-            await self.load_profile(user_id)
-        return self.user_profiles[user_id].traits
+        if not TextBlob or not interactions:
+            return (await self.load_profile(user_id)).traits
+
+        profile = await self.load_profile(user_id)
+
+        for interaction in interactions[-5:]:
+            message = interaction.get("message", "")
+            if not message:
+                continue
+
+            blob = TextBlob(message, pos_tagger=PatternTaggerFr())
+            sentiment = blob.sentiment
+
+            profile.traits["agreeableness"] = self._update_trait(
+                profile.traits["agreeableness"], (sentiment.polarity + 1) / 2
+            )
+            profile.traits["neuroticism"] = self._update_trait(
+                profile.traits["neuroticism"], (-sentiment.polarity + 1) / 2
+            )
+
+            profile.interaction_style["formality"] = self._update_trait(
+                profile.interaction_style["formality"], 1 - sentiment.subjectivity
+            )
+            profile.interaction_style["humor"] = self._update_trait(
+                profile.interaction_style["humor"], (sentiment.polarity + 1) / 2
+            )
+            profile.interaction_style["enthusiasm"] = self._update_trait(
+                profile.interaction_style["enthusiasm"], (sentiment.polarity + 1) / 2
+            )
+
+        logger.info(f"Dynamically updated personality for {user_id}: {profile.traits}")
+        asyncio.create_task(self.save_profile(user_id))
+
+        return profile.traits
+
+    def _update_trait(self, current_value: float, new_value: float) -> float:
+        """Nudge the current trait toward ``new_value`` using the learning rate."""
+        return current_value + self.learning_rate * (new_value - current_value)
