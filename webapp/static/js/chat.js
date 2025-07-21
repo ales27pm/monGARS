@@ -3,6 +3,20 @@ if (!fastapiUrl || !userId) {
   alert('Configuration missing.');
   throw new Error('Missing fastapiUrl or userId');
 }
+const historyElement = document.getElementById('chat-history');
+let chatHistory = [];
+if (historyElement) {
+  try {
+    chatHistory = JSON.parse(historyElement.textContent);
+    if (chatHistory.error) {
+      showError(chatHistory.error);
+      chatHistory = [];
+    }
+  } catch (e) {
+    console.error('Failed to parse history', e);
+  }
+  historyElement.remove();
+}
 let socket;
 function addMessage(message) {
   const chatBox = document.getElementById("chat-box");
@@ -51,10 +65,18 @@ function connectWebSocket() {
   };
 }
 connectWebSocket();
-document.getElementById("toggle-dark-mode").addEventListener("click", () => {
-  document.body.classList.toggle("dark-mode");
-  const btn = document.getElementById("toggle-dark-mode");
-  btn.textContent = document.body.classList.contains("dark-mode") ? "Mode Clair" : "Mode Sombre";
+chatHistory.forEach(addMessage);
+const darkModeKey = 'dark-mode';
+const toggleBtn = document.getElementById("toggle-dark-mode");
+function applyDarkMode(enabled) {
+  document.body.classList.toggle("dark-mode", enabled);
+  toggleBtn.textContent = enabled ? "Mode Clair" : "Mode Sombre";
+}
+applyDarkMode(localStorage.getItem(darkModeKey) === '1');
+toggleBtn.addEventListener("click", () => {
+  const enabled = !document.body.classList.contains("dark-mode");
+  applyDarkMode(enabled);
+  localStorage.setItem(darkModeKey, enabled ? '1' : '0');
 });
 document.getElementById("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -71,6 +93,12 @@ document.getElementById("chat-form").addEventListener("submit", async (event) =>
       body: formData
     });
     if (!response.ok) throw new Error("Erreur lors de l'envoi du message");
+    const data = await response.json();
+    addMessage({
+      query: message,
+      response: data.response,
+      timestamp: Date.now()
+    });
     input.value = "";
   } catch (error) {
     showError(error.message);
