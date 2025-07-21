@@ -1,7 +1,7 @@
-const { fastapiUrl, userId } = window.chatConfig || {};
-if (!fastapiUrl || !userId) {
+const { fastapiUrl, userId, token } = window.chatConfig || {};
+if (!fastapiUrl || !userId || !token) {
   alert('Configuration missing.');
-  throw new Error('Missing fastapiUrl or userId');
+  throw new Error('Missing fastapiUrl, userId or token');
 }
 const historyElement = document.getElementById('chat-history');
 let chatHistory = [];
@@ -43,8 +43,9 @@ function showError(message) {
 }
 let failureCount = 0;
 function connectWebSocket() {
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const wsUrl = `${wsProtocol}://${window.location.host}/ws/chat/?user_id=${userId}`;
+  const base = new URL(fastapiUrl);
+  const wsProtocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${base.host}/ws/chat/?token=${encodeURIComponent(token)}`;
   socket = new WebSocket(wsUrl);
   socket.onopen = () => {
     document.getElementById("status-indicator").textContent = "Connecté";
@@ -98,13 +99,13 @@ document.getElementById("chat-form").addEventListener("submit", async (event) =>
   const message = input.value.trim();
   if (!message) return;
   try {
-    const formData = new FormData();
-    formData.append("user_id", userId);
-    formData.append("query", message);
-    formData.append("session_id", "session1");
     const response = await fetch(`${fastapiUrl}/api/v1/conversation/chat`, {
       method: "POST",
-      body: formData
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ message: message, session_id: "session1" })
     });
     if (!response.ok) throw new Error("Erreur lors de l'envoi du message");
     const data = await response.json();
