@@ -59,7 +59,7 @@ This roadmap outlines the milestones needed to evolve monGARS from its current p
 - ✅ Basic JWT authentication implemented with `/token` issuance.
 - ✅ Conversation history retrieval is secured per user.
 - ✅ A Django frontend serves the initial chat interface.
-- 📝 **In Progress:** Implement the backend WebSocket handler in FastAPI to complete the live chat functionality initiated by the frontend.
+- ✅ Backend WebSocket handler in FastAPI now supports sending and receiving live chat messages.
 - 📝 **Planned:** Replace placeholder input validation with robust, centralized validation in Pydantic models for all API endpoints.
 - 📝 **Planned:** Complete the user registration flow by connecting it to the database backend.
 - 🚧 **Future:** Publish comprehensive API documentation and example client libraries.

@@ -86,3 +86,20 @@ async def test_websocket_disconnect_removes_connection(client):
         ws.receive_json()
         assert ws_manager.connections
     assert not ws_manager.connections
+
+
+@pytest.mark.asyncio
+async def test_websocket_client_can_send_message(client):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+
+    with client.websocket_connect(f"/ws/chat/?token={token}") as ws:
+        # no history expected on new connection
+        ws.send_json({"message": "via_ws"})
+        resp = ws.receive_json()
+        assert resp["query"] == "via_ws"
+        assert resp["response"] == "resp"
+
+    hist = await hippocampus.history("u1")
+    assert any(m.query == "via_ws" for m in hist)
