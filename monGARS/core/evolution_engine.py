@@ -21,7 +21,7 @@ class EvolutionEngine:
         issues = []
         try:
             stats = await self.monitor.get_system_stats()
-            logger.info(f"Diagnosing performance with stats: {stats}")
+            logger.info("Diagnosing performance with stats: %s", stats)
 
             if stats.cpu_usage and stats.cpu_usage > 85.0:
                 issues.append("High CPU")
@@ -69,7 +69,11 @@ class EvolutionEngine:
             logger.warning(
                 "Could not load in-cluster K8s config, falling back to kube_config."
             )
-            config.load_kube_config()
+            try:
+                config.load_kube_config()
+            except config.ConfigException as exc:
+                logger.error("Failed to load Kubernetes configuration: %s", exc)
+                raise
         apps_v1 = client.AppsV1Api()
         loop = asyncio.get_running_loop()
 

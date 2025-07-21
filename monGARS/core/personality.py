@@ -32,12 +32,15 @@ class PersonalityProfile:
 
 
 class PersonalityEngine:
+    ANALYSIS_WINDOW = 5
+
     def __init__(self, session_factory=async_session_factory) -> None:
         self.user_profiles = defaultdict(lambda: self._generate_default_profile())
         self.learning_rate = 0.05
         self._lock = asyncio.Lock()
         self._session_factory = session_factory
-        if not TextBlob:  # pragma: no cover
+        self._tagger_fr = PatternTaggerFr() if PatternTaggerFr else None
+        if not (TextBlob and PatternTaggerFr):  # pragma: no cover
             logger.warning(
                 "textblob or textblob-fr not installed. Personality analysis will be disabled."
             )
@@ -110,17 +113,23 @@ class PersonalityEngine:
                 logger.exception("Failed to save profile for %s: %s", user_id, exc)
 
     async def analyze_personality(self, user_id: str, interactions: list) -> dict:
+        """Update the user's profile based on recent interactions.
+
+        The profile is persisted asynchronously; failures are logged in the
+        background, so callers should not rely on immediate consistency.
+        """
+
         if not TextBlob or not interactions:
             return (await self.load_profile(user_id)).traits
 
         profile = await self.load_profile(user_id)
 
-        for interaction in interactions[-5:]:
+        for interaction in interactions[-self.ANALYSIS_WINDOW :]:
             message = interaction.get("message", "")
             if not message:
                 continue
 
-            blob = TextBlob(message, pos_tagger=PatternTaggerFr())
+            blob = TextBlob(message, pos_tagger=self._tagger_fr)
             sentiment = blob.sentiment
 
             profile.traits["agreeableness"] = self._update_trait(
@@ -140,8 +149,17 @@ class PersonalityEngine:
                 profile.interaction_style["enthusiasm"], (sentiment.polarity + 1) / 2
             )
 
-        logger.info(f"Dynamically updated personality for {user_id}: {profile.traits}")
-        asyncio.create_task(self.save_profile(user_id))
+        logger.info(
+            "Dynamically updated personality for %s: %s", user_id, profile.traits
+        )
+        task = asyncio.create_task(self.save_profile(user_id))
+        task.add_done_callback(
+            lambda t: (
+                logger.error("Failed to persist profile: %s", t.exception())
+                if t.exception()
+                else None
+            )
+        )
 
         return profile.traits
 
