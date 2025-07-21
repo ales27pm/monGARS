@@ -83,8 +83,11 @@ class MNTPTrainer:
         )
 
         model_name = self.config.get("model_name_or_path")
-        if model_name.lower().startswith("mistralai/mistral-7b"):
+        if model_name and model_name.lower().startswith("mistralai/mistral-7b"):
             logger.warning("Large model specified; using lightweight model for tests")
+            model_name = "sshleifer/tiny-gpt2"
+        elif not model_name:
+            logger.warning("No model specified, using default")
             model_name = "sshleifer/tiny-gpt2"
 
         logger.info("Initializing LLM2Vec model: %s", model_name)
