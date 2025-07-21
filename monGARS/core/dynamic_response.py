@@ -16,12 +16,14 @@ class AdaptiveResponseGenerator:
         # Handle formality with more comprehensive pronoun replacement
         if formality > 0.7:
             import re
-            adapted = re.sub(r'\btu\b', 'vous', adapted, flags=re.IGNORECASE)
+
+            adapted = re.sub(r"\btu\b", "vous", adapted, flags=re.IGNORECASE)
         elif formality < 0.3:
             import re
-            adapted = re.sub(r'\bvous\b', 'tu', adapted, flags=re.IGNORECASE)
 
-        if enthusiasm > 0.7 and not adapted.endswith('!'):
+            adapted = re.sub(r"\bvous\b", "tu", adapted, flags=re.IGNORECASE)
+
+        if enthusiasm > 0.7 and not adapted.endswith("!"):
             adapted += "!"
 
         SMILING_EMOJI = "\U0001f603"
