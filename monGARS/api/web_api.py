@@ -1,8 +1,16 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Dict, List
+from datetime import datetime
+from typing import Annotated, Any, Dict, List, Set
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
@@ -16,6 +24,24 @@ from monGARS.core.security import SecurityManager, validate_user_input
 app = FastAPI(title="monGARS API")
 sec_manager = SecurityManager()
 conversation_module = ConversationalModule()
+
+# WebSocket connection registry: {user_id: {WebSocket, ...}}
+websocket_connections: Dict[str, Set[WebSocket]] = {}
+
+
+async def broadcast_message(user_id: str, message: Dict[str, Any]) -> None:
+    """Send a message to all WebSocket clients for the given user."""
+    connections = websocket_connections.get(user_id)
+    if not connections:
+        return
+    to_remove: Set[WebSocket] = set()
+    for ws in connections:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            to_remove.add(ws)
+    for ws in to_remove:
+        connections.discard(ws)
 
 
 def get_conversational_module() -> ConversationalModule:
@@ -69,6 +95,31 @@ async def conversation_history(
         ) from exc
 
 
+@app.websocket("/ws/chat/")
+async def websocket_chat(websocket: WebSocket, user_id: str) -> None:
+    """Stream conversation history and live updates over WebSocket."""
+    await websocket.accept()
+    connections = websocket_connections.setdefault(user_id, set())
+    connections.add(websocket)
+    store = get_hippocampus()
+    try:
+        history = await store.history(user_id, limit=10)
+        for item in history[::-1]:
+            await websocket.send_json(
+                {
+                    "query": item.query,
+                    "response": item.response,
+                    "timestamp": item.timestamp.isoformat(),
+                }
+            )
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        connections.discard(websocket)
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
@@ -103,8 +154,14 @@ async def chat(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    response_payload = {
+        "query": data["query"],
+        "response": result.get("text", ""),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    await broadcast_message(current_user.get("sub"), response_payload)
     return ChatResponse(
-        response=result.get("text", ""),
+        response=response_payload["response"],
         confidence=result.get("confidence", 0.0),
         processing_time=result.get("processing_time", 0.0),
     )
