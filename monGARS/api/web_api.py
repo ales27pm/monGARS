@@ -38,6 +38,7 @@ users_db: Dict[str, str] = {
     "u1": sec_manager.get_password_hash("x"),
     "u2": sec_manager.get_password_hash("y"),
 }
+admin_users = {"u1"}
 
 
 @app.post("/token")
@@ -48,8 +49,41 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
-    token = sec_manager.create_access_token({"sub": form_data.username})
+    token = sec_manager.create_access_token(
+        {
+            "sub": form_data.username,
+            "admin": form_data.username in admin_users,
+        }
+    )
     return {"access_token": token, "token_type": "bearer"}
+
+
+class UserRegistration(BaseModel):
+    username: str
+    password: str
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 150:
+            raise ValueError("invalid username")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("password too short")
+        return v
+
+
+@app.post("/api/v1/user/register")
+async def register_user(reg: UserRegistration) -> dict:
+    if reg.username in users_db:
+        raise HTTPException(status_code=400, detail="User exists")
+    users_db[reg.username] = sec_manager.get_password_hash(reg.password)
+    return {"status": "registered"}
 
 
 @app.get("/healthz")
@@ -209,6 +243,10 @@ async def peer_register(
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Register a peer URL for future broadcasts."""
+    if not current_user.get("admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
+        )
     url = registration.url
     if url in communicator.peers:
         return {"status": "already registered", "count": len(communicator.peers)}
@@ -223,6 +261,10 @@ async def peer_unregister(
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Remove a previously registered peer URL."""
+    if not current_user.get("admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
+        )
     url = registration.url
     if url in communicator.peers:
         communicator.peers.remove(url)
@@ -236,4 +278,8 @@ async def peer_list(
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> List[str]:
     """Return the list of registered peer URLs."""
+    if not current_user.get("admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
+        )
     return sorted(communicator.peers)

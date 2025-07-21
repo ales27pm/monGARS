@@ -27,7 +27,10 @@ async def client(secret_key_env):
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test"
     ) as async_client:
-        app.dependency_overrides[get_current_user] = lambda: {"sub": "u1"}
+        app.dependency_overrides[get_current_user] = lambda: {
+            "sub": "u1",
+            "admin": True,
+        }
         comm = get_peer_communicator()
         comm.peers = set()
         comm._client = async_client

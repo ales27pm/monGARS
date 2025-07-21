@@ -19,7 +19,8 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Worker deployment settings** configurable through `WORKER_DEPLOYMENT_NAME` and `WORKER_DEPLOYMENT_NAMESPACE` environment variables used by the Evolution Engine.
 - **Robust core detection** falls back to logical CPUs if physical cores cannot be determined.
 - **Encrypted peer-to-peer messaging** via `PeerCommunicator` for basic node coordination.
-- **Peer registry endpoints** `/api/v1/peer/register`, `/api/v1/peer/unregister` and
+- **Peer registry endpoints** `/api/v1/peer/register`, `/api/v1/peer/unregister` and `/api/v1/peer/list` now require an admin token.
+- **User management** with `/api/v1/user/register` to create new accounts.
 - **Conversation endpoints** `/api/v1/conversation/chat` to generate responses
   with sanitized input and `/api/v1/conversation/history` to retrieve past
   interactions.
@@ -76,7 +77,7 @@ for basic coordination. This authenticated POST route accepts a JSON body of the
 form `{"payload": "<encrypted>"}`.
 Peers can register themselves via `/api/v1/peer/register`, remove themselves with
 `/api/v1/peer/unregister` and retrieve the current list of nodes from
-`/api/v1/peer/list`.
+`/api/v1/peer/list`. These registry routes now enforce admin permissions.
 
 Unit and integration tests are located in the `tests/` directory. Execute them with:
 
