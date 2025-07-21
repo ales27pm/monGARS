@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Any, Dict, List
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
@@ -13,9 +22,12 @@ from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.security import SecurityManager, validate_user_input
 
+from .ws_manager import WebSocketManager
+
 app = FastAPI(title="monGARS API")
 sec_manager = SecurityManager()
 conversation_module = ConversationalModule()
+ws_manager = WebSocketManager()
 
 
 def get_conversational_module() -> ConversationalModule:
@@ -69,6 +81,41 @@ async def conversation_history(
         ) from exc
 
 
+@app.websocket("/ws/chat/")
+async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
+    """Stream conversation history and live updates over WebSocket."""
+    try:
+        payload = sec_manager.verify_token(token)
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("Invalid token payload")
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
+    await ws_manager.connect(user_id, websocket)
+    store = get_hippocampus()
+    try:
+        history = await store.history(user_id, limit=10)
+        for item in history:
+            await websocket.send_json(
+                {
+                    "query": item.query,
+                    "response": item.response,
+                    "timestamp": item.timestamp.isoformat(),
+                }
+            )
+        while True:
+            try:
+                await websocket.receive_text()
+                await websocket.close(code=1003)
+                break
+            except WebSocketDisconnect:
+                break
+    finally:
+        await ws_manager.disconnect(user_id, websocket)
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
@@ -103,8 +150,17 @@ async def chat(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    response_payload = {
+        "query": data["query"],
+        "response": result.get("text", ""),
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    try:
+        await ws_manager.broadcast(current_user.get("sub"), response_payload)
+    except Exception:
+        pass
     return ChatResponse(
-        response=result.get("text", ""),
+        response=response_payload["response"],
         confidence=result.get("confidence", 0.0),
         processing_time=result.get("processing_time", 0.0),
     )

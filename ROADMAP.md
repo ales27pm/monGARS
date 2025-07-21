@@ -12,7 +12,8 @@ This roadmap outlines the milestones needed to evolve monGARS from its current p
 - Introduced the Mimicry and Mains Virtuelles modules for adaptive behaviour.
 - Began scraping via Iris and improved the Curiosity Engine.
 - Added initial tests for CircuitBreaker, TieredCache and SelfTrainingEngine alongside monitoring hooks.
-- Early LLMIntegration used local Ollama models with caching and a CircuitBreaker; the Ray Serve path remained stubbed.
+- LLMIntegration now calls local Ollama models with caching and a CircuitBreaker; the Ray Serve path remains stubbed.
+- Tests for these components are fully implemented rather than placeholders.
 
 Milestone: proof-of-concept functionality established, real AI features still missing.
 
@@ -41,10 +42,17 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - 🚧 Authentication, user management and permission checks.
 - 🚧 Publication of API documentation and example client libraries.
 
+## Phase 5 - Web Interface & API (target Q1 2026)
+- 📝 Complete the Django chat frontend and integrate a WebSocket API.
+- ✅ Basic JWT authentication implemented with `/token` issuance.
+- ✅ Conversation history retrieval secured per user.
+- 🚧 User management views and permission checks.
+- 🚧 Release example client libraries and publish the full API docs.
+
 ## Phase 6 - Self-Improvement and Research (target Q2 2026)
 - ✅ Persist personality profiles using PostgreSQL and SQLAlchemy.
 - 🚧 Implement real training logic in SelfTrainingEngine using Evolution Engine metrics; current cycles simulate versioning only.
-- 📝 Expand coverage across remaining modules beyond CircuitBreaker, TieredCache and SelfTrainingEngine.
+- ✅ Expanded test coverage across additional modules including WebSockets, hardware utilities and image captioning.
 - 🚧 Explore reinforcement learning and dynamic scaling for continuous improvement.
 
 ## Phase 7 - Sustainability & Longevity (future)
