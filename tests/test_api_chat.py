@@ -77,6 +77,34 @@ async def test_chat_empty_message_returns_422(client: TestClient):
 
 
 @pytest.mark.asyncio
+async def test_chat_message_too_long_returns_422(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    long_message = "x" * 1001
+    resp = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": long_message},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_chat_session_id_too_long_returns_422(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    long_session_id = "s" * 101
+    resp = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello", "session_id": long_session_id},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_chat_requires_auth(client: TestClient):
     resp = client.post("/api/v1/conversation/chat", json={"message": "hello"})
     assert resp.status_code == 401

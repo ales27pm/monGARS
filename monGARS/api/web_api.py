@@ -122,10 +122,19 @@ class ChatRequest(BaseModel):
 
     @field_validator("message")
     @classmethod
-    def not_empty(cls, v: str) -> str:
+    def validate_message(cls, v: str) -> str:
         v = v.strip()
         if not v:
             raise ValueError("message cannot be empty")
+        if len(v) > 1000:
+            raise ValueError("message too long")
+        return v
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 100:
+            raise ValueError("session_id too long")
         return v
 
 
