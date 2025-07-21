@@ -1,11 +1,12 @@
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import GPUtil
 import psutil
 
-from monGARS.config import get_settings
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,6 +48,6 @@ class SystemMonitor:
                     "gpu_usage": min(gpu.load * 100, 85),
                     "gpu_memory_usage": gpu.memoryUtil * 100,
                 }
-        except Exception:
-            pass
+        except Exception as exc:  # pragma: no cover - optional GPU dependency
+            logger.exception("Failed to query GPU stats", exc_info=exc)
         return {"gpu_usage": None, "gpu_memory_usage": None}
