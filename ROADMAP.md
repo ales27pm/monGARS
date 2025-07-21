@@ -38,15 +38,15 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 
 - ✅ Added `/api/v1/conversation/chat` endpoint with input sanitization.
 - ✅ Refine existing REST endpoints with robust input validation and error handling.
-- 🚧 Backend WebSocket handler to complete the Django chat application and expose a history view.
-- 🚧 Authentication, user management and permission checks.
+- ✅ Backend WebSocket handler completes the Django chat application and exposes a history view.
+- ✅ Authentication, basic user management and admin permission checks.
 - 🚧 Publication of API documentation and example client libraries.
 
 ## Phase 5 - Web Interface & API (target Q1 2026)
 - 📝 Complete the Django chat frontend and integrate a WebSocket API.
 - ✅ Basic JWT authentication implemented with `/token` issuance.
 - ✅ Conversation history retrieval secured per user.
-- 🚧 User management views and permission checks.
+- ✅ Basic user management API with admin permission checks.
 - 🚧 Release example client libraries and publish the full API docs.
 
 ## Phase 6 - Self-Improvement and Research (target Q2 2026)

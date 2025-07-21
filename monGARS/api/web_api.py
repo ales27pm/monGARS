@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Dict, List
 
@@ -15,7 +16,7 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
-from monGARS.api.authentication import get_current_user
+from monGARS.api.authentication import get_current_admin_user, get_current_user
 from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
@@ -38,6 +39,7 @@ users_db: Dict[str, str] = {
     "u1": sec_manager.get_password_hash("x"),
     "u2": sec_manager.get_password_hash("y"),
 }
+admin_users = {"u1"}
 
 
 @app.post("/token")
@@ -48,8 +50,43 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
-    token = sec_manager.create_access_token({"sub": form_data.username})
+    token = sec_manager.create_access_token(
+        {
+            "sub": form_data.username,
+            "admin": form_data.username in admin_users,
+        }
+    )
     return {"access_token": token, "token_type": "bearer"}
+
+
+class UserRegistration(BaseModel):
+    username: str
+    password: str
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 150:
+            raise ValueError("invalid username")
+        if not re.match(r"^[A-Za-z0-9_-]+$", v):
+            raise ValueError("invalid username")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("password too short")
+        return v
+
+
+@app.post("/api/v1/user/register")
+async def register_user(reg: UserRegistration) -> dict:
+    if reg.username in users_db:
+        raise HTTPException(status_code=400, detail="User exists")
+    users_db[reg.username] = sec_manager.get_password_hash(reg.password)
+    return {"status": "registered"}
 
 
 @app.get("/healthz")
@@ -205,7 +242,7 @@ async def peer_message(
 @app.post("/api/v1/peer/register")
 async def peer_register(
     registration: PeerRegistration,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Register a peer URL for future broadcasts."""
@@ -219,7 +256,7 @@ async def peer_register(
 @app.post("/api/v1/peer/unregister")
 async def peer_unregister(
     registration: PeerRegistration,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Remove a previously registered peer URL."""
@@ -232,7 +269,7 @@ async def peer_unregister(
 
 @app.get("/api/v1/peer/list", response_model=List[str])
 async def peer_list(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> List[str]:
     """Return the list of registered peer URLs."""
