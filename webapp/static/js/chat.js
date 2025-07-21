@@ -5,6 +5,7 @@ if (!fastapiUrl || !userId) {
 }
 const historyElement = document.getElementById('chat-history');
 let chatHistory = [];
+const seenMessages = new Set();
 if (historyElement) {
   try {
     chatHistory = JSON.parse(historyElement.textContent);
@@ -26,6 +27,15 @@ function addMessage(message) {
   chatBox.appendChild(msgDiv);
   chatBox.scroll({ top: chatBox.scrollHeight, behavior: 'smooth' });
 }
+
+function addMessageIfUnique(message) {
+  const key = message.id ?? message.timestamp ?? `${message.query}|${message.response}`;
+  if (seenMessages.has(key)) {
+    return;
+  }
+  seenMessages.add(key);
+  addMessage(message);
+}
 function showError(message) {
   const errorAlert = document.getElementById("error-alert");
   document.getElementById("error-message").textContent = message;
@@ -44,7 +54,7 @@ function connectWebSocket() {
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data && data.query && data.response) {
-      addMessage(data);
+      addMessageIfUnique(data);
     }
   };
   socket.onerror = (error) => {
@@ -65,19 +75,23 @@ function connectWebSocket() {
   };
 }
 connectWebSocket();
-chatHistory.forEach(addMessage);
+chatHistory.forEach(addMessageIfUnique);
 const darkModeKey = 'dark-mode';
 const toggleBtn = document.getElementById("toggle-dark-mode");
 function applyDarkMode(enabled) {
   document.body.classList.toggle("dark-mode", enabled);
-  toggleBtn.textContent = enabled ? "Mode Clair" : "Mode Sombre";
+  if (toggleBtn) {
+    toggleBtn.textContent = enabled ? "Mode Clair" : "Mode Sombre";
+  }
 }
 applyDarkMode(localStorage.getItem(darkModeKey) === '1');
-toggleBtn.addEventListener("click", () => {
-  const enabled = !document.body.classList.contains("dark-mode");
-  applyDarkMode(enabled);
-  localStorage.setItem(darkModeKey, enabled ? '1' : '0');
-});
+if (toggleBtn) {
+  toggleBtn.addEventListener("click", () => {
+    const enabled = !document.body.classList.contains("dark-mode");
+    applyDarkMode(enabled);
+    localStorage.setItem(darkModeKey, enabled ? '1' : '0');
+  });
+}
 document.getElementById("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = document.getElementById("message-input");
@@ -94,7 +108,7 @@ document.getElementById("chat-form").addEventListener("submit", async (event) =>
     });
     if (!response.ok) throw new Error("Erreur lors de l'envoi du message");
     const data = await response.json();
-    addMessage({
+    addMessageIfUnique({
       query: message,
       response: data.response,
       timestamp: Date.now()

@@ -12,9 +12,9 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Self‑training and monitoring** via `SelfTrainingEngine` and `SystemMonitor`.
 - **Evolution Engine** for autonomous diagnostics and code optimization.
 - **Web interface** implemented with Django (located in `webapp/`).
-  Conversation history is displayed on load, responses appear
-  immediately after sending a message and the dark mode
-  preference persists across sessions.
+  Conversation history is displayed on load using Django's `json_script` helper
+  to safely embed data. Responses appear immediately after sending a message and
+  the dark mode preference persists across sessions.
 - **Automatic worker tuning** for Raspberry Pi and Jetson devices via `recommended_worker_count()`.
 - **Worker deployment settings** configurable through `WORKER_DEPLOYMENT_NAME` and `WORKER_DEPLOYMENT_NAMESPACE` environment variables used by the Evolution Engine.
 - **Robust core detection** falls back to logical CPUs if physical cores cannot be determined.
