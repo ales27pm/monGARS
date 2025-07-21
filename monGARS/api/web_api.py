@@ -120,7 +120,7 @@ async def conversation_history(
 
 @app.websocket("/ws/chat/")
 async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
-    """Stream conversation history and live updates over WebSocket."""
+    """Stream conversation history and handle chat messages over WebSocket."""
     try:
         payload = sec_manager.verify_token(token)
         user_id = payload.get("sub")
@@ -132,6 +132,7 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
 
     await ws_manager.connect(user_id, websocket)
     store = get_hippocampus()
+    conv = get_conversational_module()
     try:
         history = await store.history(user_id, limit=10)
         for item in history:
@@ -144,11 +145,34 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
             )
         while True:
             try:
-                await websocket.receive_text()
-                await websocket.close(code=1003)
-                break
+                data = await websocket.receive_json()
             except WebSocketDisconnect:
                 break
+            except Exception:
+                await websocket.close(code=1003)
+                break
+
+            try:
+                chat = ChatRequest(**data)
+            except Exception:
+                await websocket.send_json({"error": "invalid payload"})
+                continue
+
+            validated = validate_user_input({"user_id": user_id, "query": chat.message})
+            try:
+                result = await conv.generate_response(
+                    user_id, validated["query"], session_id=chat.session_id
+                )
+            except Exception as exc:
+                await websocket.send_json({"error": str(exc)})
+                continue
+
+            response_payload = {
+                "query": validated["query"],
+                "response": result.get("text", ""),
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            await ws_manager.broadcast(user_id, response_payload)
     finally:
         await ws_manager.disconnect(user_id, websocket)
 
