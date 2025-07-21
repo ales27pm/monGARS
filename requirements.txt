@@ -28,7 +28,7 @@ trafilatura
 uvicorn
 llm2vec
 textblob>=0.18.0
-textblob-fr>=0.4.3
+textblob-fr==0.2.0
 pytest
 pytest-asyncio
 cryptography
