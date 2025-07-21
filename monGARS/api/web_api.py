@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Dict, List
 
@@ -15,7 +16,7 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
-from monGARS.api.authentication import get_current_user
+from monGARS.api.authentication import get_current_admin_user, get_current_user
 from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
@@ -67,6 +68,8 @@ class UserRegistration(BaseModel):
     def validate_username(cls, v: str) -> str:
         v = v.strip()
         if not v or len(v) > 150:
+            raise ValueError("invalid username")
+        if not re.match(r"^[A-Za-z0-9_-]+$", v):
             raise ValueError("invalid username")
         return v
 
@@ -239,14 +242,10 @@ async def peer_message(
 @app.post("/api/v1/peer/register")
 async def peer_register(
     registration: PeerRegistration,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Register a peer URL for future broadcasts."""
-    if not current_user.get("admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
-        )
     url = registration.url
     if url in communicator.peers:
         return {"status": "already registered", "count": len(communicator.peers)}
@@ -257,14 +256,10 @@ async def peer_register(
 @app.post("/api/v1/peer/unregister")
 async def peer_unregister(
     registration: PeerRegistration,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> dict:
     """Remove a previously registered peer URL."""
-    if not current_user.get("admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
-        )
     url = registration.url
     if url in communicator.peers:
         communicator.peers.remove(url)
@@ -274,12 +269,8 @@ async def peer_unregister(
 
 @app.get("/api/v1/peer/list", response_model=List[str])
 async def peer_list(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
 ) -> List[str]:
     """Return the list of registered peer URLs."""
-    if not current_user.get("admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
-        )
     return sorted(communicator.peers)

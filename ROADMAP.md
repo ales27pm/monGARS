@@ -46,7 +46,7 @@ Milestone: proof-of-concept functionality established, real AI features still mi
 - 📝 Complete the Django chat frontend and integrate a WebSocket API.
 - ✅ Basic JWT authentication implemented with `/token` issuance.
 - ✅ Conversation history retrieval secured per user.
-- 🚧 User management views and permission checks.
+- ✅ Basic user management API with admin permission checks.
 - 🚧 Release example client libraries and publish the full API docs.
 
 ## Phase 6 - Self-Improvement and Research (target Q2 2026)

@@ -38,6 +38,7 @@ This repository contains the source code for **monGARS**, a modular, privacy-fir
 - Peers can be added via `/api/v1/peer/register`, removed with `/api/v1/peer/unregister`, and queried using `/api/v1/peer/list`. These routes now require an admin token. Registration
   URLs are validated and normalized, and duplicates are ignored.
 - The `/api/v1/user/register` endpoint creates new local users. Tokens include an `admin` claim when applicable.
+- Admin checks are centralized via the `get_current_admin_user` dependency.
  - The `/api/v1/conversation/chat` endpoint accepts sanitized messages and returns AI responses. Conversation history can be retrieved from `/api/v1/conversation/history`.
 - The `Evolution Engine` runs automated diagnostics and applies performance tweaks. Review logs in `Mémoire Autobiographique` for optimization history.
 - A `DistributedScheduler` coordinates tasks across peers.

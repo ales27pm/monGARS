@@ -20,7 +20,7 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Robust core detection** falls back to logical CPUs if physical cores cannot be determined.
 - **Encrypted peer-to-peer messaging** via `PeerCommunicator` for basic node coordination.
 - **Peer registry endpoints** `/api/v1/peer/register`, `/api/v1/peer/unregister` and `/api/v1/peer/list` now require an admin token.
-- **User management** with `/api/v1/user/register` to create new accounts.
+- **User management** with `/api/v1/user/register` to create new accounts. Invalid credentials return clear error responses.
 - **Conversation endpoints** `/api/v1/conversation/chat` to generate responses
   with sanitized input and `/api/v1/conversation/history` to retrieve past
   interactions.
