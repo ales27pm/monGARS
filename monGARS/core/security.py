@@ -24,7 +24,16 @@ class SecurityManager:
     ) -> None:
         self.secret_key = secret_key
         self.algorithm = algorithm
-        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        # ``passlib`` defaults to bcrypt, but that backend is optional and
+        # raises a ``ValueError`` when the optimized extension is absent.  This
+        # broke our test environment, so we switch to ``pbkdf2_sha256`` which is
+        # implemented in pure Python while still providing a strong password
+        # hashing story.
+        self.pwd_context = CryptContext(
+            schemes=["pbkdf2_sha256"],
+            deprecated="auto",
+            pbkdf2_sha256__rounds=390000,
+        )
 
     def create_access_token(
         self, data: dict, expires_delta: Optional[timedelta] = None

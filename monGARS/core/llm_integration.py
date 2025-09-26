@@ -4,7 +4,11 @@ import os
 from typing import Dict
 
 import httpx
-import ollama
+
+try:  # pragma: no cover - optional dependency during tests
+    import ollama
+except ImportError:  # pragma: no cover - allow tests without ollama
+    ollama = None
 from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
 from monGARS.config import get_settings
@@ -85,18 +89,24 @@ class LLMIntegration:
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
     )
     async def _ollama_call(self, model: str, prompt: str) -> Dict:
-        async def call_api():
-            response = await ollama.chat(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                options={
-                    "temperature": settings.ai_model_temperature,
-                    "top_p": 0.9,
-                    "num_predict": 512,
-                    "stream": False,
-                },
-            )
-            return response
+        async def call_api() -> Dict:
+            loop = asyncio.get_running_loop()
+
+            def _invoke() -> Dict:
+                if not ollama:
+                    raise RuntimeError("Ollama client is not available")
+                return ollama.chat(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    options={
+                        "temperature": settings.ai_model_temperature,
+                        "top_p": 0.9,
+                        "num_predict": 512,
+                        "stream": False,
+                    },
+                )
+
+            return await loop.run_in_executor(None, _invoke)
 
         return await cb.call(call_api)
 
