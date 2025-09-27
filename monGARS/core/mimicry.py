@@ -56,14 +56,20 @@ class MimicryModule:
                     .values(interaction_style=payload)
                 )
                 result = await session.execute(stmt)
-                if result.rowcount == 0:
-                    session.add(
-                        UserPreferences(
-                            user_id=user_id,
-                            interaction_style=payload,
-                            preferred_topics={},
+                if not result.rowcount:
+                    exists = await session.execute(
+                        select(UserPreferences.user_id).where(
+                            UserPreferences.user_id == user_id
                         )
                     )
+                    if exists.scalar_one_or_none() is None:
+                        session.add(
+                            UserPreferences(
+                                user_id=user_id,
+                                interaction_style=payload,
+                                preferred_topics={},
+                            )
+                        )
                 await session.commit()
                 logger.info(f"Mimicry profile updated for user {user_id}")
             except Exception as e:

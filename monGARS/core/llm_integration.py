@@ -42,6 +42,10 @@ class AsyncTTLCache:
 _RESPONSE_CACHE = AsyncTTLCache()
 
 
+class OllamaNotAvailableError(RuntimeError):
+    """Raised when the optional Ollama client is unavailable."""
+
+
 class CircuitBreakerOpenError(Exception):
     """Raised when a circuit breaker is open."""
 
@@ -90,23 +94,19 @@ class LLMIntegration:
     )
     async def _ollama_call(self, model: str, prompt: str) -> Dict:
         async def call_api() -> Dict:
-            loop = asyncio.get_running_loop()
-
-            def _invoke() -> Dict:
-                if not ollama:
-                    raise RuntimeError("Ollama client is not available")
-                return ollama.chat(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    options={
-                        "temperature": settings.ai_model_temperature,
-                        "top_p": 0.9,
-                        "num_predict": 512,
-                        "stream": False,
-                    },
-                )
-
-            return await loop.run_in_executor(None, _invoke)
+            if not ollama:
+                raise OllamaNotAvailableError("Ollama client is not available")
+            return await asyncio.to_thread(
+                ollama.chat,
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                options={
+                    "temperature": settings.ai_model_temperature,
+                    "top_p": 0.9,
+                    "num_predict": 512,
+                    "stream": False,
+                },
+            )
 
         return await cb.call(call_api)
 
@@ -137,6 +137,15 @@ class LLMIntegration:
             logger.info(f"Using model {model_name} for prompt: {prompt}")
             try:
                 response = await self._ollama_call(model_name, prompt)
+            except OllamaNotAvailableError:
+                logger.error("Ollama client is not available.")
+                fallback = {
+                    "text": "Ollama client is not available.",
+                    "confidence": 0.0,
+                    "tokens_used": 0,
+                }
+                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
+                return fallback
             except RetryError:
                 logger.error(
                     f"Retries exhausted for model {model_name} with prompt: {prompt}"

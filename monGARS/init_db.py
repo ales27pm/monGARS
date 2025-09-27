@@ -88,12 +88,17 @@ if HAS_AIOSQLITE:
     _sync_session_maker = None
 else:
     DATABASE_URL = "sqlite:///./mongars_local.db"
-    _sync_engine = create_engine(DATABASE_URL, future=True, echo=False)
+    _sync_engine = create_engine(
+        DATABASE_URL,
+        future=True,
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
     _sync_session_maker = sessionmaker(_sync_engine, expire_on_commit=False)
     _async_engine = None
     _async_session_maker = None
 
-_init_lock = asyncio.Lock()
+_init_lock: asyncio.Lock | None = None
 _initialized = False
 
 
@@ -133,9 +138,11 @@ class _AsyncSessionProxy:
 async def _ensure_schema() -> None:
     """Create the lightweight schema once per process."""
 
-    global _initialized
+    global _initialized, _init_lock
     if _initialized:
         return
+    if _init_lock is None:
+        _init_lock = asyncio.Lock()
     async with _init_lock:
         if _initialized:
             return
@@ -171,6 +178,9 @@ async def async_session_factory() -> AsyncIterator[AsyncSession]:
 async def reset_database() -> None:
     """Utility for tests that need a clean in-memory database."""
 
+    global _init_lock
+    if _init_lock is None:
+        _init_lock = asyncio.Lock()
     async with _init_lock:
         if HAS_AIOSQLITE:
             assert _async_engine is not None

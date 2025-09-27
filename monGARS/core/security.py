@@ -28,12 +28,24 @@ class SecurityManager:
         # raises a ``ValueError`` when the optimized extension is absent.  This
         # broke our test environment, so we switch to ``pbkdf2_sha256`` which is
         # implemented in pure Python while still providing a strong password
-        # hashing story.
-        self.pwd_context = CryptContext(
-            schemes=["pbkdf2_sha256"],
-            deprecated="auto",
-            pbkdf2_sha256__rounds=390000,
-        )
+        # hashing story.  We still accept legacy bcrypt hashes when the
+        # dependency is available so existing credentials remain valid.
+        schemes = ["pbkdf2_sha256"]
+        context_kwargs = {
+            "schemes": schemes,
+            "deprecated": "auto",
+            "default": "pbkdf2_sha256",
+            "pbkdf2_sha256__rounds": 390000,
+        }
+        try:
+            import importlib
+
+            importlib.import_module("bcrypt")
+        except ModuleNotFoundError:
+            pass
+        else:
+            schemes.append("bcrypt")
+        self.pwd_context = CryptContext(**context_kwargs)
 
     def create_access_token(
         self, data: dict, expires_delta: Optional[timedelta] = None

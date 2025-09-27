@@ -41,8 +41,8 @@ class Settings(BaseSettings):
         default="default", validation_alias="WORKER_DEPLOYMENT_NAMESPACE"
     )
 
-    SECRET_KEY: str = Field(
-        default=os.getenv("SECRET_KEY", "development-secret-key"),
+    SECRET_KEY: str | None = Field(
+        default_factory=lambda: os.getenv("SECRET_KEY"),
         min_length=1,
         description="Application secret used for JWT signing; override in production.",
     )
