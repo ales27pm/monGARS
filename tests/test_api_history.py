@@ -19,6 +19,7 @@ def client() -> TestClient:
     try:
         yield client
     finally:
+        client.close()
         hippocampus._memory.clear()
         hippocampus._locks.clear()
 
