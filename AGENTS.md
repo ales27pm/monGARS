@@ -1,59 +1,50 @@
 # monGARS Contribution Guide
 
-This repository contains the source code for **monGARS**, a modular, privacy-first AI system. The project includes Python services, a Django-based web interface, container orchestration and deployment scripts.
+This repository powers **monGARS**, a modular AI assistant composed of a FastAPI
+service (`monGARS.api`), an orchestration and cognition layer (`monGARS.core`),
+a Django frontend (`webapp`), and optional research modules under `modules/`.
+Use this document together with the scoped `AGENTS.md` files deeper in the tree.
 
-## Code Style
+## Environment & Tooling
+- Python 3.11 is the primary runtime. `requirements.txt` mirrors the current
+  production stack; keep it in sync with any dependency changes.
+- Format with `black` and organise imports with `isort` before committing.
+  Both tools are configured implicitly through the project defaults.
+- Type hints are required for new or modified public functions. Prefer
+  `collections.abc` generics over concrete types for callables and iterables.
+- Central configuration lives in `config.py` and `.env` files loaded by
+  `monGARS.config.get_settings`. Never hard-code credentials or URLs.
 
-- **Python**: Follow [PEP 8](https://peps.python.org/pep-0008/) conventions with 4 space indentation.
-- Use `black` for formatting and `isort` for import organization.
-- Type hints are encouraged throughout the codebase.
-- Commit messages should be concise and in present tense: `Add feature` / `Fix bug` / `Refactor module`.
+## Tests & Quality Gates
+- Run `pytest -q` locally. The suite exercises FastAPI (`tests/test_api_*.py`),
+  cognition (`tests/test_hippocampus.py`, `tests/test_personality.py`), and the
+  optional ML flows (`tests/test_mntp_trainer.py`). Add coverage for new code.
+- Use `pytest -k <keyword>` to focus on a subset of tests while iterating.
+  `chaos_test.py`, `integration_test.py`, and `self_training_test.py` cover
+  longer paths—run them before release branches.
+- Keep fixtures isolated—see `tests/conftest.py` for hippocampus resets and
+  monkeypatch patterns.
 
-## Tests
+## Documentation Expectations
+- Update `README.md`, `docs/`, or `monGARS_structure.txt` whenever behaviour or
+  deployment expectations change. Match the tone and structure already present.
+- Record significant architecture changes or recurring incidents in this file
+  so future updates can reference the rationale.
 
-- Run `pytest` to execute the unit and integration tests found in the `tests/` directory.
-- All new features should include accompanying tests when practical.
-
-## Containers & Deployment
-
-- Use `docker-compose up` to launch required services (PostgreSQL, Redis, and optional ML components).
-- Kubernetes manifests are provided in `k8s/` for cluster deployment. Ensure RBAC and resource limits are adjusted for your environment.
-
-## Documentation
-
- - Update relevant documentation when modifying or adding functionality.
- - High-level architectural notes are located in `monGARS_structure.txt` and the project ROADMAP.
- - Keep the `README.md` up to date when behaviour or setup steps change.
-- Keep this `AGENTS.md` and the `ROADMAP.md` synchronized with the current project state. Document new modules, tasks and design decisions as they are introduced.
-- Hardware-specific optimizations automatically adjust worker count using `monGARS.utils.hardware`. Physical cores are preferred but the helper falls back to logical CPUs when necessary. See `README.md` for details.
-- Evolution Engine scales Kubernetes workers defined by `WORKER_DEPLOYMENT_NAME` and `WORKER_DEPLOYMENT_NAMESPACE`.
-- Use `build_embedded.sh` to create and push multi-arch images for Raspberry Pi and Jetson using Docker Buildx. Ensure you are logged in to your registry before running the script.
-- Use `build_native.sh` to build an optimized x86_64 image leveraging all CPU cores on a developer workstation.
-- Kubernetes RBAC policies were tightened. Refer to `rbac.yaml`.
-- A `PeerCommunicator` module provides encrypted message passing between nodes. Use `/api/v1/peer/message` to receive messages. The route requires authentication and the JSON body `{ "payload": "..." }`.
-- Use `/api/v1/conversation/chat` to send chat messages. A bearer token from `/token` is required.
-    POST JSON: `{ "message": "...", "context": {}, "personality_traits": {} }`
-    Returns `{ "response": "...", "confidence": 0.0, "metadata": {}, "processing_time": 0.0 }`.
-    Errors: `400 Bad Request` for invalid input, `401 Unauthorized` if the token is missing, `500` on server errors.
-- Peers can be added via `/api/v1/peer/register`, removed with `/api/v1/peer/unregister`, and queried using `/api/v1/peer/list`. These routes now require an admin token. Registration
-  URLs are validated and normalized, and duplicates are ignored.
-- The `/api/v1/user/register` endpoint creates new local users. Tokens include an `admin` claim when applicable.
-- Admin checks are centralized via the `get_current_admin_user` dependency.
- - The `/api/v1/conversation/chat` endpoint accepts sanitized messages and returns AI responses. Conversation history can be retrieved from `/api/v1/conversation/history`.
-- The `Evolution Engine` runs automated diagnostics and applies performance tweaks. Review logs in `Mémoire Autobiographique` for optimization history.
-- A `DistributedScheduler` coordinates tasks across peers.
-- `SommeilParadoxal` triggers background optimizations when idle.
-- `EvolutionEngine.safe_apply_optimizations` wraps upgrades in a sandbox.
-- Record common errors and the strategies developed to resolve them here so future contributors don't repeat the same investigation.
-- Keep a running log of new ideas and experimental results. Note what works well and what doesn't so the team can build on prior lessons.
+## Deployment & Operations
+- `docker-compose.yml` spins up the FastAPI stack with Postgres and Redis
+  locally. `build_native.sh` and `build_embedded.sh` produce x86_64 and ARM
+  images; keep their flags aligned with the Dockerfiles.
+- Kubernetes manifests live in `k8s/`. When adding services, extend the RBAC
+  rules in `rbac.yaml` and document any new environment variables.
+- Background workers reference `DistributedScheduler` and peer messaging over
+  `/api/v1/peer/*`. Ensure any new long-running process emits structured logs
+  (JSON or key=value) for the observability pipeline.
 
 ## Pull Requests
-
-1. Keep PRs focused on a single topic.
-2. Include a clear description of your change and testing performed.
-3. Ensure `pytest` passes and code is formatted with `black` before requesting review.
-4. Name branches using `feature/<topic>` or `fix/<issue>` for clarity.
-
-Issue and pull request templates are provided in `.github/`. Use them to maintain a consistent workflow.
-
-For questions or discussion, open an issue or reach out to the maintainers.
+1. Keep PRs focused and describe both implementation and testing in detail.
+2. Run `black`, `isort`, and `pytest` before requesting review.
+3. Squash commits when merging unless the history is intentionally split for
+   release notes.
+4. Reference relevant ROADMAP items or issues in the PR description when you
+   progress them.
