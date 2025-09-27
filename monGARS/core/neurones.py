@@ -138,11 +138,6 @@ class EmbeddingSystem:
                         normalize_embeddings=True,
                     )
                     if isinstance(encoded, Iterable):
--                        if all(isinstance(value, (int, float)) for value in encoded):
--                            vector = [float(value) for value in encoded]
--                        else:
--                            raise TypeError(
--                                "Model returned embedding with non-numeric values"
                         try:
                             vector = [float(value) for value in encoded]
                         except (TypeError, ValueError) as exc:
