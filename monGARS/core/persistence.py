@@ -1,6 +1,10 @@
+import logging
+
 from sqlalchemy import desc, select
 
 from ..init_db import ConversationHistory, Interaction, async_session_factory
+
+logger = logging.getLogger(__name__)
 
 
 class PersistenceRepository:
@@ -27,6 +31,7 @@ class PersistenceRepository:
                     )
                 await session.commit()
             except Exception:
+                logger.exception("Exception occurred while saving interaction")
                 await session.rollback()
                 raise
 

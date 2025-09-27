@@ -73,7 +73,7 @@ class ConversationalModule:
         self, text: str, user_id: str, interactions: list[dict]
     ) -> tuple[str, dict]:
         personality = await self.personality.analyze_personality(user_id, interactions)
-        adaptive = await self.dynamic.generate_adaptive_response(text, personality)
+        adaptive = self.dynamic.generate_adaptive_response(text, personality)
         await self.mimicry.update_profile(
             user_id,
             {"feedback": 0.8},
@@ -101,7 +101,8 @@ class ConversationalModule:
 
         llm_out = await self.llm.generate_response(refined)
         recent_interactions = [
-            {"message": item.query, "response": item.response} for item in history_items
+            {"message": query_text, "response": response_text}
+            for query_text, response_text in history_pairs
         ]
         final, personality_traits = await self._adapt_response(
             llm_out.get("text", ""), user_id, recent_interactions
@@ -127,7 +128,7 @@ class ConversationalModule:
                 response=final,
                 personality=personality_traits,
                 context={"history": history_pairs},
-                meta_data=None,
+                meta_data="",
                 confidence=llm_out.get("confidence", 0.0),
                 processing_time=processing_time,
             ),
@@ -137,9 +138,8 @@ class ConversationalModule:
         await self.memory.store(user_id, augmented_query, final)
 
         spoken = await self.speaker.speak(final)
-        elapsed = (datetime.utcnow() - start).total_seconds()
         return {
             "text": spoken,
             "confidence": llm_out.get("confidence", 0.0),
-            "processing_time": elapsed,
+            "processing_time": processing_time,
         }
