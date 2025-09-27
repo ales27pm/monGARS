@@ -24,7 +24,28 @@ class SecurityManager:
     ) -> None:
         self.secret_key = secret_key
         self.algorithm = algorithm
-        self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        # ``passlib`` defaults to bcrypt, but that backend is optional and
+        # raises a ``ValueError`` when the optimized extension is absent.  This
+        # broke our test environment, so we switch to ``pbkdf2_sha256`` which is
+        # implemented in pure Python while still providing a strong password
+        # hashing story.  We still accept legacy bcrypt hashes when the
+        # dependency is available so existing credentials remain valid.
+        schemes = ["pbkdf2_sha256"]
+        context_kwargs = {
+            "schemes": schemes,
+            "deprecated": "auto",
+            "default": "pbkdf2_sha256",
+            "pbkdf2_sha256__rounds": 390000,
+        }
+        try:
+            import importlib
+
+            importlib.import_module("bcrypt")
+        except ModuleNotFoundError:
+            pass
+        else:
+            schemes.append("bcrypt")
+        self.pwd_context = CryptContext(**context_kwargs)
 
     def create_access_token(
         self, data: dict, expires_delta: Optional[timedelta] = None

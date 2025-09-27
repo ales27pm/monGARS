@@ -29,6 +29,7 @@ def client(monkeypatch):
     try:
         yield client
     finally:
+        client.close()
         hippocampus._memory.clear()
         hippocampus._locks.clear()
         ws_manager.connections.clear()

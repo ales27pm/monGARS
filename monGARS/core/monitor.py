@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import GPUtil
@@ -21,16 +20,12 @@ class SystemStats:
 class SystemMonitor:
     def __init__(self, update_interval: int = 5):
         self.update_interval = update_interval
-        self.executor = ThreadPoolExecutor(max_workers=1)
 
     async def get_system_stats(self) -> SystemStats:
-        loop = asyncio.get_running_loop()
-        cpu = await loop.run_in_executor(None, psutil.cpu_percent, self.update_interval)
-        memory = await loop.run_in_executor(None, psutil.virtual_memory)
-        disk = await loop.run_in_executor(None, psutil.disk_usage, "/")
-        gpu_stats = await asyncio.get_running_loop().run_in_executor(
-            self.executor, self._get_gpu_stats
-        )
+        cpu = await asyncio.to_thread(psutil.cpu_percent, self.update_interval)
+        memory = await asyncio.to_thread(psutil.virtual_memory)
+        disk = await asyncio.to_thread(psutil.disk_usage, "/")
+        gpu_stats = await asyncio.to_thread(self._get_gpu_stats)
         return SystemStats(
             cpu_usage=cpu,
             memory_usage=memory.percent,

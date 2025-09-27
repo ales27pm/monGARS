@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 from functools import lru_cache
 
 import hvac
@@ -40,7 +41,11 @@ class Settings(BaseSettings):
         default="default", validation_alias="WORKER_DEPLOYMENT_NAMESPACE"
     )
 
-    SECRET_KEY: str = Field(..., min_length=1)
+    SECRET_KEY: str | None = Field(
+        default_factory=lambda: os.getenv("SECRET_KEY"),
+        min_length=1,
+        description="Application secret used for JWT signing; override in production.",
+    )
     JWT_ALGORITHM: str = "RS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
@@ -123,6 +128,9 @@ async def fetch_secrets_from_vault(
 
 
 def configure_telemetry(settings: Settings) -> None:
+    if os.getenv("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+        log.debug("Skipping telemetry configuration in test environment.")
+        return
     resource = Resource(
         attributes={
             "service.name": settings.otel_service_name,
