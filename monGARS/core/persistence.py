@@ -7,10 +7,28 @@ class PersistenceRepository:
     def __init__(self, session_factory=async_session_factory):
         self._session_factory = session_factory
 
-    async def save_interaction(self, interaction: Interaction):
+    async def save_interaction(
+        self,
+        interaction: Interaction,
+        *,
+        history_query: str | None = None,
+        history_response: str | None = None,
+    ):
         async with self._session_factory() as session:
-            session.add(interaction)
-            await session.commit()
+            try:
+                session.add(interaction)
+                if interaction.user_id and (interaction.message or history_query):
+                    session.add(
+                        ConversationHistory(
+                            user_id=interaction.user_id,
+                            query=history_query or interaction.message,
+                            response=history_response or interaction.response,
+                        )
+                    )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
     async def get_history(self, user_id: str, limit: int = 10):
         async with self._session_factory() as session:
