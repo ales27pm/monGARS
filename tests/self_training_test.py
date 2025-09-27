@@ -1,14 +1,22 @@
-import sys
-import types
-
 import pytest
 
-# Provide a minimal EmbeddingSystem to satisfy imports
-module = types.ModuleType("monGARS.core.neurones")
-module.EmbeddingSystem = object
-sys.modules["monGARS.core.neurones"] = module
-
 from monGARS.core.self_training import SelfTrainingEngine
+
+
+@pytest.fixture(autouse=True)
+def stub_embedding_system(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyEmbeddingSystem:
+        def __init__(self) -> None:
+            self.encodes: list[str] = []
+
+        async def encode(self, text: str) -> list[float]:
+            self.encodes.append(text)
+            return [0.0]
+
+    monkeypatch.setattr(
+        "monGARS.core.self_training.EmbeddingSystem",
+        DummyEmbeddingSystem,
+    )
 
 
 @pytest.mark.asyncio
