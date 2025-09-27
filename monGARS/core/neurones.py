@@ -138,13 +138,19 @@ class EmbeddingSystem:
                         normalize_embeddings=True,
                     )
                     if isinstance(encoded, Iterable):
-                        if all(isinstance(value, (int, float)) for value in encoded):
+-                        if all(isinstance(value, (int, float)) for value in encoded):
+-                            vector = [float(value) for value in encoded]
+-                        else:
+-                            raise TypeError(
+-                                "Model returned embedding with non-numeric values"
+                        try:
                             vector = [float(value) for value in encoded]
-                        else:
+                        except (TypeError, ValueError) as exc:
                             raise TypeError(
                                 "Model returned embedding with non-numeric values"
-                            )
+                            ) from exc
                     else:
+                        # existing fallback or error path
                         raise TypeError("Model returned non-iterable embedding")
                 except Exception as exc:  # pragma: no cover - model failures are rare
                     logger.warning("Embedding failed for '%s': %s", normalized, exc)
