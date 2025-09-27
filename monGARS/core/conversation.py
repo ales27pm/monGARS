@@ -69,14 +69,17 @@ class ConversationalModule:
         result = await self.reasoner.reason(query, user_id)
         return f"{query} {result['result']}" if "result" in result else query
 
-    async def _adapt_response(self, text: str, user_id: str) -> str:
-        personality = await self.personality.analyze_personality(user_id, [])
-        adaptive = await self.dynamic.generate_adaptive_response(text, personality)
+    async def _adapt_response(
+        self, text: str, user_id: str, interactions: list[dict]
+    ) -> tuple[str, dict]:
+        personality = await self.personality.analyze_personality(user_id, interactions)
+        adaptive = self.dynamic.generate_adaptive_response(text, personality)
         await self.mimicry.update_profile(
             user_id,
             {"feedback": 0.8},
         )
-        return await self.mimicry.adapt_response_style(adaptive, user_id)
+        styled = await self.mimicry.adapt_response_style(adaptive, user_id)
+        return styled, personality
 
     async def generate_response(
         self,
@@ -89,34 +92,54 @@ class ConversationalModule:
         history_items = await self.memory.history(user_id, limit=5)
         history_pairs = [(m.query, m.response) for m in history_items]
 
-        query = await self._handle_image(query, image_data)
-        query = await self._augment_with_curiosity(query, history_pairs)
-        refined = await self._refine_query(query, user_id)
+        original_query = query
+        query_with_image = await self._handle_image(query, image_data)
+        augmented_query = await self._augment_with_curiosity(
+            query_with_image, history_pairs
+        )
+        refined = await self._refine_query(augmented_query, user_id)
 
         llm_out = await self.llm.generate_response(refined)
-        final = await self._adapt_response(llm_out.get("text", ""), user_id)
+        recent_interactions = [
+            {"message": query_text, "response": response_text}
+            for query_text, response_text in history_pairs
+        ]
+        final, personality_traits = await self._adapt_response(
+            llm_out.get("text", ""), user_id, recent_interactions
+        )
+
+        processing_time = (datetime.utcnow() - start).total_seconds()
 
         await self.persistence.save_interaction(
             Interaction(
                 user_id=user_id,
                 session_id=session_id,
-                input_data=refined,
-                output_data=final,
-                message=query,
+                input_data={
+                    "original_query": original_query,
+                    "with_image": query_with_image,
+                    "augmented_query": augmented_query,
+                    "refined_prompt": refined,
+                },
+                output_data={
+                    "raw_llm": llm_out,
+                    "adapted_text": final,
+                },
+                message=augmented_query,
                 response=final,
-                personality={},
-                context={},
+                personality=personality_traits,
+                context={"history": history_pairs},
                 meta_data="",
                 confidence=llm_out.get("confidence", 0.0),
-                processing_time=(datetime.utcnow() - start).total_seconds(),
-            )
+                processing_time=processing_time,
+            ),
+            history_query=augmented_query,
+            history_response=final,
         )
-        await self.memory.store(user_id, refined, final)
+        await self.memory.store(user_id, augmented_query, final)
 
         spoken = await self.speaker.speak(final)
-        elapsed = (datetime.utcnow() - start).total_seconds()
         return {
             "text": spoken,
             "confidence": llm_out.get("confidence", 0.0),
-            "processing_time": elapsed,
+            "processing_time": processing_time,
         }
