@@ -142,6 +142,14 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
                     "timestamp": item.timestamp.isoformat(),
                 }
             )
+        if not history:
+            await websocket.send_json(
+                {
+                    "query": None,
+                    "response": None,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
         while True:
             try:
                 await websocket.receive_text()

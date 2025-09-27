@@ -9,7 +9,14 @@ try:  # pragma: no cover - optional dependency during tests
     import ollama
 except ImportError:  # pragma: no cover - allow tests without ollama
     ollama = None
-from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from monGARS.config import get_settings
 
@@ -90,7 +97,12 @@ class LLMIntegration:
             logger.info("Ray Serve integration enabled at %s", self.ray_url)
 
     @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=(
+            retry_if_exception_type(Exception)
+            & retry_if_not_exception_type(OllamaNotAvailableError)
+        ),
     )
     async def _ollama_call(self, model: str, prompt: str) -> Dict:
         async def call_api() -> Dict:
@@ -135,6 +147,15 @@ class LLMIntegration:
                 else self.coding_model
             )
             logger.info(f"Using model {model_name} for prompt: {prompt}")
+            if not ollama:
+                logger.error("Ollama client is not available.")
+                fallback = {
+                    "text": "Ollama client is not available.",
+                    "confidence": 0.0,
+                    "tokens_used": 0,
+                }
+                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
+                return fallback
             try:
                 response = await self._ollama_call(model_name, prompt)
             except OllamaNotAvailableError:
