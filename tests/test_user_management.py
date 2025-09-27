@@ -24,11 +24,14 @@ def client():
     admin_users.clear()
     admin_users.add("admin")
     client = TestClient(app)
-    yield client
-    users_db.clear()
-    users_db.update(original_users)
-    admin_users.clear()
-    admin_users.update(original_admins)
+    try:
+        yield client
+    finally:
+        client.close()
+        users_db.clear()
+        users_db.update(original_users)
+        admin_users.clear()
+        admin_users.update(original_admins)
 
 
 def get_token(client, username, password):
