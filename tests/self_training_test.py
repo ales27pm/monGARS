@@ -84,9 +84,7 @@ async def test_run_training_cycle_handles_multiple_records(
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
-    await engine.training_queue.put(
-        {"text": "first", "confidence": 0.9, "id": "row-1"}
-    )
+    await engine.training_queue.put({"text": "first", "confidence": 0.9, "id": "row-1"})
     await engine.training_queue.put(
         {"prompt": "second", "confidence": 0.85, "id": "row-2"}
     )
