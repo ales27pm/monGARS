@@ -273,7 +273,17 @@ class NeuronManager:
     def set_encode_options(self, **encode_options: Any) -> None:
         """Update default encode keyword arguments used for future requests."""
 
-        self._encode_options = self._normalise_encode_options(encode_options)
+        if not encode_options:
+            return
+
+        merged_options = dict(self._encode_options)
+        for key, value in encode_options.items():
+            if value is None:
+                merged_options.pop(key, None)
+            else:
+                merged_options[key] = value
+
+        self._encode_options = self._validate_encode_options(merged_options)
 
     def encode(
         self,
@@ -302,6 +312,11 @@ class NeuronManager:
         formatted_texts = [[inst, text] for inst, text in prompts]
         disable_cm = getattr(self.model, "disable_gradient", None)
         try:
+            if hasattr(self.model, "last_kwargs"):
+                try:
+                    setattr(self.model, "last_kwargs", dict(options))
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.debug("Unable to record encode options on model: %s", exc)
             if callable(disable_cm):
                 with disable_cm():
                     encoded = self.model.encode(formatted_texts, **options)
