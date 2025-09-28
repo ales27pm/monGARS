@@ -259,6 +259,18 @@ class MNTPTrainer:
         if LLM2Vec is None:
             raise RuntimeError("LLM2Vec is unavailable")
 
+        from transformers import AutoTokenizer  # local import to avoid hard dependency
+
+        if not getattr(AutoTokenizer, "_mon_gars_cleanup_patch", False):
+            original_from_pretrained = AutoTokenizer.from_pretrained
+
+            def _from_pretrained_with_cleanup(*args: Any, **kwargs: Any):
+                kwargs.setdefault("clean_up_tokenization_spaces", True)
+                return original_from_pretrained(*args, **kwargs)
+
+            AutoTokenizer.from_pretrained = _from_pretrained_with_cleanup  # type: ignore[assignment]
+            setattr(AutoTokenizer, "_mon_gars_cleanup_patch", True)
+
         dtype_name = str(self.config.get("torch_dtype", "float32"))
         torch_dtype = getattr(torch, dtype_name, None) if torch else None
         if torch_dtype is None and torch is not None:
