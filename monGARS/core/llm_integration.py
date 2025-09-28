@@ -156,6 +156,9 @@ class LLMIntegration:
     async def _ensure_adapter_metadata(self) -> dict[str, str] | None:
         """Load manifest metadata if it changed since the last call."""
 
+        if not self.use_ray:
+            return None
+
         async with self._adapter_manifest_lock:
             try:
                 stat = await asyncio.to_thread(self.adapter_manifest_path.stat)
@@ -171,9 +174,22 @@ class LLMIntegration:
             ):
                 return self._adapter_metadata
 
-            manifest = await asyncio.to_thread(
-                load_manifest, self.adapter_registry_path
-            )
+            try:
+                manifest = await asyncio.to_thread(
+                    load_manifest, self.adapter_registry_path
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "llm.adapter.manifest_unavailable",
+                    extra={"manifest_path": str(self.adapter_manifest_path)},
+                    exc_info=exc,
+                )
+                self._adapter_manifest_mtime = stat.st_mtime
+                self._adapter_metadata = None
+                self._update_adapter_version(None)
+                return None
             self._adapter_manifest_mtime = stat.st_mtime
             if manifest and manifest.current:
                 payload = manifest.build_payload()
@@ -227,12 +243,15 @@ class LLMIntegration:
         async def call_api() -> dict[str, Any]:
             if not ollama:
                 raise OllamaNotAvailableError("Ollama client is not available")
+            temperature = getattr(settings, "ai_model_temperature", None)
+            if temperature is None:
+                temperature = getattr(settings, "AI_MODEL_TEMPERATURE", 0.7)
             return await asyncio.to_thread(
                 ollama.chat,
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 options={
-                    "temperature": settings.ai_model_temperature,
+                    "temperature": float(temperature),
                     "top_p": 0.9,
                     "num_predict": 512,
                     "stream": False,
@@ -246,7 +265,13 @@ class LLMIntegration:
     ) -> dict[str, Any]:
         """Generate a response for ``prompt`` using the configured LLM stack."""
 
-        adapter_metadata = await self._ensure_adapter_metadata()
+        adapter_metadata: dict[str, str] | None
+        if self.use_ray:
+            adapter_metadata = await self._ensure_adapter_metadata()
+        else:
+            adapter_metadata = None
+            if self._current_adapter_version != "baseline":
+                self._update_adapter_version(None)
         cache_key = self._cache_key(task_type, prompt)
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:

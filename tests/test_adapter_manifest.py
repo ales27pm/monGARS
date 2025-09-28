@@ -11,7 +11,7 @@ def _create_summary(registry: Path, run_name: str) -> dict[str, object]:
     adapter_dir = registry / run_name / "adapter"
     adapter_dir.mkdir(parents=True)
     weights_path = adapter_dir / "weights.json"
-    weights_path.write_text(f"{{\"run\": \"{run_name}\"}}")
+    weights_path.write_text(f'{{"run": "{run_name}"}}')
     return {
         "status": "success",
         "artifacts": {
