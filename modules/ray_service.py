@@ -143,7 +143,15 @@ class RayLLMDeployment:
                 return self._adapter_payload
             if self._manifest_mtime and current_mtime <= self._manifest_mtime:
                 return self._adapter_payload
-            manifest = await asyncio.to_thread(load_manifest, self.registry_path)
+            try:
+                manifest = await asyncio.to_thread(load_manifest, self.registry_path)
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "llm.ray.manifest_unavailable",
+                    extra={"registry_path": str(self.registry_path)},
+                    exc_info=exc,
+                )
+                return self._adapter_payload
             self._manifest_mtime = current_mtime
             if manifest and manifest.current:
                 payload = manifest.build_payload()
