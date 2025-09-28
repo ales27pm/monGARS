@@ -1,5 +1,4 @@
-import os
-import time
+import asyncio
 
 import httpx
 import pytest
@@ -32,7 +31,7 @@ async def test_llm_integration_refreshes_manifest(tmp_path, monkeypatch):
 
     captured: list[dict[str, object]] = []
 
-    async def fake_post(self, url, json=None, timeout=10, **kwargs):
+    async def fake_post(self, url, *, json=None, **_kwargs):
         captured.append(json)
 
         class Resp:
@@ -54,7 +53,7 @@ async def test_llm_integration_refreshes_manifest(tmp_path, monkeypatch):
     assert captured and captured[0]["adapter"]["version"]
     first_version = captured[0]["adapter"]["version"]
 
-    time.sleep(0.01)
+    await asyncio.sleep(1.1)
     update_manifest(tmp_path, _write_summary(tmp_path, "second"))
 
     captured.clear()

@@ -75,13 +75,67 @@ class RayLLMDeployment:
     ) -> dict[str, str] | None:
         async with self._lock:
             if incoming and incoming.get("adapter_path"):
-                version = incoming.get("version") or "baseline"
-                if version != self._adapter_version:
-                    await asyncio.to_thread(
-                        self.neuron_manager.switch_encoder, incoming["adapter_path"]
+                root = self.registry_path.resolve()
+                try:
+                    requested_path = Path(str(incoming["adapter_path"])).resolve()
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    requested_path = None
+
+                is_within_registry = requested_path is not None and (
+                    requested_path == root or root in requested_path.parents
+                )
+
+                try:
+                    manifest = await asyncio.to_thread(
+                        load_manifest, self.registry_path
                     )
-                    self._adapter_version = version
-                self._adapter_payload = {str(k): str(v) for k, v in incoming.items()}
+                except (OSError, ValueError) as exc:
+                    logger.warning(
+                        "llm.ray.manifest_unavailable",
+                        extra={"registry_path": str(self.registry_path)},
+                        exc_info=exc,
+                    )
+                    manifest = None
+
+                manifest_version = (
+                    manifest.current.version if manifest and manifest.current else None
+                )
+                requested_version = str(incoming.get("version") or "")
+
+                if not is_within_registry or (
+                    manifest_version
+                    and requested_version
+                    and requested_version != manifest_version
+                ):
+                    logger.warning(
+                        "llm.ray.adapter.rejected",
+                        extra={
+                            "reason": "invalid_path_or_version",
+                            "requested_path": str(incoming.get("adapter_path")),
+                            "requested_version": requested_version,
+                            "manifest_version": manifest_version,
+                        },
+                    )
+                    return self._adapter_payload
+
+                effective_version = requested_version or manifest_version or "baseline"
+                if effective_version != self._adapter_version:
+                    await asyncio.to_thread(
+                        self.neuron_manager.switch_encoder, str(requested_path)
+                    )
+                    self._adapter_version = effective_version
+                    logger.info(
+                        "llm.ray.adapter.switched",
+                        extra={
+                            "adapter_version": self._adapter_version,
+                            "adapter_path": str(requested_path),
+                        },
+                    )
+
+                self._adapter_payload = {
+                    "adapter_path": str(requested_path),
+                    "version": self._adapter_version,
+                }
                 return self._adapter_payload
 
             current_mtime = self._stat_manifest()
@@ -138,11 +192,14 @@ class RayLLMDeployment:
         adapter_payload = await self._refresh_adapter(data.get("adapter"))
         embedding = await asyncio.to_thread(self._encode_prompt, prompt)
         content = self._render_response(prompt, embedding, adapter_payload)
+        safe_adapter = (
+            {"version": adapter_payload.get("version")} if adapter_payload else None
+        )
         return {
             "content": content,
             "adapter_version": self._adapter_version,
             "embedding_dimension": len(embedding[0]) if embedding else 0,
-            "adapter": adapter_payload,
+            "adapter": safe_adapter,
         }
 
 
@@ -168,7 +225,6 @@ def deploy_ray_service(
         raise RuntimeError("Ray Serve is not available in this environment")
     if not ray.is_initialized():
         ray.init(include_dashboard=False, log_to_driver=False)
-    serve.start(detached=False)
     deployment = LLMServeDeployment.bind(
         base_model_path or DEFAULT_BASE_MODEL, str(registry_path or DEFAULT_REGISTRY)
     )

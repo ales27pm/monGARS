@@ -196,10 +196,13 @@ def update_manifest(
     adapter_dir = _normalise_path(artifacts.get("adapter"))
     if adapter_dir is None:
         raise ValueError("Training summary missing 'artifacts.adapter' path")
-    weights_path = _normalise_path(artifacts.get("weights"))
-    if weights_path is None and artifacts.get("weights"):
-        # Allow weights to be specified relative to adapter_dir
-        weights_path = _normalise_path(Path(adapter_dir) / artifacts["weights"])
+    weights_value = artifacts.get("weights")
+    weights_path: Path | None = None
+    if weights_value:
+        weights_candidate = Path(weights_value)
+        if not weights_candidate.is_absolute():
+            weights_candidate = Path(adapter_dir) / weights_candidate
+        weights_path = _normalise_path(weights_candidate)
 
     relative_adapter_path = _ensure_relative(adapter_dir, registry)
     relative_weights_path = (

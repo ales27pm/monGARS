@@ -27,7 +27,6 @@ from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from monGARS.config import get_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 T = TypeVar("T")
 
@@ -123,13 +122,18 @@ class LLMIntegration:
     """Adapter responsible for generating responses via local or remote LLMs."""
 
     def __init__(self) -> None:
+        self._settings = get_settings()
         self.general_model = "dolphin-mistral:7b-v2.8-q4_K_M"
         self.coding_model = "qwen2.5-coder:7b-instruct-q6_K"
         self.use_ray = os.getenv("USE_RAY_SERVE", "False").lower() in ("true", "1")
         self.ray_url = os.getenv("RAY_SERVE_URL", "http://localhost:8000/generate")
         registry_override = os.getenv("LLM_ADAPTER_REGISTRY_PATH")
-        registry_source = registry_override or settings.llm_adapter_registry_path
-        self.adapter_registry_path = Path(registry_source)
+        registry_source = (
+            Path(registry_override)
+            if registry_override
+            else Path(self._settings.llm_adapter_registry_path)
+        )
+        self.adapter_registry_path = registry_source
         self.adapter_registry_path.mkdir(parents=True, exist_ok=True)
         self.adapter_manifest_path = self.adapter_registry_path / MANIFEST_FILENAME
         self._adapter_manifest_lock = asyncio.Lock()
@@ -180,13 +184,12 @@ class LLMIntegration:
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except (OSError, ValueError) as exc:  # pragma: no cover - defensive logging
                 logger.warning(
                     "llm.adapter.manifest_unavailable",
                     extra={"manifest_path": str(self.adapter_manifest_path)},
                     exc_info=exc,
                 )
-                self._adapter_manifest_mtime = stat.st_mtime
                 self._adapter_metadata = None
                 self._update_adapter_version(None)
                 return None
@@ -243,9 +246,7 @@ class LLMIntegration:
         async def call_api() -> dict[str, Any]:
             if not ollama:
                 raise OllamaNotAvailableError("Ollama client is not available")
-            temperature = getattr(settings, "ai_model_temperature", None)
-            if temperature is None:
-                temperature = getattr(settings, "AI_MODEL_TEMPERATURE", 0.7)
+            temperature = float(self._settings.AI_MODEL_TEMPERATURE)
             return await asyncio.to_thread(
                 ollama.chat,
                 model=model,
@@ -382,11 +383,12 @@ class LLMIntegration:
             payload: dict[str, Any] = {"prompt": prompt, "task_type": task_type}
             if adapter:
                 payload["adapter"] = adapter
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0)
+            ) as client:
                 resp = await client.post(
                     self.ray_url,
                     json=payload,
-                    timeout=10,
                 )
                 resp.raise_for_status()
                 try:

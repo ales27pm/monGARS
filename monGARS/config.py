@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from functools import lru_cache
+from pathlib import Path
 
 import hvac
 from opentelemetry import metrics, trace
@@ -60,9 +61,10 @@ class Settings(BaseSettings):
     IN_MEMORY_CACHE_SIZE: int = int(os.getenv("IN_MEMORY_CACHE_SIZE", 10000))
     DISK_CACHE_PATH: str = os.getenv("DISK_CACHE_PATH", "/tmp/mongars_cache")
     DOC_RETRIEVAL_URL: str = os.getenv("DOC_RETRIEVAL_URL", "http://localhost:8080")
-    llm_adapter_registry_path: str = Field(
-        default=os.getenv("LLM_ADAPTER_REGISTRY_PATH", "models/encoders"),
+    llm_adapter_registry_path: Path = Field(
+        default=Path("models/encoders"),
         validation_alias="LLM_ADAPTER_REGISTRY_PATH",
+        description="Directory storing adapter artifacts and manifest.",
     )
     curiosity_similarity_threshold: float = Field(
         default=0.5,

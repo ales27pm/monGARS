@@ -55,7 +55,19 @@ class EvolutionOrchestrator:
         except Exception as exc:  # pragma: no cover - unexpected training error
             logger.error("Training failed: %s", exc, exc_info=True)
             raise
-        manifest = update_manifest(self.model_registry_path, summary)
+        try:
+            manifest = update_manifest(self.model_registry_path, summary)
+        except Exception:
+            logger.error(
+                "Adapter manifest update failed",
+                extra={
+                    "encoder_path": str(unique_dir),
+                    "status": summary.get("status"),
+                    "artifacts": summary.get("artifacts", {}),
+                },
+                exc_info=True,
+            )
+            raise
         logger.info(
             "Pipeline finished",
             extra={
