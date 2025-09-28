@@ -5,7 +5,7 @@ import json
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
@@ -92,8 +92,17 @@ class MNTPTrainer:
 
         self.config = merged
 
-    def train(self) -> dict[str, Any]:
-        """Run the MNTP pipeline and return a structured training summary."""
+    def train(
+        self, curated_records: Sequence[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        """Run the MNTP pipeline and return a structured training summary.
+
+        When ``curated_records`` are provided, a lightweight masked-next-token
+        style adapter is trained directly from the supplied embeddings. This
+        keeps the trainer usable in environments without the optional heavy
+        dependencies while still providing a deterministic update path for the
+        self-training engine.
+        """
 
         self._load_config()
         logger.info(
@@ -102,7 +111,9 @@ class MNTPTrainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._save_config()
 
-        if not self._deps_available():
+        if curated_records:
+            summary = self._run_curated_training(curated_records)
+        elif not self._deps_available():
             logger.warning(
                 "Training dependencies missing; falling back to deterministic adapter"
             )
@@ -118,6 +129,146 @@ class MNTPTrainer:
 
         self._write_summary(summary)
         return summary
+
+    def _run_curated_training(
+        self, curated_records: Sequence[dict[str, Any]]
+    ) -> dict[str, Any]:
+        dataset: list[tuple[list[float], float, dict[str, Any]]] = []
+        feature_dim = 0
+
+        for index, record in enumerate(curated_records):
+            normalised = self._normalise_curated_record(record, index)
+            if normalised is None:
+                continue
+
+            embedding, target, metadata = normalised
+            feature_dim = max(feature_dim, len(embedding))
+            dataset.append((embedding, target, metadata))
+
+        if not dataset:
+            raise ValueError("No valid curated records supplied for training")
+
+        adapter_dir = self.output_dir / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+
+        weights, bias, metrics = self._train_linear_adapter(dataset)
+        artifact_path = adapter_dir / "curated_linear_adapter.json"
+        payload = {
+            "schema_version": 1,
+            "weights": weights,
+            "bias": bias,
+            "feature_dimension": feature_dim,
+            "metrics": metrics,
+            "records": [item[2] for item in dataset],
+        }
+        artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+        logger.info(
+            "Curated MNTP training complete",
+            extra={
+                "records": len(dataset),
+                "artifact_path": str(artifact_path),
+                "loss": metrics.get("loss"),
+            },
+        )
+
+        return {
+            "status": TrainingStatus.SUCCESS.value,
+            "mode": "curated_linear_adapter",
+            "artifacts": {"adapter": str(adapter_dir), "weights": str(artifact_path)},
+            "metrics": metrics
+            | {
+                "training_examples": len(dataset),
+                "feature_dimension": feature_dim,
+            },
+        }
+
+    def _normalise_curated_record(
+        self, record: dict[str, Any], index: int
+    ) -> tuple[list[float], float, dict[str, Any]] | None:
+        embedding_raw = record.get("embedding")
+        if embedding_raw is None:
+            embedding_raw = record.get("vector")
+        if not isinstance(embedding_raw, Iterable):
+            logger.debug("Skipping curated record %s without embedding", index)
+            return None
+
+        embedding: list[float] = []
+        for value in embedding_raw:
+            try:
+                embedding.append(float(value))
+            except (TypeError, ValueError):
+                logger.debug("Dropping non-numeric embedding value in record %s", index)
+                return None
+
+        if not embedding:
+            logger.debug("Skipping curated record %s with empty embedding", index)
+            return None
+
+        if "target" in record:
+            target_raw = record["target"]
+        elif "score" in record:
+            target_raw = record["score"]
+        else:
+            target_raw = None
+
+        if target_raw is None:
+            logger.debug("Skipping curated record %s without target", index)
+            return None
+
+        try:
+            target = float(target_raw)
+        except (TypeError, ValueError):
+            logger.debug("Skipping curated record %s with invalid target", index)
+            return None
+
+        metadata = {
+            "source_id": record.get("source_id"),
+            "confidence": record.get("confidence", target),
+            "text_preview": record.get("text_preview"),
+            "used_fallback_embedding": record.get("used_fallback_embedding", False),
+        }
+        return embedding, target, metadata
+
+    def _train_linear_adapter(
+        self, dataset: Sequence[tuple[list[float], float, dict[str, Any]]]
+    ) -> tuple[list[float], float, dict[str, Any]]:
+        learning_rate = float(self.config.get("curated_learning_rate", 0.05))
+        epochs = int(self.config.get("curated_epochs", 15))
+        gradient_clip = float(self.config.get("curated_gradient_clip", 1.0))
+
+        feature_dim = len(dataset[0][0])
+        weights = [0.0 for _ in range(feature_dim)]
+        bias = 0.0
+        losses: list[float] = []
+
+        for epoch in range(max(1, epochs)):
+            total_loss = 0.0
+            for embedding, target, _ in dataset:
+                prediction = bias
+                for weight, feature in zip(weights, embedding):
+                    prediction += weight * feature
+
+                error = prediction - target
+                total_loss += error * error
+
+                clipped_error = max(-gradient_clip, min(gradient_clip, error))
+
+                for i, feature in enumerate(embedding):
+                    weights[i] -= learning_rate * clipped_error * feature
+
+                bias -= learning_rate * clipped_error
+
+            loss = total_loss / len(dataset)
+            losses.append(loss)
+
+        metrics = {
+            "loss": losses[-1],
+            "initial_loss": losses[0],
+            "epochs": max(1, epochs),
+            "learning_rate": learning_rate,
+        }
+        return weights, bias, metrics
 
     def _save_config(self) -> None:
         try:
