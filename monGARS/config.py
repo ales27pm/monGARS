@@ -90,6 +90,24 @@ class Settings(BaseSettings):
         "true",
         "1",
     )
+    style_base_model: str = Field(
+        default="hf-internal-testing/tiny-random-gpt2",
+        validation_alias="STYLE_BASE_MODEL",
+    )
+    style_adapter_dir: str = Field(
+        default=os.getenv("STYLE_ADAPTER_DIR", "/tmp/mongars_style"),
+        validation_alias="STYLE_ADAPTER_DIR",
+    )
+    style_max_history: int = Field(default=int(os.getenv("STYLE_MAX_HISTORY", 20)))
+    style_min_samples: int = Field(default=int(os.getenv("STYLE_MIN_SAMPLES", 2)))
+    style_max_steps: int = Field(default=int(os.getenv("STYLE_MAX_STEPS", 6)))
+    style_learning_rate: float = Field(
+        default=float(os.getenv("STYLE_LEARNING_RATE", 5e-4))
+    )
+    style_use_qlora: bool = Field(
+        default=os.getenv("STYLE_USE_QLORA", "False").lower() in ("true", "1"),
+        validation_alias="STYLE_USE_QLORA",
+    )
     mimicry_positive_lexicon_path: str | None = Field(
         default=None,
         validation_alias="MIMICRY_POSITIVE_LEXICON_PATH",

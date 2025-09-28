@@ -77,7 +77,9 @@ class ConversationalModule:
         user_message: str,
     ) -> tuple[str, dict]:
         personality = await self.dynamic.get_personality_traits(user_id, interactions)
-        adaptive = self.dynamic.generate_adaptive_response(text, personality)
+        adaptive = self.dynamic.generate_adaptive_response(
+            text, personality, user_id=user_id
+        )
         await self.mimicry.update_profile(
             user_id,
             {"message": user_message, "response": text},
