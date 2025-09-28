@@ -16,6 +16,16 @@ except Exception:  # pragma: no cover - library not available in tests
     LLM2Vec = None  # type: ignore[assignment]
 
 
+def _get_torch_module() -> Any | None:
+    """Import ``torch`` lazily to avoid mandatory dependency at module load."""
+
+    try:  # pragma: no cover - executed only when torch is installed
+        import torch  # type: ignore[import-not-found]
+    except Exception:  # pragma: no cover - torch missing in lightweight envs
+        return None
+    return torch
+
+
 class NeuronManager:
     """Manage loading and switching of LLM2Vec encoders with graceful fallbacks."""
 
@@ -28,6 +38,7 @@ class NeuronManager:
         fallback_cache_size: int = 256,
         llm2vec_factory: Callable[[str, str | None], Any] | None = None,
         llm2vec_options: dict[str, Any] | None = None,
+        encode_options: dict[str, Any] | None = None,
     ) -> None:
         if fallback_dimensions <= 0:
             raise ValueError("fallback_dimensions must be a positive integer")
@@ -41,6 +52,7 @@ class NeuronManager:
         self._fallback_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
         self._llm2vec_factory = llm2vec_factory
         self._llm2vec_options = llm2vec_options or {}
+        self._encode_options = self._normalise_encode_options(encode_options)
         self.model: Any | None = None
         self._load_attempted = False
 
@@ -87,17 +99,164 @@ class NeuronManager:
             return self._llm2vec_factory(self.base_model_path, self.encoder_path)
         if LLM2Vec is None:
             return None
+        if not hasattr(LLM2Vec, "from_pretrained"):
+            logger.warning(
+                "LLM2Vec missing from_pretrained; falling back to placeholder"
+            )
+            return None
+
+        overrides = {
+            key: value
+            for key, value in self._llm2vec_options.items()
+            if value is not None
+        }
+        if "torch_dtype" in overrides:
+            torch_dtype_value = overrides.pop("torch_dtype")
+        else:
+            torch_dtype_value = "bfloat16"
+
         options: dict[str, Any] = {
             "base_model_name_or_path": self.base_model_path,
             "enable_bidirectional": True,
             "pooling_mode": "mean",
-            "torch_dtype": self._llm2vec_options.get("torch_dtype", "bfloat16"),
-            "device_map": self._llm2vec_options.get("device_map", "cpu"),
+            "device_map": overrides.pop("device_map", "cpu"),
         }
+        resolved_dtype = self._resolve_torch_dtype(torch_dtype_value)
+        if resolved_dtype is not None:
+            options["torch_dtype"] = resolved_dtype
         if self.encoder_path:
             options["peft_model_name_or_path"] = self.encoder_path
-        options |= self._llm2vec_options
+        options |= overrides
         return LLM2Vec.from_pretrained(**options)
+
+    def _normalise_encode_options(
+        self, options: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        defaults: dict[str, Any] = {"batch_size": 8, "show_progress_bar": False}
+        if not options:
+            return defaults
+
+        merged = dict(defaults)
+        for key, value in options.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+        return self._validate_encode_options(merged)
+
+    def _validate_encode_options(self, options: dict[str, Any]) -> dict[str, Any]:
+        validated = dict(options)
+
+        if "batch_size" in validated:
+            batch_size = validated["batch_size"]
+            if not isinstance(batch_size, int) or batch_size <= 0:
+                raise ValueError("batch_size must be a positive integer")
+
+        for boolean_key in (
+            "show_progress_bar",
+            "convert_to_numpy",
+            "convert_to_tensor",
+        ):
+            if boolean_key in validated and not isinstance(
+                validated[boolean_key], bool
+            ):
+                raise TypeError(f"{boolean_key} must be a boolean when provided")
+
+        return validated
+
+    def _prepare_encode_kwargs(self, overrides: dict[str, Any]) -> dict[str, Any]:
+        options = dict(self._encode_options)
+        for key, value in overrides.items():
+            if value is None:
+                options.pop(key, None)
+            else:
+                options[key] = value
+        return self._validate_encode_options(options)
+
+    def _prepare_prompt_pairs(
+        self,
+        texts: Sequence[str] | Sequence[Sequence[str]],
+        instruction: str | Sequence[str] | None,
+    ) -> list[tuple[str, str]]:
+        if isinstance(texts, (str, bytes)):
+            raise TypeError("texts must be a sequence of strings, not a single string")
+
+        text_list = list(texts)
+        if not text_list:
+            return []
+
+        first = text_list[0]
+        if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
+            if instruction not in ("", None):
+                raise ValueError(
+                    "instruction must be omitted when providing pre-formatted prompts"
+                )
+            pairs: list[tuple[str, str]] = []
+            for item in text_list:
+                if (
+                    not isinstance(item, Sequence)
+                    or isinstance(item, (str, bytes))
+                    or len(item) != 2
+                ):
+                    raise TypeError(
+                        "pre-formatted prompts must be sequences of two strings"
+                    )
+                inst, text = item  # type: ignore[misc]
+                if not isinstance(inst, str) or not isinstance(text, str):
+                    raise TypeError("instruction and text must both be strings")
+                pairs.append((inst, text))
+            return pairs
+
+        instructions: list[str]
+        if instruction is None:
+            instructions = [""] * len(text_list)
+        elif isinstance(instruction, str):
+            instructions = [instruction] * len(text_list)
+        else:
+            instructions = list(instruction)
+            if len(instructions) != len(text_list):
+                raise ValueError(
+                    "instruction list must match the number of texts provided"
+                )
+            for inst in instructions:
+                if not isinstance(inst, str):
+                    raise TypeError("all instructions must be strings")
+
+        pairs = []
+        for inst, text in zip(instructions, text_list, strict=True):
+            if not isinstance(text, str):
+                raise TypeError("texts must be strings")
+            pairs.append((inst, text))
+        return pairs
+
+    def _resolve_torch_dtype(self, dtype: Any) -> Any | None:
+        """Translate ``dtype`` to a torch dtype instance when possible."""
+
+        if dtype is None:
+            return None
+        if not isinstance(dtype, str):
+            return dtype
+
+        normalized = dtype.strip()
+        if not normalized:
+            return None
+        if normalized.lower() == "auto":
+            return "auto"
+
+        torch_module = _get_torch_module()
+        if torch_module is None:
+            logger.warning(
+                "Torch is unavailable; ignoring torch_dtype override '%s'", dtype
+            )
+            return None
+
+        attribute_name = normalized.split(".")[-1]
+        resolved = getattr(torch_module, attribute_name, None)
+        if resolved is None:
+            logger.warning(
+                "Unknown torch dtype '%s'; falling back to library defaults", dtype
+            )
+        return resolved
 
     def switch_encoder(self, new_encoder_path: str) -> None:
         """Change the current encoder and reload it."""
@@ -106,46 +265,63 @@ class NeuronManager:
         self._load_attempted = False
         self._load_encoder()
 
-    def encode(self, texts: Sequence[str], instruction: str = "") -> list[list[float]]:
-        """Encode a list of texts using the current model or a deterministic fallback."""
+    def reload(self) -> None:
+        """Force a reload of the current encoder configuration."""
 
-        if not texts:
+        self._load_encoder()
+
+    def set_encode_options(self, **encode_options: Any) -> None:
+        """Update default encode keyword arguments used for future requests."""
+
+        self._encode_options = self._normalise_encode_options(encode_options)
+
+    def encode(
+        self,
+        texts: Sequence[str] | Sequence[Sequence[str]],
+        instruction: str | Sequence[str] | None = "",
+        **encode_kwargs: Any,
+    ) -> list[list[float]]:
+        """Encode texts with LLM2Vec, supporting per-text instructions and overrides."""
+
+        if isinstance(texts, (str, bytes)):
+            raise TypeError("texts must be a sequence of strings, not a single string")
+
+        prompts = self._prepare_prompt_pairs(texts, instruction)
+        if not prompts:
             return []
+
+        options = self._prepare_encode_kwargs(encode_kwargs)
 
         if not self._load_attempted:
             self._load_encoder()
 
         if not self.model:
-            logger.debug("Using fallback embeddings for %d texts", len(texts))
-            return [self._fallback_vector(instruction, text) for text in texts]
+            logger.debug("Using fallback embeddings for %d texts", len(prompts))
+            return [self._fallback_vector(inst, text) for inst, text in prompts]
 
-        formatted_texts = [[instruction, text] for text in texts]
+        formatted_texts = [[inst, text] for inst, text in prompts]
         disable_cm = getattr(self.model, "disable_gradient", None)
         try:
             if callable(disable_cm):
                 with disable_cm():
-                    encoded = self.model.encode(
-                        formatted_texts, batch_size=8, show_progress_bar=False
-                    )
+                    encoded = self.model.encode(formatted_texts, **options)
             else:
-                encoded = self.model.encode(
-                    formatted_texts, batch_size=8, show_progress_bar=False
-                )
+                encoded = self.model.encode(formatted_texts, **options)
         except Exception as exc:  # pragma: no cover - inference failures are rare
             logger.warning(
                 "LLM2Vec encoding failed; falling back to deterministic vectors: %s",
                 exc,
                 exc_info=True,
             )
-            return [self._fallback_vector(instruction, text) for text in texts]
+            return [self._fallback_vector(inst, text) for inst, text in prompts]
 
         try:
-            return self._normalise_embeddings(encoded, expected=len(texts))
+            return self._normalise_embeddings(encoded, expected=len(prompts))
         except Exception as exc:  # pragma: no cover - defensive fallback
             logger.warning(
                 "LLM2Vec returned invalid embeddings; using fallback: %s", exc
             )
-            return [self._fallback_vector(instruction, text) for text in texts]
+            return [self._fallback_vector(inst, text) for inst, text in prompts]
 
     def _dispose_model(self) -> None:
         if not self.model:
