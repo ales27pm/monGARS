@@ -387,6 +387,25 @@ def test_set_encode_options_updates_defaults() -> None:
     assert manager.model.last_kwargs == {"batch_size": 3, "show_progress_bar": True}
 
 
+def test_set_encode_options_removes_option_with_none() -> None:
+    manager = NeuronManager(
+        base_model_path="base/model",
+        default_encoder_path="adapter/path",
+        llm2vec_factory=_factory,
+    )
+
+    # Set an option
+    manager.set_encode_options(batch_size=4, show_progress_bar=True)
+    manager.encode(["test"])
+    assert manager.model.last_kwargs == {"batch_size": 4, "show_progress_bar": True}
+
+    # Remove batch_size by setting it to None
+    manager.set_encode_options(batch_size=None)
+    manager.encode(["test2"])
+    # Only show_progress_bar should remain
+    assert manager.model.last_kwargs == {"show_progress_bar": True}
+
+
 def test_reload_after_initial_failure() -> None:
     attempts: list[str | None] = []
 
