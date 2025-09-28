@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,7 @@ async def test_scheduler_broadcasts(monkeypatch):
         return [True]
 
     communicator = PeerCommunicator([])
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
     monkeypatch.setattr(communicator, "send", fake_send)
     scheduler = DistributedScheduler(communicator)
 
@@ -55,3 +56,67 @@ async def test_scheduler_concurrent(monkeypatch):
     scheduler.stop()
     await run
     assert sorted(results) == list(range(5))
+
+
+@pytest.mark.asyncio
+async def test_scheduler_metrics_snapshot(monkeypatch):
+    communicator = PeerCommunicator([])
+    sent: list[dict[str, Any]] = []
+
+    async def fake_send(msg):
+        sent.append(msg)
+        return [True]
+
+    monkeypatch.setattr(communicator, "send", fake_send)
+    scheduler = DistributedScheduler(communicator, concurrency=1, metrics_interval=0.1)
+
+    async def task():
+        await asyncio.sleep(0.01)
+        return "payload"
+
+    await scheduler.add_task(task)
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.2)
+    scheduler.stop()
+    await runner
+
+    snapshot = scheduler.get_metrics_snapshot()
+    assert sent == [{"result": "payload"}]
+    assert snapshot["queue_depth"] == 0
+    assert snapshot["tasks_processed"] == 1
+    assert snapshot["tasks_failed"] == 0
+    assert snapshot["task_failure_rate"] == 0.0
+    assert snapshot["worker_uptime_seconds"] >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_failure_metrics(monkeypatch):
+    communicator = PeerCommunicator([])
+    sent: list[dict[str, Any]] = []
+
+    async def fake_send(msg):
+        sent.append(msg)
+        return [True]
+
+    monkeypatch.setattr(communicator, "send", fake_send)
+    scheduler = DistributedScheduler(communicator, concurrency=1, metrics_interval=0.1)
+
+    async def success():
+        return "ok"
+
+    async def failure():
+        raise RuntimeError("boom")
+
+    await scheduler.add_task(success)
+    await scheduler.add_task(failure)
+
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.2)
+    scheduler.stop()
+    await runner
+
+    snapshot = scheduler.get_metrics_snapshot()
+    assert sent == [{"result": "ok"}]
+    assert snapshot["tasks_processed"] == 2
+    assert snapshot["tasks_failed"] == 1
+    assert snapshot["task_failure_rate"] == pytest.approx(0.5)
