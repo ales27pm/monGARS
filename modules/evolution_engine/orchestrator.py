@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
@@ -18,7 +19,7 @@ class TrainerProtocol(Protocol):
         self, training_config_path: str, output_dir: str
     ) -> None:
         """Construct a trainer bound to the provided config and output path."""
-    def train(self) -> dict[str, object]:
+    def train(self) -> Mapping[str, object]:
         """Execute the training pipeline and return a summary payload."""
 
 
