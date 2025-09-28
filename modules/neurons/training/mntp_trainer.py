@@ -1,7 +1,11 @@
+from __future__ import annotations
+
+import hashlib
 import json
 import logging
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
@@ -16,18 +20,25 @@ except Exception:  # pragma: no cover - fallback if unavailable
 logger = logging.getLogger(__name__)
 
 
+class TrainingStatus(str, Enum):
+    """Possible outcomes for a training run."""
+
+    SUCCESS = "success"
+    FALLBACK = "fallback"
+
+
 class MNTPTrainer:
-    """Simplified trainer that simulates MNTP training."""
+    """Execute the MNTP encoder fine-tuning pipeline with graceful fallbacks."""
 
     def __init__(self, training_config_path: str, output_dir: str) -> None:
         self.config_path = Path(training_config_path)
         self.output_dir = Path(output_dir)
-        self.config: Dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
 
     def _load_config(self) -> None:
         try:
-            with self.config_path.open() as f:
-                self.config = json.load(f)
+            with self.config_path.open() as file:
+                self.config = json.load(file)
         except FileNotFoundError as exc:
             logger.error("Training config not found: %s", exc)
             raise
@@ -35,74 +46,308 @@ class MNTPTrainer:
             logger.error("Invalid JSON configuration: %s", exc)
             raise
 
-    def train(self) -> None:
-        """Run a minimal MNTP training loop and save the resulting adapter."""
-        self._load_config()
-        logger.info("MNTP training started with config: %s", self.config)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._validate_and_apply_defaults()
 
+    def _validate_and_apply_defaults(self) -> None:
+        if not isinstance(self.config, dict):  # pragma: no cover - defensive guard
+            raise TypeError("Training configuration must be a JSON object")
+
+        defaults: dict[str, Any] = {
+            "dataset_name": "wikitext",
+            "dataset_config_name": "wikitext-103-raw-v1",
+            "dataset_split": "train[:1%]",
+            "model_name_or_path": "sshleifer/tiny-gpt2",
+            "lora_r": 16,
+            "torch_dtype": "float32",
+            "attn_implementation": None,
+            "per_device_train_batch_size": 16,
+            "gradient_accumulation_steps": 1,
+            "max_seq_length": 512,
+            "max_steps": 32,
+        }
+        merged = {**defaults, **self.config}
+
+        required_keys = ("dataset_name", "model_name_or_path")
+        for key in required_keys:
+            value = merged.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"Configuration key '{key}' must be a non-empty string"
+                )
+
+        try:
+            merged["lora_r"] = int(merged["lora_r"])
+            merged["per_device_train_batch_size"] = int(
+                merged["per_device_train_batch_size"]
+            )
+            merged["gradient_accumulation_steps"] = int(
+                merged["gradient_accumulation_steps"]
+            )
+            merged["max_seq_length"] = int(merged["max_seq_length"])
+            merged["max_steps"] = int(merged["max_steps"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Numeric configuration options must be castable to int"
+            ) from exc
+
+        self.config = merged
+
+    def train(self) -> dict[str, Any]:
+        """Run the MNTP pipeline and return a structured training summary."""
+
+        self._load_config()
+        logger.info(
+            "MNTP training started", extra={"config_path": str(self.config_path)}
+        )
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self._save_config()
 
         if not self._deps_available():
-            self._handle_missing_deps()
-            return
+            logger.warning(
+                "Training dependencies missing; falling back to deterministic adapter"
+            )
+            summary = self._materialise_fallback_adapter(reason="missing_dependencies")
+        else:
+            try:
+                summary = self._run_peft_training()
+            except Exception as exc:  # pragma: no cover - unexpected ML errors
+                logger.error("Training failed: %s", exc, exc_info=True)
+                summary = self._materialise_fallback_adapter(
+                    reason="training_failed", details=str(exc)
+                )
 
-        try:
-            self._run_peft_training()
-        except Exception as exc:  # pragma: no cover - unexpected ML errors
-            logger.error("Training failed: %s", exc, exc_info=True)
-            self._save_placeholder()
-            return
-
-        logger.info("Model training finished. Artifacts saved to %s", self.output_dir)
+        self._write_summary(summary)
+        return summary
 
     def _save_config(self) -> None:
         try:
             path = self.output_dir / "training_config.json"
-            path.write_text(json.dumps(self.config, indent=2))
+            path.write_text(json.dumps(self.config, indent=2, sort_keys=True))
         except OSError as exc:  # pragma: no cover
             logger.error("Failed to write training config: %s", exc)
             raise
 
     def _deps_available(self) -> bool:
-        return bool(torch and load_dataset and LLM2Vec)
-
-    def _handle_missing_deps(self) -> None:
-        logger.warning("Training dependencies missing; saving placeholder model.")
-        self._save_placeholder()
-
-    def _save_placeholder(self) -> None:
-        (self.output_dir / "adapter_model.bin").write_text("placeholder")
-
-    def _run_peft_training(self) -> None:
-        logger.info("Loading dataset: %s", self.config.get("dataset_name"))
-        dataset = load_dataset(
-            self.config.get("dataset_name", "wikitext"),
-            self.config.get("dataset_config_name", "wikitext-103-raw-v1"),
-            split="train[:1%]",
+        return bool(
+            torch and load_dataset and LLM2Vec and hasattr(LLM2Vec, "from_pretrained")
         )
 
-        model_name = self.config.get("model_name_or_path")
-        if model_name and model_name.lower().startswith("mistralai/mistral-7b"):
-            logger.warning("Large model specified; using lightweight model for tests")
-            model_name = "sshleifer/tiny-gpt2"
-        elif not model_name:
-            logger.warning("No model specified, using default")
-            model_name = "sshleifer/tiny-gpt2"
+    def _materialise_fallback_adapter(
+        self, *, reason: str, details: str | None = None
+    ) -> dict[str, Any]:
+        adapter_dir = self.output_dir / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        weights_payload = self._derive_fallback_weights()
+        weights_path = adapter_dir / "fallback_adapter.json"
+        weights_path.write_text(json.dumps(weights_payload, indent=2, sort_keys=True))
 
-        logger.info("Initializing LLM2Vec model: %s", model_name)
-        model = LLM2Vec.from_pretrained(
-            base_model_name_or_path=model_name,
-            enable_bidirectional=True,
-            pooling_mode="mean",
-            torch_dtype=getattr(torch, self.config.get("torch_dtype", "float32")),
-            attn_implementation=self.config.get("attn_implementation"),
+        logger.info(
+            "Fallback adapter generated",
+            extra={"reason": reason, "weights_path": str(weights_path)},
         )
 
-        logger.info("Starting PEFT training...")
-        model.train(dataset=dataset, lora_r=self.config.get("lora_r", 16))
-        logger.info("PEFT training complete.")
+        return {
+            "status": TrainingStatus.FALLBACK.value,
+            "reason": reason,
+            "details": details,
+            "artifacts": {"adapter": str(adapter_dir), "weights": str(weights_path)},
+            "metrics": {
+                "training_examples": 0,
+                "per_device_train_batch_size": self.config[
+                    "per_device_train_batch_size"
+                ],
+                "gradient_accumulation_steps": self.config[
+                    "gradient_accumulation_steps"
+                ],
+            },
+        }
 
-        peft_save_path = self.output_dir / "adapter"
-        model.save_peft(str(peft_save_path))
-        logger.info("PEFT adapter saved to %s", peft_save_path)
+    def _write_summary(self, summary: dict[str, Any]) -> None:
+        summary_path = self.output_dir / "training_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+
+    def _derive_fallback_weights(self) -> dict[str, Any]:
+        fingerprint: dict[str, Any] = {
+            "keys": sorted(self.config.keys()),
+            "string_lengths": {},
+            "numeric": {},
+            "boolean": {},
+        }
+
+        for key, value in self.config.items():
+            if isinstance(value, bool):
+                fingerprint["boolean"][key] = value
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                fingerprint["numeric"][key] = float(value)
+            elif isinstance(value, str):
+                fingerprint["string_lengths"][key] = len(value)
+
+        serialized = json.dumps(
+            fingerprint, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        digest = hashlib.sha256(serialized).digest()
+        rows = max(4, min(64, int(self.config.get("lora_r", 16))))
+        cols = max(8, min(128, int(self.config.get("max_seq_length", 512)) // 4))
+
+        matrix: list[list[float]] = []
+        idx = 0
+        for _ in range(rows):
+            row: list[float] = []
+            for _ in range(cols):
+                byte = digest[idx % len(digest)]
+                value = round(((byte / 255.0) * 2) - 1, 6)
+                row.append(value)
+                idx += 1
+            matrix.append(row)
+
+        checksum = hashlib.sha256(
+            json.dumps(matrix, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+        return {
+            "rows": rows,
+            "cols": cols,
+            "checksum": checksum,
+            "schema_version": 1,
+            "matrix": matrix,
+        }
+
+    def _run_peft_training(self) -> dict[str, Any]:
+        dataset = self._load_dataset()
+        model_name = self._resolve_model_name()
+        model = self._initialise_model(model_name)
+        metrics = self._execute_training(model, dataset)
+        artifact_dir = self._persist_model(model)
+
+        logger.info(
+            "Model training finished",
+            extra={"artifact_dir": str(artifact_dir), "model_name": model_name},
+        )
+        return {
+            "status": TrainingStatus.SUCCESS.value,
+            "model_name": model_name,
+            "dataset_name": self.config["dataset_name"],
+            "artifacts": {"adapter": str(artifact_dir)},
+            "metrics": metrics,
+        }
+
+    def _load_dataset(self) -> Any:
+        if load_dataset is None:
+            raise RuntimeError("datasets library unavailable")
+
+        try:
+            dataset = load_dataset(
+                self.config["dataset_name"],
+                self.config.get("dataset_config_name"),
+                split=self.config.get("dataset_split", "train[:1%]"),
+            )
+        except Exception as exc:  # pragma: no cover - network/IO errors
+            raise RuntimeError("Failed to load dataset") from exc
+        return dataset
+
+    def _resolve_model_name(self) -> str:
+        model_name = self.config["model_name_or_path"].strip()
+        if model_name.lower().startswith("mistralai/mistral-7b"):
+            logger.warning(
+                "Large model specified; defaulting to lightweight reference model",
+                extra={"requested_model": model_name},
+            )
+            return "sshleifer/tiny-gpt2"
+        return model_name or "sshleifer/tiny-gpt2"
+
+    def _initialise_model(self, model_name: str) -> Any:
+        if LLM2Vec is None:
+            raise RuntimeError("LLM2Vec is unavailable")
+
+        dtype_name = str(self.config.get("torch_dtype", "float32"))
+        torch_dtype = getattr(torch, dtype_name, None) if torch else None
+        if torch_dtype is None and torch is not None:
+            logger.warning(
+                "Unsupported torch dtype '%s'; defaulting to float32", dtype_name
+            )
+            torch_dtype = torch.float32
+
+        try:
+            model = LLM2Vec.from_pretrained(
+                base_model_name_or_path=model_name,
+                enable_bidirectional=True,
+                pooling_mode="mean",
+                torch_dtype=torch_dtype,
+                attn_implementation=self.config.get("attn_implementation"),
+            )
+        except Exception as exc:  # pragma: no cover - depends on external library
+            raise RuntimeError("Failed to initialise LLM2Vec") from exc
+        return model
+
+    def _execute_training(self, model: Any, dataset: Any) -> dict[str, Any]:
+        if not hasattr(model, "train"):
+            raise RuntimeError("LLM2Vec model does not expose a train method")
+
+        lora_rank = int(self.config.get("lora_r", 16))
+        max_steps = int(self.config.get("max_steps", 32))
+
+        try:
+            result = model.train(
+                dataset=dataset,
+                lora_r=lora_rank,
+                max_steps=max_steps,
+                per_device_train_batch_size=self.config.get(
+                    "per_device_train_batch_size"
+                ),
+                gradient_accumulation_steps=self.config.get(
+                    "gradient_accumulation_steps"
+                ),
+            )
+        except TypeError:
+            result = model.train(dataset=dataset, lora_r=lora_rank)
+
+        metrics = self._extract_metrics(result, dataset)
+        metrics["max_steps"] = max_steps
+        metrics["lora_r"] = lora_rank
+        return metrics
+
+    def _extract_metrics(self, result: Any, dataset: Any) -> dict[str, Any]:
+        metrics: dict[str, Any] = {
+            "training_examples": self._estimate_dataset_size(dataset),
+            "per_device_train_batch_size": self.config.get(
+                "per_device_train_batch_size"
+            ),
+            "gradient_accumulation_steps": self.config.get(
+                "gradient_accumulation_steps"
+            ),
+        }
+
+        if isinstance(result, dict):
+            metrics |= {
+                key: value
+                for key, value in result.items()
+                if isinstance(value, (int, float))
+            }
+
+        return metrics
+
+    def _estimate_dataset_size(self, dataset: Any) -> int:
+        try:
+            return len(dataset)  # type: ignore[arg-type]
+        except (TypeError, ValueError):  # pragma: no cover - iterable datasets
+            batch = int(self.config.get("per_device_train_batch_size", 1))
+            steps = int(self.config.get("max_steps", 1))
+            return (
+                batch * steps * int(self.config.get("gradient_accumulation_steps", 1))
+            )
+
+    def _persist_model(self, model: Any) -> Path:
+        if not hasattr(model, "save_peft"):
+            raise RuntimeError("LLM2Vec model does not expose save_peft")
+
+        adapter_dir = self.output_dir / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            model.save_peft(str(adapter_dir))
+        except TypeError:
+            model.save_peft(adapter_dir)
+        except Exception as exc:  # pragma: no cover - filesystem issues
+            raise RuntimeError("Failed to persist PEFT adapter") from exc
+
+        return adapter_dir
