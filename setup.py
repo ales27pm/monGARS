@@ -18,6 +18,7 @@ setup(
         "ollama>=0.5.1",
         "opentelemetry-sdk>=1.35.0",
         "opentelemetry-exporter-otlp>=1.35.0",
+        "cachetools>=5.3.3",
         "passlib[bcrypt]>=1.7.4",
         "pgvector>=0.4.1",
         "celery>=5.3,<6.0",
