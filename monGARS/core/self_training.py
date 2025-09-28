@@ -36,19 +36,40 @@ class SelfTrainingEngine:
                 await self._run_training_cycle()
 
     async def _run_training_cycle(self) -> None:
-        batch = []
+        batch: list[Dict[str, Any]] = []
+        discarded = 0
         while not self.training_queue.empty() and len(batch) < 100:
-            batch.append(await self.training_queue.get())
+            record = await self.training_queue.get()
+            confidence = record.get("confidence")
+            try:
+                confidence_value = float(confidence) if confidence is not None else 0.0
+            except (TypeError, ValueError):
+                confidence_value = 0.0
+
+            if confidence_value >= self.training_threshold:
+                batch.append(record)
+            else:
+                discarded += 1
+
         if not batch:
+            if discarded:
+                logger.info(
+                    "training_cycle_skipped",
+                    extra={
+                        "discarded_items": discarded,
+                        "threshold": self.training_threshold,
+                    },
+                )
             return
         async with self.lock:
             new_version = len(self.model_versions) + 1
+            loop = asyncio.get_running_loop()
             self.model_versions[f"v{new_version}"] = {
-                "trained_at": asyncio.get_event_loop().time(),
+                "trained_at": loop.time(),
                 "data_count": len(batch),
             }
             logger.info("Training complete. New model version: v%s", new_version)
-            self.last_retrain_time = asyncio.get_event_loop().time()
+            self.last_retrain_time = loop.time()
 
     def shutdown(self) -> None:
         """Signal the auto improvement loop to stop."""
