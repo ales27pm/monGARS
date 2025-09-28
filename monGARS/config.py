@@ -108,6 +108,15 @@ class Settings(BaseSettings):
         default=os.getenv("STYLE_USE_QLORA", "False").lower() in ("true", "1"),
         validation_alias="STYLE_USE_QLORA",
     )
+    style_max_concurrent_trainings: int = Field(
+        default=int(os.getenv("STYLE_MAX_CONCURRENT_TRAININGS", 2))
+    )
+    style_adapter_ttl_seconds: int = Field(
+        default=int(os.getenv("STYLE_ADAPTER_TTL", 3600))
+    )
+    style_adapter_maxsize: int = Field(
+        default=int(os.getenv("STYLE_ADAPTER_MAXSIZE", 64))
+    )
     mimicry_positive_lexicon_path: str | None = Field(
         default=None,
         validation_alias="MIMICRY_POSITIVE_LEXICON_PATH",

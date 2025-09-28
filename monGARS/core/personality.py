@@ -78,8 +78,7 @@ class PersonalityEngine:
                             UserPersonality.user_id == user_id
                         )
                     )
-                    record = result.scalar_one_or_none()
-                    if record:
+                    if record := result.scalar_one_or_none():
                         profile = PersonalityProfile(
                             traits=record.traits,
                             interaction_style=record.interaction_style,
@@ -93,6 +92,13 @@ class PersonalityEngine:
             if user_id not in self.user_profiles:
                 self.user_profiles[user_id] = self._generate_default_profile()
             return self.user_profiles[user_id]
+
+    @property
+    def style_tuner(self) -> StyleFineTuner:
+        return self._style_tuner
+
+    def set_style_tuner(self, style_tuner: StyleFineTuner) -> None:
+        self._style_tuner = style_tuner
 
     async def save_profile(self, user_id: str) -> None:
         async with self._lock:

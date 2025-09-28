@@ -7,9 +7,10 @@ import logging
 import os
 import tempfile
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import torch
 from torch.utils.data import Dataset
@@ -47,9 +48,7 @@ def _resolve_hidden_size(config: AutoConfig) -> int:
 def _default_device() -> str:
     if torch.cuda.is_available():  # pragma: no cover - depends on runtime
         return "cuda"
-    if torch.backends.mps.is_available():  # pragma: no cover - depends on runtime
-        return "mps"
-    return "cpu"
+    return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
 def _fingerprint_interactions(interactions: Sequence[dict[str, str]]) -> str:
@@ -82,6 +81,9 @@ class StyleFineTuningConfig:
     top_p: float = float(os.getenv("STYLE_GENERATION_TOP_P", 0.9))
     max_new_tokens: int = int(os.getenv("STYLE_MAX_NEW_TOKENS", 96))
     seed: int = int(os.getenv("STYLE_ANALYSIS_SEED", 7))
+    max_concurrent_trainings: int = int(os.getenv("STYLE_MAX_CONCURRENT_TRAININGS", 2))
+    adapter_cache_ttl_seconds: int = int(os.getenv("STYLE_ADAPTER_TTL", 3600))
+    adapter_cache_maxsize: int = int(os.getenv("STYLE_ADAPTER_MAXSIZE", 64))
 
 
 @dataclass
@@ -156,171 +158,69 @@ class StyleAdapterState:
     updated_at: float
 
 
-class StyleFineTuner:
-    """Manage LoRA/QLoRA adapters to personalise responses per user."""
+class PromptBuilder:
+    """Construct generation prompts from personality dimensions."""
 
-    TRAIT_KEYS = [
-        "openness",
-        "conscientiousness",
-        "extraversion",
-        "agreeableness",
-        "neuroticism",
-    ]
-    STYLE_KEYS = ["formality", "humor", "enthusiasm", "directness"]
-    CONTEXT_KEYS = ["technical", "casual", "professional"]
+    def __init__(self, style_keys: Sequence[str]) -> None:
+        self._style_keys = list(style_keys)
+
+    def build(self, base_text: str, personality: Mapping[str, float]) -> str:
+        descriptors: list[str] = []
+        for key in self._style_keys:
+            value = personality.get(key)
+            if value is None:
+                continue
+            if value > 0.66:
+                descriptors.append(f"très {key}")
+            elif value < 0.33:
+                descriptors.append(f"peu {key}")
+        tone = ", ".join(descriptors) if descriptors else "équilibré"
+        return (
+            "Tu es un assistant personnalisé. Ajuste la réponse suivante pour adopter "
+            f"un ton {tone}. Réponse originale: {base_text}\nRéponse adaptée:"
+        )
+
+
+class StyleAdapterCache:
+    """In-memory adapter cache with TTL and LRU eviction."""
+
+    def __init__(self, *, ttl_seconds: int, maxsize: int) -> None:
+        self._ttl_seconds = ttl_seconds if ttl_seconds > 0 else None
+        self._maxsize = max(1, maxsize)
+        self._entries: OrderedDict[str, StyleAdapterState] = OrderedDict()
+
+    def get(self, user_id: str) -> StyleAdapterState | None:
+        state = self._entries.get(user_id)
+        if state is None:
+            return None
+        if self._ttl_seconds is not None:
+            now = time.monotonic()
+            if now - state.updated_at > self._ttl_seconds:
+                self._entries.pop(user_id, None)
+                return None
+            state.updated_at = now
+        self._entries.move_to_end(user_id)
+        return state
+
+    def set(self, user_id: str, state: StyleAdapterState) -> None:
+        self._entries[user_id] = state
+        self._entries.move_to_end(user_id)
+        while len(self._entries) > self._maxsize:
+            self._entries.popitem(last=False)
+
+
+class AdapterTrainer:
+    """Train and materialise LoRA/QLoRA adapters for inference."""
 
     def __init__(
         self,
-        config: StyleFineTuningConfig | None = None,
-        *,
-        device: str | None = None,
+        config: StyleFineTuningConfig,
+        tokenizer: PreTrainedTokenizerBase,
     ) -> None:
-        if config is None:
-            try:
-                from monGARS.config import get_settings
+        self._config = config
+        self._tokenizer = tokenizer
 
-                settings = get_settings()
-                config = StyleFineTuningConfig(
-                    base_model=settings.style_base_model,
-                    adapter_repository=Path(settings.style_adapter_dir),
-                    max_history_messages=settings.style_max_history,
-                    min_samples=settings.style_min_samples,
-                    max_steps=settings.style_max_steps,
-                    learning_rate=settings.style_learning_rate,
-                    use_qlora=settings.style_use_qlora,
-                )
-            except (
-                Exception
-            ) as exc:  # pragma: no cover - settings unavailable during import
-                logger.debug(
-                    "Falling back to environment defaults for style tuning config: %s",
-                    exc,
-                )
-                config = StyleFineTuningConfig()
-        self.config = config
-        self.device = device or _default_device()
-        self.config.adapter_repository.mkdir(parents=True, exist_ok=True)
-        self._base_config = AutoConfig.from_pretrained(self.config.base_model)
-        self._hidden_size = _resolve_hidden_size(self._base_config)
-        self._tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
-        generator = torch.Generator().manual_seed(self.config.seed)
-        self._trait_projection = torch.randn(
-            len(self.TRAIT_KEYS), self._hidden_size, generator=generator
-        )
-        self._style_projection = torch.randn(
-            len(self.STYLE_KEYS), self._hidden_size, generator=generator
-        )
-        self._context_projection = torch.randn(
-            len(self.CONTEXT_KEYS), self._hidden_size, generator=generator
-        )
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._adapters: dict[str, StyleAdapterState] = {}
-        logger.info(
-            "StyleFineTuner initialised (base_model=%s, device=%s)",
-            self.config.base_model,
-            self.device,
-        )
-
-    async def estimate_personality(
-        self, user_id: str, interactions: Sequence[dict[str, str]]
-    ) -> StyleAnalysis:
-        """Train (if required) the LoRA adapter and extract trait estimates."""
-
-        interactions = [
-            {
-                "message": item.get("message", ""),
-                "response": item.get("response", ""),
-            }
-            for item in interactions
-            if item.get("message") or item.get("response")
-        ]
-        fingerprint = _fingerprint_interactions(interactions)
-        lock = self._locks.setdefault(user_id, asyncio.Lock())
-
-        async with lock:
-            state = self._adapters.get(user_id)
-            needs_training = (
-                state is None or state.fingerprint != fingerprint or state.model is None
-            )
-            samples = self._build_training_corpus(interactions)
-
-            if not samples:
-                self._adapters[user_id] = StyleAdapterState(
-                    fingerprint=fingerprint,
-                    model=None,
-                    tokenizer=self._tokenizer,
-                    sample_count=0,
-                    updated_at=time.time(),
-                )
-                return StyleAnalysis.default(sample_count=0)
-
-            if needs_training and len(samples) >= self.config.min_samples:
-                state = await asyncio.to_thread(
-                    self._train_and_cache_adapter,
-                    user_id,
-                    fingerprint,
-                    samples,
-                )
-                self._adapters[user_id] = state
-            elif state is None:
-                # Not enough samples to train yet.
-                state = StyleAdapterState(
-                    fingerprint=fingerprint,
-                    model=None,
-                    tokenizer=self._tokenizer,
-                    sample_count=len(samples),
-                    updated_at=time.time(),
-                )
-                self._adapters[user_id] = state
-
-        if state.model is None:
-            return StyleAnalysis.default(sample_count=state.sample_count)
-
-        return await asyncio.to_thread(
-            self._extract_personality_sync,
-            state,
-            interactions,
-        )
-
-    def apply_style(
-        self,
-        user_id: str,
-        base_text: str,
-        personality: dict[str, float] | None,
-    ) -> str:
-        state = self._adapters.get(user_id)
-        if state is None or state.model is None:
-            logger.debug("No trained adapter for %s; returning base text", user_id)
-            return base_text
-
-        prompt = self._build_generation_prompt(base_text, personality or {})
-        tokens = state.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.config.max_sequence_length,
-        )
-        tokens = {k: v.to(self.device) for k, v in tokens.items()}
-        model = state.model.to(self.device)
-        model.eval()
-        with torch.no_grad():
-            output = model.generate(
-                **tokens,
-                max_new_tokens=self.config.max_new_tokens,
-                temperature=self.config.temperature,
-                top_p=self.config.top_p,
-                do_sample=True,
-                pad_token_id=state.tokenizer.eos_token_id,
-            )
-        generated = state.tokenizer.decode(output[0], skip_special_tokens=True)
-        if generated.startswith(prompt):
-            adapted = generated[len(prompt) :].strip()
-            return adapted or generated.strip()
-        return generated.strip()
-
-    def _train_and_cache_adapter(
+    def train(
         self,
         user_id: str,
         fingerprint: str,
@@ -334,9 +234,9 @@ class StyleFineTuner:
         )
         training_model = self._create_model(trainable=True)
         lora_config = LoraConfig(
-            r=self.config.lora_r,
-            lora_alpha=self.config.lora_alpha,
-            lora_dropout=self.config.lora_dropout,
+            r=self._config.lora_r,
+            lora_alpha=self._config.lora_alpha,
+            lora_dropout=self._config.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -344,18 +244,18 @@ class StyleFineTuner:
         dataset = ConversationDataset(
             self._tokenizer,
             samples,
-            max_length=self.config.max_sequence_length,
+            max_length=self._config.max_sequence_length,
         )
-        batch_size = min(self.config.micro_batch_size, max(1, len(dataset)))
-        adapter_path = self.config.adapter_repository / user_id
+        batch_size = min(self._config.micro_batch_size, max(1, len(dataset)))
+        adapter_path = self._config.adapter_repository / user_id
         tmp_output = adapter_path / "trainer"
         training_args = TrainingArguments(
             output_dir=str(tmp_output),
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=1,
-            learning_rate=self.config.learning_rate,
-            num_train_epochs=self.config.training_epochs,
-            max_steps=self.config.max_steps,
+            learning_rate=self._config.learning_rate,
+            num_train_epochs=self._config.training_epochs,
+            max_steps=self._config.max_steps,
             logging_steps=1,
             save_strategy="no",
             report_to=[],
@@ -388,12 +288,12 @@ class StyleFineTuner:
             model=inference_adapter,
             tokenizer=self._tokenizer,
             sample_count=len(samples),
-            updated_at=time.time(),
+            updated_at=time.monotonic(),
         )
 
     def _create_model(self, *, trainable: bool) -> PreTrainedModel:
         quantization_config = None
-        if trainable and self.config.use_qlora:
+        if trainable and self._config.use_qlora:
             try:  # pragma: no cover - depends on optional bitsandbytes
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
@@ -406,7 +306,7 @@ class StyleFineTuner:
                 quantization_config = None
 
         model = AutoModelForCausalLM.from_pretrained(
-            self.config.base_model,
+            self._config.base_model,
             torch_dtype=torch.float32,
             device_map=None,
             quantization_config=quantization_config,
@@ -415,15 +315,41 @@ class StyleFineTuner:
             model.eval()
         return model
 
-    def _extract_personality_sync(
+
+class StyleInferenceService:
+    """Run inference for style extraction and adaptation."""
+
+    def __init__(
+        self,
+        config: StyleFineTuningConfig,
+        *,
+        device: str,
+        trait_projection: torch.Tensor,
+        style_projection: torch.Tensor,
+        context_projection: torch.Tensor,
+    ) -> None:
+        self._config = config
+        self._device = device
+        self._trait_projection = trait_projection
+        self._style_projection = style_projection
+        self._context_projection = context_projection
+
+    def extract_personality(
         self,
         state: StyleAdapterState,
         interactions: Sequence[dict[str, str]],
     ) -> StyleAnalysis:
-        model = state.model.to("cpu")
+        if state.model is None:
+            return StyleAnalysis.default(sample_count=state.sample_count)
+
+        cpu_device = torch.device("cpu")
+        current_device = next(state.model.parameters()).device
+        model = (
+            state.model.to(cpu_device) if current_device != cpu_device else state.model
+        )
         model.eval()
         vectors: list[torch.Tensor] = []
-        for item in interactions[-self.config.max_history_messages :]:
+        for item in interactions[-self._config.max_history_messages :]:
             candidate = item.get("response") or item.get("message")
             if not candidate:
                 continue
@@ -431,7 +357,7 @@ class StyleFineTuner:
                 candidate,
                 return_tensors="pt",
                 truncation=True,
-                max_length=self.config.max_sequence_length,
+                max_length=self._config.max_sequence_length,
             )
             with torch.no_grad():
                 outputs = model(
@@ -452,15 +378,15 @@ class StyleFineTuner:
 
         traits = {
             key: float(trait_scores[idx].item())
-            for idx, key in enumerate(self.TRAIT_KEYS)
+            for idx, key in enumerate(StyleFineTuner.TRAIT_KEYS)
         }
         style = {
             key: float(style_scores[idx].item())
-            for idx, key in enumerate(self.STYLE_KEYS)
+            for idx, key in enumerate(StyleFineTuner.STYLE_KEYS)
         }
         context_preferences = {
             key: float(context_scores[idx].item())
-            for idx, key in enumerate(self.CONTEXT_KEYS)
+            for idx, key in enumerate(StyleFineTuner.CONTEXT_KEYS)
         }
 
         confidence = min(0.9, 0.4 + 0.1 * state.sample_count)
@@ -472,33 +398,209 @@ class StyleFineTuner:
             sample_count=state.sample_count,
         )
 
+    def apply_style(
+        self,
+        state: StyleAdapterState,
+        prompt: str,
+    ) -> str:
+        if state.model is None:
+            return prompt
+
+        tokens = state.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self._config.max_sequence_length,
+        )
+        tokens = {k: v.to(self._device) for k, v in tokens.items()}
+        model = state.model.to(self._device)
+        model.eval()
+        with torch.no_grad():
+            output = model.generate(
+                **tokens,
+                max_new_tokens=self._config.max_new_tokens,
+                temperature=self._config.temperature,
+                top_p=self._config.top_p,
+                do_sample=True,
+                pad_token_id=state.tokenizer.eos_token_id,
+            )
+        return state.tokenizer.decode(output[0], skip_special_tokens=True)
+
+
+class StyleFineTuner:
+    """Manage LoRA/QLoRA adapters to personalise responses per user."""
+
+    TRAIT_KEYS = [
+        "openness",
+        "conscientiousness",
+        "extraversion",
+        "agreeableness",
+        "neuroticism",
+    ]
+    STYLE_KEYS = ["formality", "humor", "enthusiasm", "directness"]
+    CONTEXT_KEYS = ["technical", "casual", "professional"]
+
+    def __init__(
+        self,
+        config: StyleFineTuningConfig | None = None,
+        *,
+        device: str | None = None,
+    ) -> None:
+        if config is None:
+            try:
+                from monGARS.config import get_settings
+
+                settings = get_settings()
+                config = StyleFineTuningConfig(
+                    base_model=settings.style_base_model,
+                    adapter_repository=Path(settings.style_adapter_dir),
+                    max_history_messages=settings.style_max_history,
+                    min_samples=settings.style_min_samples,
+                    max_steps=settings.style_max_steps,
+                    learning_rate=settings.style_learning_rate,
+                    use_qlora=settings.style_use_qlora,
+                    max_concurrent_trainings=settings.style_max_concurrent_trainings,
+                    adapter_cache_ttl_seconds=settings.style_adapter_ttl_seconds,
+                    adapter_cache_maxsize=settings.style_adapter_maxsize,
+                )
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - settings unavailable during import
+                logger.debug(
+                    "Falling back to environment defaults for style tuning config: %s",
+                    exc,
+                )
+                config = StyleFineTuningConfig()
+        self.config = config
+        self.device = device or _default_device()
+        self.config.adapter_repository.mkdir(parents=True, exist_ok=True)
+        self._base_config = AutoConfig.from_pretrained(self.config.base_model)
+        self._hidden_size = _resolve_hidden_size(self._base_config)
+        self._tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+        generator = torch.Generator().manual_seed(self.config.seed)
+        self._trait_projection = torch.randn(
+            len(self.TRAIT_KEYS), self._hidden_size, generator=generator
+        )
+        self._style_projection = torch.randn(
+            len(self.STYLE_KEYS), self._hidden_size, generator=generator
+        )
+        self._context_projection = torch.randn(
+            len(self.CONTEXT_KEYS), self._hidden_size, generator=generator
+        )
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._adapter_cache = StyleAdapterCache(
+            ttl_seconds=self.config.adapter_cache_ttl_seconds,
+            maxsize=self.config.adapter_cache_maxsize,
+        )
+        self._training_semaphore = asyncio.Semaphore(
+            max(1, self.config.max_concurrent_trainings)
+        )
+        self._prompt_builder = PromptBuilder(self.STYLE_KEYS)
+        self._trainer = AdapterTrainer(self.config, self._tokenizer)
+        self._inference = StyleInferenceService(
+            self.config,
+            device=self.device,
+            trait_projection=self._trait_projection,
+            style_projection=self._style_projection,
+            context_projection=self._context_projection,
+        )
+        logger.info(
+            "StyleFineTuner initialised (base_model=%s, device=%s)",
+            self.config.base_model,
+            self.device,
+        )
+
+    async def estimate_personality(
+        self, user_id: str, interactions: Sequence[dict[str, str]]
+    ) -> StyleAnalysis:
+        """Train (if required) the LoRA adapter and extract trait estimates."""
+
+        interactions = [
+            {
+                "message": item.get("message", ""),
+                "response": item.get("response", ""),
+            }
+            for item in interactions
+            if item.get("message") or item.get("response")
+        ]
+        fingerprint = _fingerprint_interactions(interactions)
+        lock = self._locks.setdefault(user_id, asyncio.Lock())
+
+        async with lock:
+            state = self._adapter_cache.get(user_id)
+            needs_training = (
+                state is None or state.fingerprint != fingerprint or state.model is None
+            )
+            samples = self._build_training_corpus(interactions)
+
+            if not samples:
+                state = StyleAdapterState(
+                    fingerprint=fingerprint,
+                    model=None,
+                    tokenizer=self._tokenizer,
+                    sample_count=0,
+                    updated_at=time.monotonic(),
+                )
+                self._adapter_cache.set(user_id, state)
+                return StyleAnalysis.default(sample_count=0)
+
+            if needs_training and len(samples) >= self.config.min_samples:
+                async with self._training_semaphore:
+                    state = await asyncio.to_thread(
+                        self._trainer.train,
+                        user_id,
+                        fingerprint,
+                        samples,
+                    )
+                self._adapter_cache.set(user_id, state)
+            elif state is None:
+                # Not enough samples to train yet.
+                state = StyleAdapterState(
+                    fingerprint=fingerprint,
+                    model=None,
+                    tokenizer=self._tokenizer,
+                    sample_count=len(samples),
+                    updated_at=time.monotonic(),
+                )
+                self._adapter_cache.set(user_id, state)
+
+        if state.model is None:
+            return StyleAnalysis.default(sample_count=state.sample_count)
+
+        return await asyncio.to_thread(
+            self._inference.extract_personality,
+            state,
+            interactions,
+        )
+
+    def apply_style(
+        self,
+        user_id: str,
+        base_text: str,
+        personality: dict[str, float] | None,
+    ) -> str:
+        state = self._adapter_cache.get(user_id)
+        if state is None or state.model is None:
+            logger.debug("No trained adapter for %s; returning base text", user_id)
+            return base_text
+
+        prompt = self._prompt_builder.build(base_text, personality or {})
+        generated = self._inference.apply_style(state, prompt)
+        if generated.startswith(prompt):
+            adapted = generated[len(prompt) :].strip()
+            return adapted or generated.strip()
+        return generated.strip()
+
     def _build_training_corpus(
         self, interactions: Sequence[dict[str, str]]
     ) -> list[str]:
         samples: list[str] = []
         for item in interactions[-self.config.max_history_messages :]:
             message = item.get("message", "").strip()
-            response = item.get("response", "").strip()
-            if response:
+            if response := item.get("response", "").strip():
                 samples.append(response)
             elif message:
                 samples.append(message)
         return samples
-
-    def _build_generation_prompt(
-        self, base_text: str, personality: dict[str, float]
-    ) -> str:
-        descriptors = []
-        for key in self.STYLE_KEYS:
-            value = personality.get(key)
-            if value is None:
-                continue
-            if value > 0.66:
-                descriptors.append(f"très {key}")
-            elif value < 0.33:
-                descriptors.append(f"peu {key}")
-        tone = ", ".join(descriptors) if descriptors else "équilibré"
-        return (
-            "Tu es un assistant personnalisé. Ajuste la réponse suivante pour adopter "
-            f"un ton {tone}. Réponse originale: {base_text}\nRéponse adaptée:"
-        )

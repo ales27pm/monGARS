@@ -60,6 +60,19 @@ class BlockingPersonalityEngine(StubPersonalityEngine):
         return await super().analyze_personality(user_id, interactions)
 
 
+class EngineWithTuner:
+    def __init__(self, style_tuner: StubStyleTuner) -> None:
+        self.style_tuner = style_tuner
+
+    async def analyze_personality(
+        self, user_id: str, interactions: list[dict[str, str]]
+    ) -> dict[str, float]:
+        return {"formality": 0.5}
+
+    def set_style_tuner(self, style_tuner: StubStyleTuner) -> None:
+        self.style_tuner = style_tuner
+
+
 @pytest.mark.asyncio
 async def test_personality_traits_reused_within_ttl() -> None:
     current_time = 0.0
@@ -84,6 +97,19 @@ async def test_personality_traits_reused_within_ttl() -> None:
     assert engine.call_count == 1
     assert first == second
     assert engine.last_user == "user-1"
+
+
+def test_generator_reuses_engine_style_tuner() -> None:
+    style_tuner = StubStyleTuner()
+    engine = EngineWithTuner(style_tuner)
+    generator = AdaptiveResponseGenerator(personality_engine=engine)
+
+    result = generator.generate_adaptive_response(
+        "Salut", {"formality": 0.7}, user_id="user-99"
+    )
+
+    assert result == "Salut::user-99"
+    assert style_tuner.applied == [("user-99", "Salut", {"formality": 0.7})]
 
 
 @pytest.mark.asyncio

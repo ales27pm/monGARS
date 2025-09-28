@@ -39,7 +39,27 @@ class AdaptiveResponseGenerator:
         time_provider: Callable[[], float] | None = None,
         style_tuner: StyleFineTuner | None = None,
     ) -> None:
-        self._personality_engine = personality_engine or PersonalityEngine()
+        shared_tuner = style_tuner
+        if personality_engine is None:
+            if shared_tuner is None:
+                shared_tuner = StyleFineTuner()
+            if isinstance(shared_tuner, StyleFineTuner):
+                personality_engine = PersonalityEngine(style_tuner=shared_tuner)
+            else:
+                personality_engine = PersonalityEngine()
+        else:
+            if shared_tuner is None and hasattr(personality_engine, "style_tuner"):
+                shared_tuner = personality_engine.style_tuner  # type: ignore[attr-defined]
+            elif isinstance(shared_tuner, StyleFineTuner) and hasattr(
+                personality_engine, "set_style_tuner"
+            ):
+                personality_engine.set_style_tuner(shared_tuner)  # type: ignore[attr-defined]
+            elif shared_tuner is None:
+                shared_tuner = StyleFineTuner()
+                if hasattr(personality_engine, "set_style_tuner"):
+                    personality_engine.set_style_tuner(shared_tuner)  # type: ignore[attr-defined]
+
+        self._personality_engine = personality_engine
         self._cache_ttl = cache_ttl_seconds
         self._time_provider = time_provider or time.monotonic
         self._lock = asyncio.Lock()
@@ -56,7 +76,7 @@ class AdaptiveResponseGenerator:
             if cache_ttl_seconds > 0
             else None
         )
-        self._style_tuner = style_tuner or StyleFineTuner()
+        self._style_tuner = shared_tuner or StyleFineTuner()
         self._recent_histories: dict[str, list[Mapping[str, Any]]] = {}
 
     async def get_personality_traits(
