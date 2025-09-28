@@ -93,6 +93,8 @@ class EmbeddingSystem:
             self._fallback_dimensions = _DEFAULT_MODEL_DIMENSION
         else:
             self._fallback_dimensions = max(1, fallback_dimensions)
+        self._model_dependency_available = SentenceTransformer is not None
+        self._using_fallback_embeddings = not self._model_dependency_available
         self.driver = driver or self._create_driver()
 
     async def close(self) -> None:
@@ -103,17 +105,20 @@ class EmbeddingSystem:
         if inspect.isawaitable(result):
             await result
 
-    async def encode(self, text: str) -> list[float]:
-        """Return an embedding for *text* with caching and graceful fallbacks."""
+    async def encode(self, text: str) -> tuple[list[float], bool]:
+        """Return an embedding for *text* and flag when fallbacks were used."""
 
         normalized = text.strip()
         cache_key = normalized or _EMPTY_CACHE_KEY
 
         cached = await self._get_cached(cache_key)
         if cached is not None:
-            return cached
+            vector, used_fallback = cached
+            self._using_fallback_embeddings = used_fallback
+            return vector, used_fallback
 
         vector: list[float]
+        fallback_triggered = False
         if not normalized:
             vector = self._fallback_embedding(cache_key)
         elif SentenceTransformer is None:
@@ -122,6 +127,7 @@ class EmbeddingSystem:
                 cache_key,
             )
             vector = self._fallback_embedding(cache_key)
+            fallback_triggered = True
         else:
             try:
                 model = await self._ensure_model()
@@ -130,6 +136,7 @@ class EmbeddingSystem:
                     "Failed to load embedding model '%s': %s", self._model_name, exc
                 )
                 vector = self._fallback_embedding(cache_key)
+                fallback_triggered = True
             else:
                 try:
                     encoded = await asyncio.to_thread(
@@ -150,9 +157,27 @@ class EmbeddingSystem:
                 except Exception as exc:  # pragma: no cover - model failures are rare
                     logger.warning("Embedding failed for '%s': %s", normalized, exc)
                     vector = self._fallback_embedding(cache_key)
+                    fallback_triggered = True
 
-        await self._store_cache(cache_key, vector)
-        return vector
+        if fallback_triggered:
+            self._using_fallback_embeddings = True
+        elif normalized:
+            self._using_fallback_embeddings = False
+
+        await self._store_cache(cache_key, vector, fallback_triggered)
+        return vector, fallback_triggered
+
+    @property
+    def is_model_available(self) -> bool:
+        """Return ``True`` when the real embedding model dependency is available."""
+
+        return self._model_dependency_available
+
+    @property
+    def using_fallback_embeddings(self) -> bool:
+        """Return ``True`` when recent encodes relied on deterministic fallbacks."""
+
+        return self._using_fallback_embeddings
 
     async def _ensure_model(self) -> SentenceTransformer:
         if self._model is not None:
@@ -179,7 +204,7 @@ class EmbeddingSystem:
                             self._fallback_dimensions = dimension
         return self._model
 
-    async def _get_cached(self, key: str) -> list[float] | None:
+    async def _get_cached(self, key: str) -> tuple[list[float], bool] | None:
         async with self._cache_lock:
             cached = await self._cache.get(key)
             if cached is None:
@@ -187,12 +212,26 @@ class EmbeddingSystem:
                 return None
             logger.debug("Embedding cache hit for '%s'", key)
             self._record_cache_key(key)
-            return [float(value) for value in cached]
+            if isinstance(cached, dict):
+                raw_vector = cached.get("vector", [])
+                vector = [float(value) for value in raw_vector]
+                used_fallback = bool(cached.get("used_fallback", False))
+                return vector, used_fallback
+            if isinstance(cached, (list, tuple)):
+                vector = [float(value) for value in cached]
+                return vector, False
+            return None
 
-    async def _store_cache(self, key: str, vector: list[float]) -> None:
+    async def _store_cache(
+        self, key: str, vector: list[float], used_fallback: bool
+    ) -> None:
         evictions: list[str] = []
         async with self._cache_lock:
-            await self._cache.set(key, list(vector), ttl=self._cache_ttl)
+            await self._cache.set(
+                key,
+                {"vector": list(vector), "used_fallback": used_fallback},
+                ttl=self._cache_ttl,
+            )
             if key in self._cache_index:
                 self._cache_index.move_to_end(key)
             else:

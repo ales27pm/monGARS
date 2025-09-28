@@ -9,9 +9,9 @@ def stub_embedding_system(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self) -> None:
             self.encodes: list[str] = []
 
-        async def encode(self, text: str) -> list[float]:
+        async def encode(self, text: str) -> tuple[list[float], bool]:
             self.encodes.append(text)
-            return [0.0]
+            return [0.0], False
 
     monkeypatch.setattr(
         "monGARS.core.self_training.EmbeddingSystem",
