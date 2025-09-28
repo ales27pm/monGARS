@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 from collections import OrderedDict
@@ -37,14 +38,13 @@ class NeuronManager:
         self.encoder_path = default_encoder_path
         self._fallback_dimensions = fallback_dimensions
         self._fallback_cache_size = fallback_cache_size
-        self._fallback_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._fallback_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
         self._llm2vec_factory = llm2vec_factory
         self._llm2vec_options = llm2vec_options or {}
         self.model: Any | None = None
         self._load_attempted = False
 
-        if self.encoder_path:
-            self._load_encoder()
+        self._load_encoder()
 
     @property
     def is_ready(self) -> bool:
@@ -70,9 +70,6 @@ class NeuronManager:
         )
         self._dispose_model()
         self._load_attempted = True
-        if not self.encoder_path:
-            logger.debug("No encoder path provided; skipping load")
-            return
 
         try:
             self.model = self._build_model()
@@ -99,7 +96,7 @@ class NeuronManager:
         }
         if self.encoder_path:
             options["peft_model_name_or_path"] = self.encoder_path
-        options.update(self._llm2vec_options)
+        options |= self._llm2vec_options
         return LLM2Vec.from_pretrained(**options)
 
     def switch_encoder(self, new_encoder_path: str) -> None:
@@ -115,7 +112,7 @@ class NeuronManager:
         if not texts:
             return []
 
-        if self.encoder_path and not self._load_attempted:
+        if not self._load_attempted:
             self._load_encoder()
 
         if not self.model:
@@ -162,13 +159,14 @@ class NeuronManager:
         self.model = None
 
     def _fallback_vector(self, instruction: str, text: str) -> list[float]:
-        cache_key = f"{instruction}\u241f{text}"
+        cache_key = (instruction, text)
         cached = self._fallback_cache.get(cache_key)
         if cached is not None:
             self._fallback_cache.move_to_end(cache_key)
             return list(cached)
 
-        digest = hashlib.sha256(cache_key.encode("utf-8")).digest()
+        serialized_key = json.dumps(cache_key, ensure_ascii=False)
+        digest = hashlib.sha256(serialized_key.encode("utf-8")).digest()
         required = self._fallback_dimensions
         repeated = (digest * ((required // len(digest)) + 1))[:required]
         vector = [(byte / 255.0) * 2 - 1 for byte in repeated]
@@ -205,8 +203,11 @@ class NeuronManager:
             vectors = [self._ensure_float_list(encoded)]
 
         if len(vectors) != expected:
-            logger.debug(
+            logger.warning(
                 "LLM2Vec returned %d embeddings for %d inputs", len(vectors), expected
+            )
+            raise ValueError(
+                f"LLM2Vec returned {len(vectors)} embeddings for {expected} inputs"
             )
 
         return vectors
