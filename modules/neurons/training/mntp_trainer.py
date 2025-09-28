@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
@@ -18,6 +19,123 @@ except Exception:  # pragma: no cover - fallback if unavailable
     LLM2Vec = None
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CuratedSample:
+    embedding: list[float]
+    target: float
+    metadata: dict[str, Any]
+
+
+class CuratedDatasetBuilder:
+    """Normalise curated records into a dataset suitable for adapter training."""
+
+    def __init__(self, records: Sequence[dict[str, Any]]) -> None:
+        self._records = records
+
+    def build(self) -> list[CuratedSample]:
+        samples: list[CuratedSample] = []
+        for index, record in enumerate(self._records):
+            sample = normalize_curated_record(record, index)
+            if sample is not None:
+                samples.append(sample)
+
+        if not samples:
+            raise ValueError("No valid curated records supplied for training")
+
+        return samples
+
+
+def normalize_curated_record(
+    record: dict[str, Any], index: int
+) -> CuratedSample | None:
+    embedding_raw = record.get("embedding") or record.get("vector")
+    if not isinstance(embedding_raw, Iterable):
+        logger.debug("Skipping curated record %s without embedding", index)
+        return None
+
+    embedding: list[float] = []
+    for value in embedding_raw:
+        try:
+            embedding.append(float(value))
+        except (TypeError, ValueError):
+            logger.debug(
+                "Dropping non-numeric embedding value '%s' in record %s",
+                value,
+                index,
+            )
+            continue
+
+    if not embedding:
+        logger.debug("Skipping curated record %s with empty embedding", index)
+        return None
+
+    target_raw = record.get("target", record.get("score"))
+    if target_raw is None:
+        logger.debug("Skipping curated record %s without target", index)
+        return None
+
+    try:
+        target = float(target_raw)
+    except (TypeError, ValueError):
+        logger.debug("Skipping curated record %s with invalid target", index)
+        return None
+
+    metadata = {
+        "source_id": record.get("source_id"),
+        "confidence": record.get("confidence", target),
+        "text_preview": record.get("text_preview"),
+        "used_fallback_embedding": record.get("used_fallback_embedding", False),
+    }
+    return CuratedSample(embedding=embedding, target=target, metadata=metadata)
+
+
+class LinearAdapterTrainer:
+    """Train a lightweight linear adapter from curated embedding samples."""
+
+    def __init__(self, *, learning_rate: float, epochs: int, gradient_clip: float) -> None:
+        if epochs < 1:
+            raise ValueError(f"Number of epochs must be at least 1. Got: {epochs}")
+        self.learning_rate = learning_rate
+        self.epochs = epochs
+        self.gradient_clip = gradient_clip
+
+    def train(
+        self, dataset: Sequence[CuratedSample]
+    ) -> tuple[list[float], float, dict[str, Any]]:
+        feature_dim = len(dataset[0].embedding)
+        weights = [0.0 for _ in range(feature_dim)]
+        bias = 0.0
+        losses: list[float] = []
+
+        for _ in range(self.epochs):
+            total_loss = 0.0
+            for sample in dataset:
+                prediction = bias + sum(
+                    weight * feature for weight, feature in zip(weights, sample.embedding)
+                )
+                error = prediction - sample.target
+                total_loss += error * error
+
+                clipped_error = max(
+                    -self.gradient_clip, min(self.gradient_clip, error)
+                )
+
+                for i, feature in enumerate(sample.embedding):
+                    weights[i] -= self.learning_rate * clipped_error * feature
+
+                bias -= self.learning_rate * clipped_error
+
+            losses.append(total_loss / len(dataset))
+
+        metrics = {
+            "loss": losses[-1],
+            "initial_loss": losses[0],
+            "epochs": self.epochs,
+            "learning_rate": self.learning_rate,
+        }
+        return weights, bias, metrics
 
 
 class TrainingStatus(str, Enum):
@@ -92,8 +210,17 @@ class MNTPTrainer:
 
         self.config = merged
 
-    def train(self) -> dict[str, Any]:
-        """Run the MNTP pipeline and return a structured training summary."""
+    def train(
+        self, curated_records: Sequence[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        """Run the MNTP pipeline and return a structured training summary.
+
+        When ``curated_records`` are provided, a lightweight masked-next-token
+        style adapter is trained directly from the supplied embeddings. This
+        keeps the trainer usable in environments without the optional heavy
+        dependencies while still providing a deterministic update path for the
+        self-training engine.
+        """
 
         self._load_config()
         logger.info(
@@ -102,7 +229,9 @@ class MNTPTrainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._save_config()
 
-        if not self._deps_available():
+        if curated_records:
+            summary = self._run_curated_training(curated_records)
+        elif not self._deps_available():
             logger.warning(
                 "Training dependencies missing; falling back to deterministic adapter"
             )
@@ -118,6 +247,52 @@ class MNTPTrainer:
 
         self._write_summary(summary)
         return summary
+
+    def _run_curated_training(
+        self, curated_records: Sequence[dict[str, Any]]
+    ) -> dict[str, Any]:
+        dataset = CuratedDatasetBuilder(curated_records).build()
+        feature_dim = max(len(sample.embedding) for sample in dataset)
+
+        adapter_dir = self.output_dir / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+
+        trainer = LinearAdapterTrainer(
+            learning_rate=float(self.config.get("curated_learning_rate", 0.05)),
+            epochs=int(self.config.get("curated_epochs", 15)),
+            gradient_clip=float(self.config.get("curated_gradient_clip", 1.0)),
+        )
+        weights, bias, metrics = trainer.train(dataset)
+        artifact_path = adapter_dir / "curated_linear_adapter.json"
+        payload = {
+            "schema_version": 1,
+            "weights": weights,
+            "bias": bias,
+            "feature_dimension": feature_dim,
+            "metrics": metrics,
+            "records": [sample.metadata for sample in dataset],
+        }
+        artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+        logger.info(
+            "Curated MNTP training complete",
+            extra={
+                "records": len(dataset),
+                "artifact_path": str(artifact_path),
+                "loss": metrics.get("loss"),
+            },
+        )
+
+        return {
+            "status": TrainingStatus.SUCCESS.value,
+            "mode": "curated_linear_adapter",
+            "artifacts": {"adapter": str(adapter_dir), "weights": str(artifact_path)},
+            "metrics": metrics
+            | {
+                "training_examples": len(dataset),
+                "feature_dimension": feature_dim,
+            },
+        }
 
     def _save_config(self) -> None:
         try:
