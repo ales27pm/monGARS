@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -12,14 +13,16 @@ class AdvancedReasoner:
         """Return supplemental reasoning hints based on keyword heuristics."""
 
         try:
-            lowered = query.lower()
-            if "why" in lowered or "pourquoi" in lowered:
+            tokens = {token for token in re.findall(r"\b\w+\b", query.lower())}
+            if not tokens:
+                return {}
+            if tokens & {"why", "pourquoi"}:
                 return {"result": "La cause principale est en cours d'analyse."}
-            if "how" in lowered or "comment" in lowered:
+            if tokens & {"how", "comment"}:
                 return {"result": "Voici quelques étapes possibles à considérer."}
-            if "what" in lowered or "quoi" in lowered:
+            if tokens & {"what", "quoi"}:
                 return {"result": "Voici quelques informations pertinentes."}
-            if "when" in lowered or "quand" in lowered:
+            if tokens & {"when", "quand"}:
                 return {"result": "Cela dépend du contexte."}
             return {}
         except Exception as exc:  # pragma: no cover - defensive

@@ -34,9 +34,9 @@ class CuriosityEngine:
         self.knowledge_gap_threshold = 0.5
         try:
             self.nlp = spacy.load("fr_core_news_sm")
-        except Exception:  # pragma: no cover - optional model
+        except OSError:  # pragma: no cover - optional model
             logger.warning(
-                "spaCy model unavailable; falling back to rule-based entity detection."
+                "spaCy model unavailable; falling back to rule-based entity detection.",
             )
 
             def _dummy(text: str) -> types.SimpleNamespace:
@@ -73,7 +73,7 @@ class CuriosityEngine:
                     "research_query": research_query,
                 }
             return {"status": "sufficient_knowledge"}
-        except Exception as exc:  # pragma: no cover - defensive
+        except (RuntimeError, ValueError) as exc:  # pragma: no cover - defensive
             logger.error(
                 "curiosity.detect_gaps.error",
                 exc_info=True,
@@ -83,6 +83,12 @@ class CuriosityEngine:
                 },
             )
             return {"status": "sufficient_knowledge"}
+        except Exception:
+            logger.exception(
+                "curiosity.detect_gaps.unexpected_error",
+                extra={"has_context": bool(conversation_context)},
+            )
+            raise
 
     async def _vector_similarity_search(self, query_text: str) -> int:
         """Count previous queries whose tokens overlap with the new one."""
@@ -136,7 +142,18 @@ class CuriosityEngine:
         """Combine the original prompt and missing entities into a query."""
 
         terms = [original_query.strip(), *missing_entities]
-        return " ".join(term for term in terms if term)
+        seen: set[str] = set()
+        normalised: list[str] = []
+        for term in terms:
+            cleaned = term.strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalised.append(cleaned)
+        return " ".join(normalised)
 
     async def _perform_research(self, query: str) -> str:
         """Fetch additional context from the document service or Iris."""
@@ -161,7 +178,10 @@ class CuriosityEngine:
             except Exception as exc:  # pragma: no cover - network optional
                 logger.debug("Document retrieval error: %s", exc)
 
-        logger.info("Falling back to Iris for query: %s", query)
+        logger.info(
+            "curiosity.iris_fallback",
+            extra={"query_len": len(query)},
+        )
         result = await self.iris.search(query)
         if result:
             return f"Contexte supplémentaire: {result}"

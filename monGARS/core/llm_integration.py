@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -48,7 +49,7 @@ class AsyncTTLCache:
                 logger.info("llm.cache.hit", extra={"cache_key": key})
                 return entry["value"]
 
-            # Entry expired – delete to keep the cache tidy.
+            # Entry expired - delete to keep the cache tidy.
             del self._cache[key]
             return None
 
@@ -83,32 +84,37 @@ class CircuitBreaker:
         self.reset_timeout = reset_timeout
         self.failure_count = 0
         self.last_failure_time: float | None = None
+        self._lock = asyncio.Lock()
 
     async def call(
         self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
     ) -> T:
         """Execute ``func`` unless the breaker is open."""
 
-        current_time = asyncio.get_running_loop().time()
-        if self.failure_count >= self.fail_max:
-            if (
-                self.last_failure_time
-                and (current_time - self.last_failure_time) < self.reset_timeout
-            ):
-                raise CircuitBreakerOpenError("Circuit breaker open: too many failures")
-            self.failure_count = 0
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        async with self._lock:
+            if self.failure_count >= self.fail_max:
+                if (
+                    self.last_failure_time
+                    and (now - self.last_failure_time) < self.reset_timeout
+                ):
+                    raise CircuitBreakerOpenError(
+                        "Circuit breaker open: too many failures"
+                    )
+                self.failure_count = 0
 
         try:
             result = await func(*args, **kwargs)
-            self.failure_count = 0
+        except Exception:  # pragma: no cover - defensive
+            async with self._lock:
+                self.failure_count += 1
+                self.last_failure_time = loop.time()
+            raise
+        else:
+            async with self._lock:
+                self.failure_count = 0
             return result
-        except Exception as exc:  # pragma: no cover - defensive
-            self.failure_count += 1
-            self.last_failure_time = current_time
-            raise exc
-
-
-cb = CircuitBreaker(fail_max=3, reset_timeout=60)
 
 
 class LLMIntegration:
@@ -124,6 +130,19 @@ class LLMIntegration:
                 "llm.ray.enabled",
                 extra={"ray_url": self.ray_url, "use_ray": self.use_ray},
             )
+        self._ollama_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
+        self._ray_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
+
+    def _cache_key(self, task_type: str, prompt: str) -> str:
+        digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+        return f"{task_type}:{digest}"
+
+    async def _fail(
+        self, cache_key: str, message: str, ttl: int = 60
+    ) -> dict[str, Any]:
+        payload = self._failure_payload(message)
+        await _RESPONSE_CACHE.set(cache_key, payload, ttl=ttl)
+        return payload
 
     @retry(
         stop=stop_after_attempt(3),
@@ -131,6 +150,7 @@ class LLMIntegration:
         retry=(
             retry_if_exception_type(Exception)
             & retry_if_not_exception_type(OllamaNotAvailableError)
+            & retry_if_not_exception_type(CircuitBreakerOpenError)
         ),
     )
     async def _ollama_call(self, model: str, prompt: str) -> dict[str, Any]:
@@ -151,26 +171,30 @@ class LLMIntegration:
                 },
             )
 
-        return await cb.call(call_api)
+        return await self._ollama_cb.call(call_api)
 
     async def generate_response(
         self, prompt: str, task_type: str = "general"
     ) -> dict[str, Any]:
         """Generate a response for ``prompt`` using the configured LLM stack."""
 
-        cache_key = f"{task_type}:{prompt}"
+        cache_key = self._cache_key(task_type, prompt)
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:
             return cached_response
         if self.use_ray:
-            logger.info("Using Ray Serve for inference")
+            logger.info(
+                "llm.ray.dispatch",
+                extra={"task_type": task_type, "ray_url": self.ray_url},
+            )
             try:
                 response = await self._ray_call(prompt, task_type)
-            except Exception as e:
-                logger.error("Ray Serve request failed: %s", e, exc_info=True)
-                fallback = self._failure_payload("Ray Serve unavailable.")
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
+            except Exception:
+                logger.exception(
+                    "llm.ray.error",
+                    extra={"task_type": task_type, "cache_key": cache_key},
+                )
+                return await self._fail(cache_key, "Ray Serve unavailable.")
         else:
             model_name = (
                 self.general_model
@@ -183,37 +207,36 @@ class LLMIntegration:
             )
             if not ollama:
                 logger.error("llm.ollama.unavailable")
-                fallback = self._failure_payload("Ollama client is not available.")
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
+                return await self._fail(cache_key, "Ollama client is not available.")
             try:
                 response = await self._ollama_call(model_name, prompt)
             except OllamaNotAvailableError:
-                logger.error("llm.ollama.unavailable")
-                fallback = self._failure_payload("Ollama client is not available.")
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
+                logger.exception("llm.ollama.unavailable")
+                return await self._fail(cache_key, "Ollama client is not available.")
             except RetryError:
-                logger.error(
+                logger.exception(
                     "llm.ollama.retry_exhausted",
                     extra={"model_name": model_name, "task_type": task_type},
                 )
-                fallback = self._failure_payload(
-                    "Unable to generate response at this time."
+                return await self._fail(
+                    cache_key, "Unable to generate response at this time."
                 )
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
-            except Exception as e:
+            except CircuitBreakerOpenError:
                 logger.error(
-                    "llm.ollama.error",
-                    exc_info=True,
+                    "llm.ollama.circuit_open",
                     extra={"model_name": model_name, "task_type": task_type},
                 )
-                fallback = self._failure_payload(
-                    "An error occurred while generating the response."
+                return await self._fail(
+                    cache_key, "Ollama circuit is temporarily open."
                 )
-                await _RESPONSE_CACHE.set(cache_key, fallback, ttl=60)
-                return fallback
+            except Exception:
+                logger.exception(
+                    "llm.ollama.error",
+                    extra={"model_name": model_name, "task_type": task_type},
+                )
+                return await self._fail(
+                    cache_key, "An error occurred while generating the response."
+                )
         generated_text = self._extract_text(response)
         confidence = self._calculate_confidence(generated_text)
         tokens_used = len(generated_text.split())
@@ -236,21 +259,12 @@ class LLMIntegration:
         if not isinstance(raw_response, dict):
             return ""
 
-        message = raw_response.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str):
-                return content
-
-        content = raw_response.get("content")
-        if isinstance(content, str):
-            return content
-
-        response_text = raw_response.get("response")
-        if isinstance(response_text, str):
-            return response_text
-
-        return ""
+        content = (
+            (raw_response.get("message") or {}).get("content")
+            or raw_response.get("content")
+            or raw_response.get("response")
+        )
+        return content if isinstance(content, str) else ""
 
     def _calculate_confidence(self, text: str) -> float:
         token_count = len(text.split())
@@ -270,10 +284,10 @@ class LLMIntegration:
                 try:
                     return resp.json()
                 except ValueError as exc:  # pragma: no cover - defensive
-                    logger.error(
+                    logger.exception(
                         "llm.ray.invalid_json",
                         extra={"status_code": resp.status_code},
                     )
                     raise RuntimeError("Ray Serve returned invalid JSON") from exc
 
-        return await cb.call(call_api)
+        return await self._ray_cb.call(call_api)
