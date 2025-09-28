@@ -14,7 +14,7 @@ async def test_llm_integration_uses_ray(monkeypatch):
 
     called = {}
 
-    async def fake_post(self, url, json=None, timeout=10):
+    async def fake_post(self, url, *, json=None, **_kwargs):
         called["url"] = url
         called["json"] = json
 

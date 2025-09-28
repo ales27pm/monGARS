@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
+from modules.neurons.registry import update_manifest
 from modules.neurons.training.mntp_trainer import MNTPTrainer
 
 logger = logging.getLogger(__name__)
@@ -54,12 +55,26 @@ class EvolutionOrchestrator:
         except Exception as exc:  # pragma: no cover - unexpected training error
             logger.error("Training failed: %s", exc, exc_info=True)
             raise
+        try:
+            manifest = update_manifest(self.model_registry_path, summary)
+        except Exception:
+            logger.error(
+                "Adapter manifest update failed",
+                extra={
+                    "encoder_path": str(unique_dir),
+                    "status": summary.get("status"),
+                    "artifacts": summary.get("artifacts", {}),
+                },
+                exc_info=True,
+            )
+            raise
         logger.info(
             "Pipeline finished",
             extra={
                 "encoder_path": str(unique_dir),
                 "status": summary.get("status"),
                 "artifacts": summary.get("artifacts", {}),
+                "manifest_path": str(manifest.path),
             },
         )
         return str(unique_dir)
