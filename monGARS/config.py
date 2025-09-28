@@ -61,19 +61,22 @@ class Settings(BaseSettings):
     DISK_CACHE_PATH: str = os.getenv("DISK_CACHE_PATH", "/tmp/mongars_cache")
     DOC_RETRIEVAL_URL: str = os.getenv("DOC_RETRIEVAL_URL", "http://localhost:8080")
     curiosity_similarity_threshold: float = Field(
-        default=float(os.getenv("CURIOSITY_SIMILARITY_THRESHOLD", 0.5)),
+        default=0.5,
         ge=0.0,
         le=1.0,
+        validation_alias="CURIOSITY_SIMILARITY_THRESHOLD",
         description="Cosine similarity threshold used to determine whether prior queries satisfy the current prompt.",
     )
     curiosity_minimum_similar_history: int = Field(
-        default=int(os.getenv("CURIOSITY_MIN_SIMILAR_HISTORY", 3)),
+        default=3,
         ge=0,
+        validation_alias="CURIOSITY_MIN_SIMILAR_HISTORY",
         description="Minimum number of similar historical interactions required before skipping external research.",
     )
     curiosity_graph_gap_cutoff: int = Field(
-        default=int(os.getenv("CURIOSITY_GRAPH_GAP_CUTOFF", 1)),
+        default=1,
         ge=1,
+        validation_alias="CURIOSITY_GRAPH_GAP_CUTOFF",
         description="Minimum number of missing entities detected in the knowledge graph before triggering research.",
     )
     MLFLOW_TRACKING_URI: str = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")

@@ -53,7 +53,7 @@ class CuriosityEngine:
         """Initialise the curiosity engine with NLP and embedding utilities."""
 
         self.embedding_system = EmbeddingSystem()
-        self.knowledge_gap_threshold = settings.curiosity_similarity_threshold
+        self.similarity_threshold = settings.curiosity_similarity_threshold
         self.similar_history_threshold = max(
             0, settings.curiosity_minimum_similar_history
         )
@@ -268,7 +268,7 @@ class CuriosityEngine:
                 for q_value, h_value in zip(query_vector, history_vector)
             )
             similarity = dot / (query_norm * other_norm)
-            if similarity >= self.knowledge_gap_threshold:
+            if similarity >= self.similarity_threshold:
                 similar += 1
         return similar
 
@@ -282,7 +282,7 @@ class CuriosityEngine:
                 continue
             overlap = query_terms.intersection(previous_terms)
             similarity = len(overlap) / len(query_terms)
-            if similarity >= self.knowledge_gap_threshold:
+            if similarity >= self.similarity_threshold:
                 similar += 1
         return similar
 

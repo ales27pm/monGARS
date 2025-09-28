@@ -51,7 +51,7 @@ async def test_vector_similarity_uses_embeddings_with_history(monkeypatch):
     )
     assert dissimilar == 0
 
-    engine.knowledge_gap_threshold = 1.0
+    engine.similarity_threshold = 1.0
     identical = await engine._vector_similarity_search(
         "Quantum computing basics",
         history,
@@ -160,7 +160,7 @@ def test_curiosity_engine_initialises_from_settings(monkeypatch):
 
     engine = CuriosityEngine()
 
-    assert engine.knowledge_gap_threshold == 0.42
+    assert engine.similarity_threshold == 0.42
     assert engine.similar_history_threshold == 7
     assert engine.graph_gap_cutoff == 3
 
@@ -191,3 +191,101 @@ async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
     result = await engine.detect_gaps({"last_query": "Qu'est-ce que MonGARS?"})
 
     assert result == {"status": "sufficient_knowledge"}
+
+
+@pytest.mark.asyncio
+async def test_perform_research_records_document_service_channel(monkeypatch):
+    engine = CuriosityEngine()
+
+    calls: list[tuple[int, dict[str, str]]] = []
+
+    def record(amount: int, attributes: dict[str, str]) -> None:
+        calls.append((amount, attributes.copy()))
+
+    monkeypatch.setattr(curiosity_module._external_research_counter, "add", record)
+
+    class SuccessfulResponse:
+        def __init__(self) -> None:
+            self._payload = {"documents": [{"summary": "Résumé pertinent"}]}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self._payload
+
+    class SuccessfulClient:
+        def __init__(
+            self, *args, **kwargs
+        ) -> None:  # pragma: no cover - signature parity
+            pass
+
+        async def __aenter__(self) -> "SuccessfulClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def post(self, *args, **kwargs) -> SuccessfulResponse:
+            return SuccessfulResponse()
+
+    async def fail_search(_query: str) -> str:
+        raise AssertionError(
+            "Iris fallback should not trigger when documents are returned"
+        )
+
+    monkeypatch.setattr(curiosity_module.httpx, "AsyncClient", SuccessfulClient)
+    monkeypatch.setattr(engine.iris, "search", fail_search)
+
+    result = await engine._perform_research("Test de recherche")
+
+    assert "Résumé pertinent" in result
+    assert calls == [(1, {"channel": "document_service"})]
+
+
+@pytest.mark.asyncio
+async def test_perform_research_records_iris_fallback_channel(monkeypatch):
+    engine = CuriosityEngine()
+
+    calls: list[tuple[int, dict[str, str]]] = []
+
+    def record(amount: int, attributes: dict[str, str]) -> None:
+        calls.append((amount, attributes.copy()))
+
+    monkeypatch.setattr(curiosity_module._external_research_counter, "add", record)
+
+    class EmptyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"documents": []}
+
+    class EmptyClient:
+        def __init__(
+            self, *args, **kwargs
+        ) -> None:  # pragma: no cover - signature parity
+            pass
+
+        async def __aenter__(self) -> "EmptyClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def post(self, *args, **kwargs) -> EmptyResponse:
+            return EmptyResponse()
+
+    async def iris_result(query: str) -> str:
+        return f"Résultat Iris pour {query}"
+
+    monkeypatch.setattr(curiosity_module.httpx, "AsyncClient", EmptyClient)
+    monkeypatch.setattr(engine.iris, "search", iris_result)
+
+    result = await engine._perform_research("Nouvelle requête")
+
+    assert "Résultat Iris" in result
+    assert calls == [
+        (1, {"channel": "document_service"}),
+        (1, {"channel": "iris"}),
+    ]
