@@ -259,12 +259,17 @@ class LLMIntegration:
         if not isinstance(raw_response, dict):
             return ""
 
-        content = (
-            (raw_response.get("message") or {}).get("content")
-            or raw_response.get("content")
-            or raw_response.get("response")
-        )
-        return content if isinstance(content, str) else ""
+        message = raw_response.get("message")
+        if isinstance(message, dict):
+            content: object | None = message.get("content")
+        else:
+            content = None
+
+        if not isinstance(content, str):
+            fallback = raw_response.get("content") or raw_response.get("response")
+            content = fallback if isinstance(fallback, str) else ""
+
+        return content
 
     def _calculate_confidence(self, text: str) -> float:
         token_count = len(text.split())
