@@ -182,10 +182,14 @@ class SelfTrainingEngine:
             record.get("content"),
             record.get("data"),
         )
-        for value in candidates:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
+        return next(
+            (
+                value.strip()
+                for value in candidates
+                if isinstance(value, str) and value.strip()
+            ),
+            None,
+        )
 
     def _trim_embedding(self, embedding: Sequence[Any]) -> list[float]:
         trimmed: list[float] = []
@@ -195,7 +199,7 @@ class SelfTrainingEngine:
             try:
                 trimmed.append(float(value))
             except (TypeError, ValueError):
-                break
+                continue
         return trimmed
 
     def _persist_curated_dataset(

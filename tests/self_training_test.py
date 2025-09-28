@@ -37,7 +37,7 @@ def trainer_stub() -> type:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             weights_path = self.output_dir / "weights.json"
             weights_path.write_text(json.dumps({"records": len(records)}))
-            summary = {
+            return {
                 "status": "success",
                 "metrics": {
                     "training_examples": len(records),
@@ -47,7 +47,6 @@ def trainer_stub() -> type:
                     "weights": str(weights_path),
                 },
             }
-            return summary
 
     DummyTrainer.runs = []
     return DummyTrainer
@@ -74,6 +73,29 @@ async def test_run_training_cycle_creates_version(
     dataset_file = version["dataset"]["dataset_file"]
     assert Path(dataset_file).exists()
     assert trainer_stub.runs and trainer_stub.runs[0][0]["text_preview"] == "trainable"
+
+
+@pytest.mark.asyncio
+async def test_run_training_cycle_handles_multiple_records(
+    tmp_path: Path, trainer_stub: type
+) -> None:
+    engine = SelfTrainingEngine(
+        trainer_cls=trainer_stub,
+        dataset_root=str(tmp_path / "datasets"),
+        model_registry_path=str(tmp_path / "models"),
+    )
+    await engine.training_queue.put(
+        {"text": "first", "confidence": 0.9, "id": "row-1"}
+    )
+    await engine.training_queue.put(
+        {"prompt": "second", "confidence": 0.85, "id": "row-2"}
+    )
+    await engine._run_training_cycle()
+
+    assert len(trainer_stub.runs) == 1
+    assert len(trainer_stub.runs[0]) == 2
+    summary = engine.model_versions["v1"]["summary"]
+    assert summary["metrics"]["training_examples"] == 2
 
 
 @pytest.mark.asyncio
@@ -117,3 +139,40 @@ async def test_run_training_cycle_handles_non_numeric_confidence(
     await engine.training_queue.put({"text": "bad", "confidence": "not-a-number"})
     await engine._run_training_cycle()
     assert engine.model_versions["v1"]["data_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_training_cycle_skips_missing_confidence(
+    tmp_path: Path, trainer_stub: type
+) -> None:
+    engine = SelfTrainingEngine(
+        training_threshold=0.5,
+        trainer_cls=trainer_stub,
+        dataset_root=str(tmp_path / "datasets"),
+        model_registry_path=str(tmp_path / "models"),
+    )
+    await engine.training_queue.put({"text": "valid", "confidence": 0.7})
+    await engine.training_queue.put({"text": "no-confidence"})
+    await engine._run_training_cycle()
+
+    assert len(trainer_stub.runs) == 1
+    assert len(trainer_stub.runs[0]) == 1
+    assert trainer_stub.runs[0][0]["text_preview"] == "valid"
+
+
+@pytest.mark.asyncio
+async def test_run_training_cycle_skips_missing_text_fields(
+    tmp_path: Path, trainer_stub: type
+) -> None:
+    engine = SelfTrainingEngine(
+        trainer_cls=trainer_stub,
+        dataset_root=str(tmp_path / "datasets"),
+        model_registry_path=str(tmp_path / "models"),
+    )
+    await engine.training_queue.put({"confidence": 0.95, "id": "missing"})
+    await engine.training_queue.put({"response": "train", "confidence": 0.9})
+    await engine._run_training_cycle()
+
+    assert len(trainer_stub.runs) == 1
+    assert len(trainer_stub.runs[0]) == 1
+    assert trainer_stub.runs[0][0]["text_preview"] == "train"
