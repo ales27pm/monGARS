@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from collections import deque
-from datetime import datetime
 
 from sqlalchemy import select, update
 
@@ -12,16 +11,21 @@ logger = logging.getLogger(__name__)
 
 def _make_default_profile(history_length: int) -> dict:
     """Return a new default mimicry profile."""
+
     return {"long_term": {}, "short_term": deque(maxlen=history_length)}
 
 
 class MimicryModule:
+    """Adapt responses based on long- and short-term interaction patterns."""
+
     def __init__(
         self,
         long_term_weight: float = 0.9,
         short_term_weight: float = 0.1,
         history_length: int = 10,
-    ):
+    ) -> None:
+        """Create a mimicry module with configurable weighting."""
+
         self.long_term_weight = long_term_weight
         self.short_term_weight = short_term_weight
         self.history_length = history_length
@@ -29,6 +33,8 @@ class MimicryModule:
         self.lock = asyncio.Lock()
 
     async def _get_profile(self, user_id: str) -> dict:
+        """Retrieve a stored profile or build a default one."""
+
         async with async_session_factory() as session:
             try:
                 result = await session.execute(
@@ -45,7 +51,9 @@ class MimicryModule:
                 logger.error(f"Error retrieving profile for user {user_id}: {e}")
                 return _make_default_profile(self.history_length)
 
-    async def _update_profile_db(self, user_id: str, profile: dict):
+    async def _update_profile_db(self, user_id: str, profile: dict) -> None:
+        """Persist a profile update back to the database."""
+
         async with async_session_factory() as session:
             try:
                 payload = dict(profile)
@@ -80,6 +88,8 @@ class MimicryModule:
                 raise
 
     async def update_profile(self, user_id: str, interaction: dict) -> dict:
+        """Blend new interaction signals into the user profile."""
+
         async with self.lock:
             profile = await self._get_profile(user_id)
             new_features = {
@@ -103,6 +113,8 @@ class MimicryModule:
             return profile
 
     async def adapt_response_style(self, response: str, user_id: str) -> str:
+        """Shape a response string using the stored interaction profile."""
+
         profile = self.user_profiles.get(user_id)
         if not profile:
             profile = await self._get_profile(user_id)
@@ -130,9 +142,13 @@ class MimicryModule:
         return response
 
     def _add_positive_sentiment(self, response: str) -> str:
+        """Add a friendly reinforcement to the response text."""
+
         return response + " Je suis vraiment content que vous posiez cette question !"
 
     def _increase_sentence_length(self, response: str) -> str:
+        """Append clarifying detail to extend the response length."""
+
         return (
             response
             + " De plus, il convient de noter que des détails supplémentaires peuvent être pertinents."

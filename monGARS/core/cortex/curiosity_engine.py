@@ -19,11 +19,17 @@ settings = get_settings()
 
 
 def _tokenize(text: str) -> set[str]:
+    """Return a lower-cased token set without empty strings."""
+
     return {token for token in text.lower().split() if token}
 
 
 class CuriosityEngine:
+    """Detect knowledge gaps and trigger research fetches when required."""
+
     def __init__(self, iris: Iris | None = None) -> None:
+        """Initialise the curiosity engine with NLP and embedding utilities."""
+
         self.embedding_system = EmbeddingSystem()
         self.knowledge_gap_threshold = 0.5
         try:
@@ -40,30 +46,47 @@ class CuriosityEngine:
         self.iris = iris or Iris()
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
-        last_query = conversation_context.get("last_query", "").strip()
-        if not last_query:
+        """Identify knowledge gaps using previous history and entity checks."""
+
+        try:
+            last_query = conversation_context.get("last_query", "").strip()
+            if not last_query:
+                return {"status": "sufficient_knowledge"}
+            similar_count = await self._vector_similarity_search(last_query)
+            if similar_count >= 3:
+                return {"status": "sufficient_knowledge"}
+            doc = self.nlp(last_query)
+            entities = [ent.text for ent in getattr(doc, "ents", [])]
+            missing_entities = [
+                entity
+                for entity in entities
+                if not await self._check_entity_in_kg(entity)
+            ]
+            if missing_entities:
+                research_query = self._formulate_research_query(
+                    missing_entities, last_query
+                )
+                additional_context = await self._perform_research(research_query)
+                return {
+                    "status": "insufficient_knowledge",
+                    "additional_context": additional_context,
+                    "research_query": research_query,
+                }
             return {"status": "sufficient_knowledge"}
-        similar_count = await self._vector_similarity_search(last_query)
-        if similar_count >= 3:
-            return {"status": "sufficient_knowledge"}
-        doc = self.nlp(last_query)
-        entities = [ent.text for ent in getattr(doc, "ents", [])]
-        missing_entities = [
-            entity for entity in entities if not await self._check_entity_in_kg(entity)
-        ]
-        if missing_entities:
-            research_query = self._formulate_research_query(
-                missing_entities, last_query
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "curiosity.detect_gaps.error",
+                exc_info=True,
+                extra={
+                    "has_context": bool(conversation_context),
+                    "error": str(exc),
+                },
             )
-            additional_context = await self._perform_research(research_query)
-            return {
-                "status": "insufficient_knowledge",
-                "additional_context": additional_context,
-                "research_query": research_query,
-            }
-        return {"status": "sufficient_knowledge"}
+            return {"status": "sufficient_knowledge"}
 
     async def _vector_similarity_search(self, query_text: str) -> int:
+        """Count previous queries whose tokens overlap with the new one."""
+
         query_terms = _tokenize(query_text)
         if not query_terms:
             return 0
@@ -90,6 +113,8 @@ class CuriosityEngine:
         return similar
 
     async def _check_entity_in_kg(self, entity: str) -> bool:
+        """Return True if the entity is already known in the knowledge graph."""
+
         try:
             async with self.embedding_system.driver.session() as session:
                 result = await session.run(
@@ -108,10 +133,14 @@ class CuriosityEngine:
     def _formulate_research_query(
         self, missing_entities: list[str], original_query: str
     ) -> str:
+        """Combine the original prompt and missing entities into a query."""
+
         terms = [original_query.strip(), *missing_entities]
         return " ".join(term for term in terms if term)
 
     async def _perform_research(self, query: str) -> str:
+        """Fetch additional context from the document service or Iris."""
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
