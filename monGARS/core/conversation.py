@@ -70,13 +70,17 @@ class ConversationalModule:
         return f"{query} {result['result']}" if "result" in result else query
 
     async def _adapt_response(
-        self, text: str, user_id: str, interactions: list[dict]
+        self,
+        text: str,
+        user_id: str,
+        interactions: list[dict[str, str]],
+        user_message: str,
     ) -> tuple[str, dict]:
         personality = await self.personality.analyze_personality(user_id, interactions)
         adaptive = self.dynamic.generate_adaptive_response(text, personality)
         await self.mimicry.update_profile(
             user_id,
-            {"feedback": 0.8},
+            {"message": user_message, "response": text},
         )
         styled = await self.mimicry.adapt_response_style(adaptive, user_id)
         return styled, personality
@@ -105,7 +109,10 @@ class ConversationalModule:
             for query_text, response_text in history_pairs
         ]
         final, personality_traits = await self._adapt_response(
-            llm_out.get("text", ""), user_id, recent_interactions
+            llm_out.get("text", ""),
+            user_id,
+            recent_interactions,
+            original_query,
         )
 
         processing_time = (datetime.utcnow() - start).total_seconds()
