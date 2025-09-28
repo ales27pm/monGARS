@@ -43,3 +43,12 @@ async def test_run_training_cycle_skips_low_confidence_only():
     await engine.training_queue.put({"data": "unknown"})
     await engine._run_training_cycle()
     assert engine.model_versions == {}
+
+
+@pytest.mark.asyncio
+async def test_run_training_cycle_handles_non_numeric_confidence():
+    engine = SelfTrainingEngine(training_threshold=0.5)
+    await engine.training_queue.put({"data": "valid", "confidence": 0.8})
+    await engine.training_queue.put({"data": "bad", "confidence": "not-a-number"})
+    await engine._run_training_cycle()
+    assert engine.model_versions["v1"]["data_count"] == 1

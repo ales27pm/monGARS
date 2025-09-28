@@ -12,11 +12,17 @@ logger = logging.getLogger(__name__)
 class SelfTrainingEngine:
     """Simplified self-training engine that batches data and records model versions."""
 
+    DEFAULT_BATCH_LIMIT = 100
+
     def __init__(
-        self, training_threshold: float = 0.8, retrain_interval: int = 3600
+        self,
+        training_threshold: float = 0.8,
+        retrain_interval: int = 3600,
+        batch_limit: int = DEFAULT_BATCH_LIMIT,
     ) -> None:
         self.training_threshold = training_threshold
         self.retrain_interval = retrain_interval
+        self.batch_limit = batch_limit
         self.training_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=1000)
         self.model_versions: Dict[str, Dict[str, Any]] = {}
         self.last_retrain_time: float = 0.0
@@ -38,28 +44,24 @@ class SelfTrainingEngine:
     async def _run_training_cycle(self) -> None:
         batch: list[Dict[str, Any]] = []
         discarded = 0
-        while not self.training_queue.empty() and len(batch) < 100:
+        while not self.training_queue.empty() and len(batch) < self.batch_limit:
             record = await self.training_queue.get()
-            confidence = record.get("confidence")
-            try:
-                confidence_value = float(confidence) if confidence is not None else 0.0
-            except (TypeError, ValueError):
-                confidence_value = 0.0
-
-            if confidence_value >= self.training_threshold:
+            _, accepted = self._assess_record_confidence(record)
+            if accepted:
                 batch.append(record)
             else:
                 discarded += 1
 
+        logger.info(
+            "training_cycle_evaluated",
+            extra={
+                "accepted_items": len(batch),
+                "discarded_items": discarded,
+                "threshold": self.training_threshold,
+            },
+        )
+
         if not batch:
-            if discarded:
-                logger.info(
-                    "training_cycle_skipped",
-                    extra={
-                        "discarded_items": discarded,
-                        "threshold": self.training_threshold,
-                    },
-                )
             return
         async with self.lock:
             new_version = len(self.model_versions) + 1
@@ -74,3 +76,20 @@ class SelfTrainingEngine:
     def shutdown(self) -> None:
         """Signal the auto improvement loop to stop."""
         self._shutdown_event.set()
+
+    def _assess_record_confidence(self, record: Dict[str, Any]) -> tuple[float, bool]:
+        """Return the parsed confidence value and whether it meets the threshold.
+
+        Missing or malformed confidence values are treated as ``0.0`` to ensure
+        they are excluded unless the threshold is configured to accept such
+        entries explicitly.
+        """
+
+        confidence_raw = record.get("confidence")
+        try:
+            confidence_value = (
+                float(confidence_raw) if confidence_raw is not None else 0.0
+            )
+        except (TypeError, ValueError):
+            confidence_value = 0.0
+        return confidence_value, confidence_value >= self.training_threshold
