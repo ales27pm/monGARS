@@ -21,14 +21,26 @@ settings = get_settings()
 class Orchestrator:
     """Coordinate modules to handle user queries."""
 
-    def __init__(self) -> None:
-        self.llm = LLMIntegration()
-        self.reasoner = AdvancedReasoner()
-        self.dynamic_response = AdaptiveResponseGenerator()
-        self.mimicry = MimicryModule()
-        self.curiosity = CuriosityEngine()
-        self.personality = PersonalityEngine()
-        self.captioner = ImageCaptioning()
+    def __init__(
+        self,
+        *,
+        llm: LLMIntegration | None = None,
+        reasoner: AdvancedReasoner | None = None,
+        personality: PersonalityEngine | None = None,
+        dynamic_response: AdaptiveResponseGenerator | None = None,
+        mimicry: MimicryModule | None = None,
+        curiosity: CuriosityEngine | None = None,
+        captioner: ImageCaptioning | None = None,
+    ) -> None:
+        self.llm = llm or LLMIntegration()
+        self.reasoner = reasoner or AdvancedReasoner()
+        self.personality = personality or PersonalityEngine()
+        self.dynamic_response = dynamic_response or AdaptiveResponseGenerator(
+            self.personality
+        )
+        self.mimicry = mimicry or MimicryModule()
+        self.curiosity = curiosity or CuriosityEngine()
+        self.captioner = captioner or ImageCaptioning()
 
     async def process_query(
         self,
@@ -91,17 +103,15 @@ class Orchestrator:
             base_response = llm_response.get("text", "")
             try:
                 user_personality = await asyncio.wait_for(
-                    self.personality.analyze_personality(user_id, []), timeout=5
+                    self.dynamic_response.get_personality_traits(user_id, []),
+                    timeout=5,
                 )
             except Exception as exc:
                 logger.error("Personality analysis failed: %s", exc)
                 user_personality = {}
             try:
-                adapted_response = await asyncio.wait_for(
-                    self.dynamic_response.generate_adaptive_response(
-                        base_response, user_personality
-                    ),
-                    timeout=5,
+                adapted_response = self.dynamic_response.generate_adaptive_response(
+                    base_response, user_personality
                 )
             except Exception as exc:
                 logger.error("Adaptive response generation failed: %s", exc)

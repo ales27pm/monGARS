@@ -4,6 +4,10 @@ import logging
 import uvicorn
 
 from init_db import init_db
+from monGARS.api.dependencies import (
+    get_adaptive_response_generator,
+    get_personality_engine,
+)
 from monGARS.config import get_settings
 from monGARS.core.monitor import SystemMonitor
 from monGARS.core.orchestrator import Orchestrator
@@ -20,7 +24,12 @@ async def main():
     await init_db()
     monitor = SystemMonitor()
     trainer = SelfTrainingEngine()
-    orchestrator = Orchestrator()
+    personality = get_personality_engine()
+    adaptive_response = get_adaptive_response_generator(personality)
+    orchestrator = Orchestrator(
+        personality=personality,
+        dynamic_response=adaptive_response,
+    )
     try:
         async with asyncio.TaskGroup() as tg:
             tg.create_task(monitor.get_system_stats())

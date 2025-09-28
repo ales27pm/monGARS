@@ -41,9 +41,9 @@ class ConversationalModule:
         self.llm = llm or LLMIntegration()
         self.reasoner = reasoner or AdvancedReasoner()
         self.curiosity = curiosity or CuriosityEngine()
-        self.dynamic = dynamic or AdaptiveResponseGenerator()
-        self.mimicry = mimicry or MimicryModule()
         self.personality = personality or PersonalityEngine()
+        self.dynamic = dynamic or AdaptiveResponseGenerator(self.personality)
+        self.mimicry = mimicry or MimicryModule()
         self.captioner = captioner or ImageCaptioning()
         self.memory = memory or MemoryService(Hippocampus())
         self.speaker = speaker or SpeakerService(Bouche())
@@ -76,7 +76,7 @@ class ConversationalModule:
         interactions: list[dict[str, str]],
         user_message: str,
     ) -> tuple[str, dict]:
-        personality = await self.personality.analyze_personality(user_id, interactions)
+        personality = await self.dynamic.get_personality_traits(user_id, interactions)
         adaptive = self.dynamic.generate_adaptive_response(text, personality)
         await self.mimicry.update_profile(
             user_id,
