@@ -90,6 +90,16 @@ class Settings(BaseSettings):
         "true",
         "1",
     )
+    mimicry_positive_lexicon_path: str | None = Field(
+        default=None,
+        validation_alias="MIMICRY_POSITIVE_LEXICON_PATH",
+        description="Optional path to a file containing additional positive sentiment terms.",
+    )
+    mimicry_negative_lexicon_path: str | None = Field(
+        default=None,
+        validation_alias="MIMICRY_NEGATIVE_LEXICON_PATH",
+        description="Optional path to a file containing additional negative sentiment terms.",
+    )
 
     @field_validator("database_url")
     @classmethod

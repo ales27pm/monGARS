@@ -1,57 +1,22 @@
 import asyncio
 import logging
-import string
+import re
 from collections import deque
 
 from sqlalchemy import select, update
 
 from ..init_db import UserPreferences, async_session_factory
-
-PUNCTUATION_TABLE = str.maketrans("", "", string.punctuation + "«»“”‘’…")
-POSITIVE_WORDS = {
-    "heureux",
-    "heureuse",
-    "ravi",
-    "ravie",
-    "content",
-    "contente",
-    "excellent",
-    "excellente",
-    "fantastique",
-    "formidable",
-    "super",
-    "merci",
-    "satisfait",
-    "satisfaite",
-    "positif",
-    "positive",
-    "agréable",
-    "brillant",
-    "génial",
-}
-NEGATIVE_WORDS = {
-    "triste",
-    "furieux",
-    "furieuse",
-    "mauvais",
-    "mauvaise",
-    "terrible",
-    "horrible",
-    "déçu",
-    "déçue",
-    "problème",
-    "problèmes",
-    "mécontent",
-    "mécontente",
-    "négatif",
-    "négative",
-    "inquiet",
-    "inquiète",
-    "fâché",
-    "fâchée",
-}
+from .mimicry_lexicon import get_sentiment_lexicon
 
 logger = logging.getLogger(__name__)
+
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _tokenize(text: str) -> list[str]:
+    """Return lowercase word tokens extracted from the provided text."""
+
+    return _WORD_RE.findall(text.lower())
 
 
 def _make_default_profile(history_length: int) -> dict:
@@ -76,6 +41,7 @@ class MimicryModule:
         self.history_length = history_length
         self.user_profiles: dict[str, dict] = {}
         self._user_locks: dict[str, asyncio.Lock] = {}
+        self.positive_words, self.negative_words = get_sentiment_lexicon()
 
     async def _get_profile(self, user_id: str) -> dict:
         """Retrieve a stored profile or build a default one."""
@@ -181,35 +147,21 @@ class MimicryModule:
     def _count_words(self, text: str) -> int:
         """Return the number of words detected in a text snippet."""
 
-        if not text.strip():
-            return 0
-        tokens = [
-            token.translate(PUNCTUATION_TABLE)
-            for token in text.split()
-            if token.translate(PUNCTUATION_TABLE).strip()
-        ]
-        return len(tokens)
+        return len(_tokenize(text))
 
     def _analyze_sentiment(self, text: str) -> float:
         """Estimate sentiment score between 0 (negative) and 1 (positive)."""
 
-        if not text.strip():
-            return 0.5
-        cleaned_tokens = [
-            token.translate(PUNCTUATION_TABLE).lower()
-            for token in text.split()
-            if token.translate(PUNCTUATION_TABLE).strip()
+        tokens = _tokenize(text)
+        scored = [
+            1 if token in self.positive_words else -1
+            for token in tokens
+            if token in self.positive_words or token in self.negative_words
         ]
-        scored_tokens = [
-            token
-            for token in cleaned_tokens
-            if token in POSITIVE_WORDS or token in NEGATIVE_WORDS
-        ]
-        if not scored_tokens:
+        if not scored:
             return 0.5
-        score = sum(1 if token in POSITIVE_WORDS else -1 for token in scored_tokens)
-        total = len(scored_tokens)
-        normalized = (score + total) / (2 * total)
+        total = len(scored)
+        normalized = (sum(scored) + total) / (2 * total)
         return max(0.0, min(1.0, normalized))
 
     async def adapt_response_style(self, response: str, user_id: str) -> str:
