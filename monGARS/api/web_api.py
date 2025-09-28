@@ -17,7 +17,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import get_current_admin_user, get_current_user
-from monGARS.api.dependencies import get_hippocampus, get_peer_communicator
+from monGARS.api.dependencies import (
+    get_adaptive_response_generator,
+    get_hippocampus,
+    get_peer_communicator,
+    get_personality_engine,
+)
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
@@ -27,7 +32,12 @@ from .ws_manager import WebSocketManager
 
 app = FastAPI(title="monGARS API")
 sec_manager = SecurityManager()
-conversation_module = ConversationalModule()
+_shared_personality = get_personality_engine()
+_shared_dynamic = get_adaptive_response_generator(_shared_personality)
+conversation_module = ConversationalModule(
+    personality=_shared_personality,
+    dynamic=_shared_dynamic,
+)
 ws_manager = WebSocketManager()
 
 

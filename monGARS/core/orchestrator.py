@@ -21,14 +21,26 @@ settings = get_settings()
 class Orchestrator:
     """Coordinate modules to handle user queries."""
 
-    def __init__(self) -> None:
-        self.llm = LLMIntegration()
-        self.reasoner = AdvancedReasoner()
-        self.personality = PersonalityEngine()
-        self.dynamic_response = AdaptiveResponseGenerator(self.personality)
-        self.mimicry = MimicryModule()
-        self.curiosity = CuriosityEngine()
-        self.captioner = ImageCaptioning()
+    def __init__(
+        self,
+        *,
+        llm: LLMIntegration | None = None,
+        reasoner: AdvancedReasoner | None = None,
+        personality: PersonalityEngine | None = None,
+        dynamic_response: AdaptiveResponseGenerator | None = None,
+        mimicry: MimicryModule | None = None,
+        curiosity: CuriosityEngine | None = None,
+        captioner: ImageCaptioning | None = None,
+    ) -> None:
+        self.llm = llm or LLMIntegration()
+        self.reasoner = reasoner or AdvancedReasoner()
+        self.personality = personality or PersonalityEngine()
+        self.dynamic_response = dynamic_response or AdaptiveResponseGenerator(
+            self.personality
+        )
+        self.mimicry = mimicry or MimicryModule()
+        self.curiosity = curiosity or CuriosityEngine()
+        self.captioner = captioner or ImageCaptioning()
 
     async def process_query(
         self,
