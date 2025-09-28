@@ -111,7 +111,7 @@ class Orchestrator:
                 user_personality = {}
             try:
                 adapted_response = self.dynamic_response.generate_adaptive_response(
-                    base_response, user_personality
+                    base_response, user_personality, user_id=user_id
                 )
             except Exception as exc:
                 logger.error("Adaptive response generation failed: %s", exc)

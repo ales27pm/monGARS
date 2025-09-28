@@ -94,7 +94,9 @@ def normalize_curated_record(
 class LinearAdapterTrainer:
     """Train a lightweight linear adapter from curated embedding samples."""
 
-    def __init__(self, *, learning_rate: float, epochs: int, gradient_clip: float) -> None:
+    def __init__(
+        self, *, learning_rate: float, epochs: int, gradient_clip: float
+    ) -> None:
         if epochs < 1:
             raise ValueError(f"Number of epochs must be at least 1. Got: {epochs}")
         self.learning_rate = learning_rate
@@ -113,14 +115,13 @@ class LinearAdapterTrainer:
             total_loss = 0.0
             for sample in dataset:
                 prediction = bias + sum(
-                    weight * feature for weight, feature in zip(weights, sample.embedding)
+                    weight * feature
+                    for weight, feature in zip(weights, sample.embedding)
                 )
                 error = prediction - sample.target
                 total_loss += error * error
 
-                clipped_error = max(
-                    -self.gradient_clip, min(self.gradient_clip, error)
-                )
+                clipped_error = max(-self.gradient_clip, min(self.gradient_clip, error))
 
                 for i, feature in enumerate(sample.embedding):
                     weights[i] -= self.learning_rate * clipped_error * feature

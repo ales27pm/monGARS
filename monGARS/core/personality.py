@@ -1,58 +1,58 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-import random
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Iterable
 
 from sqlalchemy import select
-
-try:
-    from textblob import TextBlob
-    from textblob_fr import PatternTagger as PatternTaggerFr
-except ImportError:  # pragma: no cover
-    TextBlob = None
-    PatternTaggerFr = None
 
 try:  # prefer patched init_db in tests
     from init_db import UserPersonality, async_session_factory
 except Exception:  # pragma: no cover - fallback for runtime use
     from monGARS.init_db import UserPersonality, async_session_factory
 
+from monGARS.core.style_finetuning import StyleAnalysis, StyleFineTuner
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class PersonalityProfile:
-    traits: dict
-    interaction_style: dict
-    context_preferences: dict
+    traits: dict[str, float]
+    interaction_style: dict[str, float]
+    context_preferences: dict[str, float]
     adaptation_rate: float
     confidence: float
 
 
 class PersonalityEngine:
-    ANALYSIS_WINDOW = 5
+    """Persist and evolve user personalities using learned style adapters."""
 
-    def __init__(self, session_factory=async_session_factory) -> None:
-        self.user_profiles = defaultdict(lambda: self._generate_default_profile())
+    def __init__(
+        self,
+        session_factory=async_session_factory,
+        *,
+        style_tuner: StyleFineTuner | None = None,
+    ) -> None:
+        self.user_profiles: defaultdict[str, PersonalityProfile] = defaultdict(
+            lambda: self._generate_default_profile()
+        )
         self.learning_rate = 0.05
         self._lock = asyncio.Lock()
         self._session_factory = session_factory
-        self._tagger_fr = PatternTaggerFr() if PatternTaggerFr else None
-        if not (TextBlob and PatternTaggerFr):  # pragma: no cover
-            logger.warning(
-                "textblob or textblob-fr not installed. Personality analysis will be disabled."
-            )
-        logger.info("PersonalityEngine initialized.")
+        self._style_tuner = style_tuner or StyleFineTuner()
+        logger.info("PersonalityEngine initialized with style fine-tuning module.")
 
     def _generate_default_profile(self) -> PersonalityProfile:
         default_traits = {
-            "openness": random.uniform(0.4, 0.7),
-            "conscientiousness": random.uniform(0.4, 0.7),
-            "extraversion": random.uniform(0.4, 0.7),
-            "agreeableness": random.uniform(0.4, 0.7),
-            "neuroticism": random.uniform(0.4, 0.7),
+            "openness": 0.55,
+            "conscientiousness": 0.55,
+            "extraversion": 0.55,
+            "agreeableness": 0.55,
+            "neuroticism": 0.45,
         }
         default_style = {
             "formality": 0.5,
@@ -60,7 +60,11 @@ class PersonalityEngine:
             "enthusiasm": 0.5,
             "directness": 0.5,
         }
-        default_preferences = {"technical": 0.5, "casual": 0.5, "professional": 0.5}
+        default_preferences = {
+            "technical": 0.5,
+            "casual": 0.5,
+            "professional": 0.5,
+        }
         return PersonalityProfile(
             default_traits, default_style, default_preferences, 0.1, 0.5
         )
@@ -74,8 +78,7 @@ class PersonalityEngine:
                             UserPersonality.user_id == user_id
                         )
                     )
-                    record = result.scalar_one_or_none()
-                    if record:
+                    if record := result.scalar_one_or_none():
                         profile = PersonalityProfile(
                             traits=record.traits,
                             interaction_style=record.interaction_style,
@@ -84,11 +87,18 @@ class PersonalityEngine:
                             confidence=record.confidence,
                         )
                         self.user_profiles[user_id] = profile
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Failed to load profile for %s: %s", user_id, exc)
             if user_id not in self.user_profiles:
                 self.user_profiles[user_id] = self._generate_default_profile()
             return self.user_profiles[user_id]
+
+    @property
+    def style_tuner(self) -> StyleFineTuner:
+        return self._style_tuner
+
+    def set_style_tuner(self, style_tuner: StyleFineTuner) -> None:
+        self._style_tuner = style_tuner
 
     async def save_profile(self, user_id: str) -> None:
         async with self._lock:
@@ -109,60 +119,57 @@ class PersonalityEngine:
                         )
                     )
                     await session.commit()
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Failed to save profile for %s: %s", user_id, exc)
 
-    async def analyze_personality(self, user_id: str, interactions: list) -> dict:
-        """Update the user's profile based on recent interactions.
-
-        The profile is persisted asynchronously; failures are logged in the
-        background, so callers should not rely on immediate consistency.
-        """
-
-        if not TextBlob or not interactions:
-            return (await self.load_profile(user_id)).traits
+    async def analyze_personality(
+        self, user_id: str, interactions: Iterable[dict[str, str]]
+    ) -> dict[str, float]:
+        """Update the user's profile based on recent interactions."""
 
         profile = await self.load_profile(user_id)
-
-        for interaction in interactions[-self.ANALYSIS_WINDOW :]:
-            message = interaction.get("message", "")
-            if not message:
-                continue
-
-            blob = TextBlob(message, pos_tagger=self._tagger_fr)
-            sentiment = blob.sentiment
-
-            profile.traits["agreeableness"] = self._update_trait(
-                profile.traits["agreeableness"], (sentiment.polarity + 1) / 2
+        interactions_list = list(interactions)
+        try:
+            analysis: StyleAnalysis = await self._style_tuner.estimate_personality(
+                user_id, interactions_list
             )
-            profile.traits["neuroticism"] = self._update_trait(
-                profile.traits["neuroticism"], (-sentiment.polarity + 1) / 2
-            )
+        except Exception as exc:  # pragma: no cover - graceful degradation
+            logger.exception("Style analysis failed for %s: %s", user_id, exc)
+            return profile.traits
 
-            profile.interaction_style["formality"] = self._update_trait(
-                profile.interaction_style["formality"], 1 - sentiment.subjectivity
-            )
-            profile.interaction_style["humor"] = self._update_trait(
-                profile.interaction_style["humor"], (sentiment.polarity + 1) / 2
-            )
-            profile.interaction_style["enthusiasm"] = self._update_trait(
-                profile.interaction_style["enthusiasm"], (sentiment.polarity + 1) / 2
-            )
-
-        logger.info(
-            "Dynamically updated personality for %s: %s", user_id, profile.traits
-        )
-        task = asyncio.create_task(self.save_profile(user_id))
-        task.add_done_callback(
-            lambda t: (
-                logger.error("Failed to persist profile: %s", t.exception())
-                if t.exception()
-                else None
-            )
-        )
-
+        self._blend_traits(profile, analysis)
+        self._schedule_persistence(user_id)
         return profile.traits
+
+    def _blend_traits(
+        self, profile: PersonalityProfile, analysis: StyleAnalysis
+    ) -> None:
+        for trait, value in analysis.traits.items():
+            current = profile.traits.get(trait, 0.5)
+            profile.traits[trait] = self._update_trait(current, value)
+
+        for style_dim, value in analysis.style.items():
+            current = profile.interaction_style.get(style_dim, 0.5)
+            profile.interaction_style[style_dim] = self._update_trait(current, value)
+
+        for context_key, value in analysis.context_preferences.items():
+            current = profile.context_preferences.get(context_key, 0.5)
+            profile.context_preferences[context_key] = self._update_trait(
+                current, value
+            )
+
+        profile.confidence = max(profile.confidence, analysis.confidence)
+
+    def _schedule_persistence(self, user_id: str) -> None:
+        task = asyncio.create_task(self.save_profile(user_id))
+        task.add_done_callback(self._handle_persistence_error)
+
+    @staticmethod
+    def _handle_persistence_error(task: asyncio.Task[None]) -> None:
+        if exception := task.exception():  # pragma: no cover - logged once
+            logger.error("Failed to persist personality profile: %s", exception)
 
     def _update_trait(self, current_value: float, new_value: float) -> float:
         """Nudge the current trait toward ``new_value`` using the learning rate."""
+
         return current_value + self.learning_rate * (new_value - current_value)

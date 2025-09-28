@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable
@@ -12,6 +11,7 @@ from typing import Any, Callable
 from cachetools import TTLCache
 
 from monGARS.core.personality import PersonalityEngine
+from monGARS.core.style_finetuning import StyleFineTuner
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,29 @@ class AdaptiveResponseGenerator:
         *,
         cache_ttl_seconds: int = 300,
         time_provider: Callable[[], float] | None = None,
+        style_tuner: StyleFineTuner | None = None,
     ) -> None:
-        self._personality_engine = personality_engine or PersonalityEngine()
+        shared_tuner = style_tuner
+        if personality_engine is None:
+            if shared_tuner is None:
+                shared_tuner = StyleFineTuner()
+            if isinstance(shared_tuner, StyleFineTuner):
+                personality_engine = PersonalityEngine(style_tuner=shared_tuner)
+            else:
+                personality_engine = PersonalityEngine()
+        else:
+            if shared_tuner is None and hasattr(personality_engine, "style_tuner"):
+                shared_tuner = personality_engine.style_tuner  # type: ignore[attr-defined]
+            elif isinstance(shared_tuner, StyleFineTuner) and hasattr(
+                personality_engine, "set_style_tuner"
+            ):
+                personality_engine.set_style_tuner(shared_tuner)  # type: ignore[attr-defined]
+            elif shared_tuner is None:
+                shared_tuner = StyleFineTuner()
+                if hasattr(personality_engine, "set_style_tuner"):
+                    personality_engine.set_style_tuner(shared_tuner)  # type: ignore[attr-defined]
+
+        self._personality_engine = personality_engine
         self._cache_ttl = cache_ttl_seconds
         self._time_provider = time_provider or time.monotonic
         self._lock = asyncio.Lock()
@@ -55,6 +76,8 @@ class AdaptiveResponseGenerator:
             if cache_ttl_seconds > 0
             else None
         )
+        self._style_tuner = shared_tuner or StyleFineTuner()
+        self._recent_histories: dict[str, list[Mapping[str, Any]]] = {}
 
     async def get_personality_traits(
         self,
@@ -107,46 +130,37 @@ class AdaptiveResponseGenerator:
                 user_id,
                 "infinite" if self._cache_ttl < 0 else self._cache_ttl,
             )
+            self._recent_histories[user_id] = interactions_list
 
         return dict(normalized_traits)
 
     def generate_adaptive_response(
-        self, text: str, personality: Mapping[str, float] | None
+        self,
+        text: str,
+        personality: Mapping[str, float] | None,
+        *,
+        user_id: str,
     ) -> str:
         """Return an adapted response based on user personality."""
 
-        personality = personality or {}
+        history = self._recent_histories.get(user_id, [])
+        if not history:
+            logger.debug(
+                "No cached history for %s; attempting personality estimation cache reuse.",
+                user_id,
+            )
 
-        def _coerce(value: Any, default: float) -> float:
-            if value is None:
-                return default
-            if isinstance(value, str):
-                value = value.strip()
-                if not value:
-                    return default
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return default
-
-        formality = _coerce(personality.get("formality"), 0.5)
-        humor = _coerce(personality.get("humor"), 0.5)
-        enthusiasm = _coerce(personality.get("enthusiasm"), 0.5)
-
-        adapted = text
-
-        # Handle formality with more comprehensive pronoun replacement
-        if formality > 0.7:
-            adapted = re.sub(r"\btu\b", "vous", adapted, flags=re.IGNORECASE)
-        elif formality < 0.3:
-            adapted = re.sub(r"\bvous\b", "tu", adapted, flags=re.IGNORECASE)
-
-        if enthusiasm > 0.7 and not adapted.endswith("!"):
-            adapted += "!"
-
-        smiling_emoji = "\U0001f603"
-        if humor > 0.7 and smiling_emoji not in adapted:
-            adapted += f" {smiling_emoji}"
+        try:
+            adapted = self._style_tuner.apply_style(
+                user_id,
+                text,
+                dict(personality or {}),
+            )
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.exception(
+                "Failed to apply style adaptation for %s: %s", user_id, exc
+            )
+            return text
 
         return adapted
 

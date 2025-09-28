@@ -5,6 +5,25 @@ import pytest
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 
 
+class StubStyleTuner:
+    def __init__(self) -> None:
+        self.applied: list[tuple[str, str, dict[str, float]]] = []
+
+    async def estimate_personality(
+        self, user_id: str, interactions: list[dict[str, str]]
+    ) -> None:
+        raise NotImplementedError
+
+    def apply_style(
+        self,
+        user_id: str,
+        base_text: str,
+        personality: dict[str, float] | None,
+    ) -> str:
+        self.applied.append((user_id, base_text, personality or {}))
+        return f"{base_text}::{user_id}"
+
+
 class StubPersonalityEngine:
     def __init__(self, responses: list[dict[str, float]]) -> None:
         self._responses = responses
@@ -41,6 +60,19 @@ class BlockingPersonalityEngine(StubPersonalityEngine):
         return await super().analyze_personality(user_id, interactions)
 
 
+class EngineWithTuner:
+    def __init__(self, style_tuner: StubStyleTuner) -> None:
+        self.style_tuner = style_tuner
+
+    async def analyze_personality(
+        self, user_id: str, interactions: list[dict[str, str]]
+    ) -> dict[str, float]:
+        return {"formality": 0.5}
+
+    def set_style_tuner(self, style_tuner: StubStyleTuner) -> None:
+        self.style_tuner = style_tuner
+
+
 @pytest.mark.asyncio
 async def test_personality_traits_reused_within_ttl() -> None:
     current_time = 0.0
@@ -52,7 +84,10 @@ async def test_personality_traits_reused_within_ttl() -> None:
         responses=[{"formality": 0.8, "humor": 0.4, "enthusiasm": 0.9}]
     )
     generator = AdaptiveResponseGenerator(
-        engine, cache_ttl_seconds=60, time_provider=now
+        engine,
+        cache_ttl_seconds=60,
+        time_provider=now,
+        style_tuner=StubStyleTuner(),
     )
     interactions = [{"message": "Bonjour", "response": "Salut"}]
 
@@ -62,6 +97,19 @@ async def test_personality_traits_reused_within_ttl() -> None:
     assert engine.call_count == 1
     assert first == second
     assert engine.last_user == "user-1"
+
+
+def test_generator_reuses_engine_style_tuner() -> None:
+    style_tuner = StubStyleTuner()
+    engine = EngineWithTuner(style_tuner)
+    generator = AdaptiveResponseGenerator(personality_engine=engine)
+
+    result = generator.generate_adaptive_response(
+        "Salut", {"formality": 0.7}, user_id="user-99"
+    )
+
+    assert result == "Salut::user-99"
+    assert style_tuner.applied == [("user-99", "Salut", {"formality": 0.7})]
 
 
 @pytest.mark.asyncio
@@ -78,7 +126,10 @@ async def test_personality_traits_refresh_after_ttl_expiry() -> None:
         ]
     )
     generator = AdaptiveResponseGenerator(
-        engine, cache_ttl_seconds=5, time_provider=now
+        engine,
+        cache_ttl_seconds=5,
+        time_provider=now,
+        style_tuner=StubStyleTuner(),
     )
     interactions = [{"message": "Bonjour", "response": "Salut"}]
 
@@ -104,7 +155,10 @@ async def test_personality_traits_refresh_on_interaction_change() -> None:
         ]
     )
     generator = AdaptiveResponseGenerator(
-        engine, cache_ttl_seconds=60, time_provider=now
+        engine,
+        cache_ttl_seconds=60,
+        time_provider=now,
+        style_tuner=StubStyleTuner(),
     )
 
     interactions_initial = [{"message": "Salut", "response": "Bonjour"}]
@@ -133,6 +187,7 @@ async def test_personality_traits_cached_indefinitely_with_negative_ttl() -> Non
         personality_engine=engine,
         cache_ttl_seconds=-1,
         time_provider=fake_time,
+        style_tuner=StubStyleTuner(),
     )
 
     user_id = "user1"
@@ -167,7 +222,9 @@ async def test_personality_traits_shared_across_concurrent_calls() -> None:
         gate=gate,
         release=release,
     )
-    generator = AdaptiveResponseGenerator(engine, cache_ttl_seconds=60)
+    generator = AdaptiveResponseGenerator(
+        engine, cache_ttl_seconds=60, style_tuner=StubStyleTuner()
+    )
     interactions = [{"message": "Bonjour"}]
 
     first_task = asyncio.create_task(
@@ -188,16 +245,24 @@ async def test_personality_traits_shared_across_concurrent_calls() -> None:
     assert results[0] == results[1]
 
 
-def test_generate_adaptive_response_handles_non_numeric_traits() -> None:
-    generator = AdaptiveResponseGenerator(cache_ttl_seconds=0)
+def test_generate_adaptive_response_delegates_to_style_tuner() -> None:
+    style_tuner = StubStyleTuner()
+    generator = AdaptiveResponseGenerator(cache_ttl_seconds=0, style_tuner=style_tuner)
     personality = {
         "formality": " 0.8 ",
         "humor": "not-a-number",
         "enthusiasm": None,
     }
 
-    adapted = generator.generate_adaptive_response("Salut tu", personality)
+    adapted = generator.generate_adaptive_response(
+        "Salut tu", personality, user_id="abc"
+    )
 
-    assert adapted == "Salut vous"
-    assert "!" not in adapted
-    assert "\U0001f603" not in adapted
+    assert adapted == "Salut tu::abc"
+    assert style_tuner.applied == [
+        (
+            "abc",
+            "Salut tu",
+            {"formality": " 0.8 ", "humor": "not-a-number", "enthusiasm": None},
+        )
+    ]
