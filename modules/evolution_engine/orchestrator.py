@@ -2,11 +2,25 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from modules.neurons.training.mntp_trainer import MNTPTrainer
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class TrainerProtocol(Protocol):
+    """Protocol describing the trainer expected by the orchestrator."""
+
+    def __init__(
+        self, training_config_path: str, output_dir: str
+    ) -> None:  # noqa: D401
+        """Construct a trainer bound to the provided config and output path."""
+
+    def train(self) -> dict[str, object]:
+        """Execute the training pipeline and return a summary payload."""
 
 
 class EvolutionOrchestrator:
@@ -17,7 +31,7 @@ class EvolutionOrchestrator:
         model_registry_path: str = "models/encoders/",
         config_path: str | None = None,
         *,
-        trainer_cls: type[MNTPTrainer] = MNTPTrainer,
+        trainer_cls: type[TrainerProtocol] = MNTPTrainer,
     ) -> None:
         self.model_registry_path = Path(model_registry_path)
         self.config_path = (
@@ -25,7 +39,7 @@ class EvolutionOrchestrator:
             if config_path
             else Path("configs/training/mntp_mistral_config.json")
         )
-        self._trainer_cls = trainer_cls
+        self._trainer_cls: type[TrainerProtocol] = trainer_cls
 
     def trigger_encoder_training_pipeline(self) -> str:
         """Launch the MNTP pipeline and return the produced artifact directory."""

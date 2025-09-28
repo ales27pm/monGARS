@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,13 @@ except Exception:  # pragma: no cover - fallback if unavailable
     LLM2Vec = None
 
 logger = logging.getLogger(__name__)
+
+
+class TrainingStatus(str, Enum):
+    """Possible outcomes for a training run."""
+
+    SUCCESS = "success"
+    FALLBACK = "fallback"
 
 
 class MNTPTrainer:
@@ -139,7 +147,7 @@ class MNTPTrainer:
         )
 
         return {
-            "status": "fallback",
+            "status": TrainingStatus.FALLBACK.value,
             "reason": reason,
             "details": details,
             "artifacts": {"adapter": str(adapter_dir), "weights": str(weights_path)},
@@ -159,11 +167,26 @@ class MNTPTrainer:
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
 
     def _derive_fallback_weights(self) -> dict[str, Any]:
+        fingerprint: dict[str, Any] = {
+            "keys": sorted(self.config.keys()),
+            "string_lengths": {},
+            "numeric": {},
+            "boolean": {},
+        }
+
+        for key, value in self.config.items():
+            if isinstance(value, bool):
+                fingerprint["boolean"][key] = value
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                fingerprint["numeric"][key] = float(value)
+            elif isinstance(value, str):
+                fingerprint["string_lengths"][key] = len(value)
+
         serialized = json.dumps(
-            self.config, sort_keys=True, separators=(",", ":")
+            fingerprint, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         digest = hashlib.sha256(serialized).digest()
-        rows = max(4, int(self.config.get("lora_r", 16)))
+        rows = max(4, min(64, int(self.config.get("lora_r", 16))))
         cols = max(8, min(128, int(self.config.get("max_seq_length", 512)) // 4))
 
         matrix: list[list[float]] = []
@@ -201,7 +224,7 @@ class MNTPTrainer:
             extra={"artifact_dir": str(artifact_dir), "model_name": model_name},
         )
         return {
-            "status": "success",
+            "status": TrainingStatus.SUCCESS.value,
             "model_name": model_name,
             "dataset_name": self.config["dataset_name"],
             "artifacts": {"adapter": str(artifact_dir)},
@@ -295,19 +318,17 @@ class MNTPTrainer:
         }
 
         if isinstance(result, dict):
-            metrics.update(
-                {
-                    key: value
-                    for key, value in result.items()
-                    if isinstance(value, (int, float))
-                }
-            )
+            metrics |= {
+                key: value
+                for key, value in result.items()
+                if isinstance(value, (int, float))
+            }
 
         return metrics
 
     def _estimate_dataset_size(self, dataset: Any) -> int:
         try:
-            return int(len(dataset))  # type: ignore[arg-type]
+            return len(dataset)  # type: ignore[arg-type]
         except (TypeError, ValueError):  # pragma: no cover - iterable datasets
             batch = int(self.config.get("per_device_train_batch_size", 1))
             steps = int(self.config.get("max_steps", 1))
