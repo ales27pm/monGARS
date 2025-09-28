@@ -26,7 +26,17 @@ monGARS/
 ├── .github/
 │   └── workflows/
 │       └── ci-cd.yml
-└── monGARS/
+├── modules/
+│   ├── ray_service.py
+│   ├── evolution_engine/
+│   │   └── orchestrator.py
+│   └── neurons/
+│       ├── __init__.py
+│       ├── core.py
+│       ├── registry.py
+│       └── training/
+│           └── mntp_trainer.py
+├── monGARS/
     ├── __init__.py
     ├── api/
     │   ├── __init__.py

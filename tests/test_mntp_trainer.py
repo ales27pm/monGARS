@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from modules.evolution_engine.orchestrator import EvolutionOrchestrator
+from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
 
 
@@ -41,6 +42,13 @@ def test_orchestrator_creates_encoder(temp_dir: Path) -> None:
     assert data["model_name_or_path"] == "mistralai/Mistral-7B-Instruct-v0.2"
 
     _assert_fallback_artifacts(out)
+    manifest_path = temp_dir / MANIFEST_FILENAME
+    assert manifest_path.exists()
+    manifest = load_manifest(temp_dir)
+    assert manifest is not None
+    assert manifest.current is not None
+    payload = manifest.build_payload()
+    assert payload["adapter_path"].endswith("adapter")
 
 
 def test_mntp_trainer_generates_deterministic_fallback(tmp_path: Path) -> None:

@@ -19,14 +19,23 @@ The project is structured into modular components such as `Hippocampus`, `Neuron
    - Extend `MNTPTrainer` to perform real masked next token prediction training.
    - Integrate metrics logging via MLflow for each training run.
    - Store resulting adapters in `models/encoders/` and load them through `LLMIntegration`.
+     Each training run now updates `models/encoders/adapter_manifest.json`, allowing
+     the runtime to broadcast the newest adapter version to inference services.
 3. **Distributed Inference**
    - Enable the Ray Serve path in `LLMIntegration` with actual requests to a cluster endpoint.
+     The `modules/ray_service.py` module exposes a production-ready `deploy_ray_service`
+     helper along with an `LLMServeDeployment` class that consumes the adapter manifest
+     and keeps replicas synchronised with new weights.
    - Provide Helm charts under `k8s/` for scalable deployment.
    - Add monitoring hooks using OpenTelemetry metrics already present in `TieredCache`.
 
 ## Current Machine Learning Status
 
-- **LLM Integration**: Models are served locally through Ollama with a stubbed option for Ray Serve. The code handles caching and circuit breaking but distributed inference remains disabled by default.
+- **LLM Integration**: Models are served locally through Ollama with an optional
+  Ray Serve backend. When Ray is enabled, `LLMIntegration` automatically attaches
+  adapter metadata from `models/encoders/adapter_manifest.json` to every request,
+  ensuring the cluster reloads freshly trained LLM2Vec adapters without manual
+  coordination.
 - **Self-Training Engine**: Present but performs simulated training cycles, recording new version numbers without altering model weights.
 
 ## Next Steps
