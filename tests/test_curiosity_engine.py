@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 os.environ.setdefault("SECRET_KEY", "test-secret")
@@ -174,15 +175,15 @@ async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
     async def fake_vector_similarity(*args, **kwargs) -> int:
         return 0
 
-    async def always_missing(_entity: str) -> bool:
-        return False
+    async def always_missing_batch(entities):
+        return {entity: False for entity in entities}
 
     async def fake_research(query: str) -> str:
         raise AssertionError(f"Research should not be triggered for: {query}")
 
     engine._perform_research = fake_research  # type: ignore[assignment]
     monkeypatch.setattr(engine, "_vector_similarity_search", fake_vector_similarity)
-    monkeypatch.setattr(engine, "_check_entity_in_kg", always_missing)
+    monkeypatch.setattr(engine, "_check_entities_in_kg_batch", always_missing_batch)
 
     engine.nlp = lambda text: SimpleNamespace(
         ents=[SimpleNamespace(text="Entité inconnue")]
@@ -191,6 +192,104 @@ async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
     result = await engine.detect_gaps({"last_query": "Qu'est-ce que MonGARS?"})
 
     assert result == {"status": "sufficient_knowledge"}
+
+
+@pytest.mark.asyncio
+async def test_batch_lookup_uses_cache():
+    engine = CuriosityEngine()
+
+    class RecordingResult:
+        def __init__(self, entities: list[str]) -> None:
+            self._entities = entities
+
+        async def data(self) -> list[dict[str, object]]:
+            return [
+                {"normalized": entity, "exists": entity == "paris"}
+                for entity in self._entities
+            ]
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.run_calls: list[list[str]] = []
+
+        async def __aenter__(self) -> "RecordingSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def run(self, _query: str, *, entities: list[str]) -> RecordingResult:
+            self.run_calls.append(list(entities))
+            return RecordingResult(entities)
+
+    session = RecordingSession()
+    engine.embedding_system.driver = SimpleNamespace(session=lambda: session)
+
+    first_lookup = await engine._check_entities_in_kg_batch(["Paris", "Lyon", "Paris"])
+
+    assert first_lookup == {"Paris": True, "Lyon": False}
+    assert session.run_calls == [["paris", "lyon"]]
+
+    cached_lookup = await engine._check_entities_in_kg_batch(["Lyon"])
+
+    assert cached_lookup == {"Lyon": False}
+    assert session.run_calls == [["paris", "lyon"]]
+
+
+@pytest.mark.asyncio
+async def test_batch_lookup_shares_inflight_queries():
+    engine = CuriosityEngine()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class RecordingResult:
+        def __init__(self, entities):
+            self._entities = entities
+
+        async def data(self) -> list[dict[str, object]]:
+            return [
+                {"normalized": entity, "exists": entity == "paris"}
+                for entity in self._entities
+            ]
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.run_calls: list[list[str]] = []
+
+        async def __aenter__(self) -> "RecordingSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def run(self, _query: str, *, entities: list[str]) -> RecordingResult:
+            self.run_calls.append(list(entities))
+            started.set()
+            await release.wait()
+            return RecordingResult(entities)
+
+    session = RecordingSession()
+    engine.embedding_system.driver = SimpleNamespace(session=lambda: session)
+
+    async def first_lookup() -> dict[str, bool]:
+        return await engine._check_entities_in_kg_batch(["Paris", "Lyon"])
+
+    async def second_lookup() -> dict[str, bool]:
+        await started.wait()
+        return await engine._check_entities_in_kg_batch(["Paris"])
+
+    first_task = asyncio.create_task(first_lookup())
+    await started.wait()
+    second_task = asyncio.create_task(second_lookup())
+    await asyncio.sleep(0)
+    release.set()
+
+    first_result, second_result = await asyncio.gather(first_task, second_task)
+
+    assert first_result == {"Paris": True, "Lyon": False}
+    assert second_result == {"Paris": True}
+    assert session.run_calls == [["paris", "lyon"]]
 
 
 @pytest.mark.asyncio

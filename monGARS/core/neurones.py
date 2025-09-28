@@ -35,6 +35,15 @@ class _NoOpResult:
     async def single(self) -> dict[str, Any]:
         return {"exists": False}
 
+    async def data(self) -> list[dict[str, Any]]:
+        return []
+
+    def __aiter__(self) -> "_NoOpResult":
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        raise StopAsyncIteration
+
 
 class _NoOpSession:
     async def __aenter__(self) -> "_NoOpSession":
