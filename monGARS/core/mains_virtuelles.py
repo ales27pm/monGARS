@@ -30,10 +30,18 @@ class ImageCaptioning:
             self.model = None
             return
         try:
-            self.processor = BlipProcessor.from_pretrained(model_name)
+            self.processor = BlipProcessor.from_pretrained(
+                model_name, clean_up_tokenization_spaces=True
+            )
             self.model = BlipForConditionalGeneration.from_pretrained(model_name)
             self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
+            tokenizer = getattr(self.processor, "tokenizer", None)
+            if (
+                tokenizer
+                and getattr(tokenizer, "clean_up_tokenization_spaces", None) is None
+            ):
+                tokenizer.clean_up_tokenization_spaces = True
         except Exception as e:  # pragma: no cover - model may not be available
             logger.error("Failed to load image captioning model: %s", e)
             self.processor = None
@@ -47,7 +55,11 @@ class ImageCaptioning:
             )
             with torch.no_grad():
                 outputs = self.model.generate(**inputs)
-            return self.processor.decode(outputs[0], skip_special_tokens=True)
+            return self.processor.decode(
+                outputs[0],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
         except Exception as e:  # pragma: no cover - PIL/torch errors
             logger.error("Error generating caption: %s", e)
             return None
