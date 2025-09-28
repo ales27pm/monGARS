@@ -24,10 +24,10 @@ class Orchestrator:
     def __init__(self) -> None:
         self.llm = LLMIntegration()
         self.reasoner = AdvancedReasoner()
-        self.dynamic_response = AdaptiveResponseGenerator()
+        self.personality = PersonalityEngine()
+        self.dynamic_response = AdaptiveResponseGenerator(self.personality)
         self.mimicry = MimicryModule()
         self.curiosity = CuriosityEngine()
-        self.personality = PersonalityEngine()
         self.captioner = ImageCaptioning()
 
     async def process_query(
@@ -91,17 +91,15 @@ class Orchestrator:
             base_response = llm_response.get("text", "")
             try:
                 user_personality = await asyncio.wait_for(
-                    self.personality.analyze_personality(user_id, []), timeout=5
+                    self.dynamic_response.get_personality_traits(user_id, []),
+                    timeout=5,
                 )
             except Exception as exc:
                 logger.error("Personality analysis failed: %s", exc)
                 user_personality = {}
             try:
-                adapted_response = await asyncio.wait_for(
-                    self.dynamic_response.generate_adaptive_response(
-                        base_response, user_personality
-                    ),
-                    timeout=5,
+                adapted_response = self.dynamic_response.generate_adaptive_response(
+                    base_response, user_personality
                 )
             except Exception as exc:
                 logger.error("Adaptive response generation failed: %s", exc)
