@@ -15,6 +15,8 @@ try:  # pragma: no cover - optional dependency at import time
 except ImportError:  # pragma: no cover - SQLAlchemy not installed in tests
     select = None  # type: ignore[assignment]
 
+from opentelemetry import metrics
+
 from monGARS.config import get_settings
 from monGARS.core.iris import Iris
 from monGARS.core.neurones import EmbeddingSystem
@@ -27,6 +29,12 @@ except (ImportError, AttributeError):  # pragma: no cover - database optional
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+meter = metrics.get_meter(__name__)
+_external_research_counter = meter.create_counter(
+    "curiosity_external_research_requests",
+    unit="1",
+    description="Number of external research requests initiated by the curiosity engine.",
+)
 
 
 def _tokenize(text: str) -> set[str]:
@@ -45,7 +53,11 @@ class CuriosityEngine:
         """Initialise the curiosity engine with NLP and embedding utilities."""
 
         self.embedding_system = EmbeddingSystem()
-        self.knowledge_gap_threshold = 0.5
+        self.knowledge_gap_threshold = settings.curiosity_similarity_threshold
+        self.similar_history_threshold = max(
+            0, settings.curiosity_minimum_similar_history
+        )
+        self.graph_gap_cutoff = max(1, settings.curiosity_graph_gap_cutoff)
         try:
             self.nlp = spacy.load("fr_core_news_sm")
         except OSError:  # pragma: no cover - optional model
@@ -72,7 +84,10 @@ class CuriosityEngine:
             similar_count = await self._vector_similarity_search(
                 last_query, history_queries
             )
-            if similar_count >= 3:
+            if (
+                self.similar_history_threshold
+                and similar_count >= self.similar_history_threshold
+            ):
                 return {"status": "sufficient_knowledge"}
             doc = self.nlp(last_query)
             entities = [ent.text for ent in getattr(doc, "ents", [])]
@@ -81,7 +96,7 @@ class CuriosityEngine:
                 for entity in entities
                 if not await self._check_entity_in_kg(entity)
             ]
-            if missing_entities:
+            if len(missing_entities) >= self.graph_gap_cutoff:
                 research_query = self._formulate_research_query(
                     missing_entities, last_query
                 )
@@ -371,6 +386,8 @@ class CuriosityEngine:
     async def _perform_research(self, query: str) -> str:
         """Fetch additional context from the document service or Iris."""
 
+        _external_research_counter.add(1, {"channel": "document_service"})
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
@@ -395,6 +412,7 @@ class CuriosityEngine:
             "curiosity.iris_fallback",
             extra={"query_len": len(query)},
         )
+        _external_research_counter.add(1, {"channel": "iris"})
         result = await self.iris.search(query)
         if result:
             return f"Contexte supplémentaire: {result}"

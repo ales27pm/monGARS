@@ -2,6 +2,8 @@ import os
 
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
+from types import SimpleNamespace
+
 import pytest
 
 from monGARS.core.cortex import curiosity_engine as curiosity_module
@@ -145,3 +147,47 @@ async def test_vector_similarity_fallback_both_layers_fail(monkeypatch):
     )
 
     assert similar == 0
+
+
+def test_curiosity_engine_initialises_from_settings(monkeypatch):
+    monkeypatch.setattr(
+        curiosity_module.settings, "curiosity_similarity_threshold", 0.42
+    )
+    monkeypatch.setattr(
+        curiosity_module.settings, "curiosity_minimum_similar_history", 7
+    )
+    monkeypatch.setattr(curiosity_module.settings, "curiosity_graph_gap_cutoff", 3)
+
+    engine = CuriosityEngine()
+
+    assert engine.knowledge_gap_threshold == 0.42
+    assert engine.similar_history_threshold == 7
+    assert engine.graph_gap_cutoff == 3
+
+
+@pytest.mark.asyncio
+async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
+    engine = CuriosityEngine()
+    engine.similar_history_threshold = 0
+    engine.graph_gap_cutoff = 3
+
+    async def fake_vector_similarity(*args, **kwargs) -> int:
+        return 0
+
+    async def always_missing(_entity: str) -> bool:
+        return False
+
+    async def fake_research(query: str) -> str:
+        raise AssertionError(f"Research should not be triggered for: {query}")
+
+    engine._perform_research = fake_research  # type: ignore[assignment]
+    monkeypatch.setattr(engine, "_vector_similarity_search", fake_vector_similarity)
+    monkeypatch.setattr(engine, "_check_entity_in_kg", always_missing)
+
+    engine.nlp = lambda text: SimpleNamespace(
+        ents=[SimpleNamespace(text="Entité inconnue")]
+    )
+
+    result = await engine.detect_gaps({"last_query": "Qu'est-ce que MonGARS?"})
+
+    assert result == {"status": "sufficient_knowledge"}
