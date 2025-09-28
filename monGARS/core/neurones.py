@@ -105,15 +105,17 @@ class EmbeddingSystem:
         if inspect.isawaitable(result):
             await result
 
-    async def encode(self, text: str) -> list[float]:
-        """Return an embedding for *text* with caching and graceful fallbacks."""
+    async def encode(self, text: str) -> tuple[list[float], bool]:
+        """Return an embedding for *text* and flag when fallbacks were used."""
 
         normalized = text.strip()
         cache_key = normalized or _EMPTY_CACHE_KEY
 
         cached = await self._get_cached(cache_key)
         if cached is not None:
-            return cached
+            vector, used_fallback = cached
+            self._using_fallback_embeddings = used_fallback
+            return vector, used_fallback
 
         vector: list[float]
         fallback_triggered = False
@@ -162,8 +164,8 @@ class EmbeddingSystem:
         elif normalized:
             self._using_fallback_embeddings = False
 
-        await self._store_cache(cache_key, vector)
-        return vector
+        await self._store_cache(cache_key, vector, fallback_triggered)
+        return vector, fallback_triggered
 
     @property
     def is_model_available(self) -> bool:
@@ -202,7 +204,7 @@ class EmbeddingSystem:
                             self._fallback_dimensions = dimension
         return self._model
 
-    async def _get_cached(self, key: str) -> list[float] | None:
+    async def _get_cached(self, key: str) -> tuple[list[float], bool] | None:
         async with self._cache_lock:
             cached = await self._cache.get(key)
             if cached is None:
@@ -210,12 +212,26 @@ class EmbeddingSystem:
                 return None
             logger.debug("Embedding cache hit for '%s'", key)
             self._record_cache_key(key)
-            return [float(value) for value in cached]
+            if isinstance(cached, dict):
+                raw_vector = cached.get("vector", [])
+                vector = [float(value) for value in raw_vector]
+                used_fallback = bool(cached.get("used_fallback", False))
+                return vector, used_fallback
+            if isinstance(cached, (list, tuple)):
+                vector = [float(value) for value in cached]
+                return vector, False
+            return None
 
-    async def _store_cache(self, key: str, vector: list[float]) -> None:
+    async def _store_cache(
+        self, key: str, vector: list[float], used_fallback: bool
+    ) -> None:
         evictions: list[str] = []
         async with self._cache_lock:
-            await self._cache.set(key, list(vector), ttl=self._cache_ttl)
+            await self._cache.set(
+                key,
+                {"vector": list(vector), "used_fallback": used_fallback},
+                ttl=self._cache_ttl,
+            )
             if key in self._cache_index:
                 self._cache_index.move_to_end(key)
             else:

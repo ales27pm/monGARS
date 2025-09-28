@@ -10,21 +10,19 @@ from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 
 def _enable_vector_mode(engine: CuriosityEngine) -> None:
     engine.embedding_system._model_dependency_available = True  # type: ignore[attr-defined]
-    engine.embedding_system._using_fallback_embeddings = False  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 async def test_vector_similarity_uses_embeddings_with_history(monkeypatch):
     engine = CuriosityEngine()
 
-    async def fake_encode(text: str) -> list[float]:
-        engine.embedding_system._using_fallback_embeddings = False  # type: ignore[attr-defined]
+    async def fake_encode(text: str) -> tuple[list[float], bool]:
         lowered = text.lower()
         if "quantum" in lowered:
-            return [1.0, 0.0]
+            return [1.0, 0.0], False
         if "classical" in lowered:
-            return [0.0, 1.0]
-        return [0.0, -1.0]
+            return [0.0, 1.0], False
+        return [0.0, -1.0], False
 
     _enable_vector_mode(engine)
     monkeypatch.setattr(curiosity_module, "select", None)
@@ -64,14 +62,13 @@ async def test_vector_similarity_handles_empty_and_no_overlap(monkeypatch):
     engine = CuriosityEngine()
     _enable_vector_mode(engine)
 
-    async def fake_encode(text: str) -> list[float]:
-        engine.embedding_system._using_fallback_embeddings = False  # type: ignore[attr-defined]
+    async def fake_encode(text: str) -> tuple[list[float], bool]:
         lowered = text.lower()
         if "quantum" in lowered:
-            return [1.0, 0.0]
+            return [1.0, 0.0], False
         if "classical" in lowered:
-            return [0.0, 1.0]
-        return [0.0, -1.0]
+            return [0.0, 1.0], False
+        return [0.0, -1.0], False
 
     monkeypatch.setattr(curiosity_module, "select", None)
     monkeypatch.setattr(curiosity_module, "ConversationHistory", None)
@@ -99,7 +96,7 @@ async def test_vector_similarity_handles_empty_and_no_overlap(monkeypatch):
 async def test_vector_similarity_falls_back_to_tokens(monkeypatch):
     engine = CuriosityEngine()
 
-    async def failing_encode(text: str) -> list[float]:
+    async def failing_encode(text: str) -> tuple[list[float], bool]:
         raise RuntimeError("no embedding available")
 
     monkeypatch.setattr(curiosity_module, "select", None)
@@ -124,7 +121,7 @@ async def test_vector_similarity_falls_back_to_tokens(monkeypatch):
 async def test_vector_similarity_fallback_both_layers_fail(monkeypatch):
     engine = CuriosityEngine()
 
-    async def failing_encode(text: str) -> list[float]:
+    async def failing_encode(text: str) -> tuple[list[float], bool]:
         raise RuntimeError("no embedding available")
 
     def zero_token_similarity(

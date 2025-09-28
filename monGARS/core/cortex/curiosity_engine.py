@@ -193,7 +193,9 @@ class CuriosityEngine:
             return self._count_token_similarity(query_terms, history_candidates)
 
         try:
-            query_vector = await self.embedding_system.encode(query_text)
+            query_vector, query_used_fallback = await self.embedding_system.encode(
+                query_text
+            )
         except Exception as exc:  # pragma: no cover - embedding optional
             logger.debug(
                 "Vector similarity fallback due to embedding error: %s",
@@ -201,8 +203,8 @@ class CuriosityEngine:
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
-        if self.embedding_system.using_fallback_embeddings:
-            logger.debug("Vector similarity fallback due to embedding fallback mode")
+        if query_used_fallback:
+            logger.debug("Vector similarity fallback due to query embedding fallback")
             return self._count_token_similarity(query_terms, history_candidates)
 
         query_norm = math.sqrt(sum(value * value for value in query_vector))
@@ -213,7 +215,7 @@ class CuriosityEngine:
             return self._count_token_similarity(query_terms, history_candidates)
 
         try:
-            history_vectors = await asyncio.gather(
+            history_results = await asyncio.gather(
                 *(self.embedding_system.encode(item) for item in history_candidates)
             )
         except Exception as exc:  # pragma: no cover - embedding optional
@@ -223,18 +225,21 @@ class CuriosityEngine:
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
-        if self.embedding_system.using_fallback_embeddings:
-            logger.debug("Vector similarity fallback due to embedding fallback mode")
-            return self._count_token_similarity(query_terms, history_candidates)
-
-        if len(history_vectors) != len(history_candidates):
+        if len(history_results) != len(history_candidates):
             logger.debug(
                 "Vector similarity fallback due to embedding count mismatch",
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
         similar = 0
-        for _candidate_text, history_vector in zip(history_candidates, history_vectors):
+        for _candidate_text, (history_vector, history_used_fallback) in zip(
+            history_candidates, history_results
+        ):
+            if history_used_fallback:
+                logger.debug(
+                    "Vector similarity fallback due to history embedding fallback",
+                )
+                return self._count_token_similarity(query_terms, history_candidates)
             if len(history_vector) != len(query_vector):
                 logger.debug(
                     "Vector similarity fallback due to embedding length mismatch",
