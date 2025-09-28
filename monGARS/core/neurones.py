@@ -93,6 +93,8 @@ class EmbeddingSystem:
             self._fallback_dimensions = _DEFAULT_MODEL_DIMENSION
         else:
             self._fallback_dimensions = max(1, fallback_dimensions)
+        self._model_dependency_available = SentenceTransformer is not None
+        self._using_fallback_embeddings = not self._model_dependency_available
         self.driver = driver or self._create_driver()
 
     async def close(self) -> None:
@@ -114,6 +116,7 @@ class EmbeddingSystem:
             return cached
 
         vector: list[float]
+        fallback_triggered = False
         if not normalized:
             vector = self._fallback_embedding(cache_key)
         elif SentenceTransformer is None:
@@ -122,6 +125,7 @@ class EmbeddingSystem:
                 cache_key,
             )
             vector = self._fallback_embedding(cache_key)
+            fallback_triggered = True
         else:
             try:
                 model = await self._ensure_model()
@@ -130,6 +134,7 @@ class EmbeddingSystem:
                     "Failed to load embedding model '%s': %s", self._model_name, exc
                 )
                 vector = self._fallback_embedding(cache_key)
+                fallback_triggered = True
             else:
                 try:
                     encoded = await asyncio.to_thread(
@@ -150,9 +155,27 @@ class EmbeddingSystem:
                 except Exception as exc:  # pragma: no cover - model failures are rare
                     logger.warning("Embedding failed for '%s': %s", normalized, exc)
                     vector = self._fallback_embedding(cache_key)
+                    fallback_triggered = True
+
+        if fallback_triggered:
+            self._using_fallback_embeddings = True
+        elif normalized:
+            self._using_fallback_embeddings = False
 
         await self._store_cache(cache_key, vector)
         return vector
+
+    @property
+    def is_model_available(self) -> bool:
+        """Return ``True`` when the real embedding model dependency is available."""
+
+        return self._model_dependency_available
+
+    @property
+    def using_fallback_embeddings(self) -> bool:
+        """Return ``True`` when recent encodes relied on deterministic fallbacks."""
+
+        return self._using_fallback_embeddings
 
     async def _ensure_model(self) -> SentenceTransformer:
         if self._model is not None:

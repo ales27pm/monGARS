@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import types
 from collections.abc import Iterable, Sequence
-from itertools import zip_longest
 
 import httpx
 import spacy
@@ -37,6 +37,9 @@ def _tokenize(text: str) -> set[str]:
 
 class CuriosityEngine:
     """Detect knowledge gaps and trigger research fetches when required."""
+
+    _MAX_HISTORY_CANDIDATES = 50
+    _HISTORY_KEY_PRIORITY: tuple[str, ...] = ("query", "message", "prompt", "text")
 
     def __init__(self, iris: Iris | None = None) -> None:
         """Initialise the curiosity engine with NLP and embedding utilities."""
@@ -116,17 +119,19 @@ class CuriosityEngine:
             return 0
 
         db_history = await self._load_recent_queries_from_db(limit=25)
-        combined_history = list(db_history)
+        combined_history: list[object] = list(db_history)
         if fallback_history:
             combined_history.extend(fallback_history)
 
-        history_candidates = self._deduplicate_history_queries(
-            combined_history, exclude=query_text
+        history_candidates = self._prepare_history_candidates(
+            combined_history,
+            exclude=query_text,
+            limit=self._MAX_HISTORY_CANDIDATES,
         )
         if not history_candidates:
             return 0
 
-        return await self._count_similarities_by_embeddings(
+        return await self._count_similarities(
             query_text, history_candidates, query_terms
         )
 
@@ -158,25 +163,56 @@ class CuriosityEngine:
 
         history: list[str] = []
         try:
-            rows: Iterable[str] = result.scalars().all()  # type: ignore[assignment]
+            scalars = result.scalars()
+            candidate_rows = scalars.all()
+            rows: Iterable[str]
+            if inspect.isawaitable(candidate_rows):
+                rows = await candidate_rows  # type: ignore[assignment]
+            else:
+                rows = candidate_rows  # type: ignore[assignment]
         except Exception:  # pragma: no cover - defensive
             rows = [row[0] for row in result if row and isinstance(row[0], str)]
         for previous in rows:
             if not isinstance(previous, str):
                 continue
-            cleaned = previous.strip()
-            if cleaned:
+            if cleaned := previous.strip():
                 history.append(cleaned)
         return history
 
-    async def _count_similarities_by_embeddings(
+    async def _count_similarities(
         self,
         query_text: str,
         history_candidates: Sequence[str],
         query_terms: set[str],
     ) -> int:
+        if not history_candidates:
+            return 0
+
+        if not self.embedding_system.is_model_available:
+            logger.debug("Vector similarity skipped; embedding model unavailable")
+            return self._count_token_similarity(query_terms, history_candidates)
+
         try:
             query_vector = await self.embedding_system.encode(query_text)
+        except Exception as exc:  # pragma: no cover - embedding optional
+            logger.debug(
+                "Vector similarity fallback due to embedding error: %s",
+                exc,
+            )
+            return self._count_token_similarity(query_terms, history_candidates)
+
+        if self.embedding_system.using_fallback_embeddings:
+            logger.debug("Vector similarity fallback due to embedding fallback mode")
+            return self._count_token_similarity(query_terms, history_candidates)
+
+        query_norm = math.sqrt(sum(value * value for value in query_vector))
+        if query_norm == 0:
+            logger.debug(
+                "Vector similarity fallback due to zero-length query embedding"
+            )
+            return self._count_token_similarity(query_terms, history_candidates)
+
+        try:
             history_vectors = await asyncio.gather(
                 *(self.embedding_system.encode(item) for item in history_candidates)
             )
@@ -187,18 +223,31 @@ class CuriosityEngine:
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
-        query_norm = math.sqrt(sum(value * value for value in query_vector))
-        if query_norm == 0:
+        if self.embedding_system.using_fallback_embeddings:
+            logger.debug("Vector similarity fallback due to embedding fallback mode")
+            return self._count_token_similarity(query_terms, history_candidates)
+
+        if len(history_vectors) != len(history_candidates):
             logger.debug(
-                "Vector similarity fallback due to zero-length query embedding"
+                "Vector similarity fallback due to embedding count mismatch",
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
         similar = 0
-        for candidate_text, history_vector in zip(history_candidates, history_vectors):
-            similarity = self._cosine_similarity(
-                query_vector, history_vector, query_norm=query_norm
+        for _candidate_text, history_vector in zip(history_candidates, history_vectors):
+            if len(history_vector) != len(query_vector):
+                logger.debug(
+                    "Vector similarity fallback due to embedding length mismatch",
+                )
+                return self._count_token_similarity(query_terms, history_candidates)
+            other_norm = math.sqrt(sum(value * value for value in history_vector))
+            if other_norm == 0:
+                continue
+            dot = sum(
+                q_value * h_value
+                for q_value, h_value in zip(query_vector, history_vector)
             )
+            similarity = dot / (query_norm * other_norm)
             if similarity >= self.knowledge_gap_threshold:
                 similar += 1
         return similar
@@ -217,65 +266,65 @@ class CuriosityEngine:
                 similar += 1
         return similar
 
-    @staticmethod
-    def _cosine_similarity(
-        query_vector: Sequence[float],
-        other_vector: Sequence[float],
-        *,
-        query_norm: float,
-    ) -> float:
-        other_norm_sq = 0.0
-        dot = 0.0
-        for query_value, other_value in zip_longest(
-            query_vector, other_vector, fillvalue=0.0
-        ):
-            dot += query_value * other_value
-            other_norm_sq += other_value * other_value
-        other_norm = math.sqrt(other_norm_sq)
-        if other_norm == 0 or query_norm == 0:
-            return 0.0
-        return dot / (query_norm * other_norm)
-
     def _extract_history_queries(self, history: Iterable[object] | None) -> list[str]:
         if not history:
             return []
-        queries: list[str] = []
-        for entry in history:
-            candidate: str | None = None
-            if isinstance(entry, str):
-                candidate = entry
-            elif isinstance(entry, dict):
-                for key in ("query", "message", "prompt", "text"):
-                    value = entry.get(key)
-                    if isinstance(value, str):
-                        candidate = value
-                        break
-            elif isinstance(entry, (list, tuple)) and entry:
-                first = entry[0]
-                if isinstance(first, str):
-                    candidate = first
-            if candidate:
-                cleaned = candidate.strip()
-                if cleaned:
-                    queries.append(cleaned)
-        return queries
+        return [
+            entry
+            for raw_entry in history
+            if (entry := self._normalise_history_entry(raw_entry)) is not None
+        ]
 
-    def _deduplicate_history_queries(
-        self, history_candidates: Iterable[str], *, exclude: str
+    def _prepare_history_candidates(
+        self,
+        history: Iterable[object],
+        *,
+        exclude: str,
+        limit: int,
     ) -> list[str]:
+        """Normalise, deduplicate, and bound the history list for similarity checks."""
+
         deduplicated: list[str] = []
         seen: set[str] = set()
         exclude_key = exclude.strip().lower()
-        for candidate in history_candidates:
-            cleaned = candidate.strip()
-            if not cleaned:
+        for raw_entry in history:
+            candidate = self._normalise_history_entry(raw_entry)
+            if candidate is None:
                 continue
-            key = cleaned.lower()
+            key = candidate.lower()
             if key == exclude_key or key in seen:
                 continue
             seen.add(key)
-            deduplicated.append(cleaned)
+            deduplicated.append(candidate)
+            if len(deduplicated) >= limit:
+                break
         return deduplicated
+
+    def _normalise_history_entry(self, entry: object) -> str | None:
+        """Extract a string query from history entries.
+
+        The extraction order for mapping-based entries prioritises the
+        ``query`` field, followed by ``message``, ``prompt``, and ``text`` to
+        reflect how conversation records are persisted today. The precedence is
+        documented to avoid ambiguity when multiple keys are present.
+        """
+
+        candidate: str | None = None
+        if isinstance(entry, str):
+            candidate = entry
+        elif isinstance(entry, dict):
+            for key in self._HISTORY_KEY_PRIORITY:
+                value = entry.get(key)
+                if isinstance(value, str):
+                    candidate = value
+                    break
+        elif isinstance(entry, (list, tuple)) and entry:
+            first = entry[0]
+            if isinstance(first, str):
+                candidate = first
+        if candidate and (cleaned := candidate.strip()):
+            return cleaned
+        return None
 
     async def _check_entity_in_kg(self, entity: str) -> bool:
         """Return True if the entity is already known in the knowledge graph."""
