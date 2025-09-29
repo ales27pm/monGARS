@@ -582,9 +582,29 @@ class CuriosityEngine:
         method = getattr(result, method_name, None)
         if not callable(method):
             return None
-        value = method()
+        try:
+            value = method()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "curiosity.result_method.error %s",
+                exc,
+                extra={"method": method_name, "error": str(exc)},
+            )
+            return None
         if inspect.isawaitable(value):
-            value = await value
+            try:
+                value = await value
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "curiosity.result_method.await_error %s",
+                    exc,
+                    extra={"method": method_name, "error": str(exc)},
+                )
+                return None
         return value
 
     async def _coerce_row(self, row: Any) -> dict[str, Any]:
@@ -592,17 +612,54 @@ class CuriosityEngine:
 
         data_getter = getattr(row, "data", None)
         if callable(data_getter):
-            value = data_getter()
-            if inspect.isawaitable(value):
-                value = await value
-            if isinstance(value, dict):
-                return dict(value)
-            return dict(value)
+            try:
+                value = data_getter()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "curiosity.result_row.data_error %s",
+                    exc,
+                    extra={"error": str(exc)},
+                )
+            else:
+                if inspect.isawaitable(value):
+                    try:
+                        value = await value
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # pragma: no cover - defensive logging
+                        logger.debug(
+                            "curiosity.result_row.await_error %s",
+                            exc,
+                            extra={"error": str(exc)},
+                        )
+                        value = None
+                if isinstance(value, dict):
+                    return dict(value)
+                if value is not None:
+                    try:
+                        return dict(value)
+                    except (TypeError, ValueError) as exc:
+                        logger.debug(
+                            "curiosity.result_row.coercion_error %s",
+                            exc,
+                            extra={"error": str(exc)},
+                        )
+                return {}
         if isinstance(row, dict):
             return dict(row)
         if hasattr(row, "_asdict"):
             return row._asdict()
-        return dict(row)
+        try:
+            return dict(row)
+        except (TypeError, ValueError) as exc:
+            logger.debug(
+                "curiosity.result_row.fallback_error %s",
+                exc,
+                extra={"error": str(exc)},
+            )
+            return {}
 
     def _formulate_research_query(
         self, missing_entities: list[str], original_query: str

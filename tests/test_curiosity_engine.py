@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import Sequence
 from types import SimpleNamespace
@@ -164,6 +165,36 @@ def test_curiosity_engine_initialises_from_settings(monkeypatch):
     assert engine.similarity_threshold == 0.42
     assert engine.similar_history_threshold == 7
     assert engine.graph_gap_cutoff == 3
+
+
+@pytest.mark.asyncio
+async def test_call_result_method_logs_and_recovers_from_errors(caplog):
+    engine = CuriosityEngine()
+
+    class FaultyResult:
+        def data(self) -> None:
+            raise RuntimeError("boom")
+
+    with caplog.at_level(logging.DEBUG):
+        value = await engine._call_result_method(FaultyResult(), "data")
+
+    assert value is None
+    assert "boom" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_coerce_row_handles_unexpected_iterable_shapes(caplog):
+    engine = CuriosityEngine()
+
+    class OddRow:
+        def data(self):  # noqa: ANN001 - interface mimics driver row
+            return [1, 2, 3]
+
+    with caplog.at_level(logging.DEBUG):
+        coerced = await engine._coerce_row(OddRow())
+
+    assert coerced == {}
+    assert "coercion_error" in caplog.text
 
 
 @pytest.mark.asyncio
