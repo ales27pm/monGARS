@@ -337,6 +337,27 @@ class LLMIntegration:
                     extra={"task_type": task_type, "cache_key": cache_key},
                 )
                 return await self._fail(cache_key, "Ray Serve unavailable.")
+            else:
+                if isinstance(response, dict):
+                    ray_error = response.get("error")
+                else:
+                    ray_error = None
+                if ray_error:
+                    detail = response.get("detail") if isinstance(response, dict) else None
+                    message = (
+                        detail
+                        if isinstance(detail, str) and detail
+                        else f"Ray Serve reported error: {ray_error}"
+                    )
+                    logger.warning(
+                        "llm.ray.error_response",
+                        extra={
+                            "task_type": task_type,
+                            "cache_key": cache_key,
+                            "error": ray_error,
+                        },
+                    )
+                    return await self._fail(cache_key, message)
         else:
             model_name = (
                 self.general_model
