@@ -130,7 +130,56 @@ class LLMIntegration:
         self.use_ray = (
             use_ray_env.lower() in ("true", "1") if use_ray_env is not None else True
         )
-        self.ray_url = os.getenv("RAY_SERVE_URL", "http://localhost:8000/generate")
+        raw_ray_urls = os.getenv("RAY_SERVE_URL")
+        parsed_urls = self._parse_ray_urls(raw_ray_urls)
+        if not parsed_urls:
+            if self.use_ray and raw_ray_urls is not None and not raw_ray_urls.strip():
+                logger.warning(
+                    "llm.ray.disabled", extra={"reason": "empty_url_configuration"}
+                )
+                self.use_ray = False
+            parsed_urls = ["http://localhost:8000/generate"] if self.use_ray else []
+        self._ray_endpoints: list[str] = parsed_urls
+        self._ray_endpoint_lock = asyncio.Lock()
+        self._ray_endpoint_index = 0
+        self.ray_url = parsed_urls[0] if parsed_urls else ""
+        self._ray_client_timeout = httpx.Timeout(
+            float(os.getenv("RAY_CLIENT_TIMEOUT", "10.0")),
+            connect=float(os.getenv("RAY_CLIENT_CONNECT_TIMEOUT", "5.0")),
+        )
+        self._ray_client_limits = httpx.Limits(
+            max_connections=int(os.getenv("RAY_CLIENT_MAX_CONNECTIONS", "10")),
+            max_keepalive_connections=int(os.getenv("RAY_CLIENT_MAX_KEEPALIVE", "5")),
+        )
+        scaling_codes_env = os.getenv("RAY_SCALING_STATUS_CODES")
+        if scaling_codes_env:
+            self._ray_scaling_status_codes = {
+                int(code.strip())
+                for code in scaling_codes_env.split(",")
+                if code.strip()
+            }
+        else:
+            self._ray_scaling_status_codes = {503, 409}
+        backoff_env = os.getenv("RAY_SCALING_BACKOFF", "0.5,1,2,4")
+        parsed_backoff: list[float] = []
+        for raw in backoff_env.split(","):
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                value = float(stripped)
+            except ValueError:
+                logger.warning(
+                    "llm.ray.backoff.invalid_entry", extra={"value": stripped}
+                )
+                parsed_backoff = []
+                break
+            if value < 0:
+                logger.warning("llm.ray.backoff.negative_entry", extra={"value": value})
+                continue
+            parsed_backoff.append(value)
+        self._ray_scaling_backoff = parsed_backoff or [0.5, 1.0, 2.0, 4.0]
+        self._ray_max_scale_cycles = int(os.getenv("RAY_MAX_SCALE_CYCLES", "2"))
         registry_override = os.getenv("LLM_ADAPTER_REGISTRY_PATH")
         registry_source = (
             Path(registry_override)
@@ -150,6 +199,7 @@ class LLMIntegration:
                 "llm.ray.enabled",
                 extra={
                     "ray_url": self.ray_url,
+                    "ray_endpoints": self._ray_endpoints,
                     "use_ray": self.use_ray,
                     "adapter_registry": str(self.adapter_registry_path),
                 },
@@ -302,6 +352,29 @@ class LLMIntegration:
                     extra={"task_type": task_type, "cache_key": cache_key},
                 )
                 return await self._fail(cache_key, "Ray Serve unavailable.")
+            else:
+                if isinstance(response, dict):
+                    ray_error = response.get("error")
+                else:
+                    ray_error = None
+                if ray_error:
+                    detail = (
+                        response.get("detail") if isinstance(response, dict) else None
+                    )
+                    message = (
+                        detail
+                        if isinstance(detail, str) and detail
+                        else f"Ray Serve reported error: {ray_error}"
+                    )
+                    logger.warning(
+                        "llm.ray.error_response",
+                        extra={
+                            "task_type": task_type,
+                            "cache_key": cache_key,
+                            "error": ray_error,
+                        },
+                    )
+                    return await self._fail(cache_key, message)
         else:
             model_name = (
                 self.general_model
@@ -391,21 +464,107 @@ class LLMIntegration:
             payload: dict[str, Any] = {"prompt": prompt, "task_type": task_type}
             if adapter:
                 payload["adapter"] = adapter
+            endpoints = await self._prepare_ray_endpoints()
+            if not endpoints:
+                raise RuntimeError("No Ray Serve endpoints configured")
+            max_attempts = max(
+                len(endpoints) * self._ray_max_scale_cycles, len(endpoints)
+            )
+            last_exception: Exception | None = None
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, connect=5.0)
+                timeout=self._ray_client_timeout,
+                limits=self._ray_client_limits,
             ) as client:
-                resp = await client.post(
-                    self.ray_url,
-                    json=payload,
-                )
-                resp.raise_for_status()
-                try:
-                    return resp.json()
-                except ValueError as exc:  # pragma: no cover - defensive
-                    logger.exception(
-                        "llm.ray.invalid_json",
-                        extra={"status_code": resp.status_code},
-                    )
-                    raise RuntimeError("Ray Serve returned invalid JSON") from exc
+                for attempt in range(max_attempts):
+                    endpoint = endpoints[attempt % len(endpoints)]
+                    try:
+                        resp = await client.post(endpoint, json=payload)
+                        resp.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        status_code = exc.response.status_code
+                        if status_code in self._ray_scaling_status_codes:
+                            delay = self._scale_delay(attempt, exc.response)
+                            logger.info(
+                                "llm.ray.scaling",
+                                extra={
+                                    "endpoint": endpoint,
+                                    "status_code": status_code,
+                                    "delay_seconds": delay,
+                                },
+                            )
+                            await asyncio.sleep(delay)
+                            last_exception = exc
+                            continue
+                        if 500 <= status_code < 600:
+                            logger.warning(
+                                "llm.ray.server_error",
+                                extra={
+                                    "endpoint": endpoint,
+                                    "status_code": status_code,
+                                },
+                            )
+                            await asyncio.sleep(min(2**attempt, 5))
+                            last_exception = exc
+                            continue
+                        raise
+                    except httpx.RequestError as exc:
+                        logger.warning(
+                            "llm.ray.transport_error",
+                            extra={"endpoint": endpoint, "error": str(exc)},
+                        )
+                        await asyncio.sleep(min(2**attempt, 5))
+                        last_exception = exc
+                        continue
+
+                    try:
+                        data = resp.json()
+                    except ValueError as exc:  # pragma: no cover - defensive
+                        logger.exception(
+                            "llm.ray.invalid_json",
+                            extra={"status_code": resp.status_code},
+                        )
+                        raise RuntimeError("Ray Serve returned invalid JSON") from exc
+
+                    await self._record_ray_success(endpoint)
+                    return data
+            raise RuntimeError("Ray Serve request failed") from last_exception
 
         return await self._ray_cb.call(call_api)
+
+    async def _prepare_ray_endpoints(self) -> list[str]:
+        async with self._ray_endpoint_lock:
+            if not self._ray_endpoints:
+                return []
+            start = self._ray_endpoint_index
+            endpoints = list(self._ray_endpoints)
+            self._ray_endpoint_index = (self._ray_endpoint_index + 1) % len(endpoints)
+        return endpoints[start:] + endpoints[:start]
+
+    async def _record_ray_success(self, endpoint: str) -> None:
+        self.ray_url = endpoint
+        async with self._ray_endpoint_lock:
+            try:
+                index = self._ray_endpoints.index(endpoint)
+            except ValueError:
+                return
+            self._ray_endpoint_index = (index + 1) % len(self._ray_endpoints)
+
+    def _scale_delay(self, attempt: int, response: httpx.Response | None) -> float:
+        if response is not None:
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    value = float(retry_after)
+                except ValueError:
+                    value = None
+                else:
+                    if value >= 0:
+                        return value
+        idx = min(attempt, len(self._ray_scaling_backoff) - 1)
+        return self._ray_scaling_backoff[idx]
+
+    def _parse_ray_urls(self, value: str | None) -> list[str]:
+        if not value:
+            return []
+        urls = [entry.strip() for entry in value.split(",") if entry.strip()]
+        return urls
