@@ -1,0 +1,25 @@
+name: Generate iOS CSR
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-csr:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Generate CSR and Private Key
+        run: |
+          mkdir certs
+          openssl req -new -newkey rsa:2048 -nodes \
+            -keyout certs/ios_dev.key \
+            -out certs/ios_dev.csr \
+            -subj "/emailAddress=ales27pm@hotmail.com, CN=Alexis Boulet, C=CA"
+
+      - name: Upload CSR and Private Key as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-csr-artifacts
+          path: certs/
