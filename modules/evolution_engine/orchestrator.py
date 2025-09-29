@@ -88,13 +88,18 @@ class EvolutionOrchestrator:
                 "Trainer produced adapter artifact outside orchestrator output directory"
             ) from exc
 
-        weights_path_raw = artifacts.get("weights")
-        if weights_path_raw:
+        if weights_path_raw := artifacts.get("weights"):
             weights_path = Path(weights_path_raw)
             if not weights_path.exists():
                 raise RuntimeError(
                     f"Adapter weights path '{weights_path}' does not exist"
                 )
+            try:
+                weights_path.resolve().relative_to(unique_dir.resolve())
+            except Exception as exc:
+                raise RuntimeError(
+                    "Trainer produced adapter weights outside orchestrator output directory"
+                ) from exc
 
         try:
             manifest = update_manifest(self.model_registry_path, summary)

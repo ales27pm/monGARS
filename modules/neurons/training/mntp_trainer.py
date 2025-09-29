@@ -542,8 +542,7 @@ class MNTPTrainer:
         }
 
     def _run_peft_training(self) -> dict[str, Any]:
-        missing = self._missing_training_dependencies()
-        if missing:
+        if missing := self._missing_training_dependencies():
             joined = ", ".join(sorted(missing))
             raise RuntimeError(f"Optional training dependencies unavailable: {joined}")
 
@@ -564,6 +563,8 @@ class MNTPTrainer:
             average_loss
         ):
             raise RuntimeError("Training produced an invalid average loss metric")
+        if average_loss < 0:
+            raise RuntimeError("Training produced a negative average loss metric")
         try:
             source_records = len(dataset)
         except Exception:  # pragma: no cover - streaming datasets
@@ -934,6 +935,10 @@ class MNTPTrainer:
         ]
         weights_path = next((path for path in weight_candidates if path.exists()), None)
         if weights_path is None:
+            logging.error(
+                "Adapter weights missing after save_pretrained. Checked candidate paths",
+                extra={"candidates": [str(path) for path in weight_candidates]},
+            )
             raise RuntimeError("Adapter weights missing after save_pretrained")
 
         return adapter_dir, weights_path

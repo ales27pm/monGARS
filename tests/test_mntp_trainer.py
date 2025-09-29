@@ -92,6 +92,41 @@ def test_orchestrator_surfaces_training_failure(temp_dir: Path) -> None:
     _assert_fallback_artifacts(out)
 
 
+def test_orchestrator_rejects_weights_outside_run(
+    temp_dir: Path, tmp_path: Path
+) -> None:
+    rogue_weights = tmp_path / "rogue.bin"
+    rogue_weights.write_bytes(b"1")
+
+    class StubTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            adapter_dir = self.output_dir / "adapter"
+            adapter_dir.mkdir(parents=True, exist_ok=True)
+            (adapter_dir / "adapter_config.json").write_text("{}")
+            (adapter_dir / "adapter_model.bin").write_bytes(b"0")
+            self.summary = {
+                "status": TrainingStatus.SUCCESS.value,
+                "artifacts": {
+                    "adapter": str(adapter_dir),
+                    "weights": str(rogue_weights),
+                },
+                "metrics": {"training_examples": 1},
+            }
+
+        def train(self) -> dict[str, object]:
+            return self.summary
+
+    orchestrator = EvolutionOrchestrator(
+        model_registry_path=str(temp_dir), trainer_cls=StubTrainer
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        orchestrator.trigger_encoder_training_pipeline()
+    assert "weights outside orchestrator output directory" in str(excinfo.value)
+
+
 def test_mntp_trainer_generates_deterministic_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -105,6 +140,10 @@ def test_mntp_trainer_generates_deterministic_fallback(
     )
     summary = trainer.train()
     assert summary["status"] == TrainingStatus.FALLBACK.value
+    assert summary["reason"] == "missing_dependencies"
+    artifacts = summary["artifacts"]
+    assert set(artifacts) == {"adapter", "weights"}
+    assert artifacts["adapter"].startswith(str(output_dir))
 
     weights = _assert_fallback_artifacts(output_dir)
 
@@ -115,6 +154,10 @@ def test_mntp_trainer_generates_deterministic_fallback(
     )
     repeat_summary = trainer_repeat.train()
     assert repeat_summary["status"] == TrainingStatus.FALLBACK.value
+    assert repeat_summary["reason"] == "missing_dependencies"
+    repeat_artifacts = repeat_summary["artifacts"]
+    assert set(repeat_artifacts) == {"adapter", "weights"}
+    assert repeat_artifacts["adapter"].startswith(str(second_dir))
 
     repeat_weights = _assert_fallback_artifacts(second_dir)
     assert repeat_weights == weights
