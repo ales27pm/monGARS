@@ -343,7 +343,9 @@ class LLMIntegration:
                 else:
                     ray_error = None
                 if ray_error:
-                    detail = response.get("detail") if isinstance(response, dict) else None
+                    detail = (
+                        response.get("detail") if isinstance(response, dict) else None
+                    )
                     message = (
                         detail
                         if isinstance(detail, str) and detail
