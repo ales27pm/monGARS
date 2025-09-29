@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from modules.neurons.registry import update_manifest
-from modules.neurons.training.mntp_trainer import MNTPTrainer
+from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,47 @@ class EvolutionOrchestrator:
         except Exception as exc:  # pragma: no cover - unexpected training error
             logger.error("Training failed: %s", exc, exc_info=True)
             raise
+
+        status_value = summary.get("status")
+        status = str(status_value).lower() if status_value is not None else ""
+        if status != TrainingStatus.SUCCESS.value:
+            logger.error(
+                "Trainer returned non-success status",
+                extra={
+                    "status": status_value,
+                    "artifacts": summary.get("artifacts", {}),
+                    "metrics": summary.get("metrics", {}),
+                    "encoder_path": str(unique_dir),
+                },
+            )
+            raise RuntimeError(
+                f"MNTP trainer reported unsuccessful status: {status_value!r}"
+            )
+
+        artifacts = summary.get("artifacts") or {}
+        adapter_path_raw = artifacts.get("adapter")
+        if not adapter_path_raw:
+            raise RuntimeError("Trainer did not return an adapter artifact path")
+
+        adapter_path = Path(adapter_path_raw)
+        if not adapter_path.exists():
+            raise RuntimeError(f"Adapter artifact path '{adapter_path}' does not exist")
+
+        try:
+            adapter_path.resolve().relative_to(unique_dir.resolve())
+        except Exception as exc:
+            raise RuntimeError(
+                "Trainer produced adapter artifact outside orchestrator output directory"
+            ) from exc
+
+        weights_path_raw = artifacts.get("weights")
+        if weights_path_raw:
+            weights_path = Path(weights_path_raw)
+            if not weights_path.exists():
+                raise RuntimeError(
+                    f"Adapter weights path '{weights_path}' does not exist"
+                )
+
         try:
             manifest = update_manifest(self.model_registry_path, summary)
         except Exception:

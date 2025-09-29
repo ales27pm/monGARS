@@ -459,14 +459,7 @@ class MNTPTrainer:
             raise
 
     def _deps_available(self) -> bool:
-        return bool(
-            torch
-            and load_dataset
-            and AutoTokenizer
-            and AutoModelForCausalLM
-            and get_peft_model
-            and DataLoader
-        )
+        return not self._missing_training_dependencies()
 
     def _materialise_fallback_adapter(
         self, *, reason: str, details: str | None = None
@@ -549,16 +542,28 @@ class MNTPTrainer:
         }
 
     def _run_peft_training(self) -> dict[str, Any]:
+        missing = self._missing_training_dependencies()
+        if missing:
+            joined = ", ".join(sorted(missing))
+            raise RuntimeError(f"Optional training dependencies unavailable: {joined}")
+
         dataset = self._load_dataset()
         model_name = self._resolve_model_name()
         tokenizer = self._prepare_tokenizer(model_name)
         training_dataset = self._prepare_mntp_dataset(dataset, tokenizer)
+        if len(training_dataset) == 0:
+            raise RuntimeError("MNTP dataset preprocessing yielded no examples")
         device = self._resolve_device()
         model = self._initialise_model(model_name, tokenizer, device=device)
         pad_token_id = self._resolve_pad_token_id(tokenizer)
         metrics = self._execute_training(
             model, training_dataset, pad_token_id, device=device
         )
+        average_loss = metrics.get("average_loss")
+        if not isinstance(average_loss, (int, float)) or not math.isfinite(
+            average_loss
+        ):
+            raise RuntimeError("Training produced an invalid average loss metric")
         try:
             source_records = len(dataset)
         except Exception:  # pragma: no cover - streaming datasets
@@ -777,6 +782,9 @@ class MNTPTrainer:
         if torch is None or DataLoader is None or clip_grad_norm_ is None:
             raise RuntimeError("torch dependencies unavailable for training")
 
+        if len(dataset) == 0:
+            raise RuntimeError("MNTP training dataset is empty")
+
         batch_size = int(self.config.get("per_device_train_batch_size", 8))
         grad_accum = max(1, int(self.config.get("gradient_accumulation_steps", 1)))
         max_steps = max(1, int(self.config.get("max_steps", 32)))
@@ -860,7 +868,15 @@ class MNTPTrainer:
                 completed_steps += 1
 
         average_loss = total_loss / max(1, completed_steps)
-        accuracy = correct_predictions / max(1, examples_processed)
+        if completed_steps < total_updates:
+            raise RuntimeError(
+                "Training stopped before reaching the configured number of steps"
+            )
+
+        if examples_processed == 0:
+            raise RuntimeError("No MNTP examples were processed during training")
+
+        accuracy = correct_predictions / examples_processed
 
         metrics = {
             "training_examples": len(dataset),
@@ -908,8 +924,28 @@ class MNTPTrainer:
         else:  # pragma: no cover - incompatible model
             raise RuntimeError("Model does not support save_pretrained")
 
-        weights_path = adapter_dir / "adapter_model.bin"
-        if not weights_path.exists():
-            weights_path = None
+        config_path = adapter_dir / "adapter_config.json"
+        if not config_path.exists():
+            raise RuntimeError("Adapter configuration missing after save_pretrained")
+
+        weight_candidates = [
+            adapter_dir / "adapter_model.safetensors",
+            adapter_dir / "adapter_model.bin",
+        ]
+        weights_path = next((path for path in weight_candidates if path.exists()), None)
+        if weights_path is None:
+            raise RuntimeError("Adapter weights missing after save_pretrained")
 
         return adapter_dir, weights_path
+
+    def _missing_training_dependencies(self) -> list[str]:
+        dependencies: dict[str, Any] = {
+            "torch": torch,
+            "datasets.load_dataset": load_dataset,
+            "transformers.AutoTokenizer": AutoTokenizer,
+            "transformers.AutoModelForCausalLM": AutoModelForCausalLM,
+            "peft.get_peft_model": get_peft_model,
+            "torch.utils.data.DataLoader": DataLoader,
+            "torch.nn.utils.clip_grad_norm_": clip_grad_norm_,
+        }
+        return [name for name, value in dependencies.items() if value is None]
