@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import random
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -12,11 +14,22 @@ from typing import Any, Iterable, Sequence
 try:  # pragma: no cover - heavy deps not always installed
     import torch
     from datasets import load_dataset
-    from llm2vec import LLM2Vec
+    from peft import LoraConfig, TaskType, get_peft_model
+    from torch.nn.utils import clip_grad_norm_
+    from torch.utils.data import DataLoader
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers.optimization import get_linear_schedule_with_warmup
 except Exception:  # pragma: no cover - fallback if unavailable
     torch = None
     load_dataset = None
-    LLM2Vec = None
+    LoraConfig = None
+    TaskType = None
+    get_peft_model = None
+    clip_grad_norm_ = None
+    DataLoader = None
+    AutoModelForCausalLM = None
+    AutoTokenizer = None
+    get_linear_schedule_with_warmup = None
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +150,148 @@ class LinearAdapterTrainer:
             "learning_rate": self.learning_rate,
         }
         return weights, bias, metrics
+
+
+class MaskedNextTokenDataset:
+    """Generate masked-next-token training examples from raw text records."""
+
+    def __init__(
+        self,
+        dataset: Sequence[dict[str, Any]],
+        tokenizer: Any,
+        *,
+        max_seq_length: int,
+        mask_token_id: int,
+        mlm_probability: float,
+        max_masks_per_sample: int,
+        seed: int,
+        text_field: str | None = None,
+    ) -> None:
+        self._examples: list[dict[str, Any]] = []
+        self._max_seq_length = max_seq_length
+        self._mask_token_id = mask_token_id
+
+        rng = random.Random(seed)
+        for index, record in enumerate(dataset):
+            text = self._extract_text(record, text_field)
+            if not text:
+                continue
+
+            tokenized = tokenizer(
+                text,
+                truncation=True,
+                max_length=max_seq_length,
+                padding=False,
+                add_special_tokens=True,
+            )
+            input_ids: list[int] = list(tokenized.get("input_ids", []))
+            if len(input_ids) < 2:
+                continue
+
+            positions = self._select_positions(
+                input_ids, rng, mlm_probability, max_masks_per_sample
+            )
+            for position in positions:
+                context = input_ids[:position]
+                if not context:
+                    continue
+                label = input_ids[position]
+                trimmed_context = self._trim_context(context)
+                input_ids_with_mask = trimmed_context + [mask_token_id]
+                attention_mask = [1] * len(input_ids_with_mask)
+                self._examples.append(
+                    {
+                        "input_ids": input_ids_with_mask,
+                        "attention_mask": attention_mask,
+                        "label": label,
+                        "source_index": index,
+                    }
+                )
+
+        if not self._examples:
+            raise ValueError(
+                "Unable to construct masked-next-token dataset from provided records"
+            )
+
+    @staticmethod
+    def _extract_text(record: dict[str, Any], field: str | None) -> str | None:
+        if field:
+            value = record.get(field)
+            if isinstance(value, str):
+                return value
+        # Fall back to first string value
+        for value in record.values():
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
+    @staticmethod
+    def _select_positions(
+        input_ids: Sequence[int],
+        rng: random.Random,
+        probability: float,
+        max_masks_per_sample: int,
+    ) -> list[int]:
+        limit = max(1, max_masks_per_sample)
+        positions: list[int] = []
+        for idx in range(1, len(input_ids)):
+            if rng.random() <= probability:
+                positions.append(idx)
+                if len(positions) >= limit:
+                    break
+        if not positions:
+            # Always include at least one deterministic position for stability
+            fallback_position = min(len(input_ids) - 1, max(1, len(input_ids) // 2))
+            positions.append(fallback_position)
+        return positions
+
+    def _trim_context(self, context: Sequence[int]) -> list[int]:
+        max_context = max(1, self._max_seq_length - 1)
+        if len(context) <= max_context:
+            return list(context)
+        return list(context[-max_context:])
+
+    def __len__(self) -> int:
+        return len(self._examples)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        return self._examples[index]
+
+
+class MaskedNextTokenCollator:
+    """Pad variable-length MNTP samples into uniform mini-batches."""
+
+    def __init__(self, pad_token_id: int) -> None:
+        self._pad_token_id = pad_token_id
+
+    def __call__(self, batch: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        if torch is None:
+            raise RuntimeError("torch is required for MNTP collation")
+
+        batch_size = len(batch)
+        max_length = max(len(item["input_ids"]) for item in batch)
+
+        input_ids = torch.full(
+            (batch_size, max_length),
+            fill_value=self._pad_token_id,
+            dtype=torch.long,
+        )
+        attention_mask = torch.zeros((batch_size, max_length), dtype=torch.long)
+        labels = torch.zeros(batch_size, dtype=torch.long)
+
+        for row, item in enumerate(batch):
+            sequence = torch.tensor(item["input_ids"], dtype=torch.long)
+            mask = torch.tensor(item["attention_mask"], dtype=torch.long)
+            length = sequence.size(0)
+            input_ids[row, :length] = sequence
+            attention_mask[row, :length] = mask
+            labels[row] = int(item["label"])
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+        }
 
 
 class TrainingStatus(str, Enum):
@@ -305,7 +460,12 @@ class MNTPTrainer:
 
     def _deps_available(self) -> bool:
         return bool(
-            torch and load_dataset and LLM2Vec and hasattr(LLM2Vec, "from_pretrained")
+            torch
+            and load_dataset
+            and AutoTokenizer
+            and AutoModelForCausalLM
+            and get_peft_model
+            and DataLoader
         )
 
     def _materialise_fallback_adapter(
@@ -391,23 +551,42 @@ class MNTPTrainer:
     def _run_peft_training(self) -> dict[str, Any]:
         dataset = self._load_dataset()
         model_name = self._resolve_model_name()
-        model = self._initialise_model(model_name)
-        metrics = self._execute_training(model, dataset)
-        artifact_dir = self._persist_model(model)
+        tokenizer = self._prepare_tokenizer(model_name)
+        training_dataset = self._prepare_mntp_dataset(dataset, tokenizer)
+        device = self._resolve_device()
+        model = self._initialise_model(model_name, tokenizer, device=device)
+        pad_token_id = self._resolve_pad_token_id(tokenizer)
+        metrics = self._execute_training(
+            model, training_dataset, pad_token_id, device=device
+        )
+        try:
+            source_records = len(dataset)
+        except Exception:  # pragma: no cover - streaming datasets
+            source_records = None
+        if source_records is not None:
+            metrics.setdefault("source_records", source_records)
+        artifact_dir, weights_path = self._persist_model(model)
 
         logger.info(
             "Model training finished",
-            extra={"artifact_dir": str(artifact_dir), "model_name": model_name},
+            extra={
+                "artifact_dir": str(artifact_dir),
+                "model_name": model_name,
+                "examples": metrics.get("training_examples"),
+            },
         )
+        artifacts: dict[str, str] = {"adapter": str(artifact_dir)}
+        if weights_path is not None:
+            artifacts["weights"] = str(weights_path)
         return {
             "status": TrainingStatus.SUCCESS.value,
             "model_name": model_name,
             "dataset_name": self.config["dataset_name"],
-            "artifacts": {"adapter": str(artifact_dir)},
+            "artifacts": artifacts,
             "metrics": metrics,
         }
 
-    def _load_dataset(self) -> Any:
+    def _load_dataset(self) -> Sequence[dict[str, Any]]:
         if load_dataset is None:
             raise RuntimeError("datasets library unavailable")
 
@@ -431,21 +610,81 @@ class MNTPTrainer:
             return "sshleifer/tiny-gpt2"
         return model_name or "sshleifer/tiny-gpt2"
 
-    def _initialise_model(self, model_name: str) -> Any:
-        if LLM2Vec is None:
-            raise RuntimeError("LLM2Vec is unavailable")
+    def _prepare_tokenizer(self, model_name: str) -> Any:
+        if AutoTokenizer is None:
+            raise RuntimeError("transformers AutoTokenizer unavailable")
 
-        from transformers import AutoTokenizer  # local import to avoid hard dependency
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            pad_token = tokenizer.eos_token or tokenizer.unk_token
+            if pad_token is None:
+                tokenizer.add_special_tokens({"pad_token": "<pad>"})
+            else:
+                tokenizer.pad_token = pad_token
+        tokenizer.padding_side = "left"
+        if hasattr(tokenizer, "clean_up_tokenization_spaces"):
+            tokenizer.clean_up_tokenization_spaces = True
+        return tokenizer
 
-        if not getattr(AutoTokenizer, "_mon_gars_cleanup_patch", False):
-            original_from_pretrained = AutoTokenizer.from_pretrained
+    def _prepare_mntp_dataset(
+        self, dataset: Sequence[dict[str, Any]], tokenizer: Any
+    ) -> MaskedNextTokenDataset:
+        probability = float(self.config.get("mlm_probability", 0.2))
+        max_seq_length = int(self.config.get("max_seq_length", 512))
+        max_masks = int(self.config.get("max_masks_per_sample", 4))
+        seed = int(self.config.get("seed", 17))
+        mask_token_id = self._resolve_mask_token_id(tokenizer)
+        text_field = self.config.get("dataset_text_field")
 
-            def _from_pretrained_with_cleanup(*args: Any, **kwargs: Any):
-                kwargs.setdefault("clean_up_tokenization_spaces", True)
-                return original_from_pretrained(*args, **kwargs)
+        mntp_dataset = MaskedNextTokenDataset(
+            dataset,
+            tokenizer,
+            max_seq_length=max_seq_length,
+            mask_token_id=mask_token_id,
+            mlm_probability=max(probability, 0.0),
+            max_masks_per_sample=max_masks,
+            seed=seed,
+            text_field=str(text_field) if isinstance(text_field, str) else None,
+        )
+        return mntp_dataset
 
-            AutoTokenizer.from_pretrained = _from_pretrained_with_cleanup  # type: ignore[assignment]
-            setattr(AutoTokenizer, "_mon_gars_cleanup_patch", True)
+    def _resolve_mask_token_id(self, tokenizer: Any) -> int:
+        mask_type = str(self.config.get("mask_token_type", "mask")).lower()
+        if mask_type in {"mask", "mask_token"} and tokenizer.mask_token_id is not None:
+            return int(tokenizer.mask_token_id)
+        if mask_type == "pad" and tokenizer.pad_token_id is not None:
+            return int(tokenizer.pad_token_id)
+        if mask_type == "eos" and tokenizer.eos_token_id is not None:
+            return int(tokenizer.eos_token_id)
+        if mask_type == "blank":
+            # blank means no explicit token; reuse pad/eos fallback
+            if tokenizer.pad_token_id is not None:
+                return int(tokenizer.pad_token_id)
+            if tokenizer.eos_token_id is not None:
+                return int(tokenizer.eos_token_id)
+        # Generic fallback to ensure training can proceed
+        if tokenizer.mask_token_id is not None:
+            return int(tokenizer.mask_token_id)
+        if tokenizer.pad_token_id is not None:
+            return int(tokenizer.pad_token_id)
+        if tokenizer.eos_token_id is not None:
+            return int(tokenizer.eos_token_id)
+        return 0
+
+    def _resolve_pad_token_id(self, tokenizer: Any) -> int:
+        if tokenizer.pad_token_id is not None:
+            return int(tokenizer.pad_token_id)
+        if tokenizer.eos_token_id is not None:
+            return int(tokenizer.eos_token_id)
+        if tokenizer.mask_token_id is not None:
+            return int(tokenizer.mask_token_id)
+        return 0
+
+    def _initialise_model(
+        self, model_name: str, tokenizer: Any, *, device: "torch.device"
+    ) -> Any:
+        if AutoModelForCausalLM is None or get_peft_model is None:
+            raise RuntimeError("transformers/peft unavailable for training")
 
         dtype_name = str(self.config.get("torch_dtype", "float32"))
         torch_dtype = getattr(torch, dtype_name, None) if torch else None
@@ -454,88 +693,223 @@ class MNTPTrainer:
                 "Unsupported torch dtype '%s'; defaulting to float32", dtype_name
             )
             torch_dtype = torch.float32
+        if (
+            torch is not None
+            and torch_dtype
+            in {getattr(torch, "bfloat16", None), getattr(torch, "float16", None)}
+            and device.type == "cpu"
+        ):
+            logger.info(
+                "Requested torch dtype %s is not supported on CPU; using float32",
+                dtype_name,
+            )
+            torch_dtype = torch.float32
+
+        load_kwargs: dict[str, Any] = {}
+        if torch_dtype is not None:
+            load_kwargs["torch_dtype"] = torch_dtype
+        attn_impl = self.config.get("attn_implementation")
+        if attn_impl:
+            load_kwargs["attn_implementation"] = attn_impl
 
         try:
-            model = LLM2Vec.from_pretrained(
-                base_model_name_or_path=model_name,
-                enable_bidirectional=True,
-                pooling_mode="mean",
-                torch_dtype=torch_dtype,
-                attn_implementation=self.config.get("attn_implementation"),
-            )
-        except Exception as exc:  # pragma: no cover - depends on external library
-            raise RuntimeError("Failed to initialise LLM2Vec") from exc
-        return model
+            base_model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+        except Exception as exc:  # pragma: no cover - external library errors
+            raise RuntimeError("Failed to load base language model") from exc
 
-    def _execute_training(self, model: Any, dataset: Any) -> dict[str, Any]:
-        if not hasattr(model, "train"):
-            raise RuntimeError("LLM2Vec model does not expose a train method")
+        if (
+            tokenizer.pad_token_id is not None
+            and base_model.config.pad_token_id is None
+        ):
+            base_model.config.pad_token_id = tokenizer.pad_token_id
 
-        lora_rank = int(self.config.get("lora_r", 16))
-        max_steps = int(self.config.get("max_steps", 32))
+        if hasattr(base_model, "resize_token_embeddings"):
+            base_model.resize_token_embeddings(len(tokenizer))
 
+        lora_config = self._build_lora_config()
         try:
-            result = model.train(
-                dataset=dataset,
-                lora_r=lora_rank,
-                max_steps=max_steps,
-                per_device_train_batch_size=self.config.get(
-                    "per_device_train_batch_size"
-                ),
-                gradient_accumulation_steps=self.config.get(
-                    "gradient_accumulation_steps"
-                ),
+            peft_model = get_peft_model(base_model, lora_config)
+        except Exception as exc:  # pragma: no cover - PEFT misconfiguration
+            raise RuntimeError("Failed to configure LoRA adapters") from exc
+
+        return peft_model.to(device)
+
+    def _build_lora_config(self) -> Any:
+        if LoraConfig is None or TaskType is None:
+            raise RuntimeError("peft library unavailable")
+
+        target_modules = self.config.get("lora_target_modules")
+        if isinstance(target_modules, str):
+            modules = [
+                item.strip() for item in target_modules.split(",") if item.strip()
+            ]
+        elif isinstance(target_modules, Sequence):
+            modules = [str(item) for item in target_modules if str(item).strip()]
+        else:
+            modules = []
+        if not modules:
+            modules = [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "c_attn",
+                "c_proj",
+            ]
+
+        return LoraConfig(
+            r=int(self.config.get("lora_r", 16)),
+            lora_alpha=int(self.config.get("lora_alpha", 32)),
+            lora_dropout=float(self.config.get("lora_dropout", 0.05)),
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=modules,
+        )
+
+    def _execute_training(
+        self,
+        model: Any,
+        dataset: MaskedNextTokenDataset,
+        pad_token_id: int,
+        *,
+        device: "torch.device",
+    ) -> dict[str, Any]:
+        if torch is None or DataLoader is None or clip_grad_norm_ is None:
+            raise RuntimeError("torch dependencies unavailable for training")
+
+        batch_size = int(self.config.get("per_device_train_batch_size", 8))
+        grad_accum = max(1, int(self.config.get("gradient_accumulation_steps", 1)))
+        max_steps = max(1, int(self.config.get("max_steps", 32)))
+        learning_rate = float(self.config.get("learning_rate", 5e-5))
+        weight_decay = float(self.config.get("weight_decay", 0.0))
+        max_grad_norm = float(self.config.get("max_grad_norm", 1.0))
+
+        collator = MaskedNextTokenCollator(pad_token_id)
+        data_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collator,
+            drop_last=False,
+        )
+
+        model.to(device)
+        model.train()
+
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
+        optimizer.zero_grad()
+
+        total_updates = max_steps
+        warmup_steps = int(self.config.get("warmup_steps", max(1, total_updates // 10)))
+        if get_linear_schedule_with_warmup is not None:
+            scheduler = get_linear_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=warmup_steps,
+                num_training_steps=total_updates,
             )
-        except TypeError:
-            result = model.train(dataset=dataset, lora_r=lora_rank)
+        else:  # pragma: no cover - fallback when scheduler unavailable
+            scheduler = None
 
-        metrics = self._extract_metrics(result, dataset)
-        metrics["max_steps"] = max_steps
-        metrics["lora_r"] = lora_rank
-        return metrics
+        total_loss = 0.0
+        last_loss = 0.0
+        completed_steps = 0
+        examples_processed = 0
+        correct_predictions = 0
 
-    def _extract_metrics(self, result: Any, dataset: Any) -> dict[str, Any]:
-        metrics: dict[str, Any] = {
-            "training_examples": self._estimate_dataset_size(dataset),
-            "per_device_train_batch_size": self.config.get(
-                "per_device_train_batch_size"
-            ),
-            "gradient_accumulation_steps": self.config.get(
-                "gradient_accumulation_steps"
-            ),
+        loss_fn = torch.nn.CrossEntropyLoss()
+        micro_step = 0
+
+        data_iterator = iter(data_loader)
+        while completed_steps < total_updates:
+            try:
+                batch = next(data_iterator)
+            except StopIteration:
+                data_iterator = iter(data_loader)
+                batch = next(data_iterator)
+
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            examples_processed += labels.size(0)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = outputs.logits
+            last_positions = attention_mask.sum(dim=1) - 1
+            selected_logits = logits[
+                torch.arange(logits.size(0), device=device), last_positions
+            ]
+            loss = loss_fn(selected_logits, labels)
+            loss = loss / grad_accum
+            loss.backward()
+
+            micro_step += 1
+            last_loss = loss.item() * grad_accum
+            total_loss += last_loss
+
+            batch_predictions = selected_logits.detach().argmax(dim=-1)
+            correct_predictions += (batch_predictions == labels).sum().item()
+
+            if micro_step % grad_accum == 0:
+                clip_grad_norm_(model.parameters(), max_grad_norm)
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
+                optimizer.zero_grad()
+                completed_steps += 1
+
+        average_loss = total_loss / max(1, completed_steps)
+        accuracy = correct_predictions / max(1, examples_processed)
+
+        metrics = {
+            "training_examples": len(dataset),
+            "processed_examples": examples_processed,
+            "per_device_train_batch_size": batch_size,
+            "gradient_accumulation_steps": grad_accum,
+            "max_steps": max_steps,
+            "learning_rate": learning_rate,
+            "weight_decay": weight_decay,
+            "loss": last_loss,
+            "average_loss": average_loss,
+            "accuracy": accuracy,
         }
-
-        if isinstance(result, dict):
-            metrics |= {
-                key: value
-                for key, value in result.items()
-                if isinstance(value, (int, float))
-            }
-
+        if scheduler is not None:
+            metrics["warmup_steps"] = warmup_steps
         return metrics
 
-    def _estimate_dataset_size(self, dataset: Any) -> int:
-        try:
-            return len(dataset)  # type: ignore[arg-type]
-        except (TypeError, ValueError):  # pragma: no cover - iterable datasets
-            batch = int(self.config.get("per_device_train_batch_size", 1))
-            steps = int(self.config.get("max_steps", 1))
-            return (
-                batch * steps * int(self.config.get("gradient_accumulation_steps", 1))
-            )
+    def _resolve_device(self) -> "torch.device":
+        if torch is None:
+            raise RuntimeError("torch unavailable")
 
-    def _persist_model(self, model: Any) -> Path:
-        if not hasattr(model, "save_peft"):
-            raise RuntimeError("LLM2Vec model does not expose save_peft")
+        requested = self.config.get("device")
+        if isinstance(requested, str) and requested:
+            try:
+                return torch.device(requested)
+            except Exception:  # pragma: no cover - invalid user configuration
+                logger.warning(
+                    "Invalid device override '%s'; falling back to auto", requested
+                )
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
 
+    def _persist_model(self, model: Any) -> tuple[Path, Path | None]:
         adapter_dir = self.output_dir / "adapter"
         adapter_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            model.save_peft(str(adapter_dir))
-        except TypeError:
-            model.save_peft(adapter_dir)
-        except Exception as exc:  # pragma: no cover - filesystem issues
-            raise RuntimeError("Failed to persist PEFT adapter") from exc
+        if hasattr(model, "save_pretrained"):
+            try:
+                model.save_pretrained(str(adapter_dir))
+            except Exception as exc:  # pragma: no cover - filesystem issues
+                raise RuntimeError("Failed to persist PEFT adapter") from exc
+        else:  # pragma: no cover - incompatible model
+            raise RuntimeError("Model does not support save_pretrained")
 
-        return adapter_dir
+        weights_path = adapter_dir / "adapter_model.bin"
+        if not weights_path.exists():
+            weights_path = None
+
+        return adapter_dir, weights_path
