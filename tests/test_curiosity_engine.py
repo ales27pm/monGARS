@@ -1,11 +1,11 @@
 import asyncio
 import os
-
-os.environ.setdefault("SECRET_KEY", "test-secret")
-
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import pytest
+
+os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from monGARS.core.cortex import curiosity_engine as curiosity_module
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
@@ -195,6 +195,33 @@ async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_check_entities_in_kg_batch_handles_empty_and_malformed_lists(
+    monkeypatch,
+):
+    engine = CuriosityEngine()
+
+    calls: list[list[str]] = []
+
+    async def fake_query(entities: Sequence[str]) -> dict[str, bool]:
+        normalised = list(entities)
+        calls.append(normalised)
+        return {entity: True for entity in normalised}
+
+    monkeypatch.setattr(engine, "_query_kg_entities", fake_query)
+
+    assert await engine._check_entities_in_kg_batch([]) == {}
+    assert calls == []
+
+    assert await engine._check_entities_in_kg_batch(["   ", "\t", "\n"]) == {}
+    assert calls == []
+
+    result = await engine._check_entities_in_kg_batch(["Paris", None, 123])
+
+    assert result == {"Paris": True}
+    assert calls == [["paris"]]
+
+
+@pytest.mark.asyncio
 async def test_batch_lookup_uses_cache():
     engine = CuriosityEngine()
 
@@ -290,6 +317,96 @@ async def test_batch_lookup_shares_inflight_queries():
     assert first_result == {"Paris": True, "Lyon": False}
     assert second_result == {"Paris": True}
     assert session.run_calls == [["paris", "lyon"]]
+
+
+@pytest.mark.asyncio
+async def test_batch_lookup_returns_false_on_driver_errors():
+    engine = CuriosityEngine()
+
+    class ErrorSession:
+        async def __aenter__(self) -> "ErrorSession":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type,
+            exc,
+            tb,
+        ) -> None:
+            return None
+
+        async def run(self, _query: str, *, entities: list[str]) -> None:
+            raise RuntimeError("Simulated session error")
+
+    engine.embedding_system.driver = SimpleNamespace(session=lambda: ErrorSession())
+
+    result = await engine._check_entities_in_kg_batch(["Berlin", "Madrid"])
+
+    assert result == {"Berlin": False, "Madrid": False}
+
+
+@pytest.mark.asyncio
+async def test_consume_result_rows_supports_multiple_interfaces():
+    engine = CuriosityEngine()
+
+    async def assert_rows(result_obj) -> None:
+        rows = await engine._consume_result_rows(result_obj)
+        assert rows == [
+            {"normalized": "paris", "exists": True},
+            {"normalized": "lyon", "exists": False},
+        ]
+
+    class AsyncDataResult:
+        async def data(self) -> list[dict[str, object]]:
+            return [
+                {"normalized": "paris", "exists": True},
+                {"normalized": "lyon", "exists": False},
+            ]
+
+    await assert_rows(AsyncDataResult())
+
+    class Record:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def data(self) -> dict[str, object]:
+            return self._payload
+
+    class RecordsResult:
+        def records(self) -> list[Record]:
+            return [
+                Record({"normalized": "paris", "exists": True}),
+                Record({"normalized": "lyon", "exists": False}),
+            ]
+
+    await assert_rows(RecordsResult())
+
+    class AsyncIteratorRecord:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def data(self) -> dict[str, object]:
+            return self._payload
+
+    class AsyncIterableResult:
+        def __init__(self) -> None:
+            self._records = [
+                AsyncIteratorRecord({"normalized": "paris", "exists": True}),
+                AsyncIteratorRecord({"normalized": "lyon", "exists": False}),
+            ]
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._records):
+                raise StopAsyncIteration
+            record = self._records[self._index]
+            self._index += 1
+            return record
+
+    await assert_rows(AsyncIterableResult())
 
 
 @pytest.mark.asyncio

@@ -4,14 +4,13 @@ import asyncio
 import inspect
 import logging
 import math
-import time
 import types
-from collections import OrderedDict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import httpx
 import spacy
+from cachetools import TTLCache
 
 try:  # pragma: no cover - optional dependency at import time
     from sqlalchemy import select
@@ -73,13 +72,17 @@ class CuriosityEngine:
 
             self.nlp = _dummy
         self.iris = iris or Iris()
-        self._kg_cache: OrderedDict[str, tuple[float, bool]] = OrderedDict()
-        self._kg_cache_lock = asyncio.Lock()
-        self._kg_inflight: dict[str, asyncio.Future[bool]] = {}
         self._kg_cache_ttl = max(5, getattr(settings, "curiosity_kg_cache_ttl", 300))
         self._kg_cache_max_entries = max(
             16, getattr(settings, "curiosity_kg_cache_max_entries", 512)
         )
+        self._kg_cache: TTLCache[str, bool] = TTLCache(
+            maxsize=self._kg_cache_max_entries,
+            ttl=self._kg_cache_ttl,
+        )
+        self._kg_cache_lock = asyncio.Lock()
+        self._kg_inflight_lock = asyncio.Lock()
+        self._kg_inflight: dict[str, asyncio.Future[bool]] = {}
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
@@ -310,8 +313,7 @@ class CuriosityEngine:
             text = getattr(ent, "text", "")
             if not isinstance(text, str):
                 continue
-            cleaned_text = text.strip()
-            if cleaned_text:
+            if cleaned_text := text.strip():
                 entities.append(cleaned_text)
         return entities
 
@@ -383,39 +385,13 @@ class CuriosityEngine:
         if not entities:
             return {}
 
-        normalized_map: OrderedDict[str, list[str]] = OrderedDict()
-        for raw_entity in entities:
-            if not isinstance(raw_entity, str):
-                continue
-            cleaned = raw_entity.strip()
-            if not cleaned:
-                continue
-            normalized = cleaned.lower()
-            normalized_map.setdefault(normalized, []).append(cleaned)
-
+        normalized_map = self._normalise_entities(entities)
         if not normalized_map:
             return {}
 
-        now = time.monotonic()
-        cached: dict[str, bool] = {}
-        pending: list[str] = []
         loop = asyncio.get_running_loop()
-        waiters: dict[str, asyncio.Future[bool]] = {}
-        async with self._kg_cache_lock:
-            for normalized in normalized_map:
-                cached_entry = self._kg_cache.get(normalized)
-                if cached_entry and cached_entry[0] >= now:
-                    cached[normalized] = cached_entry[1]
-                    self._kg_cache.move_to_end(normalized)
-                    continue
-                if cached_entry:
-                    self._kg_cache.pop(normalized, None)
-                existing_future = self._kg_inflight.get(normalized)
-                if existing_future is None:
-                    existing_future = loop.create_future()
-                    self._kg_inflight[normalized] = existing_future
-                    pending.append(normalized)
-                waiters[normalized] = existing_future
+        cached, missing = await self._collect_cache_hits(normalized_map.keys())
+        waiters, pending = await self._register_inflight_waiters(missing, loop)
 
         fetched_results: dict[str, bool] = {}
         if pending:
@@ -428,19 +404,9 @@ class CuriosityEngine:
                 logger.exception("curiosity.batch_lookup.unexpected_error")
                 fetched_results = {normalized: False for normalized in pending}
             finally:
-                async with self._kg_cache_lock:
-                    expiry = time.monotonic() + self._kg_cache_ttl
-                    for normalized in pending:
-                        exists = fetched_results.get(normalized, False)
-                        future = self._kg_inflight.pop(normalized, None)
-                        if future and not future.done():
-                            future.set_result(exists)
-                        self._kg_cache[normalized] = (expiry, exists)
-                        self._kg_cache.move_to_end(normalized)
-                    while len(self._kg_cache) > self._kg_cache_max_entries:
-                        self._kg_cache.popitem(last=False)
+                await self._complete_inflight(pending, fetched_results)
 
-        combined: dict[str, bool] = {**cached}
+        combined: dict[str, bool] = dict(cached)
         for normalized, future in waiters.items():
             try:
                 combined[normalized] = await future
@@ -506,48 +472,137 @@ class CuriosityEngine:
     async def _check_entity_in_kg(self, entity: str) -> bool:
         """Backward-compatible single-entity lookup that leverages batching."""
 
-        result = await self._check_entities_in_kg_batch([entity])
-        return result.get(entity, False)
+        cleaned = entity.strip() if isinstance(entity, str) else None
+        if not cleaned:
+            return False
+        result = await self._check_entities_in_kg_batch([cleaned])
+        return result.get(cleaned, False)
 
     async def _consume_result_rows(self, result: Any) -> list[dict[str, Any]]:
-        """Normalise driver result objects into a list of dictionaries."""
+        """Normalise driver result objects into a list of dictionaries.
+
+        Neo4j's async driver exposes several shapes depending on how results are
+        consumed (``result.data()``, ``result.records()`` or async iteration).
+        Tests also exercise lightweight stubs that mimic a subset of that
+        interface. To keep the engine decoupled from a specific driver, this
+        helper attempts the common access patterns in order and coerces each row
+        into a mapping.
+        """
 
         if result is None:
             return []
 
-        data_method = getattr(result, "data", None)
-        if callable(data_method):
-            rows = data_method()
-            if inspect.isawaitable(rows):
-                rows = await rows
-            if isinstance(rows, list):
-                return [dict(row) for row in rows]
-            return [dict(row) for row in list(rows)]
+        rows = await self._call_result_method(result, "data")
+        if rows is not None:
+            return [await self._coerce_row(row) for row in rows]
 
-        records_method = getattr(result, "records", None)
-        if callable(records_method):
-            records = records_method()
-            if inspect.isawaitable(records):
-                records = await records
-            normalised: list[dict[str, Any]] = []
-            for record in records:
-                data_getter = getattr(record, "data", None)
-                if callable(data_getter):
-                    normalised.append(data_getter())
-                else:
-                    normalised.append(dict(record))
-            return normalised
+        records = await self._call_result_method(result, "records")
+        if records is not None:
+            return [await self._coerce_row(record) for record in records]
 
         normalised_records: list[dict[str, Any]] = []
         aiter_method = getattr(result, "__aiter__", None)
         if callable(aiter_method):
             async for record in result:
-                data_getter = getattr(record, "data", None)
-                if callable(data_getter):
-                    normalised_records.append(data_getter())
-                else:
-                    normalised_records.append(dict(record))
+                normalised_records.append(await self._coerce_row(record))
         return normalised_records
+
+    def _normalise_entities(self, entities: Sequence[str]) -> dict[str, list[str]]:
+        """Return a mapping of normalised entity keys to the original forms."""
+
+        normalized_map: dict[str, list[str]] = {}
+        for raw_entity in entities:
+            if not isinstance(raw_entity, str):
+                continue
+            cleaned = raw_entity.strip()
+            if not cleaned:
+                continue
+            normalized = cleaned.lower()
+            normalized_map.setdefault(normalized, []).append(cleaned)
+        return normalized_map
+
+    async def _collect_cache_hits(
+        self, normalized_keys: Iterable[str]
+    ) -> tuple[dict[str, bool], list[str]]:
+        """Return cached results and the keys missing from the cache."""
+
+        cached: dict[str, bool] = {}
+        missing: list[str] = []
+        async with self._kg_cache_lock:
+            for normalized in normalized_keys:
+                try:
+                    cached[normalized] = self._kg_cache[normalized]
+                except KeyError:
+                    missing.append(normalized)
+        return cached, missing
+
+    async def _register_inflight_waiters(
+        self,
+        normalized_keys: Iterable[str],
+        loop: asyncio.AbstractEventLoop,
+    ) -> tuple[dict[str, asyncio.Future[bool]], list[str]]:
+        """Register in-flight futures for ``normalized_keys`` and return waiters."""
+
+        waiters: dict[str, asyncio.Future[bool]] = {}
+        pending: list[str] = []
+        async with self._kg_inflight_lock:
+            for normalized in normalized_keys:
+                future = self._kg_inflight.get(normalized)
+                if future is None:
+                    future = loop.create_future()
+                    self._kg_inflight[normalized] = future
+                    pending.append(normalized)
+                waiters[normalized] = future
+        return waiters, pending
+
+    async def _complete_inflight(
+        self, pending: Iterable[str], results: Mapping[str, bool]
+    ) -> None:
+        """Resolve pending futures and refresh the cache with ``results``."""
+
+        resolved = {
+            normalized: results.get(normalized, False) for normalized in pending
+        }
+        async with self._kg_inflight_lock:
+            futures = {
+                normalized: self._kg_inflight.pop(normalized, None)
+                for normalized in pending
+            }
+        for normalized, future in futures.items():
+            if future and not future.done():
+                future.set_result(resolved[normalized])
+        if resolved:
+            async with self._kg_cache_lock:
+                for normalized, value in resolved.items():
+                    self._kg_cache[normalized] = value
+
+    async def _call_result_method(self, result: Any, method_name: str) -> Any | None:
+        """Invoke ``method_name`` on ``result`` if available and return the value."""
+
+        method = getattr(result, method_name, None)
+        if not callable(method):
+            return None
+        value = method()
+        if inspect.isawaitable(value):
+            value = await value
+        return value
+
+    async def _coerce_row(self, row: Any) -> dict[str, Any]:
+        """Convert *row* into a dictionary, awaiting ``data()`` if provided."""
+
+        data_getter = getattr(row, "data", None)
+        if callable(data_getter):
+            value = data_getter()
+            if inspect.isawaitable(value):
+                value = await value
+            if isinstance(value, dict):
+                return dict(value)
+            return dict(value)
+        if isinstance(row, dict):
+            return dict(row)
+        if hasattr(row, "_asdict"):
+            return row._asdict()
+        return dict(row)
 
     def _formulate_research_query(
         self, missing_entities: list[str], original_query: str

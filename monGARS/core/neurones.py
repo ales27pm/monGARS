@@ -32,10 +32,21 @@ _EMPTY_CACHE_KEY = "<EMPTY>"
 
 
 class _NoOpResult:
+    """Minimal async-compatible result used when the Neo4j driver is absent.
+
+    The curiosity engine exercises ``data()``, ``records()`` and async iteration
+    when normalising query responses. These stubs mirror that interface so tests
+    can run without the optional driver dependency. Extend this class if new
+    result helpers are accessed in the future.
+    """
+
     async def single(self) -> dict[str, Any]:
         return {"exists": False}
 
     async def data(self) -> list[dict[str, Any]]:
+        return []
+
+    def records(self) -> list[dict[str, Any]]:
         return []
 
     def __aiter__(self) -> "_NoOpResult":
