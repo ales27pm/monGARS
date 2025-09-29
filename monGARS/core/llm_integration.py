@@ -180,8 +180,12 @@ class LLMIntegration:
                 self._adapter_manifest_mtime
                 and stat.st_mtime <= self._adapter_manifest_mtime
             ):
+                self._update_adapter_version(
+                    self._adapter_metadata.get("version")
+                    if self._adapter_metadata
+                    else None
+                )
                 return self._adapter_metadata
-
             try:
                 manifest = await asyncio.to_thread(
                     load_manifest, self.adapter_registry_path
