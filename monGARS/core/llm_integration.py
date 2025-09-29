@@ -161,9 +161,24 @@ class LLMIntegration:
         else:
             self._ray_scaling_status_codes = {503, 409}
         backoff_env = os.getenv("RAY_SCALING_BACKOFF", "0.5,1,2,4")
-        self._ray_scaling_backoff = [
-            float(value.strip()) for value in backoff_env.split(",") if value.strip()
-        ] or [0.5, 1.0, 2.0, 4.0]
+        parsed_backoff: list[float] = []
+        for raw in backoff_env.split(","):
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                value = float(stripped)
+            except ValueError:
+                logger.warning(
+                    "llm.ray.backoff.invalid_entry", extra={"value": stripped}
+                )
+                parsed_backoff = []
+                break
+            if value < 0:
+                logger.warning("llm.ray.backoff.negative_entry", extra={"value": value})
+                continue
+            parsed_backoff.append(value)
+        self._ray_scaling_backoff = parsed_backoff or [0.5, 1.0, 2.0, 4.0]
         self._ray_max_scale_cycles = int(os.getenv("RAY_MAX_SCALE_CYCLES", "2"))
         registry_override = os.getenv("LLM_ADAPTER_REGISTRY_PATH")
         registry_source = (

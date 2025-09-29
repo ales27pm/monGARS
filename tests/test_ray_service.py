@@ -100,3 +100,29 @@ async def test_llm_integration_balances_ray_endpoints(monkeypatch):
     assert result["content"] == "ray"
     assert called_urls.count("http://ray-one/generate") == 1
     assert called_urls.count("http://ray-two/generate") >= 1
+
+
+def test_llm_integration_negative_backoff_entries_are_ignored(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "test")
+    monkeypatch.setenv("USE_RAY_SERVE", "True")
+    monkeypatch.setenv("RAY_SERVE_URL", "http://ray/generate")
+    monkeypatch.setenv("RAY_SCALING_BACKOFF", "1.5, -2, 3.0")
+
+    from monGARS.core.llm_integration import LLMIntegration
+
+    llm = LLMIntegration()
+
+    assert llm._ray_scaling_backoff == [1.5, 3.0]
+
+
+def test_llm_integration_invalid_backoff_falls_back_to_defaults(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "test")
+    monkeypatch.setenv("USE_RAY_SERVE", "True")
+    monkeypatch.setenv("RAY_SERVE_URL", "http://ray/generate")
+    monkeypatch.setenv("RAY_SCALING_BACKOFF", "oops, 1.0")
+
+    from monGARS.core.llm_integration import LLMIntegration
+
+    llm = LLMIntegration()
+
+    assert llm._ray_scaling_backoff == [0.5, 1.0, 2.0, 4.0]
