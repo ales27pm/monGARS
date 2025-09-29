@@ -799,6 +799,7 @@ class MNTPTrainer:
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=learning_rate, weight_decay=weight_decay
         )
+        optimizer.zero_grad()
 
         total_updates = max_steps
         warmup_steps = int(self.config.get("warmup_steps", max(1, total_updates // 10)))
@@ -818,6 +819,7 @@ class MNTPTrainer:
         correct_predictions = 0
 
         loss_fn = torch.nn.CrossEntropyLoss()
+        micro_step = 0
 
         data_iterator = iter(data_loader)
         while completed_steps < total_updates:
@@ -842,19 +844,20 @@ class MNTPTrainer:
             loss = loss / grad_accum
             loss.backward()
 
+            micro_step += 1
             last_loss = loss.item() * grad_accum
             total_loss += last_loss
 
-            if (completed_steps * grad_accum + 1) % grad_accum == 0:
+            batch_predictions = selected_logits.detach().argmax(dim=-1)
+            correct_predictions += (batch_predictions == labels).sum().item()
+
+            if micro_step % grad_accum == 0:
                 clip_grad_norm_(model.parameters(), max_grad_norm)
                 optimizer.step()
                 if scheduler is not None:
                     scheduler.step()
                 optimizer.zero_grad()
                 completed_steps += 1
-
-                predictions = selected_logits.detach().argmax(dim=-1)
-                correct_predictions += (predictions == labels).sum().item()
 
         average_loss = total_loss / max(1, completed_steps)
         accuracy = correct_predictions / max(1, examples_processed)
