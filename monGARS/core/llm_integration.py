@@ -125,7 +125,11 @@ class LLMIntegration:
         self._settings = get_settings()
         self.general_model = "dolphin-mistral:7b-v2.8-q4_K_M"
         self.coding_model = "qwen2.5-coder:7b-instruct-q6_K"
-        self.use_ray = os.getenv("USE_RAY_SERVE", "False").lower() in ("true", "1")
+        use_ray_env = os.getenv("USE_RAY_SERVE")
+        # Default to Ray Serve to activate distributed inference once configured.
+        self.use_ray = (
+            use_ray_env.lower() in ("true", "1") if use_ray_env is not None else True
+        )
         self.ray_url = os.getenv("RAY_SERVE_URL", "http://localhost:8000/generate")
         registry_override = os.getenv("LLM_ADAPTER_REGISTRY_PATH")
         registry_source = (
@@ -176,8 +180,12 @@ class LLMIntegration:
                 self._adapter_manifest_mtime
                 and stat.st_mtime <= self._adapter_manifest_mtime
             ):
+                self._update_adapter_version(
+                    self._adapter_metadata.get("version")
+                    if self._adapter_metadata
+                    else None
+                )
                 return self._adapter_metadata
-
             try:
                 manifest = await asyncio.to_thread(
                     load_manifest, self.adapter_registry_path
