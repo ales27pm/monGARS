@@ -1,10 +1,12 @@
+import asyncio
+import logging
 import os
-
-os.environ.setdefault("SECRET_KEY", "test-secret")
-
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import pytest
+
+os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from monGARS.core.cortex import curiosity_engine as curiosity_module
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
@@ -166,6 +168,36 @@ def test_curiosity_engine_initialises_from_settings(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_result_method_logs_and_recovers_from_errors(caplog):
+    engine = CuriosityEngine()
+
+    class FaultyResult:
+        def data(self) -> None:
+            raise RuntimeError("boom")
+
+    with caplog.at_level(logging.DEBUG):
+        value = await engine._call_result_method(FaultyResult(), "data")
+
+    assert value is None
+    assert "boom" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_coerce_row_handles_unexpected_iterable_shapes(caplog):
+    engine = CuriosityEngine()
+
+    class OddRow:
+        def data(self):  # noqa: ANN001 - interface mimics driver row
+            return [1, 2, 3]
+
+    with caplog.at_level(logging.DEBUG):
+        coerced = await engine._coerce_row(OddRow())
+
+    assert coerced == {}
+    assert "coercion_error" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
     engine = CuriosityEngine()
     engine.similar_history_threshold = 0
@@ -174,15 +206,15 @@ async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
     async def fake_vector_similarity(*args, **kwargs) -> int:
         return 0
 
-    async def always_missing(_entity: str) -> bool:
-        return False
+    async def always_missing_batch(entities):
+        return {entity: False for entity in entities}
 
     async def fake_research(query: str) -> str:
         raise AssertionError(f"Research should not be triggered for: {query}")
 
     engine._perform_research = fake_research  # type: ignore[assignment]
     monkeypatch.setattr(engine, "_vector_similarity_search", fake_vector_similarity)
-    monkeypatch.setattr(engine, "_check_entity_in_kg", always_missing)
+    monkeypatch.setattr(engine, "_check_entities_in_kg_batch", always_missing_batch)
 
     engine.nlp = lambda text: SimpleNamespace(
         ents=[SimpleNamespace(text="Entité inconnue")]
@@ -191,6 +223,221 @@ async def test_detect_gaps_respects_graph_gap_cutoff(monkeypatch):
     result = await engine.detect_gaps({"last_query": "Qu'est-ce que MonGARS?"})
 
     assert result == {"status": "sufficient_knowledge"}
+
+
+@pytest.mark.asyncio
+async def test_check_entities_in_kg_batch_handles_empty_and_malformed_lists(
+    monkeypatch,
+):
+    engine = CuriosityEngine()
+
+    calls: list[list[str]] = []
+
+    async def fake_query(entities: Sequence[str]) -> dict[str, bool]:
+        normalised = list(entities)
+        calls.append(normalised)
+        return {entity: True for entity in normalised}
+
+    monkeypatch.setattr(engine, "_query_kg_entities", fake_query)
+
+    assert await engine._check_entities_in_kg_batch([]) == {}
+    assert calls == []
+
+    assert await engine._check_entities_in_kg_batch(["   ", "\t", "\n"]) == {}
+    assert calls == []
+
+    result = await engine._check_entities_in_kg_batch(["Paris", None, 123])
+
+    assert result == {"Paris": True}
+    assert calls == [["paris"]]
+
+
+@pytest.mark.asyncio
+async def test_batch_lookup_uses_cache():
+    engine = CuriosityEngine()
+
+    class RecordingResult:
+        def __init__(self, entities: list[str]) -> None:
+            self._entities = entities
+
+        async def data(self) -> list[dict[str, object]]:
+            return [
+                {"normalized": entity, "exists": entity == "paris"}
+                for entity in self._entities
+            ]
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.run_calls: list[list[str]] = []
+
+        async def __aenter__(self) -> "RecordingSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def run(self, _query: str, *, entities: list[str]) -> RecordingResult:
+            self.run_calls.append(list(entities))
+            return RecordingResult(entities)
+
+    session = RecordingSession()
+    engine.embedding_system.driver = SimpleNamespace(session=lambda: session)
+
+    first_lookup = await engine._check_entities_in_kg_batch(["Paris", "Lyon", "Paris"])
+
+    assert first_lookup == {"Paris": True, "Lyon": False}
+    assert session.run_calls == [["paris", "lyon"]]
+
+    cached_lookup = await engine._check_entities_in_kg_batch(["Lyon"])
+
+    assert cached_lookup == {"Lyon": False}
+    assert session.run_calls == [["paris", "lyon"]]
+
+
+@pytest.mark.asyncio
+async def test_batch_lookup_shares_inflight_queries():
+    engine = CuriosityEngine()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class RecordingResult:
+        def __init__(self, entities):
+            self._entities = entities
+
+        async def data(self) -> list[dict[str, object]]:
+            return [
+                {"normalized": entity, "exists": entity == "paris"}
+                for entity in self._entities
+            ]
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.run_calls: list[list[str]] = []
+
+        async def __aenter__(self) -> "RecordingSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def run(self, _query: str, *, entities: list[str]) -> RecordingResult:
+            self.run_calls.append(list(entities))
+            started.set()
+            await release.wait()
+            return RecordingResult(entities)
+
+    session = RecordingSession()
+    engine.embedding_system.driver = SimpleNamespace(session=lambda: session)
+
+    async def first_lookup() -> dict[str, bool]:
+        return await engine._check_entities_in_kg_batch(["Paris", "Lyon"])
+
+    async def second_lookup() -> dict[str, bool]:
+        await started.wait()
+        return await engine._check_entities_in_kg_batch(["Paris"])
+
+    first_task = asyncio.create_task(first_lookup())
+    await started.wait()
+    second_task = asyncio.create_task(second_lookup())
+    await asyncio.sleep(0)
+    release.set()
+
+    first_result, second_result = await asyncio.gather(first_task, second_task)
+
+    assert first_result == {"Paris": True, "Lyon": False}
+    assert second_result == {"Paris": True}
+    assert session.run_calls == [["paris", "lyon"]]
+
+
+@pytest.mark.asyncio
+async def test_batch_lookup_returns_false_on_driver_errors():
+    engine = CuriosityEngine()
+
+    class ErrorSession:
+        async def __aenter__(self) -> "ErrorSession":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type,
+            exc,
+            tb,
+        ) -> None:
+            return None
+
+        async def run(self, _query: str, *, entities: list[str]) -> None:
+            raise RuntimeError("Simulated session error")
+
+    engine.embedding_system.driver = SimpleNamespace(session=lambda: ErrorSession())
+
+    result = await engine._check_entities_in_kg_batch(["Berlin", "Madrid"])
+
+    assert result == {"Berlin": False, "Madrid": False}
+
+
+@pytest.mark.asyncio
+async def test_consume_result_rows_supports_multiple_interfaces():
+    engine = CuriosityEngine()
+
+    async def assert_rows(result_obj) -> None:
+        rows = await engine._consume_result_rows(result_obj)
+        assert rows == [
+            {"normalized": "paris", "exists": True},
+            {"normalized": "lyon", "exists": False},
+        ]
+
+    class AsyncDataResult:
+        async def data(self) -> list[dict[str, object]]:
+            return [
+                {"normalized": "paris", "exists": True},
+                {"normalized": "lyon", "exists": False},
+            ]
+
+    await assert_rows(AsyncDataResult())
+
+    class Record:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def data(self) -> dict[str, object]:
+            return self._payload
+
+    class RecordsResult:
+        def records(self) -> list[Record]:
+            return [
+                Record({"normalized": "paris", "exists": True}),
+                Record({"normalized": "lyon", "exists": False}),
+            ]
+
+    await assert_rows(RecordsResult())
+
+    class AsyncIteratorRecord:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def data(self) -> dict[str, object]:
+            return self._payload
+
+    class AsyncIterableResult:
+        def __init__(self) -> None:
+            self._records = [
+                AsyncIteratorRecord({"normalized": "paris", "exists": True}),
+                AsyncIteratorRecord({"normalized": "lyon", "exists": False}),
+            ]
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._records):
+                raise StopAsyncIteration
+            record = self._records[self._index]
+            self._index += 1
+            return record
+
+    await assert_rows(AsyncIterableResult())
 
 
 @pytest.mark.asyncio

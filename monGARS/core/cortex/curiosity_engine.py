@@ -5,10 +5,12 @@ import inspect
 import logging
 import math
 import types
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 import httpx
 import spacy
+from cachetools import TTLCache
 
 try:  # pragma: no cover - optional dependency at import time
     from sqlalchemy import select
@@ -70,6 +72,17 @@ class CuriosityEngine:
 
             self.nlp = _dummy
         self.iris = iris or Iris()
+        self._kg_cache_ttl = max(5, getattr(settings, "curiosity_kg_cache_ttl", 300))
+        self._kg_cache_max_entries = max(
+            16, getattr(settings, "curiosity_kg_cache_max_entries", 512)
+        )
+        self._kg_cache: TTLCache[str, bool] = TTLCache(
+            maxsize=self._kg_cache_max_entries,
+            ttl=self._kg_cache_ttl,
+        )
+        self._kg_cache_lock = asyncio.Lock()
+        self._kg_inflight_lock = asyncio.Lock()
+        self._kg_inflight: dict[str, asyncio.Future[bool]] = {}
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
@@ -89,12 +102,10 @@ class CuriosityEngine:
                 and similar_count >= self.similar_history_threshold
             ):
                 return {"status": "sufficient_knowledge"}
-            doc = self.nlp(last_query)
-            entities = [ent.text for ent in getattr(doc, "ents", [])]
+            entities = await self._extract_entities(last_query)
+            entity_presence = await self._check_entities_in_kg_batch(entities)
             missing_entities = [
-                entity
-                for entity in entities
-                if not await self._check_entity_in_kg(entity)
+                entity for entity in entities if not entity_presence.get(entity, False)
             ]
             if len(missing_entities) >= self.graph_gap_cutoff:
                 research_query = self._formulate_research_query(
@@ -286,6 +297,26 @@ class CuriosityEngine:
                 similar += 1
         return similar
 
+    async def _extract_entities(self, query: str) -> list[str]:
+        """Extract entities for *query* without blocking the event loop."""
+
+        cleaned = query.strip()
+        if not cleaned:
+            return []
+
+        if inspect.iscoroutinefunction(self.nlp):
+            doc = await self.nlp(cleaned)
+        else:
+            doc = await asyncio.to_thread(self.nlp, cleaned)
+        entities: list[str] = []
+        for ent in getattr(doc, "ents", []):
+            text = getattr(ent, "text", "")
+            if not isinstance(text, str):
+                continue
+            if cleaned_text := text.strip():
+                entities.append(cleaned_text)
+        return entities
+
     def _extract_history_queries(self, history: Iterable[object] | None) -> list[str]:
         if not history:
             return []
@@ -346,23 +377,289 @@ class CuriosityEngine:
             return cleaned
         return None
 
-    async def _check_entity_in_kg(self, entity: str) -> bool:
-        """Return True if the entity is already known in the knowledge graph."""
+    async def _check_entities_in_kg_batch(
+        self, entities: Sequence[str]
+    ) -> dict[str, bool]:
+        """Return entity presence flags using batching and an LRU cache."""
+
+        if not entities:
+            return {}
+
+        normalized_map = self._normalise_entities(entities)
+        if not normalized_map:
+            return {}
+
+        loop = asyncio.get_running_loop()
+        cached, missing = await self._collect_cache_hits(normalized_map.keys())
+        waiters, pending = await self._register_inflight_waiters(missing, loop)
+
+        fetched_results: dict[str, bool] = {}
+        if pending:
+            try:
+                fetched_results = await self._query_kg_entities(pending)
+            except asyncio.CancelledError:
+                fetched_results = {normalized: False for normalized in pending}
+                raise
+            except Exception:  # pragma: no cover - defensive logging below
+                logger.exception("curiosity.batch_lookup.unexpected_error")
+                fetched_results = {normalized: False for normalized in pending}
+            finally:
+                await self._complete_inflight(pending, fetched_results)
+
+        combined: dict[str, bool] = dict(cached)
+        for normalized, future in waiters.items():
+            try:
+                combined[normalized] = await future
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                combined[normalized] = False
+
+        entity_presence: dict[str, bool] = {}
+        for normalized, originals in normalized_map.items():
+            value = combined.get(normalized, False)
+            for original in originals:
+                entity_presence[original] = value
+        return entity_presence
+
+    async def _query_kg_entities(
+        self, normalized_entities: Sequence[str]
+    ) -> dict[str, bool]:
+        """Resolve entity presence flags from the knowledge graph driver."""
+
+        if not normalized_entities:
+            return {}
+
+        driver = getattr(self.embedding_system, "driver", None)
+        session_factory = getattr(driver, "session", None)
+        if not callable(session_factory):
+            logger.debug(
+                "Knowledge graph batch lookup skipped; driver session unavailable.",
+            )
+            return {normalized: False for normalized in normalized_entities}
 
         try:
-            async with self.embedding_system.driver.session() as session:
+            async with session_factory() as session:
                 result = await session.run(
                     (
-                        "MATCH (n) WHERE toLower(n.name) CONTAINS toLower($entity) "
-                        "RETURN count(n) > 0 AS exists"
+                        "UNWIND $entities AS entity "
+                        "OPTIONAL MATCH (n) "
+                        "WHERE toLower(n.name) CONTAINS entity "
+                        "RETURN entity AS normalized, count(n) > 0 AS exists"
                     ),
-                    entity=entity,
+                    entities=list(normalized_entities),
                 )
-                record = await result.single()
-                return bool(record.get("exists"))
         except Exception as exc:  # pragma: no cover - driver optional
-            logger.debug("Knowledge graph lookup failed for %s: %s", entity, exc)
+            logger.debug(
+                "Knowledge graph batch lookup failed for %s entities: %s",
+                len(normalized_entities),
+                exc,
+            )
+            return {normalized: False for normalized in normalized_entities}
+
+        rows = await self._consume_result_rows(result)
+        query_results: dict[str, bool] = {}
+        for row in rows:
+            normalized = str(row.get("normalized", "")).strip()
+            if not normalized:
+                continue
+            exists = bool(row.get("exists"))
+            query_results[normalized] = exists
+        for normalized in normalized_entities:
+            query_results.setdefault(normalized, False)
+        return query_results
+
+    async def _check_entity_in_kg(self, entity: str) -> bool:
+        """Backward-compatible single-entity lookup that leverages batching."""
+
+        cleaned = entity.strip() if isinstance(entity, str) else None
+        if not cleaned:
             return False
+        result = await self._check_entities_in_kg_batch([cleaned])
+        return result.get(cleaned, False)
+
+    async def _consume_result_rows(self, result: Any) -> list[dict[str, Any]]:
+        """Normalise driver result objects into a list of dictionaries.
+
+        Neo4j's async driver exposes several shapes depending on how results are
+        consumed (``result.data()``, ``result.records()`` or async iteration).
+        Tests also exercise lightweight stubs that mimic a subset of that
+        interface. To keep the engine decoupled from a specific driver, this
+        helper attempts the common access patterns in order and coerces each row
+        into a mapping.
+        """
+
+        if result is None:
+            return []
+
+        rows = await self._call_result_method(result, "data")
+        if rows is not None:
+            return [await self._coerce_row(row) for row in rows]
+
+        records = await self._call_result_method(result, "records")
+        if records is not None:
+            return [await self._coerce_row(record) for record in records]
+
+        normalised_records: list[dict[str, Any]] = []
+        aiter_method = getattr(result, "__aiter__", None)
+        if callable(aiter_method):
+            async for record in result:
+                normalised_records.append(await self._coerce_row(record))
+        return normalised_records
+
+    def _normalise_entities(self, entities: Sequence[str]) -> dict[str, list[str]]:
+        """Return a mapping of normalised entity keys to the original forms."""
+
+        normalized_map: dict[str, list[str]] = {}
+        for raw_entity in entities:
+            if not isinstance(raw_entity, str):
+                continue
+            cleaned = raw_entity.strip()
+            if not cleaned:
+                continue
+            normalized = cleaned.lower()
+            normalized_map.setdefault(normalized, []).append(cleaned)
+        return normalized_map
+
+    async def _collect_cache_hits(
+        self, normalized_keys: Iterable[str]
+    ) -> tuple[dict[str, bool], list[str]]:
+        """Return cached results and the keys missing from the cache."""
+
+        cached: dict[str, bool] = {}
+        missing: list[str] = []
+        async with self._kg_cache_lock:
+            for normalized in normalized_keys:
+                try:
+                    cached[normalized] = self._kg_cache[normalized]
+                except KeyError:
+                    missing.append(normalized)
+        return cached, missing
+
+    async def _register_inflight_waiters(
+        self,
+        normalized_keys: Iterable[str],
+        loop: asyncio.AbstractEventLoop,
+    ) -> tuple[dict[str, asyncio.Future[bool]], list[str]]:
+        """Register in-flight futures for ``normalized_keys`` and return waiters."""
+
+        waiters: dict[str, asyncio.Future[bool]] = {}
+        pending: list[str] = []
+        async with self._kg_inflight_lock:
+            for normalized in normalized_keys:
+                future = self._kg_inflight.get(normalized)
+                if future is None:
+                    future = loop.create_future()
+                    self._kg_inflight[normalized] = future
+                    pending.append(normalized)
+                waiters[normalized] = future
+        return waiters, pending
+
+    async def _complete_inflight(
+        self, pending: Iterable[str], results: Mapping[str, bool]
+    ) -> None:
+        """Resolve pending futures and refresh the cache with ``results``."""
+
+        resolved = {
+            normalized: results.get(normalized, False) for normalized in pending
+        }
+        async with self._kg_inflight_lock:
+            futures = {
+                normalized: self._kg_inflight.pop(normalized, None)
+                for normalized in pending
+            }
+        for normalized, future in futures.items():
+            if future and not future.done():
+                future.set_result(resolved[normalized])
+        if resolved:
+            async with self._kg_cache_lock:
+                for normalized, value in resolved.items():
+                    self._kg_cache[normalized] = value
+
+    async def _call_result_method(self, result: Any, method_name: str) -> Any | None:
+        """Invoke ``method_name`` on ``result`` if available and return the value."""
+
+        method = getattr(result, method_name, None)
+        if not callable(method):
+            return None
+        try:
+            value = method()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.debug(
+                "curiosity.result_method.error %s",
+                exc,
+                extra={"method": method_name, "error": str(exc)},
+            )
+            return None
+        if inspect.isawaitable(value):
+            try:
+                value = await value
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "curiosity.result_method.await_error %s",
+                    exc,
+                    extra={"method": method_name, "error": str(exc)},
+                )
+                return None
+        return value
+
+    async def _coerce_row(self, row: Any) -> dict[str, Any]:
+        """Convert *row* into a dictionary, awaiting ``data()`` if provided."""
+
+        data_getter = getattr(row, "data", None)
+        if callable(data_getter):
+            try:
+                value = data_getter()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "curiosity.result_row.data_error %s",
+                    exc,
+                    extra={"error": str(exc)},
+                )
+            else:
+                if inspect.isawaitable(value):
+                    try:
+                        value = await value
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # pragma: no cover - defensive logging
+                        logger.debug(
+                            "curiosity.result_row.await_error %s",
+                            exc,
+                            extra={"error": str(exc)},
+                        )
+                        value = None
+                if isinstance(value, dict):
+                    return dict(value)
+                if value is not None:
+                    try:
+                        return dict(value)
+                    except (TypeError, ValueError) as exc:
+                        logger.debug(
+                            "curiosity.result_row.coercion_error %s",
+                            exc,
+                            extra={"error": str(exc)},
+                        )
+                return {}
+        if isinstance(row, dict):
+            return dict(row)
+        if hasattr(row, "_asdict"):
+            return row._asdict()
+        try:
+            return dict(row)
+        except (TypeError, ValueError) as exc:
+            logger.debug(
+                "curiosity.result_row.fallback_error %s",
+                exc,
+                extra={"error": str(exc)},
+            )
+            return {}
 
     def _formulate_research_query(
         self, missing_entities: list[str], original_query: str
