@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+
 @pytest.mark.asyncio
 async def test_ray_service_render_response_uses_ollama(monkeypatch):
     from modules import ray_service
