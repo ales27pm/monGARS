@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..core.aui import DEFAULT_ACTIONS, AUISuggester
-from .dependencies import get_current_user
+from .authentication import get_current_user
 
 router = APIRouter(prefix="/api/v1/ui", tags=["ui"])
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ async def suggestions(
     else:
         actions = DEFAULT_ACTIONS
 
-    ordered, scores = _suggester.order(prompt, actions)
+    ordered, scores = await _suggester.order(prompt, actions)
     model_name = _suggester.model_name
     logger.debug(
         "aui_suggestions_generated",

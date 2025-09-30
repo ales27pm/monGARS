@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from collections.abc import Iterable, Sequence
@@ -71,7 +72,7 @@ class AUISuggester:
     def model_name(self) -> str:
         return "neurones" if self._embed else "keyword"
 
-    def suggest(
+    async def suggest(
         self,
         prompt: str,
         actions: Iterable[tuple[str, str]] = DEFAULT_ACTIONS,
@@ -86,30 +87,38 @@ class AUISuggester:
         if not items:
             return {}
 
+        fallback_scores = {
+            key: _keyword_score(key, prompt, description) for key, description in items
+        }
+
         if self._embed:
             try:
-                prompt_vector = self._embed.encode([prompt])[0]
-                action_vectors = self._embed.encode(
-                    [description for _, description in items]
+                prompt_vector, prompt_used_fallback = await self._embed.encode(prompt)
+                action_vectors = await asyncio.gather(
+                    *(self._embed.encode(description) for _, description in items)
                 )
+                if prompt_used_fallback or any(
+                    action_used_fallback for _, action_used_fallback in action_vectors
+                ):
+                    return fallback_scores
                 return {
                     key: _cosine(prompt_vector, vector)
-                    for (key, _), vector in zip(items, action_vectors, strict=False)
+                    for (key, _), (vector, _) in zip(
+                        items, action_vectors, strict=False
+                    )
                 }
             except Exception as exc:  # pragma: no cover - runtime fallback
                 logger.warning(
                     "aui_embedding_inference_failed", extra={"error": repr(exc)}
                 )
 
-        return {
-            key: _keyword_score(key, prompt, description) for key, description in items
-        }
+        return fallback_scores
 
-    def order(
+    async def order(
         self,
         prompt: str,
         actions: Iterable[tuple[str, str]] = DEFAULT_ACTIONS,
     ) -> tuple[list[str], dict[str, float]]:
-        scores = self.suggest(prompt, actions)
+        scores = await self.suggest(prompt, actions)
         ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         return [key for key, _ in ordered], scores
