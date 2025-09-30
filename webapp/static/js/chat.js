@@ -173,7 +173,8 @@
       bubble.textContent = streamBuf;
       const meta = document.createElement("div");
       meta.className = "chat-meta";
-      meta.textContent = formatTimestamp(nowISO());
+      const ts = data && data.timestamp ? data.timestamp : nowISO();
+      meta.textContent = formatTimestamp(ts);
       if (data && data.error) {
         meta.classList.add("text-danger");
         meta.textContent = `${meta.textContent} • ${data.error}`;
@@ -316,6 +317,17 @@
             `<div class="chat-bubble chat-bubble-error">${escapeHTML(data.error)}</div>`,
           );
         }
+        break;
+      }
+      case "chat.message": {
+        if (!streamRow) {
+          startStream();
+        }
+        if (data && typeof data.response === "string" && !streamBuf) {
+          appendStream(data.response);
+        }
+        endStream(data);
+        setBusy(false);
         break;
       }
       case "evolution_engine.training_complete": {
