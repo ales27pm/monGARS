@@ -15,7 +15,15 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from pydantic import BeforeValidator, Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import (
+    AnyUrl,
+    BeforeValidator,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from monGARS.utils.hardware import recommended_worker_count
@@ -111,6 +119,19 @@ class Settings(BaseSettings):
     otel_metrics_enabled: EnvBool = Field(default=True)
     otel_traces_enabled: EnvBool = Field(default=True)
 
+    WS_ENABLE_EVENTS: bool = Field(default=True)
+    WS_ALLOWED_ORIGINS: list[AnyUrl] = Field(
+        default_factory=lambda: [
+            "http://localhost:8000",
+            "https://your.app",
+        ]
+    )
+    WS_TICKET_TTL_SECONDS: int = Field(default=45, ge=1)
+    REDIS_URL: AnyUrl | None = Field(
+        default=None,
+        description="Optional override for the Redis connection string, e.g. redis://localhost:6379/0.",
+    )
+
     VAULT_URL: str = Field(default="")
     VAULT_TOKEN: str = Field(default="")
 
@@ -145,6 +166,15 @@ class Settings(BaseSettings):
         if "postgresql+asyncpg" not in str(value):
             raise ValueError("Invalid async PostgreSQL URL")
         return value
+
+    @model_validator(mode="after")
+    def sync_redis_url(self) -> "Settings":
+        if self.REDIS_URL:
+            try:
+                self.redis_url = RedisDsn(str(self.REDIS_URL))
+            except ValueError as exc:  # pragma: no cover - configuration error
+                raise ValueError("Invalid REDIS_URL provided") from exc
+        return self
 
 
 def ensure_secret_key(
