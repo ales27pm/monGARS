@@ -7,5 +7,12 @@ COPY . /app
 FROM python:3.10-slim
 WORKDIR /app
 COPY --from=builder /app /app
+
+RUN groupadd --system mongars \
+    && useradd --system --gid mongars --create-home --home-dir /home/mongars mongars \
+    && chown -R mongars:mongars /app
+
+USER mongars
+
 EXPOSE 8000
 CMD ["python", "main.py"]

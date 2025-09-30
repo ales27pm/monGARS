@@ -13,5 +13,12 @@ WORKDIR /app
 COPY --from=builder /app /app
 COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/uvicorn
+
+RUN groupadd --system mongars \
+    && useradd --system --gid mongars --create-home --home-dir /home/mongars mongars \
+    && chown -R mongars:mongars /app
+
+USER mongars
+
 EXPOSE 8000
 CMD ["uvicorn", "monGARS.main:app", "--host", "0.0.0.0", "--port", "8000"]
