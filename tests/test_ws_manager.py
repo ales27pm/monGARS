@@ -86,3 +86,46 @@ async def test_heartbeat_detects_stale_connection() -> None:
 
     async with manager._lock:  # noqa: SLF001 - accessing for assertion in tests
         assert "user" not in manager.connections or not manager.connections["user"]
+
+
+@pytest.mark.asyncio
+async def test_offline_queue_overflow_drops_oldest(caplog) -> None:
+    manager = WebSocketManager(max_offline_messages=2)
+
+    caplog.set_level("WARNING")
+
+    await manager.broadcast("user", {"seq": 0})
+    await manager.broadcast("user", {"seq": 1})
+    await manager.broadcast("user", {"seq": 2})
+
+    drop_logs = [
+        record
+        for record in caplog.records
+        if "Dropping oldest queued message" in record.message
+    ]
+    assert drop_logs, "Expected warning when offline queue overflows"
+    assert getattr(drop_logs[0], "dropped")["seq"] == 0
+
+    reconnect_ws = DummyWebSocket()
+    await manager.connect("user", reconnect_ws)
+    await manager.flush_offline("user")
+
+    assert [msg["seq"] for msg in reconnect_ws.sent] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_generic_send_failure_disconnects_and_queues() -> None:
+    manager = WebSocketManager()
+    failing_ws = DummyWebSocket(fail_after=0)
+
+    await manager.connect("user", failing_ws)
+    await manager.broadcast("user", {"payload": "queued"})
+
+    async with manager._lock:  # noqa: SLF001 - test-only assertion
+        assert failing_ws not in manager.connections.get("user", set())
+
+    reconnect_ws = DummyWebSocket()
+    await manager.connect("user", reconnect_ws)
+    await manager.flush_offline("user")
+
+    assert reconnect_ws.sent[0]["payload"] == "queued"

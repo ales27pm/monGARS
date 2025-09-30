@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Set
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -40,6 +40,7 @@ class WebSocketManager:
         current = asyncio.current_task()
         if task and task is not current:
             task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         try:
             await ws.close()
         except RuntimeError:
@@ -54,9 +55,12 @@ class WebSocketManager:
     async def flush_offline(self, user_id: str) -> None:
         await self._flush_offline_queue(user_id)
 
-    def reset(self) -> None:
-        for task in self._heartbeat_tasks.values():
+    async def reset(self) -> None:
+        tasks = list(self._heartbeat_tasks.values())
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._heartbeat_tasks.clear()
         self.connections.clear()
         self._offline_queues.clear()
@@ -77,7 +81,7 @@ class WebSocketManager:
                     await ws.send_json(
                         {
                             "type": "ping",
-                            "timestamp": datetime.now(UTC).isoformat(),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                         }
                     )
                 except WebSocketDisconnect:
@@ -140,39 +144,37 @@ class WebSocketManager:
 
         return delivered
 
-    async def _queue_message(
-        self, user_id: str, message: Dict[str, Any], *, to_left: bool = False
-    ) -> None:
+    async def _queue_message(self, user_id: str, message: Dict[str, Any]) -> None:
+        payload = dict(message)
         async with self._lock:
             queue = self._offline_queues.setdefault(
                 user_id, deque(maxlen=self._max_offline_messages)
             )
-            if len(queue) >= self._max_offline_messages:
-                dropped = queue.popleft()
-                logger.warning(
-                    "Dropping oldest queued message due to capacity",
-                    extra={"user_id": user_id, "dropped": dropped},
-                )
-            if to_left:
-                queue.appendleft(dict(message))
-            else:
-                queue.append(dict(message))
+            dropped = queue[0] if len(queue) == queue.maxlen else None
+            queue.append(payload)
+        if dropped is not None:
+            logger.warning(
+                "Dropping oldest queued message due to capacity",
+                extra={"user_id": user_id, "dropped": dropped},
+            )
 
     async def _flush_offline_queue(self, user_id: str) -> None:
-        queued_messages = await self._drain_offline_queue(user_id)
-        if not queued_messages:
-            return
-        for message in queued_messages:
+        while True:
+            async with self._lock:
+                queue = self._offline_queues.get(user_id)
+                if not queue:
+                    return
+                message = dict(queue[0])
             delivered = await self._send_message(
                 user_id, message, queue_if_offline=False
             )
             if not delivered:
-                await self._queue_message(user_id, message, to_left=True)
-                break
-
-    async def _drain_offline_queue(self, user_id: str) -> List[Dict[str, Any]]:
-        async with self._lock:
-            queue = self._offline_queues.pop(user_id, None)
-            if not queue:
-                return []
-            return list(queue)
+                return
+            async with self._lock:
+                queue = self._offline_queues.get(user_id)
+                if not queue:
+                    continue
+                if queue:
+                    queue.popleft()
+                if not queue:
+                    self._offline_queues.pop(user_id, None)
