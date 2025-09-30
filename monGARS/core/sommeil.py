@@ -41,14 +41,7 @@ class SommeilParadoxal:
             extra={"user_id": user_id},
         )
 
-        try:
-            success = await self.evolution.safe_apply_optimizations()
-        except Exception:
-            logger.exception(
-                "sommeil.optimization.error",
-                extra={"user_id": user_id},
-            )
-            success = False
+        success = await self.evolution.safe_apply_optimizations()
 
         await event_bus().publish(
             make_event(
