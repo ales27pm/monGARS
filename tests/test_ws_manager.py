@@ -1,131 +1,127 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+from typing import List
 
 import pytest
-from fastapi import WebSocketDisconnect
 
 from monGARS.api.ws_manager import WebSocketManager
+from monGARS.core.ui_events import Event
 
 
 class DummyWebSocket:
-    def __init__(
-        self,
-        *,
-        fail_after: int | None = None,
-        fail_with_disconnect: bool = False,
-    ) -> None:
+    def __init__(self, *, fail: bool = False) -> None:
         self.accepted = False
         self.closed = False
-        self.sent: List[Dict[str, Any]] = []
-        self.fail_after = fail_after
-        self.fail_with_disconnect = fail_with_disconnect
-        self.close_code: int | None = None
+        self.sent: List[str] = []
+        self.fail = fail
+        self.event = asyncio.Event()
 
     async def accept(self) -> None:
         self.accepted = True
 
-    async def send_json(self, message: Dict[str, Any]) -> None:
-        if self.fail_after is not None and len(self.sent) >= self.fail_after:
-            if self.fail_with_disconnect:
-                raise WebSocketDisconnect()
+    async def send_text(self, message: str) -> None:
+        if self.fail:
             raise RuntimeError("send failure")
         self.sent.append(message)
+        self.event.set()
 
-    async def close(self, code: int | None = None) -> None:
+    async def close(self) -> None:
         self.closed = True
-        self.close_code = code
 
 
 @pytest.mark.asyncio
-async def test_broadcast_queue_and_replay_on_reconnect() -> None:
-    manager = WebSocketManager(heartbeat_interval=0.1, max_offline_messages=10)
-
-    message = {"payload": "data"}
-    await manager.broadcast("user", message)
-
-    reconnect_ws = DummyWebSocket()
-    await manager.connect("user", reconnect_ws)
-    await manager.flush_offline("user")
-
-    assert reconnect_ws.sent[0]["payload"] == "data"
-
-    await manager.disconnect("user", reconnect_ws)
-
-
-@pytest.mark.asyncio
-async def test_disconnect_and_queue_on_subsequent_broadcast() -> None:
-    manager = WebSocketManager(heartbeat_interval=0.1)
-    active_ws = DummyWebSocket()
-    await manager.connect("user", active_ws)
-
-    await manager.broadcast("user", {"payload": "online"})
-    assert any(msg["payload"] == "online" for msg in active_ws.sent)
-
-    await manager.disconnect("user", active_ws)
-
-    await manager.broadcast("user", {"payload": "queued"})
-
-    new_ws = DummyWebSocket()
-    await manager.connect("user", new_ws)
-    await manager.flush_offline("user")
-    assert any(msg["payload"] == "queued" for msg in new_ws.sent)
-
-    await manager.disconnect("user", new_ws)
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_detects_stale_connection() -> None:
-    manager = WebSocketManager(heartbeat_interval=0.05)
-    failing_ws = DummyWebSocket(fail_after=0)
-
-    await manager.connect("user", failing_ws)
-
-    await asyncio.sleep(0.15)
-
-    async with manager._lock:  # noqa: SLF001 - accessing for assertion in tests
-        assert "user" not in manager.connections or not manager.connections["user"]
-
-
-@pytest.mark.asyncio
-async def test_offline_queue_overflow_drops_oldest(caplog) -> None:
-    manager = WebSocketManager(max_offline_messages=2)
-
-    caplog.set_level("WARNING")
-
-    await manager.broadcast("user", {"seq": 0})
-    await manager.broadcast("user", {"seq": 1})
-    await manager.broadcast("user", {"seq": 2})
-
-    drop_logs = [
-        record
-        for record in caplog.records
-        if "Dropping oldest queued message" in record.message
-    ]
-    assert drop_logs, "Expected warning when offline queue overflows"
-    assert getattr(drop_logs[0], "dropped")["seq"] == 0
-
-    reconnect_ws = DummyWebSocket()
-    await manager.connect("user", reconnect_ws)
-    await manager.flush_offline("user")
-
-    assert [msg["seq"] for msg in reconnect_ws.sent] == [1, 2]
-
-
-@pytest.mark.asyncio
-async def test_generic_send_failure_disconnects_and_queues() -> None:
+async def test_connect_and_disconnect_cleans_up() -> None:
     manager = WebSocketManager()
-    failing_ws = DummyWebSocket(fail_after=0)
+    ws = DummyWebSocket()
 
-    await manager.connect("user", failing_ws)
-    await manager.broadcast("user", {"payload": "queued"})
+    await manager.connect(ws, "user-1")
 
-    async with manager._lock:  # noqa: SLF001 - test-only assertion
-        assert failing_ws not in manager.connections.get("user", set())
+    assert ws.accepted
+    async with manager._lock:  # noqa: SLF001 - test-only inspection
+        assert ws in manager.active["user-1"]
 
-    reconnect_ws = DummyWebSocket()
-    await manager.connect("user", reconnect_ws)
-    await manager.flush_offline("user")
+    await manager.disconnect(ws, "user-1")
 
-    assert reconnect_ws.sent[0]["payload"] == "queued"
+    assert ws.closed
+    async with manager._lock:  # noqa: SLF001 - test-only inspection
+        assert "user-1" not in manager.active
+
+
+@pytest.mark.asyncio
+async def test_send_event_routes_by_user() -> None:
+    manager = WebSocketManager()
+    alice = DummyWebSocket()
+    bob = DummyWebSocket()
+    await manager.connect(alice, "alice")
+    await manager.connect(bob, "bob")
+
+    event = Event(id="1", type="chat.message", ts=1.0, user="alice", data={"x": 1})
+    await manager.send_event(event)
+
+    assert alice.sent, "Expected Alice to receive the event"
+    assert not bob.sent, "Bob should not receive Alice's event"
+
+
+@pytest.mark.asyncio
+async def test_send_event_broadcasts_when_user_missing() -> None:
+    manager = WebSocketManager()
+    sockets = [DummyWebSocket() for _ in range(3)]
+    for idx, ws in enumerate(sockets):
+        await manager.connect(ws, f"user-{idx}")
+
+    event = Event(id="2", type="system.broadcast", ts=2.0, user=None, data={"ok": True})
+    await manager.send_event(event)
+
+    for ws in sockets:
+        assert ws.sent, "All sockets should receive broadcast events"
+
+
+@pytest.mark.asyncio
+async def test_send_event_removes_failing_sockets() -> None:
+    manager = WebSocketManager()
+    healthy = DummyWebSocket()
+    failing = DummyWebSocket(fail=True)
+    await manager.connect(healthy, "user")
+    await manager.connect(failing, "user")
+
+    event = Event(id="3", type="chat.message", ts=3.0, user="user", data={})
+    await manager.send_event(event)
+
+    assert healthy.sent
+    assert failing.closed
+    async with manager._lock:  # noqa: SLF001 - test-only inspection
+        assert failing not in manager.active.get("user", set())
+
+
+@pytest.mark.asyncio
+async def test_background_fanout_consumes_bus(monkeypatch) -> None:
+    manager = WebSocketManager()
+    ws = DummyWebSocket()
+    await manager.connect(ws, "user")
+
+    class DummyBus:
+        def __init__(self) -> None:
+            self.queue: asyncio.Queue[Event] = asyncio.Queue()
+
+        async def publish(self, ev: Event) -> None:
+            await self.queue.put(ev)
+
+        def subscribe(self):  # type: ignore[override]
+            async def iterator():
+                while True:
+                    yield await self.queue.get()
+
+            return iterator()
+
+    bus = DummyBus()
+    monkeypatch.setattr("monGARS.api.ws_manager.event_bus", lambda: bus)
+
+    manager.ensure_background_fanout()
+
+    event = Event(id="4", type="chat.message", ts=4.0, user="user", data={})
+    await bus.publish(event)
+
+    await asyncio.wait_for(ws.event.wait(), timeout=0.5)
+
+    await manager.reset()
