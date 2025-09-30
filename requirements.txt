@@ -8,6 +8,7 @@ python-multipart>=0.0.20
 GPUtil>=1.4.0
 httpx>=0.28.1
 hvac>=2.3.0
+itsdangerous>=2.2.0
 ollama>=0.5.1
 opentelemetry-sdk>=1.35.0
 opentelemetry-exporter-otlp>=1.35.0

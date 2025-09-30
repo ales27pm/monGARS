@@ -16,7 +16,11 @@ from fastapi import (
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
-from monGARS.api.authentication import get_current_admin_user, get_current_user
+from monGARS.api.authentication import (
+    get_current_admin_user,
+    get_current_user,
+)
+from monGARS.api.authentication import router as auth_router
 from monGARS.api.dependencies import (
     get_adaptive_response_generator,
     get_hippocampus,
@@ -31,6 +35,7 @@ from monGARS.core.security import SecurityManager, validate_user_input
 from .ws_manager import WebSocketManager
 
 app = FastAPI(title="monGARS API")
+app.include_router(auth_router)
 sec_manager = SecurityManager()
 _shared_personality = get_personality_engine()
 _shared_dynamic = get_adaptive_response_generator(_shared_personality)
