@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -124,7 +125,10 @@ class Settings(BaseSettings):
         default_factory=lambda: [
             "http://localhost:8000",
             "https://your.app",
-        ]
+        ],
+        description=(
+            "Comma separated or JSON array of origins permitted to use the WebSocket API."
+        ),
     )
     WS_TICKET_TTL_SECONDS: int = Field(default=45, ge=1)
     REDIS_URL: AnyUrl | None = Field(
@@ -135,6 +139,18 @@ class Settings(BaseSettings):
         default=1000,
         ge=1,
         description="Maximum number of events buffered per in-memory subscriber before backpressure is applied.",
+    )
+    WS_RATE_LIMIT_MAX_TOKENS: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum burst of WebSocket events allowed per user. Set to 0 to disable per-user throttling."
+        ),
+    )
+    WS_RATE_LIMIT_REFILL_SECONDS: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Number of seconds required to refill a single WebSocket event token.",
     )
 
     VAULT_URL: str = Field(default="")
@@ -170,6 +186,24 @@ class Settings(BaseSettings):
     def validate_db(cls, value: PostgresDsn) -> PostgresDsn:
         if "postgresql+asyncpg" not in str(value):
             raise ValueError("Invalid async PostgreSQL URL")
+        return value
+
+    @field_validator("WS_ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_ws_origins(cls, value: Any) -> Any:
+        """Allow comma separated or JSON encoded origins."""
+
+        if value is None:
+            return []
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return []
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                parsed = [item.strip() for item in cleaned.split(",") if item.strip()]
+            return parsed
         return value
 
     @model_validator(mode="after")

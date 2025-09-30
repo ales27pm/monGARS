@@ -91,6 +91,20 @@ pytest
 
 Code style is enforced using `black` and `isort` as outlined in `AGENTS.md`.
 
+## Security Hardening Quick Wins
+
+- **Restrict WebSocket origins.** Set the `WS_ALLOWED_ORIGINS` environment variable
+  to the exact frontend origins that should open WebSocket sessions
+  (comma-separated or JSON list), for example
+  `WS_ALLOWED_ORIGINS="https://app.example.com,https://admin.example.com"`.
+- **Terminate TLS at the edge.** Serve `wss://` traffic through your ingress
+  controller (Caddy, Nginx, Traefik, etc.) so certificates and TLS negotiation
+  stay outside of the application container.
+- **Apply rate limiting.** When a reverse proxy limit is not available, enable the
+  built-in per-user token bucket by setting
+  `WS_RATE_LIMIT_MAX_TOKENS` and `WS_RATE_LIMIT_REFILL_SECONDS` to throttle event
+  fan-out directly in `ws_manager.py`.
+
 ## Deployment
 
 Production deployments can be containerised via the provided `Dockerfile`. Kubernetes manifests live in `k8s/` for cluster environments. Adjust resource limits and RBAC rules as required for your infrastructure.
