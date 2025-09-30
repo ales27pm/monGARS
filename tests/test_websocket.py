@@ -15,6 +15,7 @@ from monGARS.core.conversation import ConversationalModule
 def client(monkeypatch):
     hippocampus._memory.clear()
     hippocampus._locks.clear()
+    ws_manager.reset()
 
     async def fake_generate_response(
         self, user_id, query, session_id=None, image_data=None
@@ -32,7 +33,7 @@ def client(monkeypatch):
         client.close()
         hippocampus._memory.clear()
         hippocampus._locks.clear()
-        ws_manager.connections.clear()
+        ws_manager.reset()
 
 
 @pytest.mark.asyncio

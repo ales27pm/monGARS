@@ -160,6 +160,7 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
             )
+        await ws_manager.flush_offline(user_id)
         while True:
             try:
                 await websocket.receive_text()
