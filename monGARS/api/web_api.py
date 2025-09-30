@@ -13,7 +13,6 @@ from monGARS.api.authentication import (
     get_current_admin_user,
     get_current_user,
 )
-from monGARS.api.authentication import router as auth_router
 from monGARS.api.dependencies import (
     get_adaptive_response_generator,
     get_hippocampus,
@@ -27,13 +26,15 @@ from monGARS.core.peer import PeerCommunicator
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import event_bus, make_event
 
-from .ws_manager import router as ws_router
-from .ws_manager import ws_manager as _ws_manager
-
 app = FastAPI(title="monGARS API")
-app.include_router(auth_router)
+
+from . import authentication as auth_routes
+from . import ws_manager
+
+app.include_router(ws_manager.router)
+app.include_router(auth_routes.router)
 app.include_router(ws_ticket_router)
-app.include_router(ws_router)
+_ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
 _shared_personality = get_personality_engine()
 _shared_dynamic = get_adaptive_response_generator(_shared_personality)
