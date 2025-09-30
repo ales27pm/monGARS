@@ -92,6 +92,23 @@ class Settings(BaseSettings):
     )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
 
+    @model_validator(mode="after")
+    def validate_jwt_keys(self) -> "Settings":
+        """Ensure RSA algorithms have properly paired keys configured."""
+        algorithm = self.JWT_ALGORITHM.upper()
+        if algorithm.startswith("RS"):
+            if not self.JWT_PRIVATE_KEY or not self.JWT_PUBLIC_KEY:
+                raise ValueError(
+                    "RS algorithms require both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY to be set."
+                )
+            if "-----BEGIN" not in self.JWT_PRIVATE_KEY:
+                raise ValueError(
+                    "JWT_PRIVATE_KEY must be a PEM-encoded RSA private key."
+                )
+            if "-----BEGIN" not in self.JWT_PUBLIC_KEY:
+                raise ValueError("JWT_PUBLIC_KEY must be a PEM-encoded RSA public key.")
+        return self
+
     database_url: PostgresDsn = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost/mongars_db"
     )

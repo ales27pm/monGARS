@@ -10,6 +10,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import (
+    authenticate_user,
     get_current_admin_user,
     get_current_user,
 )
@@ -29,6 +30,7 @@ from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import event_bus, make_event
 
 app = FastAPI(title="monGARS API")
+logger = logging.getLogger(__name__)
 
 from . import authentication as auth_routes
 from . import ui as ui_routes
@@ -48,8 +50,14 @@ conversation_module = ConversationalModule(
 )
 ws_manager = _ws_manager
 DEFAULT_USERS: dict[str, dict[str, Any]] = {
-    "u1": {"password": "x", "is_admin": True},
-    "u2": {"password": "y", "is_admin": False},
+    "u1": {
+        "password_hash": sec_manager.get_password_hash("x"),
+        "is_admin": True,
+    },
+    "u2": {
+        "password_hash": sec_manager.get_password_hash("y"),
+        "is_admin": False,
+    },
 }
 
 
@@ -63,27 +71,13 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
 ) -> dict:
     """Return a simple access token."""
-    user = await repo.get_user_by_username(form_data.username)
-    if user is None:
-        default_user = DEFAULT_USERS.get(form_data.username)
-        if default_user and form_data.password == default_user["password"]:
-            try:
-                user = await repo.create_user(
-                    form_data.username,
-                    sec_manager.get_password_hash(default_user["password"]),
-                    is_admin=default_user["is_admin"],
-                )
-            except ValueError:
-                user = await repo.get_user_by_username(form_data.username)
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-            )
-
-    if not sec_manager.verify_password(form_data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-        )
+    user = await authenticate_user(
+        repo,
+        form_data.username,
+        form_data.password,
+        sec_manager,
+        DEFAULT_USERS,
+    )
     token = sec_manager.create_access_token(
         {
             "sub": user.username,
@@ -120,16 +114,18 @@ async def register_user(
     reg: UserRegistration,
     repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
 ) -> dict:
-    if reg.username in DEFAULT_USERS:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User exists")
-    existing = await repo.get_user_by_username(reg.username)
-    if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User exists")
     try:
-        await repo.create_user(
-            reg.username, sec_manager.get_password_hash(reg.password)
+        await repo.create_user_atomic(
+            reg.username,
+            sec_manager.get_password_hash(reg.password),
+            reserved_usernames=DEFAULT_USERS.keys(),
         )
     except ValueError as exc:
+        logger.debug(
+            "auth.register.conflict",
+            extra={"username": reg.username},
+            exc_info=exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc

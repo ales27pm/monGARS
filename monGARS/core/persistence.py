@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -150,6 +150,42 @@ class PersistenceRepository:
             return await self._execute_with_retry(
                 operation,
                 operation_name="create_user",
+                retry_exceptions=(OperationalError, InterfaceError),
+            )
+        except IntegrityError as exc:
+            raise ValueError("Username already exists") from exc
+
+    async def create_user_atomic(
+        self,
+        username: str,
+        password_hash: str,
+        *,
+        is_admin: bool = False,
+        reserved_usernames: Iterable[str] | None = None,
+    ) -> UserAccount:
+        reserved = set(reserved_usernames or ())
+
+        async def operation(session):
+            if username in reserved:
+                raise ValueError("Username already exists")
+            async with session.begin():
+                result = await session.execute(
+                    select(UserAccount).where(UserAccount.username == username)
+                )
+                if result.scalar_one_or_none() is not None:
+                    raise ValueError("Username already exists")
+                user = UserAccount(
+                    username=username,
+                    password_hash=password_hash,
+                    is_admin=is_admin,
+                )
+                session.add(user)
+            return user
+
+        try:
+            return await self._execute_with_retry(
+                operation,
+                operation_name="create_user_atomic",
                 retry_exceptions=(OperationalError, InterfaceError),
             )
         except IntegrityError as exc:
