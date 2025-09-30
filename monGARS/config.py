@@ -94,7 +94,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_jwt_keys(self) -> "Settings":
-        """Ensure RSA algorithms have properly paired keys configured."""
+        """Ensure the configured JWT algorithm matches the provided key material."""
+
         algorithm = self.JWT_ALGORITHM.upper()
         if algorithm.startswith("RS"):
             if not self.JWT_PRIVATE_KEY or not self.JWT_PUBLIC_KEY:
@@ -269,6 +270,34 @@ def ensure_secret_key(
     return settings.model_copy(update={"SECRET_KEY": generated_key}), True
 
 
+def validate_jwt_configuration(settings: Settings) -> None:
+    """Validate that JWT settings have consistent key material."""
+
+    algorithm = settings.JWT_ALGORITHM.upper()
+    if algorithm.startswith("HS"):
+        if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
+            raise ValueError(
+                "HS algorithms must not define JWT_PRIVATE_KEY or JWT_PUBLIC_KEY; "
+                "remove them or switch JWT_ALGORITHM to an RS variant."
+            )
+        if not settings.SECRET_KEY:
+            raise ValueError("HS algorithms require SECRET_KEY to be configured.")
+    elif algorithm.startswith("RS"):
+        missing = []
+        if not settings.JWT_PRIVATE_KEY:
+            missing.append("JWT_PRIVATE_KEY")
+        if not settings.JWT_PUBLIC_KEY:
+            missing.append("JWT_PUBLIC_KEY")
+        if missing:
+            raise ValueError(
+                "RS algorithms require the following settings: " + ", ".join(missing)
+            )
+    else:
+        raise ValueError(
+            f"Unsupported JWT_ALGORITHM '{settings.JWT_ALGORITHM}'. Use an HS or RS variant."
+        )
+
+
 async def fetch_secrets_from_vault(
     settings: Settings, attempts: int = 3, delay: float = 1.0
 ) -> dict:
@@ -353,5 +382,6 @@ def get_settings() -> Settings:
         if hasattr(settings, key):
             setattr(settings, key, value)
     settings, _ = ensure_secret_key(settings)
+    validate_jwt_configuration(settings)
     configure_telemetry(settings)
     return settings
