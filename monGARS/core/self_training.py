@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 from uuid import uuid4
 
+from models.datasets import DatasetCatalog, sanitize_record, scrub_text
 from monGARS.core.neurones import EmbeddingSystem
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class SelfTrainingEngine:
             model_registry_path or "models/encoders/self_training"
         )
         self.curated_feature_limit = max(1, curated_feature_limit)
+        self._dataset_catalog = DatasetCatalog(self.dataset_root)
         logger.info("SelfTrainingEngine initialized.")
 
     async def auto_improve(self) -> None:
@@ -95,13 +97,15 @@ class SelfTrainingEngine:
                 logger.info("No curated samples available; skipping training run")
                 return
 
+            sanitized_batch = [sanitize_record(record) for record in curated_batch]
+
             dataset_metadata = await asyncio.to_thread(
-                self._persist_curated_dataset, curated_batch
+                self._persist_curated_dataset, sanitized_batch
             )
 
             try:
                 summary = await asyncio.to_thread(
-                    self._launch_trainer, curated_batch, dataset_metadata
+                    self._launch_trainer, sanitized_batch, dataset_metadata
                 )
             except Exception as exc:  # pragma: no cover - unexpected training error
                 logger.error("Self-training run failed: %s", exc, exc_info=True)
@@ -149,8 +153,12 @@ class SelfTrainingEngine:
                 logger.debug("Skipping record without trainable text")
                 continue
 
+            sanitized_text = scrub_text(text)
+
             try:
-                embedding, used_fallback = await self._embedding_model.encode(text)
+                embedding, used_fallback = await self._embedding_model.encode(
+                    sanitized_text
+                )
             except Exception as exc:  # pragma: no cover - unexpected embedding error
                 logger.warning("Embedding failed for curated record: %s", exc)
                 continue
@@ -161,13 +169,17 @@ class SelfTrainingEngine:
                 logger.debug("Trimmed embedding empty; skipping record")
                 continue
 
+            source_id = record.get("id") or record.get("message_id")
+            if isinstance(source_id, str):
+                source_id = scrub_text(source_id)
+
             curated.append(
                 {
                     "embedding": trimmed_embedding,
                     "target": confidence,
                     "confidence": confidence,
-                    "source_id": record.get("id") or record.get("message_id"),
-                    "text_preview": text[:200],
+                    "source_id": source_id,
+                    "text_preview": sanitized_text[:200],
                     "used_fallback_embedding": used_fallback,
                 }
             )
@@ -216,11 +228,20 @@ class SelfTrainingEngine:
                 handle.write(json.dumps(record, sort_keys=True))
                 handle.write("\n")
 
+        version = self._dataset_catalog.register(
+            run_id=run_id,
+            dataset_dir=dataset_dir,
+            dataset_file=dataset_file,
+            record_count=len(curated_batch),
+        )
+
         return {
             "run_id": run_id,
             "dataset_dir": str(dataset_dir),
             "dataset_file": str(dataset_file),
             "records": len(curated_batch),
+            "version": version.version,
+            "catalog_entry": version.as_dict(),
         }
 
     def _launch_trainer(

@@ -73,6 +73,7 @@ async def test_run_training_cycle_creates_version(
     dataset_file = version["dataset"]["dataset_file"]
     assert Path(dataset_file).exists()
     assert trainer_stub.runs and trainer_stub.runs[0][0]["text_preview"] == "trainable"
+    assert version["dataset"]["version"] == 1
 
 
 @pytest.mark.asyncio
@@ -174,3 +175,39 @@ async def test_run_training_cycle_skips_missing_text_fields(
     assert len(trainer_stub.runs) == 1
     assert len(trainer_stub.runs[0]) == 1
     assert trainer_stub.runs[0][0]["text_preview"] == "train"
+
+
+@pytest.mark.asyncio
+async def test_dataset_catalog_and_pii_scrubbing(
+    tmp_path: Path, trainer_stub: type
+) -> None:
+    engine = SelfTrainingEngine(
+        trainer_cls=trainer_stub,
+        dataset_root=str(tmp_path / "datasets"),
+        model_registry_path=str(tmp_path / "models"),
+    )
+    await engine.training_queue.put(
+        {
+            "text": "Reach me at person@example.com",
+            "confidence": 0.92,
+            "id": "user-123",
+        }
+    )
+    await engine._run_training_cycle()
+
+    version = engine.model_versions["v1"]
+    dataset_meta = version["dataset"]
+    dataset_file = Path(dataset_meta["dataset_file"])
+    assert dataset_file.exists()
+
+    with dataset_file.open("r", encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle]
+
+    assert rows and "[REDACTED_EMAIL]" in rows[0]["text_preview"]
+    assert trainer_stub.runs[0][0]["text_preview"].endswith("[REDACTED_EMAIL]")
+    assert dataset_meta["version"] == 1
+
+    catalog_path = tmp_path / "datasets" / "catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    assert catalog["latest_version"] == 1
+    assert catalog["versions"][0]["run_id"] == dataset_meta["run_id"]
