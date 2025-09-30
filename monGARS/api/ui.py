@@ -2,35 +2,23 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends
 
 from ..core.aui import DEFAULT_ACTIONS, AUISuggester
 from .authentication import get_current_user
+from .schemas import SuggestRequest, SuggestResponse
 
 router = APIRouter(prefix="/api/v1/ui", tags=["ui"])
 logger = logging.getLogger(__name__)
 _suggester = AUISuggester()
 
 
-class SuggestRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=8000)
-    actions: list[str] | None = None
-
-
-class SuggestResponse(BaseModel):
-    actions: list[str]
-    scores: dict[str, float]
-    model: str
-
-
 @router.post("/suggestions", response_model=SuggestResponse)
 async def suggestions(
-    body: SuggestRequest, current=Depends(get_current_user)
+    body: SuggestRequest,
+    current=Depends(get_current_user),
 ) -> SuggestResponse:  # noqa: ANN001
-    prompt = body.prompt.strip()
-    if not prompt:
-        raise HTTPException(status_code=422, detail="prompt is empty")
+    prompt = body.prompt
 
     if body.actions:
         desc_map = {
