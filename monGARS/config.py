@@ -248,7 +248,8 @@ class Settings(BaseSettings):
         except ValueError as exc:  # pragma: no cover - configuration error
             raise ValueError("Invalid REDIS_URL provided") from exc
 
-        return self.model_copy(update={"redis_url": override})
+        object.__setattr__(self, "redis_url", override)
+        return self
 
 
 def ensure_secret_key(
