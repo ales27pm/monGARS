@@ -20,6 +20,10 @@ class WebSocketManager:
         heartbeat_interval: float = 30.0,
         max_offline_messages: int = 100,
     ) -> None:
+        if heartbeat_interval <= 0:
+            raise ValueError("heartbeat_interval must be positive")
+        if max_offline_messages <= 0:
+            raise ValueError("max_offline_messages must be positive")
         self.connections: Dict[str, Set[WebSocket]] = {}
         self._lock = asyncio.Lock()
         self._heartbeat_interval = heartbeat_interval
