@@ -7,10 +7,12 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
+import monGARS.api.ws_manager as ws_module
 from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app, ws_manager
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule
+from monGARS.core.ui_events import make_event
 
 
 @pytest_asyncio.fixture
@@ -121,3 +123,36 @@ async def test_websocket_disconnect_removes_connection(client):
         ws.receive_json()
         assert ws_manager.connections
     assert not ws_manager.connections
+
+
+class _DummyWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def accept(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def send_text(self, payload: str) -> None:
+        self.sent.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_drops_events(monkeypatch):
+    manager = ws_module.WebSocketManager()
+    monkeypatch.setattr(ws_module.settings, "WS_RATE_LIMIT_MAX_TOKENS", 2)
+    monkeypatch.setattr(ws_module.settings, "WS_RATE_LIMIT_REFILL_SECONDS", 60.0)
+    ws = _DummyWebSocket()
+    await manager.connect(ws, "rate-user")
+
+    event = make_event("chat.message", "rate-user", {"seq": 1})
+    await manager.send_event(event)
+    await manager.send_event(event)
+    await manager.send_event(event)
+
+    assert len(ws.sent) == 2
+
+    await manager.disconnect(ws, "rate-user")
+    assert not manager.connections
