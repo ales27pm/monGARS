@@ -263,14 +263,22 @@ class EvolutionEngine:
             logger.exception("Optimization failed")
             return False
 
-    async def train_cycle(self, user_id: str | None = None) -> None:
-        """Execute a training cycle and publish lifecycle events."""
+    async def train_cycle(
+        self,
+        user_id: str | None = None,
+        version: str = "enc_2025_09_29",
+    ) -> None:
+        """Execute a training cycle and publish lifecycle events.
+
+        Args:
+            user_id: Identifier for the user initiating the training cycle.
+            version: Identifier describing the training routine being executed.
+        """
 
         logger.info(
             "evolution.train_cycle.start",
-            extra={"user_id": user_id},
+            extra={"user_id": user_id, "version": version},
         )
-        version = "enc_2025_09_29"
         try:
             await self.apply_optimizations()
         except Exception as exc:
@@ -278,12 +286,12 @@ class EvolutionEngine:
                 make_event(
                     "evolution_engine.training_failed",
                     user_id,
-                    {"error": str(exc)},
+                    {"error": str(exc), "version": version},
                 )
             )
             logger.exception(
                 "evolution.train_cycle.failed",
-                extra={"user_id": user_id},
+                extra={"user_id": user_id, "version": version},
             )
             raise
 

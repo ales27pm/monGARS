@@ -22,6 +22,8 @@ import hmac
 import time
 from collections.abc import Callable
 
+ALLOWED_CLOCK_SKEW_SECONDS = 300
+
 __all__ = [
     "BadSignature",
     "SignatureExpired",
@@ -53,6 +55,11 @@ class TicketSigner:
     clock:
         Optional callable returning the current UNIX timestamp as a float.  This
         is primarily intended for unit tests.
+    clock_skew_tolerance:
+        Allowed difference, in seconds, between the timestamp encoded in a token
+        and the verifier's notion of the current time.  Defaults to five
+        minutes, mirroring typical allowances for clock skew in distributed
+        systems.
     """
 
     _separator = "."
@@ -64,12 +71,16 @@ class TicketSigner:
         salt: str = "monGARS.ws_ticket",
         digestmod: str = "sha256",
         clock: Callable[[], float] | None = None,
+        clock_skew_tolerance: float = ALLOWED_CLOCK_SKEW_SECONDS,
     ) -> None:
         if not secret_key:
             msg = "secret_key must be a non-empty string"
             raise ValueError(msg)
         if not salt:
             msg = "salt must be a non-empty string"
+            raise ValueError(msg)
+        if clock_skew_tolerance < 0:
+            msg = "clock_skew_tolerance must be non-negative"
             raise ValueError(msg)
 
         try:
@@ -80,6 +91,7 @@ class TicketSigner:
         self._secret = secret_key.encode("utf-8")
         self._salt = salt.encode("utf-8")
         self._clock = clock or time.time
+        self._clock_skew_tolerance = float(clock_skew_tolerance)
 
     @staticmethod
     def _b64encode(value: bytes) -> str:
@@ -130,9 +142,12 @@ class TicketSigner:
         except ValueError as exc:
             raise BadSignature("Timestamp is not an integer") from exc
 
+        current_time = self._clock()
+        if issued_at > current_time + self._clock_skew_tolerance:
+            raise BadSignature("Token issue time is in the future")
+
         if max_age is not None:
-            current_time = self._clock()
-            if current_time - issued_at > max_age:
+            if current_time - issued_at > max_age + self._clock_skew_tolerance:
                 raise SignatureExpired("Token has expired")
 
         try:

@@ -30,6 +30,8 @@ from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
 
+STREAM_CHUNK_SIZE = 64
+
 T = TypeVar("T")
 
 
@@ -568,8 +570,7 @@ class LLMIntegration:
     def _parse_ray_urls(self, value: str | None) -> list[str]:
         if not value:
             return []
-        urls = [entry.strip() for entry in value.split(",") if entry.strip()]
-        return urls
+        return [entry.strip() for entry in value.split(",") if entry.strip()]
 
     async def chat(self, user_id: str, prompt: str, stream: bool = True) -> str | None:
         """Generate chat responses and publish UI streaming events."""
@@ -608,6 +609,19 @@ class LLMIntegration:
                 )
             )
             return text
+        except asyncio.CancelledError:
+            logger.info(
+                "llm.chat.cancelled",
+                extra={"user_id": user_id, "stream": stream},
+            )
+            await event_bus().publish(
+                make_event(
+                    "ai_model.response_complete",
+                    user_id,
+                    {"ok": False, "error": "cancelled"},
+                )
+            )
+            raise
         except Exception as exc:
             logger.exception(
                 "llm.chat.error",
@@ -630,12 +644,11 @@ class LLMIntegration:
         response = await self.generate_response(prompt, task_type=task_type)
         text = response.get("text", "") if isinstance(response, dict) else ""
         if text:
-            yield text
+            for start in range(0, len(text), STREAM_CHUNK_SIZE):
+                yield text[start : start + STREAM_CHUNK_SIZE]
 
     async def _inference(self, prompt: str, task_type: str = "general") -> str:
         """Return the full response text for the prompt."""
 
         response = await self.generate_response(prompt, task_type=task_type)
-        if not isinstance(response, dict):
-            return ""
-        return str(response.get("text", ""))
+        return "" if not isinstance(response, dict) else str(response.get("text", ""))
