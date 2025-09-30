@@ -10,6 +10,7 @@ PLATFORMS="linux/arm/v7,linux/arm64/v8"
 # authenticated to your container registry before running this script.
 docker buildx build \
   --platform "$PLATFORMS" \
+  --build-arg JOBS="$(nproc)" \
   -f Dockerfile.embedded \
   -t "$IMAGE_NAME" \
   --push .
