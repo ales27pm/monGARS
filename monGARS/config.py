@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import os
+import secrets
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Any
 
 import hvac
 from opentelemetry import metrics, trace
@@ -13,7 +15,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import BeforeValidator, Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from monGARS.utils.hardware import recommended_worker_count
@@ -21,135 +23,119 @@ from monGARS.utils.hardware import recommended_worker_count
 log = logging.getLogger(__name__)
 
 
+def _parse_env_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    raise ValueError(f"Invalid boolean value: {value!r}")
+
+
+EnvBool = Annotated[bool, BeforeValidator(_parse_env_bool)]
+
+
 class Settings(BaseSettings):
     """Application configuration."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        alias_generator=str.upper,
+        populate_by_name=True,
     )
 
     app_name: str = "monGARS"
     api_version: str = "1.0.0"
 
-    debug: bool = os.getenv("DEBUG", "False").lower() in ("true", "1")
-    host: str = os.getenv("HOST", "127.0.0.1")
-    port: int = int(os.getenv("PORT", 8000))
+    debug: EnvBool = Field(default=False)
+    host: str = Field(default="127.0.0.1")
+    port: int = Field(default=8000)
     workers: int = recommended_worker_count()
-    worker_deployment_name: str = Field(
-        default="mongars-workers", validation_alias="WORKER_DEPLOYMENT_NAME"
-    )
-    worker_deployment_namespace: str = Field(
-        default="default", validation_alias="WORKER_DEPLOYMENT_NAMESPACE"
-    )
+    worker_deployment_name: str = Field(default="mongars-workers")
+    worker_deployment_namespace: str = Field(default="default")
 
     SECRET_KEY: str | None = Field(
-        default_factory=lambda: os.getenv("SECRET_KEY"),
+        default=None,
         min_length=1,
         description="Application secret used for JWT signing; override in production.",
     )
-    JWT_ALGORITHM: str = "RS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ALGORITHM: str = Field(default="HS256")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
 
     database_url: PostgresDsn = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost/mongars_db"
     )
-    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", 5))
-    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", 10))
-    db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", 30))
+    db_pool_size: int = Field(default=5)
+    db_max_overflow: int = Field(default=10)
+    db_pool_timeout: int = Field(default=30)
     redis_url: RedisDsn = Field(default="redis://localhost:6379/0")
 
-    IN_MEMORY_CACHE_SIZE: int = int(os.getenv("IN_MEMORY_CACHE_SIZE", 10000))
-    DISK_CACHE_PATH: str = os.getenv("DISK_CACHE_PATH", "/tmp/mongars_cache")
-    DOC_RETRIEVAL_URL: str = os.getenv("DOC_RETRIEVAL_URL", "http://localhost:8080")
+    IN_MEMORY_CACHE_SIZE: int = Field(default=10000)
+    DISK_CACHE_PATH: str = Field(default="/tmp/mongars_cache")
+    DOC_RETRIEVAL_URL: str = Field(default="http://localhost:8080")
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
-        validation_alias="LLM_ADAPTER_REGISTRY_PATH",
         description="Directory storing adapter artifacts and manifest.",
     )
     curiosity_similarity_threshold: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        validation_alias="CURIOSITY_SIMILARITY_THRESHOLD",
         description="Cosine similarity threshold used to determine whether prior queries satisfy the current prompt.",
     )
     curiosity_minimum_similar_history: int = Field(
         default=3,
         ge=0,
-        validation_alias="CURIOSITY_MIN_SIMILAR_HISTORY",
         description="Minimum number of similar historical interactions required before skipping external research.",
     )
     curiosity_graph_gap_cutoff: int = Field(
         default=1,
         ge=1,
-        validation_alias="CURIOSITY_GRAPH_GAP_CUTOFF",
         description="Minimum number of missing entities detected in the knowledge graph before triggering research.",
     )
-    MLFLOW_TRACKING_URI: str = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-    FASTAPI_URL: str = os.getenv("FASTAPI_URL", "http://localhost:8000")
+    MLFLOW_TRACKING_URI: str = Field(default="http://localhost:5000")
+    FASTAPI_URL: str = Field(default="http://localhost:8000")
 
-    otel_service_name: str = os.getenv("OTEL_SERVICE_NAME", "mongars-api")
-    otel_debug: bool = os.getenv("OTEL_DEBUG", "False").lower() in ("true", "1")
-    otel_collector_url: str = os.getenv("OTEL_COLLECTOR_URL", "http://localhost:4318")
-    otel_metrics_enabled: bool = os.getenv("OTEL_METRICS_ENABLED", "True").lower() in (
-        "true",
-        "1",
-    )
-    otel_traces_enabled: bool = os.getenv("OTEL_TRACES_ENABLED", "True").lower() in (
-        "true",
-        "1",
-    )
+    otel_service_name: str = Field(default="mongars-api")
+    otel_debug: EnvBool = Field(default=False)
+    otel_collector_url: str = Field(default="http://localhost:4318")
+    otel_metrics_enabled: EnvBool = Field(default=True)
+    otel_traces_enabled: EnvBool = Field(default=True)
 
-    VAULT_URL: str = os.getenv("VAULT_URL", "")
-    VAULT_TOKEN: str = os.getenv("VAULT_TOKEN", "")
+    VAULT_URL: str = Field(default="")
+    VAULT_TOKEN: str = Field(default="")
 
-    AI_MODEL_NAME: str = os.getenv("AI_MODEL_NAME", "gpt-3.5-turbo")
-    AI_MODEL_TEMPERATURE: float = float(os.getenv("AI_MODEL_TEMPERATURE", 0.7))
-    USE_GPU: bool = os.getenv("USE_GPU", "False").lower() in ("true", "1")
+    AI_MODEL_NAME: str = Field(default="gpt-3.5-turbo")
+    AI_MODEL_TEMPERATURE: float = Field(default=0.7)
+    USE_GPU: EnvBool = Field(default=False)
     default_language: str = "fr-CA"
-    caption_prefix: str = os.getenv(
-        "CAPTION_PREFIX",
-        "Description de l'image:",
-    )
-    otel_logs_enabled: bool = os.getenv("OTEL_LOGS_ENABLED", "True").lower() in (
-        "true",
-        "1",
-    )
-    style_base_model: str = Field(
-        default="hf-internal-testing/tiny-random-gpt2",
-        validation_alias="STYLE_BASE_MODEL",
-    )
-    style_adapter_dir: str = Field(
-        default=os.getenv("STYLE_ADAPTER_DIR", "/tmp/mongars_style"),
-        validation_alias="STYLE_ADAPTER_DIR",
-    )
-    style_max_history: int = Field(default=int(os.getenv("STYLE_MAX_HISTORY", 20)))
-    style_min_samples: int = Field(default=int(os.getenv("STYLE_MIN_SAMPLES", 2)))
-    style_max_steps: int = Field(default=int(os.getenv("STYLE_MAX_STEPS", 6)))
-    style_learning_rate: float = Field(
-        default=float(os.getenv("STYLE_LEARNING_RATE", 5e-4))
-    )
-    style_use_qlora: bool = Field(
-        default=os.getenv("STYLE_USE_QLORA", "False").lower() in ("true", "1"),
-        validation_alias="STYLE_USE_QLORA",
-    )
-    style_max_concurrent_trainings: int = Field(
-        default=int(os.getenv("STYLE_MAX_CONCURRENT_TRAININGS", 2))
-    )
-    style_adapter_ttl_seconds: int = Field(
-        default=int(os.getenv("STYLE_ADAPTER_TTL", 3600))
-    )
-    style_adapter_maxsize: int = Field(
-        default=int(os.getenv("STYLE_ADAPTER_MAXSIZE", 64))
-    )
+    caption_prefix: str = Field(default="Description de l'image:")
+    otel_logs_enabled: EnvBool = Field(default=True)
+    style_base_model: str = Field(default="hf-internal-testing/tiny-random-gpt2")
+    style_adapter_dir: str = Field(default="/tmp/mongars_style")
+    style_max_history: int = Field(default=20)
+    style_min_samples: int = Field(default=2)
+    style_max_steps: int = Field(default=6)
+    style_learning_rate: float = Field(default=5e-4)
+    style_use_qlora: EnvBool = Field(default=False)
+    style_max_concurrent_trainings: int = Field(default=2)
+    style_adapter_ttl_seconds: int = Field(default=3600)
+    style_adapter_maxsize: int = Field(default=64)
     mimicry_positive_lexicon_path: str | None = Field(
         default=None,
-        validation_alias="MIMICRY_POSITIVE_LEXICON_PATH",
         description="Optional path to a file containing additional positive sentiment terms.",
     )
     mimicry_negative_lexicon_path: str | None = Field(
         default=None,
-        validation_alias="MIMICRY_NEGATIVE_LEXICON_PATH",
         description="Optional path to a file containing additional negative sentiment terms.",
     )
 
@@ -159,6 +145,25 @@ class Settings(BaseSettings):
         if "postgresql+asyncpg" not in str(value):
             raise ValueError("Invalid async PostgreSQL URL")
         return value
+
+
+def ensure_secret_key(
+    settings: Settings, *, log_message: str | None = None
+) -> tuple[Settings, bool]:
+    """Ensure the settings object contains a SECRET_KEY."""
+
+    if settings.SECRET_KEY:
+        return settings, False
+    if not settings.debug:
+        raise ValueError("SECRET_KEY must be provided in production")
+    message = (
+        log_message
+        if log_message is not None
+        else "SECRET_KEY not configured; generated ephemeral key for debug use only."
+    )
+    log.warning(message)
+    generated_key = secrets.token_urlsafe(64)
+    return settings.model_copy(update={"SECRET_KEY": generated_key}), True
 
 
 async def fetch_secrets_from_vault(
@@ -244,7 +249,6 @@ def get_settings() -> Settings:
     for key, value in vault_secrets.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
-    if not settings.SECRET_KEY and not settings.debug:
-        raise ValueError("SECRET_KEY must be provided in production")
+    settings, _ = ensure_secret_key(settings)
     configure_telemetry(settings)
     return settings

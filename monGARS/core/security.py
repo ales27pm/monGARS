@@ -1,3 +1,4 @@
+import logging
 import re
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
@@ -11,19 +12,37 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-from monGARS.config import get_settings
+from monGARS.config import Settings, ensure_secret_key, get_settings
 
-settings = get_settings()
+log = logging.getLogger(__name__)
 
 
 class SecurityManager:
     def __init__(
         self,
-        secret_key: str = settings.SECRET_KEY,
-        algorithm: str = settings.JWT_ALGORITHM,
+        secret_key: Optional[str] = None,
+        algorithm: Optional[str] = None,
+        settings: Optional[Settings] = None,
     ) -> None:
-        self.secret_key = secret_key
-        self.algorithm = algorithm
+        base_settings = settings or get_settings()
+        if secret_key and not base_settings.SECRET_KEY:
+            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+
+        resolved_secret = secret_key or base_settings.SECRET_KEY
+        if not resolved_secret:
+            base_settings, _ = ensure_secret_key(
+                base_settings,
+                log_message=(
+                    "SECRET_KEY missing during SecurityManager init; using ephemeral key."
+                ),
+            )
+            resolved_secret = base_settings.SECRET_KEY
+        elif secret_key and base_settings.SECRET_KEY != secret_key:
+            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+
+        self._settings = base_settings
+        self.secret_key = resolved_secret
+        self.algorithm = algorithm or self._settings.JWT_ALGORITHM
         # ``passlib`` defaults to bcrypt, but that backend is optional and
         # raises a ``ValueError`` when the optimized extension is absent.  This
         # broke our test environment, so we switch to ``pbkdf2_sha256`` which is
@@ -53,8 +72,7 @@ class SecurityManager:
         to_encode = data.copy()
         expire = datetime.now(timezone.utc) + (
             expires_delta
-            if expires_delta
-            else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+            or timedelta(minutes=self._settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         )
         to_encode.update({"exp": expire.timestamp()})
         return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
@@ -79,6 +97,7 @@ class SecurityManager:
 
 def _get_fernet(key: Union[str, bytes, None] = None) -> Fernet:
     """Return a Fernet instance derived from the provided key."""
+    settings = get_settings()
     raw_key = (
         key.encode()
         if isinstance(key, str)
