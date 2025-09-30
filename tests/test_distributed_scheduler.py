@@ -28,7 +28,8 @@ async def test_scheduler_broadcasts(monkeypatch):
     await asyncio.sleep(0.05)
     scheduler.stop()
     await run_task
-    assert calls[0] == {"result": "done"}
+    assert calls[0]["result"] == "done"
+    assert "origin" in calls[0]
 
 
 @pytest.mark.asyncio
@@ -83,7 +84,8 @@ async def test_scheduler_metrics_snapshot(monkeypatch):
     await runner
 
     snapshot = await scheduler.get_metrics_snapshot()
-    assert sent == [{"result": "payload"}]
+    assert sent[0]["result"] == "payload"
+    assert sent[0]["origin"]
     assert snapshot["queue_depth"] == 0
     assert snapshot["tasks_processed"] == 1
     assert snapshot["tasks_failed"] == 0
@@ -118,7 +120,7 @@ async def test_scheduler_failure_metrics(monkeypatch):
     await runner
 
     snapshot = await scheduler.get_metrics_snapshot()
-    assert sent == [{"result": "ok"}]
+    assert sent[0]["result"] == "ok"
     assert snapshot["tasks_processed"] == 2
     assert snapshot["tasks_failed"] == 1
     assert snapshot["task_failure_rate"] == pytest.approx(0.5)
@@ -165,7 +167,7 @@ async def test_scheduler_metrics_logging(monkeypatch):
         await runner
 
     snapshot = await scheduler.get_metrics_snapshot()
-    assert sent == [{"result": "ok"}]
+    assert sent[0]["result"] == "ok"
     assert snapshot["tasks_processed"] == 2
     assert snapshot["tasks_failed"] == 1
     assert snapshot["task_failure_rate"] == pytest.approx(0.5)
@@ -173,3 +175,86 @@ async def test_scheduler_metrics_logging(monkeypatch):
     assert len(metrics_logs) >= 3
     assert "tasks_processed" in metrics_logs[-1]
     assert metrics_logs[-1]["tasks_processed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduler_routes_to_least_loaded(monkeypatch):
+    communicator = PeerCommunicator(
+        [
+            "http://peer1/api/v1/peer/message",
+            "http://peer2/api/v1/peer/message",
+        ]
+    )
+    routed: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+
+    async def fake_send_to(peers, message):
+        routed.append((tuple(peers), message))
+        return [True] * len(tuple(peers))
+
+    async def fake_send(message):
+        routed.append((("broadcast",), message))
+        return [True] * len(communicator.peers)
+
+    async def fake_fetch_peer_loads():
+        return {
+            "http://peer1/api/v1/peer/message": 0.2,
+            "http://peer2/api/v1/peer/message": 0.9,
+        }
+
+    monkeypatch.setattr(communicator, "send_to", fake_send_to)
+    monkeypatch.setattr(communicator, "send", fake_send)
+    monkeypatch.setattr(communicator, "fetch_peer_loads", fake_fetch_peer_loads)
+
+    scheduler = DistributedScheduler(communicator, concurrency=1)
+
+    async def task():
+        return "payload"
+
+    await scheduler.add_task(task)
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.1)
+    scheduler.stop()
+    await runner
+
+    assert routed
+    first_route, message = routed[0]
+    assert first_route == ("http://peer1/api/v1/peer/message",)
+    assert message["result"] == "payload"
+    assert "origin" in message
+
+
+@pytest.mark.asyncio
+async def test_scheduler_falls_back_to_broadcast_when_no_better_peer(monkeypatch):
+    communicator = PeerCommunicator(["http://peer/api/v1/peer/message"])
+    calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+
+    async def fake_send(message):
+        calls.append((("broadcast",), message))
+        return [True]
+
+    async def fake_send_to(peers, message):
+        calls.append((tuple(peers), message))
+        return [True] * len(tuple(peers))
+
+    async def fake_fetch_peer_loads():
+        return {"http://peer/api/v1/peer/message": 5.0}
+
+    monkeypatch.setattr(communicator, "send", fake_send)
+    monkeypatch.setattr(communicator, "send_to", fake_send_to)
+    monkeypatch.setattr(communicator, "fetch_peer_loads", fake_fetch_peer_loads)
+
+    scheduler = DistributedScheduler(communicator, concurrency=1)
+
+    async def task():
+        return "payload"
+
+    await scheduler.add_task(task)
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.1)
+    scheduler.stop()
+    await runner
+
+    assert calls
+    route, message = calls[0]
+    assert route == ("broadcast",)
+    assert message["result"] == "payload"

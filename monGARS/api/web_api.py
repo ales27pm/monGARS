@@ -22,6 +22,7 @@ from monGARS.api.dependencies import (
 from monGARS.api.schemas import (
     ChatRequest,
     ChatResponse,
+    PeerLoadSnapshot,
     PeerMessage,
     PeerRegistration,
     UserRegistration,
@@ -247,3 +248,14 @@ async def peer_list(
 ) -> list[str]:
     """Return the list of registered peer URLs."""
     return sorted(communicator.peers)
+
+
+@app.get("/api/v1/peer/load", response_model=PeerLoadSnapshot)
+async def peer_load(
+    current_user: dict = Depends(get_current_admin_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> PeerLoadSnapshot:
+    """Expose this node's scheduler load metrics to peers."""
+
+    snapshot = await communicator.get_local_load()
+    return PeerLoadSnapshot(**snapshot)

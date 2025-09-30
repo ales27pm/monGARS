@@ -8,7 +8,8 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
   integration (URL configured via `RAY_SERVE_URL`). When `USE_RAY_SERVE` is set
   the service streams adapter metadata from `LLM_ADAPTER_REGISTRY_PATH`
   (`models/encoders` by default) so new LLM2Vec adapters are propagated to Ray
-  replicas without manual restarts.
+  replicas without manual restarts. See `docs/ray_serve_deployment.md` for
+  deployment steps and fallback behaviour.
 - **Memory management** through the in-memory `Hippocampus` and persistent storage via `PersistenceRepository`.
 - **Adaptive behaviour** using the `MimicryModule`, `PersonalityEngine` and `AdaptiveResponseGenerator`.
 - **Web scraping** utilities provided by `Iris` for retrieving external context.
@@ -28,7 +29,9 @@ monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI sy
 - **Conversation endpoints** `/api/v1/conversation/chat` to generate responses
   with sanitized input and `/api/v1/conversation/history` to retrieve past
   interactions.
-- **Distributed task scheduling** handled by `DistributedScheduler` to share work between peers.
+- **Distributed task scheduling** handled by `DistributedScheduler` with
+  load-aware routing that favours the least busy peers while falling back to
+  broadcast when none are available.
 - **Idle-time optimization** through `SommeilParadoxal` which triggers upgrades when the system is quiet.
 - **Safe optimization cycles** executed by `EvolutionEngine.safe_apply_optimizations`.
 
