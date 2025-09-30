@@ -1,55 +1,46 @@
-# monGARS Repository vs Memory Alignment
+# Repository ↔ Memory Alignment
 
-This document captures the relationship between the modules present in the
-`monGARS` repository and the architectural components referenced in the
-assistant's long-term project memory. Use it as an onboarding aid when mapping
-historical design notes to the current codebase.
+Use this mapping to translate long-term project memory references into concrete
+code locations inside the monGARS repository. Update the table whenever
+architecture or naming conventions change.
 
 ## API Layer
-- `api/authentication.py` ←→ **Security model** (HMAC tokens with planned JWT
-  support).
-- `api/dependencies.py` ←→ **Backend scaffolding** utilities for FastAPI.
-- `api/web_api.py` ←→ **Bouche** (dialogue engine), `APIService.swift`
-  integration points, and browser speech clients.
+| Memory Term | Repository Target | Notes |
+| --- | --- | --- |
+| Bouche (dialogue API) | `monGARS/api/web_api.py` | REST endpoints for chat, history, peers, and health checks. |
+| Security model | `monGARS/api/authentication.py`, `monGARS/core/security.py` | OAuth2 password flow, JWT issuance, Fernet utilities. |
+| Backend scaffolding | `monGARS/api/dependencies.py` | Dependency injection helpers for FastAPI routes. |
+| Speech/Browser clients | `monGARS/api/ws_manager.py` | WebSocket fan-out with connection bookkeeping. |
 
 ## Core Services
-- `core/conversation.py` ←→ **Bouche + Cortex** orchestration for dialogue
-  flows.
-- `core/evolution_engine.py` ←→ **Evolution Engine** and Sommeil Paradoxal
-  testing loops.
-- `core/llm_integration.py` ←→ **monGARS LLM bucket** (currently unpopulated in
-  memory).
-- `core/logging.py` ←→ **Mémoire Autobiographique** (structured logging and
-  historical traceability).
-- `core/monitor.py` ←→ **Sommeil Paradoxal diagnostics** and Evolution Engine
-  validation checks.
-- `core/caching/tiered_cache.py` ←→ **Hippocampus** (short-term cache layered on
-  vector embeddings).
-- `core/neuro_symbolic/advanced_reasoning.py` ←→ **Tronc** (neuro-symbolic
-  curiosity engine experiments).
+| Memory Term | Repository Target | Notes |
+| --- | --- | --- |
+| Cortex + Bouche orchestration | `monGARS/core/conversation.py` | ConversationalModule coordinating memory, curiosity, LLM, mimicry. |
+| Hippocampus | `monGARS/core/hippocampus.py` | In-memory, lock-guarded conversation history. |
+| Evolution Engine / Sommeil Paradoxal | `monGARS/core/evolution_engine.py`, `monGARS/core/sommeil.py` | Diagnostics, safe optimisation, idle-time triggers. |
+| Mémoire Autobiographique | `monGARS/core/logging.py`, `monGARS/core/ui_events.py` | Structured logging and typed event bus. |
+| Tronc (neuro-symbolic reasoning) | `monGARS/core/neuro_symbolic/advanced_reasoner.py` | Heuristic reasoning hints for the LLM pipeline. |
 
 ## Testing Infrastructure
-- `tests/integration_test.py` ←→ Phase 1 validation workflows.
-- `tests/self_training_test.py` ←→ Sommeil Paradoxal + Evolution Engine
-  self-optimization routines.
-- `tests/property_test.py` ←→ Cortex + Mimicry behaviour consistency checks.
-- `tests/chaos_test.py` ←→ Robustness testing for autonomy and offline-first
-  guarantees.
+| Memory Term | Repository Target | Notes |
+| --- | --- | --- |
+| Phase validation workflows | `tests/integration_test.py` | End-to-end validation of cognition pipelines. |
+| Self-optimisation routines | `tests/self_training_test.py` | Covers self-training engine versioning. |
+| Robustness guarantees | `tests/chaos_test.py` | Circuit breaker and failure-injection scenarios. |
+| Behaviour invariants | `tests/property_test.py` | Property-based coverage for tiered caching. |
 
 ## Platform & Operations
-- `init_db.py` ←→ **Hippocampus** semantic memory database provisioning
-  (Postgres + pgvector).
-- `tasks.py` ←→ **Sommeil Paradoxal** background job scheduling.
-- `docker-compose.yml` ←→ Local orchestration for Cortex, Hippocampus, and
-  auxiliary services.
-- `Dockerfile` ←→ Baseline container specification.
-- `k8s/deployment.yaml` ←→ Future distributed deployment plans.
-- `k8s/prometheus.yaml` ←→ Monitoring hooks for Sommeil Paradoxal diagnostics.
-- `k8s/secrets.yaml` ←→ Runtime secrets (align with planned AES-256 storage).
-- `.github/workflows/ci-cd.yml` ←→ Automated validation via Evolution Engine
-  pipelines.
+| Memory Term | Repository Target | Notes |
+| --- | --- | --- |
+| Hippocampus provisioning | `init_db.py` | SQLModel schema definitions and migrations. |
+| Background scheduling | `tasks.py`, `monGARS/core/distributed_scheduler.py` | Celery-style helpers and async queues. |
+| Container orchestration | `docker-compose.yml`, `Dockerfile*` | Local stack provisioning and build scripts. |
+| Kubernetes manifests | `k8s/*.yaml` | Deployments, Prometheus scraping, RBAC, secrets. |
 
-## Related Documentation
-- `monGARS_structure.txt` and `ROADMAP.md` carry historical notes referenced in
-  the memory archive. Update this mapping whenever major architectural changes
-  land to keep the knowledge base synchronized.
+## Documentation
+- `monGARS_structure.txt` – canonical directory overview referenced by long-term
+  memory entries.
+- `ROADMAP.md` – planned milestones and their current status.
+
+Keep this alignment file updated after large refactors so the assistant’s memory
+remains trustworthy.

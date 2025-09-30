@@ -1,19 +1,16 @@
-# monGARS OpenAPI Catalogue
+# monGARS API Catalogue
 
-This directory contains generated artefacts and client guides for the public
-FastAPI surface exposed by `monGARS.api.web_api`. The specification is updated
-from the running application to ensure feature parity with the deployed
-behaviour.
+This directory contains the generated OpenAPI specification and example client
+implementations for the FastAPI surface exposed by `monGARS.api.web_api`.
 
-## Specification Files
-
+## Contents
 - [`openapi.json`](openapi.json) – canonical machine-readable description of
   every route, request/response model, and authentication requirement.
+- [`clients/`](clients) – typed client examples for Python and TypeScript.
 
 ## Regenerating the Specification
-
-The schema depends on a configured `SECRET_KEY`. When regenerating, provide a
-throwaway value via the environment so the FastAPI application can boot:
+Ensure `SECRET_KEY` is set (a throwaway value is fine) so the FastAPI app can
+boot while generating the schema.
 
 ```bash
 SECRET_KEY="dev-secret" python - <<'PY'
@@ -31,12 +28,13 @@ print(f"wrote {output_path}")
 PY
 ```
 
-Commit the updated `openapi.json` alongside any API changes. Downstream client
-generators (see below) rely on the canonical file.
+Commit the updated `openapi.json` alongside any API change; downstream client
+code depends on it.
 
-## Example Client Libraries
+## Client Guidance
+- [Python example](clients/python.md) – async `httpx` client backed by Pydantic
+  models with optional SDK generation instructions.
+- [TypeScript example](clients/typescript.md) – `openapi-typescript-codegen`
+  workflow for Node.js or React Native consumers.
 
-Sample integrations for popular stacks are documented under
-[`clients/`](clients). Each client example includes dependency instructions,
-authentication helpers, and typed request wrappers that mirror the generated
-schema.
+Keep examples updated when endpoints, schemas, or authentication flows evolve.

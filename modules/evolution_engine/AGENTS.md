@@ -1,26 +1,26 @@
-# Evolution Engine Guidelines
+# Evolution Engine Standards
 
-`EvolutionOrchestrator` in `orchestrator.py` coordinates encoder refresh
-pipelines that invoke the MNTP trainer and persist artifacts under
-`models/encoders/`.
+`modules/evolution_engine/` coordinates adapter retraining and operational
+self-healing.
 
-- Treat the orchestrator as a pure coordinator. It should assemble trainers from
-  `modules.neurons.training` and return artifact paths without mutating global
-  state beyond logging.
-- Keep pipeline stages explicit. When you add steps (e.g. validation, metrics
-  export), expose them as dedicated methods so they can be unit-tested and
-  chained from `trigger_encoder_training_pipeline`.
-- Wrap external calls with precise error handling. Reuse the logging pattern in
-  the current implementation—log before launching, record the final artifact
-  path, and re-raise unexpected exceptions so the caller can respond.
-- Configuration defaults should continue to point at
-  `configs/training/mntp_mistral_config.json`. Accept overrides via constructor
-  arguments for reproducibility in tests and automation.
+## Orchestration Principles
+- Keep `EvolutionOrchestrator` focused on sequencing. Instantiate trainers from
+  `modules.neurons.training` and return artifact metadata; avoid mutating global
+  state.
+- Represent pipeline stages with explicit methods (validation, training,
+  deployment) so tests can exercise them individually.
+- Wrap external calls with targeted exception handling. Log the action, propagate
+  unexpected errors, and ensure callers receive actionable messages.
+
+## Configuration
+- Default configs should point to `configs/training/mntp_mistral_config.json`.
+  Accept overrides via constructor arguments for deterministic tests and batch
+  jobs.
+- Document new config keys and update the README/roadmap when pipeline defaults
+  change.
 
 ## Testing
-- Update `tests/test_evolution_engine.py` when you alter pipeline behaviour.
-  The test currently asserts that the returned path exists and that trainer
-  methods are invoked; expand it to cover new side effects or error modes.
-- Use `pytest` fixtures to replace `MNTPTrainer` with a fake implementation when
-  validating orchestration logic. Keep temporary directories isolated under
-  `tmp_path`.
+- Extend `tests/test_evolution_engine.py` to cover new stages, success/failure
+  cases, and artifact validation.
+- Replace `MNTPTrainer` with fakes in fixtures when unit testing so tests remain
+  fast and hermetic.

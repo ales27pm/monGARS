@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="540" viewBox="0 0 1024 540" role="img" aria-labelledby="title desc">
+  <title id="title">Deployment stack</title>
+  <desc id="desc">Illustration of local, container, and Kubernetes deployment paths for monGARS.</desc>
+  <style>
+    text { font-family: 'Inter', sans-serif; fill: #1f2937; font-size: 18px; }
+    .header { font-size: 20px; font-weight: 600; }
+    rect { rx: 16; ry: 16; stroke-width: 2; }
+    .local { fill: #fef3c7; stroke: #d97706; }
+    .container { fill: #ede9fe; stroke: #7c3aed; }
+    .k8s { fill: #d1fae5; stroke: #10b981; }
+    line { stroke: #4b5563; stroke-width: 2; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4b5563" />
+    </marker>
+  </defs>
+  <rect x="80" y="150" width="240" height="180" class="local" />
+  <text x="100" y="195" class="header">Local</text>
+  <text x="100" y="230">Python 3.11 + uvicorn</text>
+  <text x="100" y="258">init_db.py provisioning</text>
+  <text x="100" y="286">pytest / lint</text>
+  <rect x="380" y="80" width="260" height="220" class="container" />
+  <text x="400" y="130" class="header">Containers</text>
+  <text x="400" y="165">Dockerfile &amp; .embedded</text>
+  <text x="400" y="193">docker-compose up</text>
+  <text x="400" y="221">build_native.sh / build_embedded.sh</text>
+  <rect x="700" y="150" width="240" height="200" class="k8s" />
+  <text x="720" y="195" class="header">Kubernetes</text>
+  <text x="720" y="230">k8s/deployment.yaml</text>
+  <text x="720" y="258">rbac.yaml &amp; secrets</text>
+  <text x="720" y="286">Ray Serve optional</text>
+  <line x1="320" y1="220" x2="380" y2="190" />
+  <line x1="640" y1="190" x2="700" y2="220" />
+</svg>

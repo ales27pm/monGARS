@@ -1,17 +1,27 @@
 # Code Audit Summary — 2024-11-26
 
 ## Scope
-- Triggered full unit test suite with `pytest` to surface runtime defects.
-- Focused remediation on authentication stack where import-time user bootstrapping exercises password hashing routines.
+- Executed the full `pytest` suite to surface runtime defects.
+- Focused on the authentication stack where import-time user bootstrapping
+  exercises password hashing routines.
 
 ## Findings
-- `monGARS/core/security.py` instantiated a `CryptContext` with the `bcrypt` scheme. In environments lacking the optional C backend, Passlib raises `ValueError: password cannot be longer than 72 bytes` during backend detection.
-- The error prevented API modules from importing, causing every FastAPI test module to fail during collection.
+- `monGARS/core/security.py` instantiated a `CryptContext` with the `bcrypt`
+  scheme. In environments lacking the optional C backend, Passlib raised
+  `ValueError: password cannot be longer than 72 bytes` during backend detection,
+  preventing FastAPI modules from importing.
 
 ## Remediation
-- Switched password hashing to `pbkdf2_sha256` with 390,000 rounds. The algorithm is implemented in pure Python and avoids the brittle backend detection path while maintaining a high work factor.
-- Added inline documentation explaining the rationale so future maintainers understand the security and portability trade-offs.
+- Switched password hashing to `pbkdf2_sha256` with 390k iterations—a pure-Python
+  implementation that avoids brittle backend detection while maintaining a strong
+  work factor.
+- Added inline documentation clarifying the trade-offs so future maintainers know
+  why bcrypt was replaced.
 
 ## Recommendations
-- If legacy bcrypt hashes exist in production data, plan a rolling re-hash to PBKDF2 on next successful login, or ensure the `bcrypt` wheel is bundled with the deployment image.
-- Consider pinning `Passlib` in `requirements.txt` and capturing backend availability in CI to avoid future regressions.
+- If legacy bcrypt hashes exist, rehash to PBKDF2 on the next successful login or
+  bundle the `bcrypt` wheel in deployment images.
+- Pin `passlib` in `requirements.txt` and record backend availability in CI to
+  prevent regressions.
+- Periodically rerun the audit after dependency upgrades or authentication flow
+  changes.

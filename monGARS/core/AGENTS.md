@@ -1,42 +1,38 @@
-# Core Engine Guidelines
+# Core Engine Standards
 
-Components here coordinate perception, memory, reasoning, and output for
-monGARS. Most public methods are asynchronous and orchestrate multiple
-subsystems.
+`monGARS/core/` contains the cognition pipeline, memory abstractions, scheduling
+primitives, and adaptive behaviour modules. Extend the root and package
+guidelines with the rules below.
 
 ## Architectural Patterns
-- Keep orchestrators thin. `conversation.ConversationalModule` composes
-  Hippocampus, LLM integration, curiosity, mimicry, and persistence services.
-  New collaborators should expose async interfaces and be injected through the
-  constructor for testability.
-- Reuse shared services: `persistence.PersistenceRepository` for storage,
-  `hippocampus.Hippocampus` for memory, `distributed_scheduler.DistributedScheduler`
-  for background work, and `peer.PeerCommunicator` for messaging. Avoid
-  duplicating logic already encapsulated in these modules.
-- When adding cognitive behaviours (e.g. new curiosity heuristics or sleep
-  cycles), update module-level docstrings to capture the rationale and mention
-  any tunable constants.
+- Keep orchestrators thin. Inject collaborators through constructors and expose
+  asynchronous interfaces (`async def`) so tests can patch behaviours.
+- Reuse existing services (`Hippocampus`, `PersistenceRepository`,
+  `DistributedScheduler`, `PeerCommunicator`) instead of introducing parallel
+  state machines.
+- Document new behaviours in module docstrings, including tuning knobs or
+  heuristics, so the reasoning behind defaults is preserved.
 
 ## Asynchrony & Performance
-- Preserve async workflows end-to-end. Methods such as
-  `ConversationalModule.generate_response`, `MimicryModule.adapt_response_style`,
-  and `SommeilParadoxal.run_cycle` are awaited across the stack. Use
-  `asyncio.to_thread` if you must call blocking libraries.
-- Leverage caching helpers under `core/caching/` and avoid long-lived globals.
-  Clear caches in tests via fixtures (see `tests/test_tiered_cache.py`).
+- Preserve async flows end-to-end. Wrap blocking libraries with
+  `asyncio.to_thread` or queue them on background executors.
+- Use caching utilities in `core/caching` and clear them in fixtures. Avoid global
+  state that survives between tests.
 
-## Logging & Security
-- Use structured logs (`logger.info("event", extra={...})` style) and include
-  correlation identifiers (user ID, session ID, request ID). Never log secrets or
-  raw tokens—redact sensitive values manually before emitting logs.
-- Security-sensitive flows must rely on `core.security.SecurityManager` and
-  `core.security.validate_user_input` to prevent inconsistent sanitisation.
+## Logging, Metrics, and Safety
+- Emit structured logs with correlation identifiers (user, session, request).
+  Redact secrets and tokens manually before logging.
+- Publish high-level counters or gauges through OpenTelemetry when adding new
+  loops, retries, or backoff strategies.
+- Handle optional ML dependencies defensively—log unavailability and return safe
+  fallbacks rather than raising unless the caller explicitly requires a hard
+  failure.
 
-## Testing
-- Update relevant tests under `tests/` when modifying this package:
-  conversation entry points surface through `test_api_chat.py`, while lower-level
-  modules are covered by `test_hippocampus.py`, `test_personality.py`,
-  `test_sommeil.py`, `test_distributed_scheduler.py`, and
-  `test_peer_communication.py`.
-- Provide deterministic behaviour in tests by monkeypatching randomness (see
-  `test_social_media.py`) and clearing shared state in fixtures.
+## Testing Expectations
+- Update targeted tests when cognition changes:
+  - `tests/test_hippocampus.py`, `tests/test_personality.py`,
+    `tests/test_mimicry.py`, `tests/test_sommeil.py`
+  - `tests/test_evolution_engine.py`, `tests/test_distributed_scheduler.py`,
+    `tests/test_peer_communication.py`
+- Mock randomness, time, and heavy integrations to keep the suite deterministic
+  and fast. Reset shared memory/state within fixtures.

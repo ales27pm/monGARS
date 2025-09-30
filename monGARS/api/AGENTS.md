@@ -1,34 +1,35 @@
-# API Layer Guidelines
+# API Layer Standards
 
-The modules in this folder expose the FastAPI application consumed by the Django
-frontend and peer nodes.
+Applies to everything under `monGARS/api/`, including FastAPI routers, request
+schemas, WebSocket helpers, and authentication utilities.
 
-## Endpoints & Schemas
-- Keep endpoints asynchronous and return Pydantic models defined in
-  `web_api.py` (e.g. `ChatResponse`, `MemoryItem`). Use validators for payloads
-  to match the strict rules enforced by `tests/test_api_chat.py` and
-  `tests/test_api_history.py`.
-- Centralise security through `authentication.py` and the dependency providers
-  in `dependencies.py`. When you add new dependencies, register them here so
-  fixtures in `tests/conftest.py` can override them.
-- Protect administrative routes with `get_current_admin_user` and all other
-  routes with `get_current_user`. JWT parsing must go through
-  `core.security.SecurityManager`—do not duplicate the logic.
-- Use `ws_manager.WebSocketManager` for websocket broadcasts. Never write to a
-  `WebSocket` directly outside of that helper so connection bookkeeping remains
-  consistent with `tests/test_websocket.py`.
+## Endpoint Design
+- Prefer asynchronous endpoints returning Pydantic response models. Validate
+  inputs through `schemas.py` and avoid inline validation logic.
+- Register shared dependencies in `dependencies.py` so tests can override them.
+  Authentication must flow through `get_current_user` / `get_current_admin_user`
+  backed by `core.security.SecurityManager`.
+- Keep WebSocket interactions inside `ws_manager.WebSocketManager` to preserve
+  connection bookkeeping. Do not interact with `WebSocket` instances directly in
+  routes.
 
-## Error Handling & Logging
-- Translate domain exceptions into `HTTPException` with meaningful status codes
-  (`400` for validation failures, `403` for forbidden, `500` for unexpected
-  errors). Log unexpected errors with context before propagating.
-- Normalise external URLs and tokens before persisting or caching them. Follow
-  the `PeerRegistration` validator example to avoid duplication.
+## Error Handling
+- Translate domain-specific exceptions into `HTTPException` with precise status
+  codes. Log unexpected failures with correlation identifiers before re-raising.
+- Normalise external URLs, tokens, and identifiers before persisting or caching
+  them. Use validators similar to `PeerRegistration` to maintain a consistent
+  shape across the API.
 
-## Testing
+## Security Expectations
+- Require bearer tokens for every route except `/ready` and `/healthz`. Peer and
+  user admin routes must enforce the admin guard.
+- Sanitize user input with `core.security.validate_user_input` or equivalent
+  helpers before handing payloads to the cognition layer or persistence.
+
+## Testing Checklist
 - Update `tests/test_api_chat.py`, `tests/test_api_history.py`,
-  `tests/test_peer_communication.py`, and `tests/test_user_management.py` when
-  touching related endpoints.
-- Use FastAPI `TestClient` or async WebSocket clients in tests to mirror
-  real-world flows. Provide stubs for heavy dependencies via fixtures or
-  monkeypatching.
+  `tests/test_peer_communication.py`, and `tests/test_user_management.py` when you
+  change route behaviour.
+- Use FastAPI's async test clients or WebSocket sessions to mimic production
+  flows. Patch heavy integrations via fixtures/monkeypatching rather than editing
+  application code for testability.

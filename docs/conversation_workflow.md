@@ -1,68 +1,68 @@
-# monGARS Conversation Workflow
+# Conversation Workflow
 
-This document provides a step-by-step walkthrough of how monGARS turns a user chat request into a conversational response. It follows the path from authentication, through request validation and orchestration in the conversational engine, to persistence and streaming updates.
+This guide walks through how a chat request flows from authentication to
+streamed delivery inside monGARS. Use it when debugging the cognition pipeline
+or onboarding new contributors.
 
-## 1. Authentication and Session Context
+## 1. Authenticate & Contextualise
+1. Clients obtain a JWT via `POST /token` using the OAuth2 password flow. The
+   route validates credentials with `SecurityManager`, hashes passwords, and
+   signs a JWT containing the subject and admin flag.
+2. Subsequent requests depend on FastAPI dependencies:
+   - `get_current_user` validates the JWT and returns the payload.
+   - `get_current_admin_user` wraps the dependency for admin-only endpoints.
+3. The chat endpoint (`/api/v1/conversation/chat`) receives the validated user ID
+   and applies it throughout the pipeline for caching, memory access, and
+   persistence.
 
-1. A client first exchanges credentials for a bearer token by calling `POST /token` with an `OAuth2PasswordRequestForm`. The FastAPI route validates the username/password pair against `users_db`, hashes the password with the `SecurityManager`, and signs a JWT containing the subject and `admin` claim when applicable.【F:monGARS/api/web_api.py†L38-L66】【F:monGARS/core/security.py†L18-L73】
-2. For each authenticated request, FastAPI injects `get_current_user` which reconstructs a `SecurityManager` using the configured secret and algorithm, verifies the JWT, and returns the payload. Admin-only routes wrap this dependency with `get_current_admin_user` to enforce the `admin` flag.【F:monGARS/api/authentication.py†L1-L25】
-3. The `/api/v1/conversation/chat` route therefore receives a validated `current_user` payload whose `sub` field becomes the logical user identifier throughout the workflow.【F:monGARS/api/web_api.py†L133-L183】
+## 2. Validate Inputs & Prepare Channels
+1. Payloads are parsed through `ChatRequest`, trimming whitespace, enforcing
+   length bounds, and rejecting empty messages.
+2. Inputs are sanitised with `validate_user_input`, stripping HTML and missing
+   fields before the data reaches LLM integrations.
+3. WebSocket subscribers connect to `/ws/chat/` with the same JWT. The server
+   replays recent conversation history via Hippocampus and registers the
+   connection with `WebSocketManager` so later responses can broadcast.
 
-## 2. Request Validation and WebSocket Setup
+## 3. Orchestrate Cognition
+`ConversationalModule.generate_response` coordinates the following stages:
+1. **State preparation** – Hippocampus fetches the most recent interactions,
+   guarded by per-user asyncio locks. Optional images are captioned via BLIP and
+   appended to the query when available.
+2. **Curiosity pass** – Curiosity Engine compares the normalised query to recent
+   conversation vectors. If knowledge gaps appear, it triggers entity extraction
+   and document retrieval (internal service or Iris fallback).
+3. **Reasoning hints** – The neuro-symbolic advanced reasoner adds structured
+   hints for “why/how” prompts before invoking the LLM.
+4. **LLM invocation** – `LLMIntegration` selects Ollama or Ray Serve, wraps calls
+   in circuit breakers and retries, and caches responses. Graceful fallbacks keep
+   the system responsive when optional dependencies are missing.
+5. **Personality & mimicry** – PersonalityEngine collaborates with the LoRA-based
+   StyleFineTuner and MimicryModule to adapt responses using recent interaction
+   statistics and stored personality profiles.
+6. **Persistence** – `PersistenceRepository` writes structured metadata to the
+   SQL store while Hippocampus caches the latest exchange for rapid replay.
+7. **Delivery** – The adapted response is returned via HTTP and broadcast to all
+   active WebSocket subscribers.
 
-1. Incoming chat requests must conform to the `ChatRequest` pydantic model which trims whitespace, enforces non-empty messages, and limits message/session lengths. This prevents overly large payloads and removes incidental formatting issues.【F:monGARS/api/web_api.py†L104-L131】
-2. The message and user identifier are sanitized via `validate_user_input`. This helper strips HTML with `bleach`, confirms presence of required fields, and raises `ValueError` for missing data so that the API can return a structured error response.【F:monGARS/core/security.py†L87-L106】
-3. In parallel, authenticated WebSocket clients may subscribe to `/ws/chat/` by presenting the same JWT. The server reuses the `SecurityManager` to verify the token, replays the most recent history via the shared `Hippocampus`, and registers the connection with `WebSocketManager` so that future responses can be broadcast live.【F:monGARS/api/web_api.py†L69-L103】【F:monGARS/api/ws_manager.py†L1-L34】【F:monGARS/api/dependencies.py†L1-L16】【F:monGARS/core/hippocampus.py†L1-L43】
+## 4. Cross-Cutting Concerns
+- **Security** – Peer messaging and chat routes reuse the same cryptographic
+  helpers for JWT validation, Fernet encryption, and sanitisation.
+- **Observability** – Structured logs and OpenTelemetry counters mark the start
+  and end of each stage (`llm.*`, `curiosity.*`, `evolution_engine.*`).
+- **Idle optimisation** – Sommeil Paradoxal monitors the distributed scheduler
+  queue and triggers evolution engine cycles when the system is idle.
 
-## 3. Conversational Pipeline Orchestration
+## 5. Event Bus Integration
+The UI and background services consume a typed event bus defined in
+`core/ui_events.py`.
+- `chat.message` events mirror HTTP responses and power live updates in the
+  Django interface.
+- `ai_model.response_chunk` / `ai_model.response_complete` events support streaming
+  LLM output without polling.
+- `evolution_engine.*` and `sleep_time_compute.*` events keep dashboards informed
+  about background optimisation and maintenance cycles.
 
-The heart of the workflow resides in `ConversationalModule.generate_response`, which composes multiple cognitive subsystems in sequence.【F:monGARS/core/conversation.py†L26-L145】  The major stages are:
-
-1. **State Preparation**
-   * A shared `Hippocampus` provides the five most recent `(query, response)` pairs for context. Memory access is serialized per user through asyncio locks to avoid race conditions.【F:monGARS/core/conversation.py†L91-L99】【F:monGARS/core/hippocampus.py†L19-L43】
-   * Optional image bytes are captioned with `ImageCaptioning`. If the BLIP model is available, captions are generated asynchronously and appended to the textual query; otherwise, the module logs a warning and returns the untouched query.【F:monGARS/core/conversation.py†L53-L57】【F:monGARS/core/mains_virtuelles.py†L1-L70】
-
-2. **Knowledge Gap Detection**
-   * The `CuriosityEngine` compares the normalized query against recent conversation vectors stored in the SQL-backed `ConversationHistory`. When insufficient overlap is found, it performs entity extraction via spaCy (or a rule-based fallback), consults the knowledge graph driver, and, if necessary, triggers external document retrieval or web search via `Iris`. Similarity and gap-detection cutoffs are tunable via the `CURIOSITY_*` environment variables, and OpenTelemetry counters expose how often external research is invoked so operators can monitor expensive lookups. The resulting supplemental context is appended to the query to better inform the LLM stage.【F:monGARS/core/conversation.py†L59-L99】【F:monGARS/core/cortex/curiosity_engine.py†L1-L206】【F:monGARS/config.py†L63-L106】
-
-3. **Symbolic Reasoning Augmentation**
-   * The `AdvancedReasoner` inspects the refined query for interrogatives (e.g., “why”, “how”) and contributes templated explanatory hints. These hints are concatenated to the prompt that will be sent to the LLM.【F:monGARS/core/conversation.py†L68-L100】【F:monGARS/core/neuro_symbolic/advanced_reasoner.py†L1-L13】
-
-4. **LLM Invocation with Reliability Guards**
-   * `LLMIntegration` determines whether to call Ollama locally or forward to a Ray Serve deployment, governed by environment variables. Calls are wrapped in a circuit breaker and tenacity retries. Responses are cached in an async TTL cache to avoid repeated work, and multiple fallbacks return descriptive placeholder text when dependencies are unavailable, ensuring the system degrades gracefully rather than throwing errors.【F:monGARS/core/conversation.py†L100-L108】【F:monGARS/core/llm_integration.py†L23-L197】
-
-5. **Personality-Driven Adaptation**
-   * `PersonalityEngine` now collaborates with the LoRA-powered `StyleFineTuner` to build and refresh user-specific adapters. Recent interactions trigger fine-tuning on a compact causal language model, and the resulting hidden-state projections drive personality trait updates stored in `UserPersonality`. `AdaptiveResponseGenerator` reuses the same adapters to rewrite responses with the learned tone instead of relying on regex substitutions, while `MimicryModule` continues to merge long- and short-term statistics for additional contextual polish.【F:monGARS/core/conversation.py†L26-L138】【F:monGARS/core/personality.py†L1-L122】【F:monGARS/core/style_finetuning.py†L1-L326】【F:monGARS/core/dynamic_response.py†L1-L197】【F:monGARS/core/mimicry.py†L1-L104】
-
-6. **Persistence and Memory Consolidation**
-   * Structured metadata capturing the original, image-augmented, and refined prompts plus the adapted response is saved to the lightweight SQLite schema via `PersistenceRepository`. The repository writes both an `Interaction` row and a matching `ConversationHistory` entry so the `CuriosityEngine` can learn from past conversations, while the same augmented query/response pair is cached in the shared `Hippocampus` for WebSocket replays.【F:monGARS/core/conversation.py†L91-L138】【F:monGARS/core/persistence.py†L10-L31】【F:monGARS/core/hippocampus.py†L19-L43】【F:monGARS/init_db.py†L14-L114】
-
-7. **Output Delivery**
-   * `SpeakerService` currently delegates to `Bouche`, which logs and returns the final text. This abstraction makes it easy to swap in a TTS system later. The API then broadcasts the payload to all active WebSocket listeners and returns an HTTP response containing the text, reported confidence, and processing time.【F:monGARS/core/conversation.py†L26-L145】【F:monGARS/core/bouche.py†L1-L10】【F:monGARS/api/web_api.py†L166-L183】【F:monGARS/api/ws_manager.py†L16-L34】
-
-## 4. Cross-Cutting Services
-
-1. **Security & Sanitization** – Beyond JWT handling, `validate_user_input` ensures no raw HTML or missing fields reach the LLM layer. Peer-to-peer routes reuse the same Fernet-based encryption helpers for secure message exchange between nodes.【F:monGARS/core/security.py†L18-L106】【F:monGARS/core/peer.py†L1-L56】
-2. **Adaptive Infrastructure** – The instantiated `EvolutionEngine` watches for high CPU, memory, or GPU utilization via `SystemMonitor` and can scale Kubernetes worker deployments or flush caches when required. While not triggered directly in the chat path, it provides operational resilience for the conversation service.【F:monGARS/core/conversation.py†L26-L51】【F:monGARS/core/evolution_engine.py†L1-L94】【F:monGARS/core/monitor.py†L1-L36】
-3. **Configuration & Secrets** – `get_settings()` centralizes configuration, optionally fetches overrides from HashiCorp Vault, configures OpenTelemetry exporters, and enforces production requirements such as a non-empty `SECRET_KEY`. These settings feed into security, external service URLs, and optional accelerations like Ray Serve or GPU usage.【F:monGARS/config.py†L1-L149】【F:monGARS/config.py†L151-L222】
-
-## 5. Response Lifecycle Summary
-
-1. **Authenticate** – Obtain JWT via `/token`; FastAPI dependencies validate it on subsequent requests.
-2. **Submit** – Send sanitized chat payload to `/api/v1/conversation/chat`.
-3. **Orchestrate** – `ConversationalModule` aggregates memory, curiosity, reasoning, LLM output, personality adaptation, and mimicry.
-4. **Persist & Notify** – The augmented query/response pair is stored in SQLite and in-memory history, then broadcast to WebSocket subscribers and returned to the caller.
-5. **Observe** – Background systems continue to monitor resource usage and maintain secure peer communication channels.
-
-## 6. Event-Driven UI Integration
-
-monGARS surfaces AI activity to the UI through a typed event bus that covers authenticated REST flows, streaming inference, and background optimizers.
-
-1. **JWT-backed chat and ticket issuance** – The chat route reuses FastAPI dependencies to resolve shared cognition services and emits a `chat.message` event each time a response is generated. The same `get_current_user` dependency powers the `/api/v1/auth/ws/ticket` endpoint, which mints short-lived signed tickets so WebSocket subscribers stay bound to the original JWT identity.【F:monGARS/api/web_api.py†L107-L185】【F:monGARS/api/dependencies.py†L5-L45】【F:monGARS/api/ws_ticket.py†L1-L41】
-2. **Typed events and backends** – `core/ui_events.py` defines the `Event` dataclass, memory/Redis backends, and the global `event_bus()` accessor. Every publisher constructs events with `make_event`, ensuring consistent envelopes regardless of transport and keeping payloads JSON serializable for downstream consumers.【F:monGARS/core/ui_events.py†L1-L125】
-3. **Streaming LLM responses** – `LLMIntegration.chat` streams chunked tokens through `ai_model.response_chunk` events and signals completion (or failure) via `ai_model.response_complete`. Non-streaming callers receive the full text in the completion event, aligning with the PDF’s UI-as-a-function-of-AI guidance.【F:monGARS/core/llm_integration.py†L276-L356】
-4. **Background loops reporting progress** – The `SommeilParadoxal` idle optimizer and `EvolutionEngine.train_cycle` publish lifecycle events (`sleep_time_compute.*`, `evolution_engine.*`) so dashboards can surface long-running activity alongside chat updates.【F:monGARS/core/sommeil.py†L1-L56】【F:monGARS/core/evolution_engine.py†L1-L167】
-
-This event-driven layer lets clients subscribe once and react uniformly to conversational replies, infrastructure tuning, or other AI-side effects without polling disparate services.
-
-This layered design keeps the chat workflow modular, resilient to missing optional dependencies, and ready for extension across distributed deployments.
+This layered workflow keeps monGARS resilient: optional modules degrade
+gracefully, observability remains rich, and every chat request leaves an auditable
+trace across memory, persistence, and streaming channels.

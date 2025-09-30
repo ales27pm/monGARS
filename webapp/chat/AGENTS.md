@@ -1,29 +1,22 @@
-# Chat App Guidelines
+# Chat App Standards
 
-This Django app wraps the FastAPI conversation endpoints and manages UI state
-for operators.
+This scoped guide applies to `webapp/chat/`, covering views, services, forms,
+and templates for the operator chat interface.
 
 ## Architecture
-- `views.py` should delegate HTTP calls to `services.py` and apply the
-  `require_token` decorator from `decorators.py` for any authenticated routes.
-- Keep forms and request payloads aligned with the FastAPI contracts in
-  `monGARS.api.web_api`. For example, chat messages must respect the same length
-  limits enforced by `ChatRequest`.
-- When you introduce new context variables for templates, document them in the
-  view docstring and update the corresponding template under
-  `templates/chat/`.
+- Views should call helpers in `services.py` and wrap protected routes with
+  `require_token` from `decorators.py`.
+- Keep payloads aligned with FastAPI contracts defined in
+  `monGARS.api.web_api.ChatRequest`. Document new context variables in view
+  docstrings and templates.
 
 ## Networking & Error Handling
-- `services.py` centralises calls to `/token` and `/api/v1/conversation/history`.
-  Expand it when adding new API interactions so retries and logging stay
-  consistent.
-- Catch network exceptions and surface user-friendly error messages (see
-  `fetch_history`). Log failures with enough context for operators to diagnose
-  connection issues.
+- Centralise HTTP calls in `services.py` to keep retries, error handling, and
+  logging consistent.
+- Surface user-friendly errors when network calls fail and log exceptions with
+  enough context for operators to diagnose issues.
 
 ## Testing
-- Update `tests/test_api_history.py` and `tests/test_websocket.py` when altering
-  chat flows, ensuring websocket broadcasts and HTTP history retrieval remain
-  in sync.
-- Use asynchronous test clients or `httpx` mocking when validating new service
-  functions so behaviour mirrors production.
+- Update `tests/test_api_history.py` and `tests/test_websocket.py` when chat flows
+  change. Use async clients or httpx mocking utilities to validate new service
+  functions.

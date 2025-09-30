@@ -1,14 +1,22 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: Suggest an enhancement to monGARS
 labels: enhancement
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is.
+## Problem Statement
+<!-- What challenge are you trying to solve? -->
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+## Proposed Solution
+<!-- Describe the change you would like to see. -->
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+## Alternatives Considered
+<!-- List any other approaches you evaluated. -->
+
+## Impact
+- Affected components (API, core, modules, webapp, ops):
+- Required documentation updates:
+- Additional testing considerations:
+
+## Additional Context
+<!-- Links, diagrams, or references that help clarify the request. -->

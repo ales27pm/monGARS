@@ -1,13 +1,10 @@
 # Python Client Example
 
-The following example uses [`httpx`](https://www.python-httpx.org/) and
-[`pydantic`](https://docs.pydantic.dev/) to provide a lightweight, fully typed
-client for the monGARS API. It mirrors the request/response schemas defined in
-`monGARS.api.schemas` and can be extended or generated automatically with tools
-like [`openapi-python-client`](https://github.com/openapi-generators/openapi-python-client).
+Use [`httpx`](https://www.python-httpx.org/) and
+[`pydantic`](https://docs.pydantic.dev/) to interact with the monGARS API. The
+snippet below mirrors request/response schemas defined in `monGARS.api.schemas`.
 
 ## Installation
-
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -15,12 +12,10 @@ pip install httpx[http2] pydantic
 ```
 
 ## Usage
-
 ```python
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -48,6 +43,7 @@ async def main() -> None:
             "/token",
             data={"username": "u1", "password": "x"},
             headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=30,
         )
         token = TokenResponse.model_validate_json(token_resp.text)
 
@@ -57,6 +53,7 @@ async def main() -> None:
             "/api/v1/conversation/chat",
             json=payload.model_dump(mode="json"),
             headers=headers,
+            timeout=60,
         )
         chat = ChatResponse.model_validate_json(response.text)
         print(chat.response)
@@ -67,12 +64,10 @@ if __name__ == "__main__":
 ```
 
 ## Extending
-
-- Generate a fully featured SDK:
-
+- Generate a full SDK:
   ```bash
-  openapi-python-client generate --path docs/api/openapi.json --config openapi-python-client.toml
+  openapi-python-client generate --path docs/api/openapi.json \
+    --config openapi-python-client.toml
   ```
-
-- Use `monGARS.api.schemas` directly for shared validation logic inside custom
-data pipelines or CLI tooling.
+- Import `monGARS.api.schemas` directly inside automation or data pipelines to
+  reuse validation logic.
