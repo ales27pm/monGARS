@@ -54,4 +54,15 @@ The heart of the workflow resides in `ConversationalModule.generate_response`, w
 4. **Persist & Notify** – The augmented query/response pair is stored in SQLite and in-memory history, then broadcast to WebSocket subscribers and returned to the caller.
 5. **Observe** – Background systems continue to monitor resource usage and maintain secure peer communication channels.
 
+## 6. Event-Driven UI Integration
+
+monGARS surfaces AI activity to the UI through a typed event bus that covers authenticated REST flows, streaming inference, and background optimizers.
+
+1. **JWT-backed chat and ticket issuance** – The chat route reuses FastAPI dependencies to resolve shared cognition services and emits a `chat.message` event each time a response is generated. The same `get_current_user` dependency powers the `/api/v1/auth/ws/ticket` endpoint, which mints short-lived signed tickets so WebSocket subscribers stay bound to the original JWT identity.【F:monGARS/api/web_api.py†L107-L185】【F:monGARS/api/dependencies.py†L5-L45】【F:monGARS/api/ws_ticket.py†L1-L41】
+2. **Typed events and backends** – `core/ui_events.py` defines the `Event` dataclass, memory/Redis backends, and the global `event_bus()` accessor. Every publisher constructs events with `make_event`, ensuring consistent envelopes regardless of transport and keeping payloads JSON serializable for downstream consumers.【F:monGARS/core/ui_events.py†L1-L125】
+3. **Streaming LLM responses** – `LLMIntegration.chat` streams chunked tokens through `ai_model.response_chunk` events and signals completion (or failure) via `ai_model.response_complete`. Non-streaming callers receive the full text in the completion event, aligning with the PDF’s UI-as-a-function-of-AI guidance.【F:monGARS/core/llm_integration.py†L276-L356】
+4. **Background loops reporting progress** – The `SommeilParadoxal` idle optimizer and `EvolutionEngine.train_cycle` publish lifecycle events (`sleep_time_compute.*`, `evolution_engine.*`) so dashboards can surface long-running activity alongside chat updates.【F:monGARS/core/sommeil.py†L1-L56】【F:monGARS/core/evolution_engine.py†L1-L167】
+
+This event-driven layer lets clients subscribe once and react uniformly to conversational replies, infrastructure tuning, or other AI-side effects without polling disparate services.
+
 This layered design keeps the chat workflow modular, resilient to missing optional dependencies, and ready for extension across distributed deployments.
