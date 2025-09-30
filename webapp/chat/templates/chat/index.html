@@ -18,22 +18,34 @@
   </nav>
   <div class="container mt-4">
     <div class="row">
-      <div class="col-md-8 offset-md-2">
-        <div class="d-flex justify-content-between mb-2">
-          <h4>Historique du Chat</h4>
-          <span id="status-indicator">Connecting...</span>
+      <div class="col-lg-8 offset-lg-2">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+          <h4 class="mb-0">Historique du Chat</h4>
+          <span id="ws-status" class="badge ws-badge offline" aria-live="polite">Hors ligne</span>
         </div>
-        <div id="chat-box" class="mb-3"></div>
-        <form id="chat-form">
-          <div class="input-group">
-            <input type="text" id="message-input" class="form-control" placeholder="Entrez votre message..." required>
-            <button class="btn btn-primary" type="submit">Envoyer</button>
+        <section id="connection" class="visually-hidden" aria-live="polite"></section>
+        <main id="chat" class="card shadow-sm">
+          <div class="card-body p-0">
+            <div id="transcript" class="chat-transcript" aria-live="polite" aria-busy="false"></div>
+            <div id="error-alert" class="alert alert-danger m-3 d-none alert-dismissible fade show" role="alert">
+              <span id="error-message"></span>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fermer"></button>
+            </div>
+            <aside id="actions" class="chat-actions px-3 pb-3">
+              <div class="chat-actions-row" id="quick-actions" role="list">
+                <button role="listitem" class="qa btn btn-outline-secondary" data-action="summarize">Résumer</button>
+                <button role="listitem" class="qa btn btn-outline-secondary" data-action="code">Code</button>
+                <button role="listitem" class="qa btn btn-outline-secondary" data-action="explain">Expliquer</button>
+              </div>
+            </aside>
+            <form id="composer" class="p-3 border-top" autocomplete="off">
+              <div class="input-group">
+                <input id="prompt" name="prompt" class="form-control" placeholder="Entrez votre message…" autocomplete="off" />
+                <button id="send" type="submit" class="btn btn-primary">Envoyer</button>
+              </div>
+            </form>
           </div>
-        </form>
-        <div id="error-alert" class="alert alert-danger mt-3 d-none alert-dismissible fade show" role="alert">
-          <span id="error-message"></span>
-          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
+        </main>
       </div>
     </div>
   </div>
