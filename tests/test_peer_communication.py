@@ -137,3 +137,32 @@ async def test_peer_register_and_list(client):
     assert unreg.status_code == 200
     assert unreg.json()["status"] == "unregistered"
     assert unreg.json()["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_peer_load_endpoint(client):
+    communicator = get_peer_communicator()
+    original_provider = communicator._load_provider
+
+    async def provider():
+        return {
+            "scheduler_id": "sched-test",
+            "queue_depth": 3,
+            "active_workers": 1,
+            "concurrency": 2,
+            "load_factor": 2.0,
+        }
+
+    communicator.register_load_provider(provider)
+    try:
+        resp = await client.get(
+            "/api/v1/peer/load",
+            headers={"Authorization": "Bearer token"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["scheduler_id"] == "sched-test"
+        assert data["queue_depth"] == 3
+        assert data["load_factor"] == pytest.approx(2.0)
+    finally:
+        communicator._load_provider = original_provider

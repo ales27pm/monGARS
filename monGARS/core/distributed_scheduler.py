@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import time
 import uuid
@@ -136,9 +137,11 @@ class DistributedScheduler:
             "tasks_processed": 0,
             "tasks_failed": 0,
             "task_failure_rate": 0.0,
+            "load_factor": 0.0,
         }
         self._loop: asyncio.AbstractEventLoop | None = None
         self._metrics_registered_with_meter = False
+        self._register_with_communicator()
 
     @property
     def metric_attributes(self) -> dict[str, int | str]:
@@ -205,8 +208,8 @@ class DistributedScheduler:
                         exc_info=True,
                     )
                 else:
-                    await self._update_metrics(self._mark_task_success)
-                    await self.communicator.send({"result": result})
+                    snapshot = await self._update_metrics(self._mark_task_success)
+                    await self._dispatch_result(result, snapshot)
                 finally:
                     self.queue.task_done()
                     await self._update_metrics()
@@ -298,14 +301,18 @@ class DistributedScheduler:
         processed = self._processed_tasks
         failed = self._failed_tasks
         failure_rate = 0.0 if processed == 0 else failed / processed
+        queue_depth = self.queue.qsize()
+        active_workers = len(self._worker_start_times)
+        load_factor = self._calculate_load(queue_depth, active_workers)
         return {
-            "queue_depth": self.queue.qsize(),
-            "active_workers": len(self._worker_start_times),
+            "queue_depth": queue_depth,
+            "active_workers": active_workers,
             "concurrency": self.concurrency,
             "worker_uptime_seconds": uptime,
             "tasks_processed": processed,
             "tasks_failed": failed,
             "task_failure_rate": failure_rate,
+            "load_factor": load_factor,
         }
 
     def _compute_worker_uptime(self, now: float) -> float:
@@ -330,3 +337,98 @@ class DistributedScheduler:
         start_time = self._worker_start_times.pop(worker_id, None)
         if start_time is not None:
             self._worker_uptime_total += time.monotonic() - start_time
+
+    def _register_with_communicator(self) -> None:
+        register = getattr(self.communicator, "register_load_provider", None)
+        if register is None:
+            return
+        try:
+            register(self.get_load_snapshot)
+        except Exception:  # pragma: no cover - defensive
+            logger.warning(
+                "scheduler.load_provider_registration_failed",
+                extra={"scheduler_id": self.instance_id},
+                exc_info=True,
+            )
+
+    async def _dispatch_result(
+        self,
+        result: Any,
+        metrics_snapshot: dict[str, float | int] | None = None,
+    ) -> None:
+        payload = {"result": result, "origin": self.instance_id}
+        snapshot = metrics_snapshot or await self.get_metrics_snapshot()
+        local_load = float(snapshot.get("load_factor", 0.0))
+        peer_loads = await self._get_peer_loads()
+        targets = self._select_peer_targets(peer_loads, local_load)
+        if targets:
+            await self._send_to_targets(targets, payload)
+        else:
+            await self._send_to_targets(None, payload)
+
+    async def _send_to_targets(
+        self, targets: Iterable[str] | None, payload: dict[str, Any]
+    ) -> None:
+        send_to = getattr(self.communicator, "send_to", None)
+        if targets:
+            if send_to is not None:
+                await send_to(targets, payload)
+                return
+        await self.communicator.send(payload)
+
+    async def _get_peer_loads(self) -> dict[str, float]:
+        fetch = getattr(self.communicator, "fetch_peer_loads", None)
+        if fetch is None:
+            return {}
+        try:
+            return await fetch()
+        except Exception:  # pragma: no cover - defensive
+            logger.warning(
+                "scheduler.peer_load_fetch_failed",
+                extra={"scheduler_id": self.instance_id},
+                exc_info=True,
+            )
+            return {}
+
+    def _select_peer_targets(
+        self, peer_loads: dict[str, float], local_load: float
+    ) -> list[str]:
+        if not peer_loads:
+            return []
+        candidates: list[tuple[str, float]] = []
+        for peer, load in peer_loads.items():
+            if isinstance(load, (int, float)) and math.isfinite(load) and load >= 0:
+                candidates.append((peer, float(load)))
+        if not candidates:
+            return []
+        candidates.sort(key=lambda item: item[1])
+        best_load = candidates[0][1]
+        tolerance = 0.15
+        if local_load <= best_load + tolerance:
+            return []
+        selected: list[str] = []
+        for peer, load in candidates:
+            if load < local_load and load <= best_load + tolerance:
+                selected.append(peer)
+            if len(selected) >= self.concurrency:
+                break
+        if selected:
+            return selected
+        if best_load < local_load:
+            return [candidates[0][0]]
+        return []
+
+    def _calculate_load(self, queue_depth: int, active_workers: int) -> float:
+        concurrency = max(1, self.concurrency)
+        load = (queue_depth + active_workers) / concurrency
+        return load
+
+    async def get_load_snapshot(self) -> dict[str, float | int]:
+        metrics = await self.get_metrics_snapshot()
+        return {
+            "scheduler_id": self.instance_id,
+            "queue_depth": int(metrics["queue_depth"]),
+            "active_workers": int(metrics["active_workers"]),
+            "concurrency": int(metrics["concurrency"]),
+            "load_factor": float(metrics["load_factor"]),
+        }

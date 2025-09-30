@@ -84,6 +84,23 @@ class PeerRegistration(BaseModel):
         return str(value).rstrip("/")
 
 
+class PeerLoadSnapshot(BaseModel):
+    """Minimal load report shared between peer schedulers."""
+
+    scheduler_id: str | None = None
+    queue_depth: int = Field(default=0, ge=0)
+    active_workers: int = Field(default=0, ge=0)
+    concurrency: int = Field(default=0, ge=0)
+    load_factor: float = Field(default=0.0, ge=0.0)
+
+    @field_validator("load_factor")
+    @classmethod
+    def validate_load_factor(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("load_factor cannot be negative")
+        return value
+
+
 class SuggestRequest(BaseModel):
     """Request body for the UI suggestion endpoint."""
 
@@ -129,6 +146,7 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "PeerMessage",
+    "PeerLoadSnapshot",
     "PeerRegistration",
     "SuggestRequest",
     "SuggestResponse",
