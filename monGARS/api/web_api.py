@@ -28,9 +28,11 @@ from monGARS.api.schemas import (
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.core.conversation import ConversationalModule
+from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
+from monGARS.core.personality import PersonalityEngine
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import event_bus, make_event
 
@@ -61,11 +63,23 @@ DEFAULT_USERS: dict[str, dict[str, Any]] = {
 }
 
 
-def get_conversational_module() -> ConversationalModule:
+def _get_adaptive_response_generator_for_personality(
+    personality: Annotated[PersonalityEngine, Depends(get_personality_engine)],
+) -> AdaptiveResponseGenerator:
+    """Resolve the adaptive response generator for the provided personality."""
+
+    return get_adaptive_response_generator(personality)
+
+
+def get_conversational_module(
+    personality: Annotated[PersonalityEngine, Depends(get_personality_engine)],
+    dynamic: Annotated[
+        AdaptiveResponseGenerator,
+        Depends(_get_adaptive_response_generator_for_personality),
+    ],
+) -> ConversationalModule:
     global conversation_module
     if conversation_module is None:
-        personality = get_personality_engine()
-        dynamic = get_adaptive_response_generator(personality)
         conversation_module = ConversationalModule(
             personality=personality,
             dynamic=dynamic,
