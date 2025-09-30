@@ -131,6 +131,11 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the Redis connection string, e.g. redis://localhost:6379/0.",
     )
+    EVENTBUS_MEMORY_QUEUE_MAXSIZE: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum number of events buffered per in-memory subscriber before backpressure is applied.",
+    )
 
     VAULT_URL: str = Field(default="")
     VAULT_TOKEN: str = Field(default="")

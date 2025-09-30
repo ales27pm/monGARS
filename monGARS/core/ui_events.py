@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
+from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
@@ -19,6 +21,7 @@ except Exception:  # pragma: no cover - redis is optional in many deployments
 
 
 settings = get_settings()
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,30 +40,59 @@ class Event:
         return json.dumps(asdict(self), separators=(",", ":"), ensure_ascii=False)
 
 
-class EventBus:
-    """Pluggable pub/sub. Starts in-memory, auto-upgrades to Redis if configured."""
+class EventBackend(ABC):
+    """Abstract backend for publishing and subscribing to events."""
 
-    def __init__(self) -> None:
-        self._memory_queue: "asyncio.Queue[Event]" = asyncio.Queue()
-        self._redis = None
-        self._channel = "mongars:events"
-        if settings.REDIS_URL and aioredis:
-            self._redis = aioredis.from_url(
-                str(settings.REDIS_URL), encoding="utf-8", decode_responses=True
-            )
+    @abstractmethod
+    async def publish(self, ev: Event) -> None:
+        """Publish an event to interested subscribers."""
+
+    @abstractmethod
+    def subscribe(self) -> AsyncIterator[Event]:
+        """Return an async iterator yielding new events."""
+
+
+class MemoryEventBackend(EventBackend):
+    """Broadcast events to per-subscriber queues backed by asyncio."""
+
+    def __init__(self, *, max_queue_size: int) -> None:
+        self._max_queue_size = max_queue_size
+        self._subscribers: set[asyncio.Queue[Event]] = set()
 
     async def publish(self, ev: Event) -> None:
-        """Publish an event to subscribers."""
+        for queue in tuple(self._subscribers):
+            await queue.put(ev)
 
-        if self._redis:
-            await self._redis.publish(self._channel, ev.to_json())
-            return
-        await self._memory_queue.put(ev)
+    def subscribe(self) -> AsyncIterator[Event]:
+        queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=self._max_queue_size)
+        self._subscribers.add(queue)
 
-    async def subscribe(self) -> AsyncIterator[Event]:
-        """Yield events as they are received."""
+        async def iterator() -> AsyncIterator[Event]:
+            try:
+                while True:
+                    yield await queue.get()
+            finally:
+                self._subscribers.discard(queue)
 
-        if self._redis:
+        return iterator()
+
+
+class RedisEventBackend(EventBackend):
+    """Publish events via Redis pub/sub."""
+
+    def __init__(self, *, redis_url: str, channel: str) -> None:
+        if not aioredis:  # pragma: no cover - guard for optional dependency
+            raise RuntimeError("redis backend requested without redis client")
+        self._redis = aioredis.from_url(
+            redis_url, encoding="utf-8", decode_responses=True
+        )
+        self._channel = channel
+
+    async def publish(self, ev: Event) -> None:
+        await self._redis.publish(self._channel, ev.to_json())
+
+    def subscribe(self) -> AsyncIterator[Event]:
+        async def iterator() -> AsyncIterator[Event]:
             pubsub = self._redis.pubsub()
             await pubsub.subscribe(self._channel)
             try:
@@ -70,15 +102,60 @@ class EventBus:
                     data = message.get("data")
                     if not data:
                         continue
-                    payload = json.loads(data)
-                    yield Event(**payload)
+                    if not isinstance(data, str):
+                        log.warning(
+                            "redis_event_bus.invalid_payload_type",
+                            extra={"type": type(data).__name__},
+                        )
+                        continue
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        log.warning("redis_event_bus.invalid_json")
+                        continue
+                    if not isinstance(payload, dict):
+                        log.warning(
+                            "redis_event_bus.non_mapping_payload",
+                            extra={"payload_type": type(payload).__name__},
+                        )
+                        continue
+                    try:
+                        yield Event(**payload)
+                    except TypeError:
+                        log.warning(
+                            "redis_event_bus.invalid_event_payload",
+                            extra={"payload_keys": sorted(payload.keys())},
+                        )
+                        continue
             finally:
                 await pubsub.unsubscribe(self._channel)
                 await pubsub.close()
+
+        return iterator()
+
+
+class EventBus:
+    """Pluggable pub/sub. Starts in-memory, auto-upgrades to Redis if configured."""
+
+    def __init__(self) -> None:
+        if settings.REDIS_URL and aioredis:
+            self._backend: EventBackend = RedisEventBackend(
+                redis_url=str(settings.REDIS_URL),
+                channel="mongars:events",
+            )
         else:
-            while True:
-                event = await self._memory_queue.get()
-                yield event
+            maxsize = getattr(settings, "EVENTBUS_MEMORY_QUEUE_MAXSIZE", 1000)
+            self._backend = MemoryEventBackend(max_queue_size=maxsize)
+
+    async def publish(self, ev: Event) -> None:
+        """Publish an event to subscribers."""
+
+        await self._backend.publish(ev)
+
+    def subscribe(self) -> AsyncIterator[Event]:
+        """Yield events as they are received."""
+
+        return self._backend.subscribe()
 
 
 _event_bus: Optional[EventBus] = None
