@@ -1,179 +1,200 @@
-import os
-
-os.environ.setdefault("SECRET_KEY", "test")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
+"""End-to-end tests for user registration and authentication flows."""
 
 import pytest
-from fastapi.testclient import TestClient
+import pytest_asyncio
+from fastapi import status
+from httpx import ASGITransport, AsyncClient
 
-from monGARS.api.dependencies import get_peer_communicator
-from monGARS.api.web_api import admin_users, app, sec_manager, users_db
+from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
+from monGARS.api.web_api import app, sec_manager
+from monGARS.init_db import reset_database
 
 
-@pytest.fixture
-def client():
-    original_users = users_db.copy()
-    original_admins = set(admin_users)
-    users_db.clear()
-    users_db.update(
-        {
-            "admin": sec_manager.get_password_hash("secret"),
-            "user": sec_manager.get_password_hash("passphrase"),
-        }
+@pytest_asyncio.fixture
+async def client() -> AsyncClient:
+    await reset_database()
+    repo = get_persistence_repository()
+    await repo.create_user(
+        "admin", sec_manager.get_password_hash("secret"), is_admin=True
     )
-    admin_users.clear()
-    admin_users.add("admin")
-    client = TestClient(app)
-    try:
-        yield client
-    finally:
-        client.close()
-        users_db.clear()
-        users_db.update(original_users)
-        admin_users.clear()
-        admin_users.update(original_admins)
+    await repo.create_user(
+        "user", sec_manager.get_password_hash("passphrase"), is_admin=False
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
+        yield async_client
+
+    await reset_database()
 
 
-def get_token(client, username, password):
-    response = client.post("/token", data={"username": username, "password": password})
+async def get_token(client: AsyncClient, username: str, password: str) -> str:
+    response = await client.post(
+        "/token", data={"username": username, "password": password}
+    )
+    assert response.status_code == 200, response.json()
     data = response.json()
-    if "access_token" in data:
-        return data["access_token"]
-    print(f"Failed to get access_token for {username}: {data}")
-    return None
+    assert "access_token" in data
+    return data["access_token"]
 
 
-def test_register_and_login(client):
-    resp = client.post(
-        "/api/v1/user/register", json={"username": "newuser", "password": "newpassword"}
+@pytest.mark.asyncio
+async def test_register_and_login(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/v1/user/register",
+        json={"username": "newuser", "password": "newpassword"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "registered"
 
-    token = get_token(client, "newuser", "newpassword")
-    assert token
+    token = await get_token(client, "newuser", "newpassword")
+    payload = sec_manager.verify_token(token)
+    assert payload["sub"] == "newuser"
+    assert payload["admin"] is False
 
 
-def test_register_existing_username(client):
-    resp1 = client.post(
-        "/api/v1/user/register", json={"username": "dup", "password": "password123"}
+@pytest.mark.asyncio
+async def test_register_existing_username_returns_conflict(
+    client: AsyncClient,
+) -> None:
+    resp_first = await client.post(
+        "/api/v1/user/register",
+        json={"username": "dup", "password": "password123"},
     )
-    assert resp1.status_code == 200
-    assert resp1.json()["status"] == "registered"
-    resp2 = client.post(
-        "/api/v1/user/register", json={"username": "dup", "password": "password123"}
+    assert resp_first.status_code == 200
+    resp_second = await client.post(
+        "/api/v1/user/register",
+        json={"username": "dup", "password": "password123"},
     )
-    assert resp2.status_code in (400, 409)
+    assert resp_second.status_code == status.HTTP_409_CONFLICT
+    assert resp_second.json()["detail"] == "Username already exists"
 
 
-def test_register_invalid_username(client):
-    resp = client.post(
+@pytest.mark.asyncio
+async def test_register_invalid_username(client: AsyncClient) -> None:
+    resp = await client.post(
         "/api/v1/user/register", json={"username": "", "password": "password123"}
     )
-    assert resp.status_code == 422
-    resp = client.post(
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    resp = await client.post(
         "/api/v1/user/register",
         json={"username": "invalid user!", "password": "password123"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
-def test_register_short_password(client):
-    resp = client.post(
-        "/api/v1/user/register", json={"username": "shortpwuser", "password": "pw"}
+@pytest.mark.asyncio
+async def test_register_short_password(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/api/v1/user/register",
+        json={"username": "shortpwuser", "password": "pw"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
-def test_login_incorrect_credentials(client):
-    client.post(
+@pytest.mark.asyncio
+async def test_login_incorrect_credentials(client: AsyncClient) -> None:
+    await client.post(
         "/api/v1/user/register",
         json={"username": "loginuser", "password": "correctpassword"},
     )
-    resp = client.post(
+    resp = await client.post(
         "/token", data={"username": "loginuser", "password": "wrongpassword"}
     )
-    assert resp.status_code == 401
-    resp = client.post("/token", data={"username": "nosuchuser", "password": "any"})
-    assert resp.status_code == 401
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+    resp = await client.post(
+        "/token", data={"username": "nosuchuser", "password": "any"}
+    )
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_peer_endpoints_require_admin(client, monkeypatch):
+@pytest.mark.asyncio
+async def test_admin_claim_reflects_admin_status(client: AsyncClient) -> None:
+    admin_token = await get_token(client, "admin", "secret")
+    admin_payload = sec_manager.verify_token(admin_token)
+    assert admin_payload["admin"] is True
+
+    user_token = await get_token(client, "user", "passphrase")
+    user_payload = sec_manager.verify_token(user_token)
+    assert user_payload["admin"] is False
+
+
+@pytest.mark.asyncio
+async def test_peer_endpoints_require_admin(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     peer_comm = get_peer_communicator()
     peer_comm.peers = set()
 
-    user_token = get_token(client, "user", "passphrase")
-    admin_token = get_token(client, "admin", "secret")
+    user_token = await get_token(client, "user", "passphrase")
+    admin_token = await get_token(client, "admin", "secret")
     invalid_token = "invalid.token.value"
 
-    # /peer/register
-    resp = client.post("/api/v1/peer/register", json={"url": "http://x"})
-    assert resp.status_code == 401
+    resp = await client.post("/api/v1/peer/register", json={"url": "http://x"})
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
-    resp = client.post(
+    resp = await client.post(
         "/api/v1/peer/register",
         json={"url": "http://x"},
         headers={"Authorization": f"Bearer {invalid_token}"},
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
-    resp = client.post(
+    resp = await client.post(
         "/api/v1/peer/register",
         json={"url": "http://x"},
         headers={"Authorization": f"Bearer {user_token}"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
 
-    resp = client.post(
+    resp = await client.post(
         "/api/v1/peer/register",
         json={"url": "http://x"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == status.HTTP_200_OK
 
-    # /peer/unregister
-    resp = client.post("/api/v1/peer/unregister", json={"url": "http://x"})
-    assert resp.status_code == 401
+    resp = await client.post("/api/v1/peer/unregister", json={"url": "http://x"})
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
-    resp = client.post(
+    resp = await client.post(
         "/api/v1/peer/unregister",
         json={"url": "http://x"},
         headers={"Authorization": f"Bearer {invalid_token}"},
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
-    resp = client.post(
+    resp = await client.post(
         "/api/v1/peer/unregister",
         json={"url": "http://x"},
         headers={"Authorization": f"Bearer {user_token}"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
 
-    resp = client.post(
+    resp = await client.post(
         "/api/v1/peer/unregister",
         json={"url": "http://x"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert resp.status_code in (200, 404)
+    assert resp.status_code in (status.HTTP_200_OK, status.HTTP_404_NOT_FOUND)
 
-    # /peer/list
-    resp = client.get("/api/v1/peer/list")
-    assert resp.status_code == 401
+    resp = await client.get("/api/v1/peer/list")
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
-    resp = client.get(
+    resp = await client.get(
         "/api/v1/peer/list",
         headers={"Authorization": f"Bearer {invalid_token}"},
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
 
-    resp = client.get(
+    resp = await client.get(
         "/api/v1/peer/list",
         headers={"Authorization": f"Bearer {user_token}"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
 
-    resp = client.get(
+    resp = await client.get(
         "/api/v1/peer/list",
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == status.HTTP_200_OK

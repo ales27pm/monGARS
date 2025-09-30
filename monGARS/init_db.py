@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncIterator
+from weakref import WeakKeyDictionary
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -23,6 +24,10 @@ class Base(DeclarativeBase):
     """Base class for all lightweight ORM models."""
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class ConversationHistory(Base):
     __tablename__ = "conversation_history"
 
@@ -30,9 +35,7 @@ class ConversationHistory(Base):
     user_id: Mapped[str] = mapped_column(String, index=True)
     query: Mapped[str] = mapped_column(String)
     response: Mapped[str] = mapped_column(String)
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
-    )
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
     vector: Mapped[list[float] | None] = mapped_column(JSON, default=list)
 
 
@@ -51,11 +54,9 @@ class Interaction(Base):
     meta_data: Mapped[str | None] = mapped_column(String, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     processing_time: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=_utcnow, onupdate=_utcnow
     )
 
 
@@ -77,7 +78,20 @@ class UserPersonality(Base):
     context_preferences: Mapped[dict] = mapped_column(JSON, default=dict)
     adaptation_rate: Mapped[float] = mapped_column(Float, default=0.1)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
-    last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
 
 
 if HAS_AIOSQLITE:
@@ -98,8 +112,19 @@ else:
     _async_engine = None
     _async_session_maker = None
 
-_init_lock: asyncio.Lock | None = None
+_init_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    WeakKeyDictionary()
+)
 _initialized = False
+
+
+def _get_loop_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _init_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _init_locks[loop] = lock
+    return lock
 
 
 class _AsyncSessionProxy:
@@ -158,12 +183,11 @@ class _AsyncSessionProxy:
 async def _ensure_schema() -> None:
     """Create the lightweight schema once per process."""
 
-    global _initialized, _init_lock
+    global _initialized
     if _initialized:
         return
-    if _init_lock is None:
-        _init_lock = asyncio.Lock()
-    async with _init_lock:
+    lock = _get_loop_lock()
+    async with lock:
         if _initialized:
             return
         if HAS_AIOSQLITE:
@@ -198,10 +222,9 @@ async def async_session_factory() -> AsyncIterator[AsyncSession]:
 async def reset_database() -> None:
     """Utility for tests that need a clean in-memory database."""
 
-    global _init_lock
-    if _init_lock is None:
-        _init_lock = asyncio.Lock()
-    async with _init_lock:
+    global _initialized
+    lock = _get_loop_lock()
+    async with lock:
         if HAS_AIOSQLITE:
             assert _async_engine is not None
             async with _async_engine.begin() as conn:
@@ -211,3 +234,4 @@ async def reset_database() -> None:
             assert _sync_engine is not None
             await asyncio.to_thread(Base.metadata.drop_all, _sync_engine)
             await asyncio.to_thread(Base.metadata.create_all, _sync_engine)
+        _initialized = True

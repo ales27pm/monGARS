@@ -5,6 +5,7 @@ from weakref import WeakKeyDictionary
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.peer import PeerCommunicator
+from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
 
 hippocampus = Hippocampus()
@@ -13,6 +14,7 @@ _personality_engine: PersonalityEngine | None = None
 _adaptive_generators: WeakKeyDictionary[
     PersonalityEngine, AdaptiveResponseGenerator
 ] = WeakKeyDictionary()
+_persistence_repository = PersistenceRepository()
 
 
 def _resolve_personality_engine() -> PersonalityEngine:
@@ -30,6 +32,11 @@ def get_hippocampus() -> Hippocampus:
 def get_peer_communicator() -> PeerCommunicator:
     """Return the shared PeerCommunicator instance."""
     return peer_communicator
+
+
+def get_persistence_repository() -> PersistenceRepository:
+    """Return the shared PersistenceRepository instance."""
+    return _persistence_repository
 
 
 def get_personality_engine() -> PersonalityEngine:

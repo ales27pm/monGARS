@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import (
+    authenticate_user,
     get_current_admin_user,
     get_current_user,
 )
@@ -17,16 +18,19 @@ from monGARS.api.dependencies import (
     get_adaptive_response_generator,
     get_hippocampus,
     get_peer_communicator,
+    get_persistence_repository,
     get_personality_engine,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
+from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import event_bus, make_event
 
 app = FastAPI(title="monGARS API")
+logger = logging.getLogger(__name__)
 
 from . import authentication as auth_routes
 from . import ui as ui_routes
@@ -45,31 +49,39 @@ conversation_module = ConversationalModule(
     dynamic=_shared_dynamic,
 )
 ws_manager = _ws_manager
+DEFAULT_USERS: dict[str, dict[str, Any]] = {
+    "u1": {
+        "password_hash": sec_manager.get_password_hash("x"),
+        "is_admin": True,
+    },
+    "u2": {
+        "password_hash": sec_manager.get_password_hash("y"),
+        "is_admin": False,
+    },
+}
 
 
 def get_conversational_module() -> ConversationalModule:
     return conversation_module
 
 
-users_db: Dict[str, str] = {
-    "u1": sec_manager.get_password_hash("x"),
-    "u2": sec_manager.get_password_hash("y"),
-}
-admin_users = {"u1"}
-
-
 @app.post("/token")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
+async def login(
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+    form_data: OAuth2PasswordRequestForm = Depends(),
+) -> dict:
     """Return a simple access token."""
-    hashed = users_db.get(form_data.username)
-    if not hashed or not sec_manager.verify_password(form_data.password, hashed):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
-        )
+    user = await authenticate_user(
+        repo,
+        form_data.username,
+        form_data.password,
+        sec_manager,
+        DEFAULT_USERS,
+    )
     token = sec_manager.create_access_token(
         {
-            "sub": form_data.username,
-            "admin": form_data.username in admin_users,
+            "sub": user.username,
+            "admin": user.is_admin,
         }
     )
     return {"access_token": token, "token_type": "bearer"}
@@ -98,10 +110,25 @@ class UserRegistration(BaseModel):
 
 
 @app.post("/api/v1/user/register")
-async def register_user(reg: UserRegistration) -> dict:
-    if reg.username in users_db:
-        raise HTTPException(status_code=400, detail="User exists")
-    users_db[reg.username] = sec_manager.get_password_hash(reg.password)
+async def register_user(
+    reg: UserRegistration,
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+) -> dict:
+    try:
+        await repo.create_user_atomic(
+            reg.username,
+            sec_manager.get_password_hash(reg.password),
+            reserved_usernames=DEFAULT_USERS.keys(),
+        )
+    except ValueError as exc:
+        logger.debug(
+            "auth.register.conflict",
+            extra={"username": reg.username},
+            exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return {"status": "registered"}
 
 

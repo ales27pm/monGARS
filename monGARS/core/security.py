@@ -23,26 +23,37 @@ class SecurityManager:
         secret_key: Optional[str] = None,
         algorithm: Optional[str] = None,
         settings: Optional[Settings] = None,
+        private_key: Optional[str] = None,
+        public_key: Optional[str] = None,
     ) -> None:
         base_settings = settings or get_settings()
-        if secret_key and not base_settings.SECRET_KEY:
-            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+        original_algorithm = algorithm or base_settings.JWT_ALGORITHM
+        configured_algorithm = original_algorithm.upper()
 
-        resolved_secret = secret_key or base_settings.SECRET_KEY
-        if not resolved_secret:
-            base_settings, _ = ensure_secret_key(
+        self.algorithm = original_algorithm
+        self._is_asymmetric = configured_algorithm.startswith("RS")
+
+        if self._is_asymmetric:
+            (
+                self._settings,
+                self.private_key,
+                self.public_key,
+            ) = self._init_asymmetric(
                 base_settings,
-                log_message=(
-                    "SECRET_KEY missing during SecurityManager init; using ephemeral key."
-                ),
+                private_key=private_key,
+                public_key=public_key,
             )
-            resolved_secret = base_settings.SECRET_KEY
-        elif secret_key and base_settings.SECRET_KEY != secret_key:
-            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+            self.secret_key = None
+        else:
+            self._settings, self.secret_key = self._init_symmetric(
+                base_settings,
+                secret_key=secret_key,
+            )
+            self.private_key = None
+            self.public_key = None
 
-        self._settings = base_settings
-        self.secret_key = resolved_secret
-        self.algorithm = algorithm or self._settings.JWT_ALGORITHM
+        self._signing_key = self.private_key or self.secret_key
+        self._verification_key = self.public_key or self.secret_key
         # ``passlib`` defaults to bcrypt, but that backend is optional and
         # raises a ``ValueError`` when the optimized extension is absent.  This
         # broke our test environment, so we switch to ``pbkdf2_sha256`` which is
@@ -66,6 +77,58 @@ class SecurityManager:
             schemes.append("bcrypt")
         self.pwd_context = CryptContext(**context_kwargs)
 
+    @staticmethod
+    def _validate_pem_key(key: str, *, expected: str) -> None:
+        pattern = rf"-----BEGIN (?:RSA )?{expected} KEY-----"
+        if not re.search(pattern, key):
+            raise ValueError(
+                f"Invalid RSA {expected.lower()} key format; expected PEM-encoded key."
+            )
+
+    def _init_asymmetric(
+        self,
+        base_settings: Settings,
+        *,
+        private_key: Optional[str],
+        public_key: Optional[str],
+    ) -> tuple[Settings, str, str]:
+        resolved_private = private_key or getattr(
+            base_settings, "JWT_PRIVATE_KEY", None
+        )
+        resolved_public = public_key or getattr(base_settings, "JWT_PUBLIC_KEY", None)
+
+        if not resolved_private or not resolved_public:
+            raise ValueError("RSA JWT algorithms require both private and public keys.")
+
+        self._validate_pem_key(resolved_private, expected="PRIVATE")
+        self._validate_pem_key(resolved_public, expected="PUBLIC")
+
+        return base_settings, resolved_private, resolved_public
+
+    def _init_symmetric(
+        self,
+        base_settings: Settings,
+        *,
+        secret_key: Optional[str],
+    ) -> tuple[Settings, str]:
+        if secret_key and base_settings.SECRET_KEY != secret_key:
+            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+
+        resolved_secret = secret_key or base_settings.SECRET_KEY
+        if not resolved_secret:
+            base_settings, _ = ensure_secret_key(
+                base_settings,
+                log_message=(
+                    "SECRET_KEY missing during SecurityManager init; using ephemeral key."
+                ),
+            )
+            resolved_secret = base_settings.SECRET_KEY
+
+        if resolved_secret is None:
+            raise ValueError("SECRET_KEY could not be resolved.")
+
+        return base_settings, resolved_secret
+
     def create_access_token(
         self, data: dict, expires_delta: Optional[timedelta] = None
     ) -> str:
@@ -75,11 +138,17 @@ class SecurityManager:
             or timedelta(minutes=self._settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         )
         to_encode.update({"exp": expire.timestamp()})
-        return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
+        if not self._signing_key:
+            raise ValueError("Signing key is not configured")
+        return jwt.encode(to_encode, self._signing_key, algorithm=self.algorithm)
 
     def verify_token(self, token: str) -> dict:
         try:
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            if not self._verification_key:
+                raise ValueError("Verification key is not configured")
+            payload = jwt.decode(
+                token, self._verification_key, algorithms=[self.algorithm]
+            )
             if datetime.fromtimestamp(payload["exp"], tz=timezone.utc) <= datetime.now(
                 timezone.utc
             ):
