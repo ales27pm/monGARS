@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 from monGARS.config import get_settings
@@ -6,6 +6,7 @@ from monGARS.core.security import SecurityManager
 
 settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
