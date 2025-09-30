@@ -169,12 +169,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def sync_redis_url(self) -> "Settings":
-        if self.REDIS_URL:
-            try:
-                self.redis_url = RedisDsn(str(self.REDIS_URL))
-            except ValueError as exc:  # pragma: no cover - configuration error
-                raise ValueError("Invalid REDIS_URL provided") from exc
-        return self
+        """Normalise the Redis override onto the canonical redis_url field."""
+
+        if not self.REDIS_URL:
+            return self
+
+        try:
+            override = RedisDsn(str(self.REDIS_URL))
+        except ValueError as exc:  # pragma: no cover - configuration error
+            raise ValueError("Invalid REDIS_URL provided") from exc
+
+        return self.model_copy(update={"redis_url": override})
 
 
 def ensure_secret_key(
