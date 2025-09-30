@@ -115,7 +115,16 @@ service for manual testing or demos:
    python manage.py runserver 0.0.0.0:8001
    ```
 
-4. Visit `http://127.0.0.1:8001/chat/login/` to authenticate. The login form
+4. In a separate terminal, start the FastAPI backend so the login proxy has a
+   target to authenticate against:
+
+   ```bash
+   uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
+   ```
+
+   (You can also run `python -m uvicorn ...` if `uvicorn` is not on your `PATH`.)
+
+5. Visit `http://127.0.0.1:8001/chat/login/` to authenticate. The login form
    proxies credentials to FastAPI's `/token` endpoint, stores the issued JWT in
    the session, and then redirects to the chat view. When JavaScript is
    disabled, conversations can still be submitted thanks to the progressive
