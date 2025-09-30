@@ -4,6 +4,7 @@ os.environ.setdefault("SECRET_KEY", "test")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 
 from monGARS.api.dependencies import hippocampus
@@ -11,10 +12,11 @@ from monGARS.api.web_api import app, ws_manager
 from monGARS.core.conversation import ConversationalModule
 
 
-@pytest.fixture
-def client(monkeypatch):
+@pytest_asyncio.fixture
+async def client(monkeypatch):
     hippocampus._memory.clear()
     hippocampus._locks.clear()
+    await ws_manager.reset()
 
     async def fake_generate_response(
         self, user_id, query, session_id=None, image_data=None
@@ -32,7 +34,7 @@ def client(monkeypatch):
         client.close()
         hippocampus._memory.clear()
         hippocampus._locks.clear()
-        ws_manager.connections.clear()
+        await ws_manager.reset()
 
 
 @pytest.mark.asyncio
