@@ -49,6 +49,18 @@ def test_ray_service_encode_prompt_error(monkeypatch):
         deployment._encode_prompt("prompt")
 
 
+def test_deploy_ray_service_raises_when_ray_missing(monkeypatch):
+    from modules import ray_service
+
+    monkeypatch.setattr(ray_service, "serve", None)
+    monkeypatch.setattr(ray_service, "ray", None)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ray_service.deploy_ray_service()
+
+    assert "Ray Serve is not available" in str(excinfo.value)
+
+
 @pytest.mark.asyncio
 async def test_llm_integration_balances_ray_endpoints(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "test")

@@ -163,6 +163,34 @@ def test_mntp_trainer_generates_deterministic_fallback(
     assert repeat_weights == weights
 
 
+def test_mntp_trainer_recovers_from_training_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_deps_available(self) -> bool:
+        return True
+
+    def fail_training(self):
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(
+        MNTPTrainer, "_deps_available", fake_deps_available, raising=False
+    )
+    monkeypatch.setattr(MNTPTrainer, "_run_peft_training", fail_training, raising=False)
+
+    output_dir = tmp_path / "failed"
+    trainer = MNTPTrainer(
+        training_config_path="configs/training/mntp_mistral_config.json",
+        output_dir=str(output_dir),
+    )
+
+    summary = trainer.train()
+
+    assert summary["status"] == TrainingStatus.FALLBACK.value
+    assert summary["reason"] == "training_failed"
+    assert summary["details"] == "synthetic failure"
+    _assert_fallback_artifacts(output_dir)
+
+
 def test_mntp_trainer_missing_config_file(tmp_path: Path) -> None:
     missing_config_path = tmp_path / "missing_config.json"
     trainer = MNTPTrainer(
