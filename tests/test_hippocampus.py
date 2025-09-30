@@ -1,6 +1,8 @@
 import pytest
 
 from monGARS.core.hippocampus import Hippocampus
+from monGARS.core.persistence import PersistenceRepository
+from monGARS.init_db import reset_database
 
 
 async def populate(h: Hippocampus, user: str, count: int):
@@ -43,3 +45,18 @@ async def test_empty_history():
     h = Hippocampus()
     history = await h.history("nouser")
     assert history == []
+
+
+@pytest.mark.asyncio
+async def test_persistent_history_across_instances():
+    await reset_database()
+    repo = PersistenceRepository()
+    h1 = Hippocampus(persistence=repo, persist_on_store=True)
+    await h1.store("u-persist", "q0", "r0")
+
+    # New instance should hydrate from the shared persistence layer.
+    h2 = Hippocampus(persistence=repo)
+    history = await h2.history("u-persist", limit=1)
+    assert history
+    assert history[0].query == "q0"
+    assert history[0].response == "r0"

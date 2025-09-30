@@ -108,6 +108,20 @@ class _AsyncSessionProxy:
     def __init__(self, session):
         self._session = session
 
+    class _AsyncTransactionProxy:
+        """Async-compatible wrapper around ``Session.begin`` transactions."""
+
+        def __init__(self, transaction):
+            self._transaction = transaction
+
+        async def __aenter__(self):
+            return await asyncio.to_thread(self._transaction.__enter__)
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return await asyncio.to_thread(
+                self._transaction.__exit__, exc_type, exc, tb
+            )
+
     async def __aenter__(self):
         return self
 
@@ -116,6 +130,12 @@ class _AsyncSessionProxy:
 
     def add(self, obj) -> None:
         self._session.add(obj)
+
+    def begin(self):
+        return self._AsyncTransactionProxy(self._session.begin())
+
+    def in_transaction(self) -> bool:
+        return self._session.in_transaction()
 
     async def merge(self, obj):
         return await asyncio.to_thread(self._session.merge, obj)
