@@ -102,6 +102,9 @@ service for manual testing or demos:
    ```bash
    export DJANGO_SECRET_KEY="change-me"  # required, no default provided
    export FASTAPI_URL="http://localhost:8000"  # point to the FastAPI process
+   # optional: override the default "localhost,127.0.0.1,[::1]" allow-list when
+   # exposing Django on another hostname
+   # export DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1"
    ```
 
 3. Apply migrations and start the development server on an open port, e.g.:
