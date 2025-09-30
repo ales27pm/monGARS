@@ -86,7 +86,7 @@ class Interaction(Base):
 
 
 async_engine = create_async_engine(
-    settings.database_url,
+    str(settings.database_url),
     echo=settings.debug,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
