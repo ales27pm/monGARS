@@ -90,13 +90,17 @@
   }
 
   function escapeHTML(str) {
-    return String(str).replace(/[&<>"']/g, (ch) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    })[ch]);
+    return String(str).replace(
+      /[&<>"']/g,
+      (ch) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[ch],
+    );
   }
 
   function formatTimestamp(ts) {
@@ -301,7 +305,8 @@
     const data = ev && ev.data ? ev.data : {};
     switch (type) {
       case "ai_model.response_chunk": {
-        const delta = typeof data.delta === "string" ? data.delta : data.text || "";
+        const delta =
+          typeof data.delta === "string" ? data.delta : data.text || "";
         appendStream(delta);
         break;
       }
@@ -372,7 +377,9 @@
         break;
       }
       case "ui.suggestions": {
-        applyQuickActionOrdering(Array.isArray(data.actions) ? data.actions : []);
+        applyQuickActionOrdering(
+          Array.isArray(data.actions) ? data.actions : [],
+        );
         break;
       }
       default:
@@ -418,6 +425,46 @@
     els.quickActions.appendChild(frag);
   }
 
+  // ---- Debounced AUI suggestions -----------------------------------------
+  let auiTimer = null;
+
+  async function fetchSuggestionsDebounced() {
+    if (auiTimer) {
+      clearTimeout(auiTimer);
+    }
+    auiTimer = window.setTimeout(fetchSuggestions, 220);
+  }
+
+  async function fetchSuggestions() {
+    const text = (els.prompt.value || "").trim();
+    if (!text) {
+      return;
+    }
+    try {
+      const jwt = await getJwt();
+      const resp = await fetch(apiUrl("/api/v1/ui/suggestions"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({
+          prompt: text,
+          actions: ["code", "summarize", "explain"],
+        }),
+      });
+      if (!resp.ok) {
+        return;
+      }
+      const payload = await resp.json();
+      if (payload && Array.isArray(payload.actions)) {
+        applyQuickActionOrdering(payload.actions);
+      }
+    } catch (err) {
+      console.debug("AUI suggestion fetch failed", err);
+    }
+  }
+
   // ---- Submit & quick actions --------------------------------------------
   els.composer.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -435,6 +482,7 @@
     );
     els.prompt.value = "";
     setBusy(true);
+    applyQuickActionOrdering(["code", "summarize", "explain"]);
 
     try {
       const jwt = await getJwt();
@@ -479,6 +527,10 @@
       els.prompt.value = presets[action] || action;
       els.composer.dispatchEvent(new Event("submit"));
     });
+  }
+
+  if (els.prompt) {
+    els.prompt.addEventListener("input", fetchSuggestionsDebounced);
   }
 
   // ---- Dark mode toggle ---------------------------------------------------
