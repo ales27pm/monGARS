@@ -13,6 +13,8 @@ from kubernetes import client, config
 from monGARS.config import get_settings
 from monGARS.core.monitor import SystemMonitor, SystemStats
 
+from .ui_events import event_bus, make_event
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -260,6 +262,50 @@ class EvolutionEngine:
         except Exception:  # pragma: no cover - unexpected errors
             logger.exception("Optimization failed")
             return False
+
+    async def train_cycle(
+        self,
+        user_id: str | None = None,
+        version: str = "enc_2025_09_29",
+    ) -> None:
+        """Execute a training cycle and publish lifecycle events.
+
+        Args:
+            user_id: Identifier for the user initiating the training cycle.
+            version: Identifier describing the training routine being executed.
+        """
+
+        logger.info(
+            "evolution.train_cycle.start",
+            extra={"user_id": user_id, "version": version},
+        )
+        try:
+            await self.apply_optimizations()
+        except Exception as exc:
+            await event_bus().publish(
+                make_event(
+                    "evolution_engine.training_failed",
+                    user_id,
+                    {"error": str(exc), "version": version},
+                )
+            )
+            logger.exception(
+                "evolution.train_cycle.failed",
+                extra={"user_id": user_id, "version": version},
+            )
+            raise
+
+        await event_bus().publish(
+            make_event(
+                "evolution_engine.training_complete",
+                user_id,
+                {"version": version},
+            )
+        )
+        logger.info(
+            "evolution.train_cycle.complete",
+            extra={"user_id": user_id, "version": version},
+        )
 
 
 def _collect_numeric(values: Iterable[float | None]) -> list[float]:

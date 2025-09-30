@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -26,7 +26,11 @@ from tenacity import (
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from monGARS.config import get_settings
 
+from .ui_events import event_bus, make_event
+
 logger = logging.getLogger(__name__)
+
+STREAM_CHUNK_SIZE = 64
 
 T = TypeVar("T")
 
@@ -566,5 +570,85 @@ class LLMIntegration:
     def _parse_ray_urls(self, value: str | None) -> list[str]:
         if not value:
             return []
-        urls = [entry.strip() for entry in value.split(",") if entry.strip()]
-        return urls
+        return [entry.strip() for entry in value.split(",") if entry.strip()]
+
+    async def chat(self, user_id: str, prompt: str, stream: bool = True) -> str | None:
+        """Generate chat responses and publish UI streaming events."""
+
+        logger.info(
+            "llm.chat.start",
+            extra={"user_id": user_id, "stream": stream},
+        )
+        try:
+            if stream:
+                async for piece in self._stream_inference(prompt):
+                    if not piece:
+                        continue
+                    await event_bus().publish(
+                        make_event(
+                            "ai_model.response_chunk",
+                            user_id,
+                            {"delta": piece},
+                        )
+                    )
+                await event_bus().publish(
+                    make_event(
+                        "ai_model.response_complete",
+                        user_id,
+                        {"ok": True},
+                    )
+                )
+                return None
+
+            text = await self._inference(prompt)
+            await event_bus().publish(
+                make_event(
+                    "ai_model.response_complete",
+                    user_id,
+                    {"ok": True, "text": text},
+                )
+            )
+            return text
+        except asyncio.CancelledError:
+            logger.info(
+                "llm.chat.cancelled",
+                extra={"user_id": user_id, "stream": stream},
+            )
+            await event_bus().publish(
+                make_event(
+                    "ai_model.response_complete",
+                    user_id,
+                    {"ok": False, "error": "cancelled"},
+                )
+            )
+            raise
+        except Exception as exc:
+            logger.exception(
+                "llm.chat.error",
+                extra={"user_id": user_id, "stream": stream},
+            )
+            await event_bus().publish(
+                make_event(
+                    "ai_model.response_complete",
+                    user_id,
+                    {"ok": False, "error": str(exc)},
+                )
+            )
+            raise
+
+    async def _stream_inference(
+        self, prompt: str, task_type: str = "general"
+    ) -> AsyncIterator[str]:
+        """Yield response fragments for the given prompt."""
+
+        response = await self.generate_response(prompt, task_type=task_type)
+        text = response.get("text", "") if isinstance(response, dict) else ""
+        if text:
+            for start in range(0, len(text), STREAM_CHUNK_SIZE):
+                yield text[start : start + STREAM_CHUNK_SIZE]
+
+    async def _inference(self, prompt: str, task_type: str = "general") -> str:
+        """Return the full response text for the prompt."""
+
+        response = await self.generate_response(prompt, task_type=task_type)
+        return "" if not isinstance(response, dict) else str(response.get("text", ""))

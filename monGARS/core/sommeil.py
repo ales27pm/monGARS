@@ -6,6 +6,7 @@ from typing import Any
 
 from .distributed_scheduler import DistributedScheduler
 from .evolution_engine import EvolutionEngine
+from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,35 @@ class SommeilParadoxal:
         self.check_interval = check_interval
         self._task: asyncio.Task[Any] | None = None
         self._running = False
+
+    async def run(self, user_id: str | None = None) -> None:
+        """Execute a single idle-time optimization cycle."""
+
+        await event_bus().publish(
+            make_event(
+                "sleep_time_compute.phase_start",
+                user_id,
+                {"phase": "deep"},
+            )
+        )
+        logger.info(
+            "sommeil.phase.start",
+            extra={"user_id": user_id},
+        )
+
+        success = await self.evolution.safe_apply_optimizations()
+
+        await event_bus().publish(
+            make_event(
+                "sleep_time_compute.creative_phase",
+                user_id,
+                {"ideas": 3},
+            )
+        )
+        logger.info(
+            "sommeil.phase.complete",
+            extra={"user_id": user_id, "success": success},
+        )
 
     async def _loop(self) -> None:
         try:

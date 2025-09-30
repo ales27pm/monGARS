@@ -7,10 +7,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
 from pydantic import BaseModel
 
 from monGARS.api.authentication import get_current_user
+from monGARS.api.ticket_signer import BadSignature, SignatureExpired, TicketSigner
 from monGARS.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -24,8 +24,8 @@ class WSTicketResponse(BaseModel):
     ttl: int
 
 
-def _ticket_signer() -> TimestampSigner:
-    return TimestampSigner(settings.SECRET_KEY)
+def _ticket_signer() -> TicketSigner:
+    return TicketSigner(settings.SECRET_KEY)
 
 
 @router.post("/ticket", response_model=WSTicketResponse)
@@ -39,7 +39,7 @@ async def issue_ws_ticket(
             detail="Invalid token payload: 'sub' must be a non-empty string",
         )
     signer = _ticket_signer()
-    token = signer.sign(uid.encode("utf-8")).decode("utf-8")
+    token = signer.sign(uid.encode("utf-8"))
     return WSTicketResponse(ticket=token, ttl=settings.WS_TICKET_TTL_SECONDS)
 
 
