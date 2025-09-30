@@ -9,6 +9,7 @@
     send: document.getElementById("send"),
     wsStatus: document.getElementById("ws-status"),
     quickActions: document.getElementById("quick-actions"),
+    connection: document.getElementById("connection"),
     errorAlert: document.getElementById("error-alert"),
     errorMessage: document.getElementById("error-message"),
   };
@@ -52,6 +53,8 @@
     }
     historyElement.remove();
   }
+
+  let historyBootstrapped = els.transcript.childElementCount > 0;
 
   // ---- UX helpers ---------------------------------------------------------
   const nowISO = () => new Date().toISOString();
@@ -112,8 +115,22 @@
     }
   }
 
-  function renderHistory(entries) {
+  function renderHistory(entries, options = {}) {
+    const { replace = false } = options;
     if (!Array.isArray(entries) || entries.length === 0) {
+      if (replace) {
+        els.transcript.innerHTML = "";
+        historyBootstrapped = false;
+      }
+      return;
+    }
+    if (replace) {
+      els.transcript.innerHTML = "";
+      historyBootstrapped = false;
+      streamRow = null;
+      streamBuf = "";
+    }
+    if (historyBootstrapped && !replace) {
       return;
     }
     entries
@@ -137,6 +154,7 @@
           );
         }
       });
+    historyBootstrapped = true;
   }
 
   renderHistory(chatHistory);
@@ -187,6 +205,23 @@
     }
     streamRow = null;
     streamBuf = "";
+  }
+
+  function announceConnection(message, variant = "info") {
+    if (!els.connection) {
+      return;
+    }
+    const classList = els.connection.classList;
+    Array.from(classList)
+      .filter((cls) => cls.startsWith("alert-") && cls !== "alert")
+      .forEach((cls) => classList.remove(cls));
+    classList.add("alert");
+    classList.add(`alert-${variant}`);
+    els.connection.textContent = message;
+    classList.remove("visually-hidden");
+    window.setTimeout(() => {
+      classList.add("visually-hidden");
+    }, 4000);
   }
 
   // ---- WS ticket + socket -------------------------------------------------
@@ -304,6 +339,20 @@
     const type = ev && ev.type ? ev.type : "";
     const data = ev && ev.data ? ev.data : {};
     switch (type) {
+      case "ws.connected": {
+        if (data && data.origin) {
+          announceConnection(`Connecté via ${data.origin}`);
+        } else {
+          announceConnection("Connecté au serveur.");
+        }
+        break;
+      }
+      case "history.snapshot": {
+        if (data && Array.isArray(data.items)) {
+          renderHistory(data.items, { replace: true });
+        }
+        break;
+      }
       case "ai_model.response_chunk": {
         const delta =
           typeof data.delta === "string" ? data.delta : data.text || "";

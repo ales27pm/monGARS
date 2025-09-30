@@ -23,10 +23,43 @@
           <h4 class="mb-0">Historique du Chat</h4>
           <span id="ws-status" class="badge ws-badge offline" aria-live="polite">Hors ligne</span>
         </div>
-        <section id="connection" class="visually-hidden" aria-live="polite"></section>
+        {% if flash_message %}
+        <div class="alert alert-success" role="status">{{ flash_message }}</div>
+        {% endif %}
+        <section id="connection" class="alert alert-info visually-hidden" role="status" aria-live="polite"></section>
         <main id="chat" class="card shadow-sm">
           <div class="card-body p-0">
-            <div id="transcript" class="chat-transcript" aria-live="polite" aria-busy="false"></div>
+            <div id="transcript" class="chat-transcript" aria-live="polite" aria-busy="false">
+              {% if history_error %}
+              <div class="chat-row chat-system">
+                <div class="chat-bubble chat-bubble-error">{{ history_error }}</div>
+              </div>
+              {% endif %}
+              {% for item in history %}
+                {% if item.query %}
+                <div class="chat-row chat-user">
+                  <div class="chat-bubble">
+                    {{ item.query }}
+                    <div class="chat-meta">{{ item.timestamp|default_if_none:"" }}</div>
+                  </div>
+                </div>
+                {% endif %}
+                {% if item.response %}
+                <div class="chat-row chat-assistant">
+                  <div class="chat-bubble">
+                    {{ item.response }}
+                    <div class="chat-meta">{{ item.timestamp|default_if_none:"" }}</div>
+                  </div>
+                </div>
+                {% endif %}
+              {% empty %}
+              {% if not history_error %}
+              <div class="chat-row chat-system">
+                <div class="chat-bubble chat-bubble-hint">Aucun échange pour le moment.</div>
+              </div>
+              {% endif %}
+              {% endfor %}
+            </div>
             <div id="error-alert" class="alert alert-danger m-3 d-none alert-dismissible fade show" role="alert">
               <span id="error-message"></span>
               <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fermer"></button>
@@ -38,9 +71,13 @@
                 <button role="listitem" class="qa btn btn-outline-secondary" data-action="explain">Expliquer</button>
               </div>
             </aside>
-            <form id="composer" class="p-3 border-top" autocomplete="off">
+            <form id="composer" class="p-3 border-top" autocomplete="off" method="post">
+              {% csrf_token %}
+              {% if form_error %}
+              <div class="alert alert-warning" role="alert">{{ form_error }}</div>
+              {% endif %}
               <div class="input-group">
-                <input id="prompt" name="prompt" class="form-control" placeholder="Entrez votre message…" autocomplete="off" />
+                <input id="prompt" name="prompt" class="form-control" placeholder="Entrez votre message…" value="{{ prompt_value }}" autocomplete="off" />
                 <button id="send" type="submit" class="btn btn-primary">Envoyer</button>
               </div>
             </form>
@@ -51,7 +88,7 @@
   </div>
   <!-- Bootstrap 5 JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  {{ data|json_script:"chat-history" }}
+  {{ history_json|json_script:"chat-history" }}
   <script>
     window.chatConfig = {
       fastapiUrl: "{{ fastapi_url }}",
