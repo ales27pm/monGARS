@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime
-from typing import Annotated, Any, List
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, HttpUrl, field_validator
 
 from monGARS.api.authentication import (
     authenticate_user,
@@ -20,6 +18,13 @@ from monGARS.api.dependencies import (
     get_peer_communicator,
     get_persistence_repository,
     get_personality_engine,
+)
+from monGARS.api.schemas import (
+    ChatRequest,
+    ChatResponse,
+    PeerMessage,
+    PeerRegistration,
+    UserRegistration,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.core.conversation import ConversationalModule
@@ -42,12 +47,7 @@ app.include_router(ui_routes.router)
 app.include_router(ws_ticket_router)
 _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
-_shared_personality = get_personality_engine()
-_shared_dynamic = get_adaptive_response_generator(_shared_personality)
-conversation_module = ConversationalModule(
-    personality=_shared_personality,
-    dynamic=_shared_dynamic,
-)
+conversation_module: ConversationalModule | None = None
 ws_manager = _ws_manager
 DEFAULT_USERS: dict[str, dict[str, Any]] = {
     "u1": {
@@ -62,6 +62,14 @@ DEFAULT_USERS: dict[str, dict[str, Any]] = {
 
 
 def get_conversational_module() -> ConversationalModule:
+    global conversation_module
+    if conversation_module is None:
+        personality = get_personality_engine()
+        dynamic = get_adaptive_response_generator(personality)
+        conversation_module = ConversationalModule(
+            personality=personality,
+            dynamic=dynamic,
+        )
     return conversation_module
 
 
@@ -85,28 +93,6 @@ async def login(
         }
     )
     return {"access_token": token, "token_type": "bearer"}
-
-
-class UserRegistration(BaseModel):
-    username: str
-    password: str
-
-    @field_validator("username")
-    @classmethod
-    def validate_username(cls, v: str) -> str:
-        v = v.strip()
-        if not v or len(v) > 150:
-            raise ValueError("invalid username")
-        if not re.match(r"^[A-Za-z0-9_-]+$", v):
-            raise ValueError("invalid username")
-        return v
-
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("password too short")
-        return v
 
 
 @app.post("/api/v1/user/register")
@@ -142,13 +128,13 @@ async def ready() -> dict:
     return {"status": "ready"}
 
 
-@app.get("/api/v1/conversation/history", response_model=List[MemoryItem])
+@app.get("/api/v1/conversation/history", response_model=list[MemoryItem])
 async def conversation_history(
     user_id: str,
     current_user: Annotated[dict, Depends(get_current_user)],
     store: Annotated[Any, Depends(get_hippocampus)],
     limit: int = 10,
-) -> List[MemoryItem]:
+) -> list[MemoryItem]:
     if user_id != current_user.get("sub"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     if limit <= 0:
@@ -159,34 +145,6 @@ async def conversation_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
         ) from exc
-
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str | None = None
-
-    @field_validator("message")
-    @classmethod
-    def validate_message(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("message cannot be empty")
-        if len(v) > 1000:
-            raise ValueError("message too long")
-        return v
-
-    @field_validator("session_id")
-    @classmethod
-    def validate_session_id(cls, v: str | None) -> str | None:
-        if v is not None and len(v) > 100:
-            raise ValueError("session_id too long")
-        return v
-
-
-class ChatResponse(BaseModel):
-    response: str
-    confidence: float
-    processing_time: float
 
 
 @app.post("/api/v1/conversation/chat", response_model=ChatResponse)
@@ -224,19 +182,6 @@ async def chat(
         confidence=result.get("confidence", 0.0),
         processing_time=result.get("processing_time", 0.0),
     )
-
-
-class PeerMessage(BaseModel):
-    payload: str
-
-
-class PeerRegistration(BaseModel):
-    url: HttpUrl
-
-    @field_validator("url")
-    @classmethod
-    def normalize(cls, v: HttpUrl) -> str:
-        return str(v).rstrip("/")
 
 
 @app.post("/api/v1/peer/message")
@@ -281,10 +226,10 @@ async def peer_unregister(
     return {"status": "not registered", "count": len(communicator.peers)}
 
 
-@app.get("/api/v1/peer/list", response_model=List[str])
+@app.get("/api/v1/peer/list", response_model=list[str])
 async def peer_list(
     current_user: dict = Depends(get_current_admin_user),
     communicator: PeerCommunicator = Depends(get_peer_communicator),
-) -> List[str]:
+) -> list[str]:
     """Return the list of registered peer URLs."""
     return sorted(communicator.peers)
