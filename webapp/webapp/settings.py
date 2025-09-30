@@ -10,7 +10,14 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("DJANGO_SECRET_KEY environment variable required")
 DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("true", "1")
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost").split(",")
+_default_allowed_hosts = "localhost,127.0.0.1,[::1]"
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get("DJANGO_ALLOWED_HOSTS", _default_allowed_hosts).split(
+        ","
+    )
+    if host.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.admin",

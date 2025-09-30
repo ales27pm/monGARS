@@ -91,6 +91,45 @@ pytest
 
 Code style is enforced using `black` and `isort` as outlined in `AGENTS.md`.
 
+### Running the Django Web UI
+
+The chat frontend shipped in `webapp/` can be launched alongside the FastAPI
+service for manual testing or demos:
+
+1. Install Django dependencies (already listed in `requirements.txt`).
+2. Export the minimal environment expected by `webapp/webapp/settings.py`:
+
+   ```bash
+   export DJANGO_SECRET_KEY="change-me"  # required, no default provided
+   export FASTAPI_URL="http://localhost:8000"  # point to the FastAPI process
+   # optional: override the default "localhost,127.0.0.1,[::1]" allow-list when
+   # exposing Django on another hostname
+   # export DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1"
+   ```
+
+3. Apply migrations and start the development server on an open port, e.g.:
+
+   ```bash
+   cd webapp
+   python manage.py migrate
+   python manage.py runserver 0.0.0.0:8001
+   ```
+
+4. In a separate terminal, start the FastAPI backend so the login proxy has a
+   target to authenticate against:
+
+   ```bash
+   uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
+   ```
+
+   (You can also run `python -m uvicorn ...` if `uvicorn` is not on your `PATH`.)
+
+5. Visit `http://127.0.0.1:8001/chat/login/` to authenticate. The login form
+   proxies credentials to FastAPI's `/token` endpoint, stores the issued JWT in
+   the session, and then redirects to the chat view. When JavaScript is
+   disabled, conversations can still be submitted thanks to the progressive
+   enhancement fallbacks implemented in `chat/index.html`.
+
 ## Security Hardening Quick Wins
 
 - **Restrict WebSocket origins.** Set the `WS_ALLOWED_ORIGINS` environment variable
