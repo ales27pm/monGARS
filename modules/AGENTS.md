@@ -1,29 +1,21 @@
-# Modules Directory Guidelines
+# Optional Modules Standards
 
-The `modules` namespace contains optional subsystems that extend the core
-capabilities of monGARS. Today this includes the evolution engine controller and
-research-grade neuron trainers. Everything here must remain importable even
-when heavy ML dependencies are missing.
+The `modules/` namespace hosts optional subsystems (e.g. evolution engine,
+training utilities). They must remain importable on lightweight deployments.
 
 ## Design Principles
-- Guard optional packages (e.g. `torch`, `llm2vec`, `datasets`) with runtime
-  availability checks as demonstrated in
-  `modules/neurons/training/mntp_trainer.py`. Tests rely on these guards to run
-  without GPU libraries.
-- Pass configuration explicitly. Subpackages should accept file system paths or
-  config objects instead of reading environment variables directly. Reuse the
-  JSON configs in `configs/training/` when possible.
-- Emit logs through `logging.getLogger(__name__)`. Include key identifiers such
-  as model name, dataset, and output directory to aid long-running experiment
-  debugging. Avoid `print` except for CLI entry points.
-- Document new subpackages in `monGARS_structure.txt` and create a scoped
-  `AGENTS.md` describing their internal conventions.
+- Guard heavy dependencies (Torch, datasets, GPU tooling) behind runtime feature
+  checks. Provide clear log messages and return placeholders when features are
+  unavailable.
+- Accept configuration via explicit parameters or config objects. Reuse JSON
+  bundles from `configs/` instead of reading environment variables directly.
+- Emit logs with `logging.getLogger(__name__)` and include identifiers such as
+  model name, dataset, and output directory.
+- Document new subpackages by adding scoped `AGENTS.md` files and updating
+  `monGARS_structure.txt`.
 
 ## Testing
-- Extend `tests/test_evolution_engine.py` when changing orchestrator behaviour
-  (e.g. new pipeline stages or artifact paths).
-- Mirror the dependency stubbing strategy from `tests/test_mntp_trainer.py` for
-  trainers and neuron utilities. Heavy imports should be patched with
-  lightweight fakes.
-- Keep tests deterministic by seeding random modules in fixtures when you
-  introduce stochastic algorithms.
+- Extend existing tests when behaviour changes:
+  - `tests/test_evolution_engine.py` for orchestration
+  - `tests/test_mntp_trainer.py` for neuron trainers
+- Seed randomness and patch heavy imports to keep tests deterministic and fast.

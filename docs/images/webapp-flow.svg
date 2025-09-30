@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="520" viewBox="0 0 1024 520" role="img" aria-labelledby="title desc">
+  <title id="title">Web application flow</title>
+  <desc id="desc">Overview of the Django chat frontend bridging to FastAPI services.</desc>
+  <style>
+    text { font-family: 'Inter', sans-serif; fill: #111827; font-size: 18px; }
+    .label { font-size: 20px; font-weight: 600; }
+    rect { rx: 16; ry: 16; stroke-width: 2; }
+    .ui { fill: #f1f5f9; stroke: #1e293b; }
+    .service { fill: #ede9fe; stroke: #7c3aed; }
+    .backend { fill: #e0f2fe; stroke: #0284c7; }
+    line { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4 L0,8 z" fill="#334155" />
+    </marker>
+  </defs>
+  <rect x="80" y="160" width="220" height="160" class="ui" />
+  <text x="100" y="205" class="label">Django Templates</text>
+  <text x="100" y="240">Progressive chat UI</text>
+  <text x="100" y="268">WebSocket bootstrapping</text>
+  <rect x="360" y="80" width="280" height="140" class="service" />
+  <text x="380" y="125" class="label">chat/services.py</text>
+  <text x="380" y="160">Async httpx client</text>
+  <text x="380" y="188">Token exchange helpers</text>
+  <rect x="360" y="260" width="280" height="140" class="service" />
+  <text x="380" y="305" class="label">chat/views.py</text>
+  <text x="380" y="340">require_token decorator</text>
+  <text x="380" y="368">History hydration</text>
+  <rect x="700" y="160" width="240" height="160" class="backend" />
+  <text x="720" y="205" class="label">FastAPI</text>
+  <text x="720" y="240">/token, /chat, /history</text>
+  <text x="720" y="268">WebSocketManager</text>
+  <line x1="300" y1="240" x2="360" y2="170" />
+  <line x1="300" y1="240" x2="360" y2="330" />
+  <line x1="640" y1="150" x2="700" y2="210" />
+  <line x1="640" y1="330" x2="700" y2="210" />
+</svg>

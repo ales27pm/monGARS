@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">monGARS system overview</title>
+  <desc id="desc">Diagram showing monGARS FastAPI API, core cognition services, optional modules, persistence, and Django web interface.</desc>
+  <style>
+    text { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; fill: #0f172a; font-size: 18px; }
+    .label { font-size: 20px; font-weight: 600; }
+    .box { rx: 16; ry: 16; fill: #e0f2fe; stroke: #0284c7; stroke-width: 2; }
+    .core { fill: #f1f5f9; stroke: #1e293b; }
+    .accent { fill: #ecfdf5; stroke: #059669; }
+    .storage { fill: #fef3c7; stroke: #d97706; }
+    .shadow { filter: url(#shadow); }
+    line { stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.1" />
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4 L0,8 z" fill="#475569" />
+    </marker>
+  </defs>
+  <rect x="80" y="60" width="280" height="160" class="box shadow" />
+  <text x="110" y="110" class="label">FastAPI Surface</text>
+  <text x="110" y="150">OAuth2 authentication</text>
+  <text x="110" y="178">Chat, peer, health endpoints</text>
+  <text x="110" y="206">WebSocket broadcast hub</text>
+  <rect x="360" y="40" width="280" height="220" class="core shadow" />
+  <text x="380" y="95" class="label">Core Cognition</text>
+  <text x="380" y="135">ConversationalModule</text>
+  <text x="380" y="163">Hippocampus &amp; Persistence</text>
+  <text x="380" y="191">LLMIntegration &amp; caching</text>
+  <text x="380" y="219">Personality &amp; Mimicry</text>
+  <rect x="660" y="80" width="220" height="160" class="accent shadow" />
+  <text x="680" y="130" class="label">Evolution Modules</text>
+  <text x="680" y="170">MNTP Trainer</text>
+  <text x="680" y="198">Curiosity Engine</text>
+  <text x="680" y="226">Sommeil Paradoxal</text>
+  <rect x="120" y="260" width="220" height="140" class="accent shadow" />
+  <text x="140" y="310" class="label">Django Web UI</text>
+  <text x="140" y="350">Async views &amp; services</text>
+  <text x="140" y="378">Token-aware chat interface</text>
+  <rect x="380" y="280" width="220" height="160" class="storage shadow" />
+  <text x="400" y="330" class="label">Persistence Layer</text>
+  <text x="400" y="370">Postgres / Redis</text>
+  <text x="400" y="398">Adapter registry</text>
+  <rect x="660" y="280" width="220" height="160" class="box shadow" />
+  <text x="680" y="330" class="label">Operations</text>
+  <text x="680" y="370">Monitoring &amp; metrics</text>
+  <text x="680" y="398">Ray Serve integration</text>
+  <line x1="360" y1="140" x2="360" y2="330" />
+  <line x1="640" y1="140" x2="640" y2="360" />
+  <line x1="240" y1="200" x2="240" y2="260" />
+  <line x1="270" y1="330" x2="380" y2="330" />
+  <line x1="600" y1="330" x2="660" y2="330" />
+  <line x1="520" y1="260" x2="520" y2="280" />
+</svg>

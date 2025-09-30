@@ -1,42 +1,42 @@
-# monGARS Package Guidelines
+# monGARS Package Standards
 
-This package contains the FastAPI surface, cognition pipelines, persistence
-layers, and shared utilities. Respect the repository-wide standards described in
-the root `AGENTS.md` and apply these specifics when working under `monGARS/`.
+These rules apply to everything under `monGARS/`, including FastAPI surfaces,
+core cognition services, persistence helpers, and shared utilities. Follow the
+root playbook in `/AGENTS.md` and treat the guidelines below as additive.
 
-## Configuration & Settings
-- Always fetch configuration via `monGARS.config.get_settings()`. Modules such as
-  `core.conversation` and `utils.hardware` rely on the cached settings object;
-  creating new instances manually can desynchronise feature flags.
-- Validate environment-dependent inputs early. For example, `core.security`
-  raises on invalid JWT settings—follow that approach for new secrets or API
-  tokens.
+## Configuration & Dependency Injection
+- Always resolve configuration with `monGARS.config.get_settings()` and share the
+  cached object. Constructing new settings instances breaks feature-flag parity
+  across services.
+- Inject collaborators via constructors or dependency providers in
+  `monGARS.api.dependencies`. Avoid module-level singletons so tests can replace
+  implementations with fakes.
 
-## Dependency Management
-- Avoid global singletons. Inject collaborators through constructors or via the
-  providers in `monGARS.api.dependencies` so tests can swap implementations. The
-  `ConversationalModule` and WebSocket manager demonstrate the preferred pattern.
-- Keep optional integrations (OpenAI, Torch, etc.) behind feature checks in
-  `utils` or dedicated adapters. Do not import them at module load time without
-  fallbacks.
+## Optional Integrations
+- Gate heavy imports (Torch, Ray, transformers, GPU tooling) behind availability
+  checks. Provide functional fallbacks that log a warning and degrade gracefully.
+- Place adapters or provider abstractions in `monGARS.utils` or dedicated modules
+  so callers can select optional backends without editing orchestration logic.
 
-## Logging & Observability
-- Use module-level loggers (`logging.getLogger(__name__)`) and include context
-  such as `user_id`, `session_id`, or model identifiers. Sensitive fields must be
-  redacted before logging.
-- Emit structured dictionaries when raising or propagating errors so FastAPI and
-  background workers can surface actionable telemetry.
+## Logging & Telemetry
+- Use `logging.getLogger(__name__)` and emit structured dictionaries. Redact
+  `user_id`, tokens, and other sensitive identifiers before logging.
+- When adding retries or background loops, surface counters/timers through
+  OpenTelemetry to keep observability consistent across the stack.
 
 ## Persistence & State
-- Route database interactions through `core.persistence.PersistenceRepository`
-  and schema definitions in `init_db.py`. If you need new tables, add SQLModel
-  definitions there and update the Alembic migrations.
-- When caching, prefer the utilities in `core.caching` and `core.hippocampus`
-  rather than ad-hoc dictionaries.
+- Route database access through `core.persistence.PersistenceRepository` and keep
+  schemas defined in `init_db.py`. New tables require a matching Alembic
+  migration and documentation in `docs/`.
+- Prefer the caching utilities in `core.caching` and `core.hippocampus` instead
+  of ad-hoc dictionaries. Clear caches explicitly in tests.
 
-## Testing
-- Updates here usually require adjustments under `tests/`: see
-  `test_hardware_utils.py`, `test_hippocampus.py`, `test_peer_communication.py`,
-  `test_personality.py`, and `test_token_security.py` for reference patterns.
-- Provide fixtures or monkeypatches when you introduce new external calls so the
-  suite remains hermetic and fast.
+## Testing Expectations
+- Update targeted tests when you modify behaviour:
+  - `tests/test_api_*.py` for FastAPI changes
+  - `tests/test_hippocampus.py`, `tests/test_personality.py`, `tests/test_peer_communication.py`
+    for cognition and messaging updates
+  - `tests/test_mntp_trainer.py` and `tests/test_evolution_engine.py` for ML and
+    orchestration adjustments
+- Provide fixtures or monkeypatches for external calls so the suite remains
+  hermetic and fast.

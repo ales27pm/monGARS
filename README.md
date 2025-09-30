@@ -1,164 +1,192 @@
 # monGARS
 
-monGARS (Modular Neural Agent for Research and Support) is a privacy-first AI system designed for experimentation on low-resource hardware. The project bundles Python services, a Django web interface and container orchestration files so contributors can run or deploy the stack with minimal setup.
+**monGARS** (Modular Neural Guardian for Autonomous Research & Support) is a
+privacy-first AI assistant designed for resilient deployment on workstations,
+edge appliances, and research clusters. The project combines a FastAPI service,
+adaptive cognition pipeline, Django operator console, and optional ML training
+modules so contributors can experiment end-to-end without bespoke tooling.
 
-## Features
+## Table of Contents
+1. [Project Snapshot](#project-snapshot)
+2. [Architecture at a Glance](#architecture-at-a-glance)
+3. [Functional Snapshots](#functional-snapshots)
+4. [Service Breakdown](#service-breakdown)
+5. [Getting Started](#getting-started)
+6. [Configuration Keys](#configuration-keys)
+7. [Operational Workflows](#operational-workflows)
+8. [Deployment Options](#deployment-options)
+9. [Security & Observability](#security--observability)
+10. [Documentation Map](#documentation-map)
+11. [Contributing](#contributing)
 
-- **Conversational engine** powered by `LLMIntegration` with optional Ray Serve
-  integration (URL configured via `RAY_SERVE_URL`). When `USE_RAY_SERVE` is set
-  the service streams adapter metadata from `LLM_ADAPTER_REGISTRY_PATH`
-  (`models/encoders` by default) so new LLM2Vec adapters are propagated to Ray
-  replicas without manual restarts. See `docs/ray_serve_deployment.md` for
-  deployment steps and fallback behaviour.
-- **Memory management** through the in-memory `Hippocampus` and persistent storage via `PersistenceRepository`.
-- **Adaptive behaviour** using the `MimicryModule`, `PersonalityEngine` and `AdaptiveResponseGenerator`.
-- **Web scraping** utilities provided by `Iris` for retrieving external context.
-- **Tiered caching** (memory, Redis and disk) with graceful fallback handling.
-- **Self‑training and monitoring** via `SelfTrainingEngine` and `SystemMonitor`.
-- **Evolution Engine** for autonomous diagnostics and code optimization.
-- **Web interface** implemented with Django (located in `webapp/`).
-  Conversation history is displayed on load using Django's `json_script` helper
-  to safely embed data. Responses appear immediately after sending a message and
-  the dark mode preference persists across sessions.
-- **Automatic worker tuning** for Raspberry Pi and Jetson devices via `recommended_worker_count()`.
-- **Worker deployment settings** configurable through `WORKER_DEPLOYMENT_NAME` and `WORKER_DEPLOYMENT_NAMESPACE` environment variables used by the Evolution Engine.
-- **Robust core detection** falls back to logical CPUs if physical cores cannot be determined.
-- **Encrypted peer-to-peer messaging** via `PeerCommunicator` for basic node coordination.
-- **Peer registry endpoints** `/api/v1/peer/register`, `/api/v1/peer/unregister` and `/api/v1/peer/list` now require an admin token.
-- **User management** with `/api/v1/user/register` to create new accounts. Invalid credentials return clear error responses.
-- **Conversation endpoints** `/api/v1/conversation/chat` to generate responses
-  with sanitized input and `/api/v1/conversation/history` to retrieve past
-  interactions.
-- **Distributed task scheduling** handled by `DistributedScheduler` with
-  load-aware routing that favours the least busy peers while falling back to
-  broadcast when none are available.
-- **Idle-time optimization** through `SommeilParadoxal` which triggers upgrades when the system is quiet.
-- **Safe optimization cycles** executed by `EvolutionEngine.safe_apply_optimizations`.
+## Project Snapshot
+- **Conversational engine** with memory-backed context, curiosity-driven
+  research, and style adaptation.
+- **Memory architecture** that blends in-memory `Hippocampus`, SQL persistence,
+  and Redis/disk caching layers.
+- **Evolution engine** to retrain adapters, roll out artefacts, and trigger safe
+  optimisations during idle windows.
+- **Web interface** powered by Django async views that proxy authentication and
+  chat history to FastAPI.
+- **Hardware-aware operations** with worker tuning for Raspberry Pi/Jetson,
+  container build scripts for multiple architectures, and Kubernetes manifests.
 
-A high level component overview can be found in `monGARS_structure.txt`.
+## Architecture at a Glance
+![System overview diagram](docs/images/system-overview.svg)
+
+The system is intentionally modular:
+- **FastAPI surface (`monGARS.api`)** exposes OAuth2 authentication, chat,
+  conversation history, and peer-management endpoints. WebSockets are mediated by
+  a dedicated manager so broadcasts remain consistent.
+- **Core cognition (`monGARS.core`)** orchestrates Hippocampus memory, curiosity
+  heuristics, neuro-symbolic reasoning, LLM adapters (Ollama or Ray Serve), and
+  personality/mimicry engines.
+- **Optional modules (`modules/`)** host the evolution engine, neuron trainers,
+  and research tooling. They degrade gracefully when heavy dependencies are
+  absent.
+- **Django webapp (`webapp/`)** delivers a token-aware operator console with
+  progressive enhancement for offline/JS-light scenarios.
+- **Persistence & cache layers** span PostgreSQL, Redis, disk snapshots, and an
+  adapter manifest that coordinates encoder rollouts across services.
+
+## Functional Snapshots
+Each core capability ships with a quick visual reference that you can embed in
+slide decks or ops runbooks.
+
+### Conversational Pipeline
+![Conversation pipeline](docs/images/conversation-pipeline.svg)
+- OAuth2 login issues JWTs consumed by FastAPI dependencies.
+- Requests are validated, sanitised, and enriched with memory, curiosity-driven
+  research, and neuro-symbolic hints before hitting the LLM.
+- Responses are adapted for user personality, persisted, cached, and streamed to
+  WebSocket subscribers.
+
+### Evolution & Self-Training Loop
+![Evolution engine workflow](docs/images/evolution-engine.svg)
+- Diagnostics collect OpenTelemetry counters, system metrics, and curiosity gap
+  reports.
+- `MNTPTrainer` produces new adapters, publishes metrics to MLflow, and updates
+  the shared manifest.
+- Deployments notify Ray Serve replicas (when enabled) and trigger idle-time
+  optimisation cycles through `SommeilParadoxal`.
+
+### Operator Console Flow
+![Web application flow](docs/images/webapp-flow.svg)
+- Django templates render a progressive chat interface and bootstrap WebSockets.
+- `chat/services.py` manages token exchange, retries, and history hydration via
+  async `httpx` calls.
+- FastAPI endpoints provide token issuance, chat, history, and streaming updates
+  for the UI.
+
+### Deployment Stack
+![Deployment stack](docs/images/deployment-stack.svg)
+- Run locally with Python/uvicorn, package via Docker/Compose, or deploy to
+  Kubernetes using the provided manifests and RBAC rules.
+
+## Service Breakdown
+| Component | Location | Responsibilities |
+| --- | --- | --- |
+| FastAPI service | `monGARS/api` | Authentication, REST/WebSocket endpoints, dependency wiring |
+| Cognition core | `monGARS/core` | Memory, reasoning, LLM integration, adaptive response generation |
+| Evolution modules | `modules/` | Adapter training, diagnostics, research tooling |
+| Django UI | `webapp/` | Operator-facing chat console and auth proxy |
+| Persistence | `init_db.py`, `monGARS/core/persistence.py` | SQLModel schemas, Hippocampus caching, Redis/disk tiers |
+| Tooling | `tasks.py`, `build_*.sh`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
 
 ## Getting Started
-
 ### Prerequisites
+- Python 3.11+
+- Docker & Docker Compose for container workflows
+- Optional: GPU drivers for Ollama or Torch-based adapters
 
-- Python 3.10+
-- Docker and Docker Compose (for local development)
-- Optional: GPU drivers for Nvidia containers
-
-### Installation
-
-1. Clone the repository and install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   Or run the helper script:
-   ```bash
-   ./setup.sh
-   ```
-2. Copy `.env.example` to `.env` and adjust configuration values.
-3. Initialize the database:
-   ```bash
-   python init_db.py
-   ```
-4. Launch services:
-   ```bash
-   docker-compose up
-   ```
-   This starts PostgreSQL, Redis, MLflow, Vault and an Ollama model server alongside the application.
-
-### Running the Application
-
-The main entry point is `main.py` which bootstraps monitoring tasks and exposes the FastAPI app under `monGARS.api.web_api`. During development you can run:
-
+### Local Development
 ```bash
-python main.py
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env  # update secrets + URLs
+python init_db.py
+uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-On Raspberry Pi or Jetson boards the number of Uvicorn workers is
-automatically reduced using `monGARS.utils.hardware.recommended_worker_count`.
-The helper checks physical cores first and falls back to logical CPUs when
-necessary.
-
-The `/api/v1/peer/message` endpoint allows nodes to exchange encrypted messages
-for basic coordination. This authenticated POST route accepts a JSON body of the
-form `{"payload": "<encrypted>"}`.
-Peers can register themselves via `/api/v1/peer/register`, remove themselves with
-`/api/v1/peer/unregister` and retrieve the current list of nodes from
-`/api/v1/peer/list`. These registry routes now enforce admin permissions.
-
-Unit and integration tests are located in the `tests/` directory. Execute them with:
-
+### Docker Compose Stack
 ```bash
-pytest
+./setup.sh               # installs Python deps and pre-flight tooling
+cp .env.example .env
+docker-compose up        # FastAPI, Postgres, Redis, MLflow, Vault, Ollama
 ```
+Use `docker-compose down -v` to reset stateful services when required.
 
-Code style is enforced using `black` and `isort` as outlined in `AGENTS.md`.
+### Django Operator Console
+```bash
+cd webapp
+export DJANGO_SECRET_KEY="change-me"
+export FASTAPI_URL="http://localhost:8000"
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8001
+```
+Browse to `http://127.0.0.1:8001/chat/login/` and authenticate with a FastAPI
+user/token.
 
-### Running the Django Web UI
+## Configuration Keys
+| Setting | Description |
+| --- | --- |
+| `SECRET_KEY` | Required for JWT signing and Fernet encryption. Never leave empty. |
+| `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints. |
+| `DOCUMENT_RETRIEVAL_URL` | Endpoint for external research invoked by the curiosity engine. |
+| `WS_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to open WebSocket sessions. |
+| `WORKER_DEPLOYMENT_NAME` / `WORKER_DEPLOYMENT_NAMESPACE` | Kubernetes deployment targeted by the evolution engine when scaling. |
+| `REDIS_URL`, `DATABASE_URL` | Connection strings for cache and persistence layers. |
+| `OPEN_TELEMETRY_EXPORTER` | Optional metrics exporter configuration for observability pipelines. |
 
-The chat frontend shipped in `webapp/` can be launched alongside the FastAPI
-service for manual testing or demos:
+Document any new environment variable or feature flag in this table and the
+relevant module docstrings.
 
-1. Install Django dependencies (already listed in `requirements.txt`).
-2. Export the minimal environment expected by `webapp/webapp/settings.py`:
+## Operational Workflows
+- **Testing**: `pytest -q` for unit/integration coverage. Run
+  `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage.
+- **Static analysis**: `black . && isort .` before committing. Add type hints when
+  editing public APIs.
+- **Database migrations**: define new SQLModel tables in `init_db.py`, generate an
+  Alembic migration, and document schema changes.
+- **Worker tuning**: `monGARS.utils.hardware.recommended_worker_count()` auto-tunes
+  Uvicorn worker counts on constrained hardware—no manual flags needed on Pi or
+  Jetson devices.
 
-   ```bash
-   export DJANGO_SECRET_KEY="change-me"  # required, no default provided
-   export FASTAPI_URL="http://localhost:8000"  # point to the FastAPI process
-   # optional: override the default "localhost,127.0.0.1,[::1]" allow-list when
-   # exposing Django on another hostname
-   # export DJANGO_ALLOWED_HOSTS="localhost,127.0.0.1"
-   ```
+## Deployment Options
+- **Local**: `uvicorn monGARS.api.web_api:app` for rapid development.
+- **Container**: `build_native.sh` (x86_64) or `build_embedded.sh` (multi-arch)
+  produce images aligned with `Dockerfile` / `Dockerfile.embedded`.
+- **Kubernetes**: manifests in `k8s/` cover deployments, RBAC, Prometheus
+  scraping, and secrets. Update RBAC when introducing new controllers.
+- **Ray Serve**: follow [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md)
+  to provision inference clusters with graceful fallbacks.
 
-3. Apply migrations and start the development server on an open port, e.g.:
+## Security & Observability
+- Restrict WebSocket origins via `WS_ALLOWED_ORIGINS` and terminate TLS at your
+  ingress layer.
+- Enable per-user rate limiting by setting `WS_RATE_LIMIT_MAX_TOKENS` and
+  `WS_RATE_LIMIT_REFILL_SECONDS`.
+- Review OpenTelemetry metrics (`llm.*`, `cache.*`, `evolution_engine.*`) and
+  structured logs for operational insight. MLflow captures training runs when the
+  evolution engine is active.
+- Store secrets in Vault or a compatible secret manager. Avoid committing `.env`
+  files or sample secrets.
 
-   ```bash
-   cd webapp
-   python manage.py migrate
-   python manage.py runserver 0.0.0.0:8001
-   ```
-
-4. In a separate terminal, start the FastAPI backend so the login proxy has a
-   target to authenticate against:
-
-   ```bash
-   uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
-   ```
-
-   (You can also run `python -m uvicorn ...` if `uvicorn` is not on your `PATH`.)
-
-5. Visit `http://127.0.0.1:8001/chat/login/` to authenticate. The login form
-   proxies credentials to FastAPI's `/token` endpoint, stores the issued JWT in
-   the session, and then redirects to the chat view. When JavaScript is
-   disabled, conversations can still be submitted thanks to the progressive
-   enhancement fallbacks implemented in `chat/index.html`.
-
-## Security Hardening Quick Wins
-
-- **Restrict WebSocket origins.** Set the `WS_ALLOWED_ORIGINS` environment variable
-  to the exact frontend origins that should open WebSocket sessions
-  (comma-separated or JSON list), for example
-  `WS_ALLOWED_ORIGINS="https://app.example.com,https://admin.example.com"`.
-- **Terminate TLS at the edge.** Serve `wss://` traffic through your ingress
-  controller (Caddy, Nginx, Traefik, etc.) so certificates and TLS negotiation
-  stay outside of the application container.
-- **Apply rate limiting.** When a reverse proxy limit is not available, enable the
-  built-in per-user token bucket by setting
-  `WS_RATE_LIMIT_MAX_TOKENS` and `WS_RATE_LIMIT_REFILL_SECONDS` to throttle event
-  fan-out directly in `ws_manager.py`.
-
-## Deployment
-
-Production deployments can be containerised via the provided `Dockerfile`. Kubernetes manifests live in `k8s/` for cluster environments. Adjust resource limits and RBAC rules as required for your infrastructure.
-Use `./build_embedded.sh` with Docker Buildx to build and push multi-architecture images for Raspberry Pi and Jetson using `Dockerfile.embedded`. Provide a repository name (e.g. `user/image:tag`) and ensure you're logged in to your container registry.
-The `build_native.sh` helper builds an optimized x86_64 image tuned for fast compiles on a typical Intel i7 workstation.
+## Documentation Map
+| Topic | Location |
+| --- | --- |
+| Implementation status & roadmap alignment | [docs/implementation_status.md](docs/implementation_status.md) |
+| Advanced fine-tuning plan | [docs/advanced_fine_tuning.md](docs/advanced_fine_tuning.md) |
+| Code audit notes | [docs/code_audit_summary.md](docs/code_audit_summary.md) |
+| Ray Serve deployment | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
+| Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
+| API specification & clients | [docs/api/](docs/api/README.md) |
+| Conversation workflow deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
+| Future milestones | [ROADMAP.md](ROADMAP.md) |
 
 ## Contributing
-
-Please read `AGENTS.md` for the contribution guide. Pull requests should be focused, include relevant tests and ensure `pytest` passes before submission. Documentation updates are encouraged whenever behaviour changes.
-
-## Roadmap
-
-Development milestones are tracked in `ROADMAP.md`. Upcoming phases include hardware optimization, collaborative networking and a full web API. A detailed plan for fine-tuning and distributed inference is available in `docs/advanced_fine_tuning.md`.
-
-Community feedback and contributions are welcome!
+Read the scoped contribution rules in `AGENTS.md` files before changing code.
+Keep pull requests focused, document behavioural changes, and include a testing
+summary in every PR. When adding optional integrations, provide fallbacks and
+update documentation alongside the implementation.

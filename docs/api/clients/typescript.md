@@ -1,34 +1,34 @@
 # TypeScript Client Example
 
-This sample demonstrates how to generate a typed SDK with
-[`openapi-typescript-codegen`](https://www.npmjs.com/package/openapi-typescript-codegen)
-and consume it in a modern application (Node.js or React Native).
+Generate a typed SDK for monGARS using
+[`openapi-typescript-codegen`](https://www.npmjs.com/package/openapi-typescript-codegen).
+The example below works for Node.js, React, or React Native projects.
 
 ## Prerequisites
-
 ```bash
 npm install --save-dev openapi-typescript-codegen
 ```
 
 ## Generate the Client
-
 ```bash
-npx openapi-typescript-codegen --input docs/api/openapi.json --output ./generated/mongars
+npx openapi-typescript-codegen \
+  --input docs/api/openapi.json \
+  --output ./generated/mongars \
+  --useUnionTypes
 ```
 
 The generator produces:
-
-- A `Client` wrapper with configurable base URL and interceptors.
-- Namespaced functions for each API group (e.g. `PeerService.registerPeer`).
-- Type definitions mirroring the Pydantic models in `monGARS.api.schemas`.
+- A configurable `Client` wrapper with base URL, auth token hook, and retry
+  helpers.
+- Namespaced services for each API group (e.g. `ConversationService`).
+- Type definitions mirroring the Pydantic schemas.
 
 ## Example Usage
-
 ```ts
 import { Client, ConversationService } from '../generated/mongars';
 
 const client = new Client({
-  BASE: 'https://mongars.example.com',
+  BASE: process.env.MONGARS_URL ?? 'https://mongars.example.com',
   TOKEN: async () => `Bearer ${process.env.MONGARS_TOKEN ?? ''}`,
 });
 
@@ -48,9 +48,8 @@ run().catch((error) => {
 });
 ```
 
-## React Native Considerations
-
-- Use a fetch-compatible polyfill such as `cross-fetch` or `whatwg-fetch` if the
-target runtime does not provide `fetch` by default.
-- Wrap network calls with platform-aware permission guards when integrating with
-native diagnostics modules, as described in the repository guidelines.
+## React Native Notes
+- Provide a `fetch` polyfill (`whatwg-fetch`, `cross-fetch`) if the target
+  runtime lacks a native implementation.
+- Wrap network calls with platform-specific permission checks when integrating
+  with native diagnostics modules.

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title desc">
+  <title id="title">Evolution engine workflow</title>
+  <desc id="desc">Lifecycle of diagnostics, training, and deployment managed by the monGARS evolution engine.</desc>
+  <style>
+    text { font-family: 'Inter', sans-serif; fill: #0f172a; font-size: 18px; }
+    .title { font-size: 20px; font-weight: 600; }
+    rect { rx: 14; ry: 14; stroke-width: 2; }
+    .diag { fill: #e2e8f0; stroke: #1e293b; }
+    .train { fill: #ede9fe; stroke: #7c3aed; }
+    .deploy { fill: #cffafe; stroke: #0e7490; }
+    .feedback { fill: #dcfce7; stroke: #15803d; }
+    line { stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
+    path { stroke: #475569; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,4 L0,8 z" fill="#475569" />
+    </marker>
+  </defs>
+  <rect x="80" y="120" width="220" height="140" class="diag" />
+  <text x="100" y="160" class="title">Diagnose</text>
+  <text x="100" y="195">SystemMonitor metrics</text>
+  <text x="100" y="223">Curiosity gap reports</text>
+  <rect x="360" y="90" width="240" height="180" class="train" />
+  <text x="380" y="140" class="title">Train Adapters</text>
+  <text x="380" y="175">MNTPTrainer loop</text>
+  <text x="380" y="203">MLflow metrics &amp; artefacts</text>
+  <rect x="660" y="120" width="220" height="140" class="deploy" />
+  <text x="680" y="160" class="title">Deploy</text>
+  <text x="680" y="195">Adapter manifest update</text>
+  <text x="680" y="223">Ray Serve broadcast</text>
+  <rect x="360" y="320" width="240" height="140" class="feedback" />
+  <text x="380" y="360" class="title">Feedback</text>
+  <text x="380" y="395">Sommeil Paradoxal triggers</text>
+  <text x="380" y="423">safe_apply_optimizations</text>
+  <line x1="300" y1="190" x2="360" y2="190" />
+  <line x1="600" y1="190" x2="660" y2="190" />
+  <path d="M770 260 C770 340 620 340 620 320" />
+  <line x1="480" y1="320" x2="480" y2="270" />
+  <path d="M360 390 C220 390 220 220 80 220" />
+</svg>

@@ -1,82 +1,59 @@
-# monGARS Development Roadmap (Revised)
+# monGARS Roadmap
 
-This roadmap outlines the milestones needed to evolve monGARS from its current prototype stage into a stable and fully featured system. This document reflects the current, verified state of the codebase and prioritizes critical security and stability improvements.
+This roadmap reflects the verified state of the codebase and the milestones
+required to reach production readiness.
 
----
+## Immediate Priorities (Security & Stability)
+- 🔐 Align JWT algorithm with deployed secrets (HS256 today). Implement asymmetric
+  keys only when the infrastructure supports managed key storage.
+- 🔒 Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
+- 🛡️ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude
+  secrets and build artefacts.
+- 👤 Replace demo users in `web_api.py` with the database-backed authentication
+  flow and migrations.
 
-### **Immediate Priority: Foundational Security & Stability**
+## Phase 1 – Core Infrastructure (✅ Completed Q1 2025)
+- Established core cognition modules (Cortex, Hippocampus, Neurons, Bouche).
+- Delivered Docker Compose and Kubernetes manifests for local/cluster deployment.
 
-*This is a new priority section to address critical vulnerabilities before further feature development.*
+## Phase 2 – Functional Expansion (✅ Completed Q2 2025)
+- Landed Mimicry, Personality, Adaptive Response, and image captioning modules.
+- Integrated Iris scraping and Curiosity Engine for external research.
+- Replaced placeholder tests with meaningful coverage for circuit breakers,
+  caching, and self-training.
 
-- 🔐 **Fix JWT Algorithm Mismatch:** Change the JWT algorithm from `RS256` to `HS256` to match the symmetric `SECRET_KEY` usage, or implement a full RSA key pair.
-- 🔒 **Implement Secure Secret Management:** Replace insecure Kubernetes secrets (`k8s/secrets.yaml`) with a proper secret management solution like HashiCorp Vault or Sealed Secrets.
-- 🛡️ **Harden Container Security:** Add a non-root user to `Dockerfile` and `Dockerfile.embedded` to prevent containers from running with root privileges.
-- 📝 **Create `.dockerignore` File:** Prevent sensitive files (`.env`, `.git`) and local artifacts from being included in container images.
-- 🐛 **Replace Hardcoded Demo Users:** Migrate from the hardcoded user dictionary in `web_api.py` to a proper database-backed authentication system.
+## Phase 3 – Hardware & Performance (🔄 In Progress, Target Q3 2025)
+- ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
+- ✅ Multi-architecture build scripts and cache metrics.
+- ✅ Hardened RBAC manifests.
+- 🔄 Implement real masked next-token training in `MNTPTrainer` and wire Ray Serve
+  HTTP requests in `LLMIntegration`.
+- 🔄 Pin container image versions in `docker-compose.yml` and extend Alembic
+  migrations.
 
----
+## Phase 4 – Collaborative Networking (🔄 In Progress, Target Q4 2025)
+- ✅ Encrypted peer registry, admin-guarded endpoints, and distributed scheduler.
+- ✅ Sommeil Paradoxal idle-time optimisation and safe apply pipeline.
+- 🔄 Implement load-aware scheduling strategies and share optimisation telemetry
+  across nodes.
 
-### **Phase 1 - Core Infrastructure (Completed Q1 2025)**
+## Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)
+- ✅ FastAPI chat/history/token endpoints with validation.
+- ✅ Django chat UI with progressive enhancement.
+- 🔄 Implement FastAPI WebSocket handler to match frontend expectations.
+- 🔄 Replace hard-coded credential stores with database-backed auth flows.
+- 🚧 Publish polished SDKs and reference clients.
 
-- ✅ Established the Cortex, Hippocampus, Neurons, and Bouche modules with initial APIs.
-- ✅ Added basic memory storage, conversation flow, and logging facilities.
-- ✅ Provided Docker Compose and Kubernetes manifests for local deployment.
+## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)
+- ✅ Personality profiles persisted via SQLModel with live adapter updates.
+- 🔄 Execute real self-training cycles instead of simulated versioning.
+- 🚧 Explore reinforcement learning loops and advanced scaling strategies.
+- 🔄 Expand tests for WebSockets, hardware utilities, and distributed workflows.
 
-### **Phase 2 - Functional Expansion (Completed Q2 2025)**
+## Phase 7 – Sustainability & Longevity (🌱 Future)
+- 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.
+- 🚧 Automate energy usage reporting and advanced hardware-aware scaling.
+- 🚧 Share optimisation artefacts between nodes for faster convergence.
 
-- ✅ Introduced the Mimicry and Mains Virtuelles modules for adaptive behaviour.
-- ✅ Implemented web scraping via Iris and improved the Curiosity Engine.
-- ✅ Added initial, meaningful tests for `CircuitBreaker`, `TieredCache`, and `SelfTrainingEngine`.
-- ✅ `LLMIntegration` now performs actual calls to local Ollama models with caching and a CircuitBreaker.
-
----
-
-### **Phase 3 - Hardware & Performance Optimization (Current - Target Q3 2025)**
-
-- ✅ Optimized CPU and memory usage for Raspberry Pi and Jetson boards via `recommended_worker_count()`.
-- ✅ Built container images for embedded hardware targets (`build_embedded.sh`).
-- ✅ Provided a host-optimized build script for developer workstations (`build_native.sh`).
-- ✅ Improved embedded build script to push multi-arch images to a registry.
-- ✅ Added cache hit/miss metrics with OpenTelemetry.
-- ✅ Hardened Kubernetes RBAC rules (`rbac.yaml`).
-- 📝 **In Progress:** Finalize PostgreSQL database migrations for all data models.
-- 📝 **Planned:** Pin all base images in `docker-compose.yml` to specific versions to ensure build stability.
-
-### **Phase 4 - Collaborative Networking (In Progress – Target Q4 2025)**
-
-- ✅ Implemented encrypted peer-to-peer communication via `PeerCommunicator`.
-- ✅ Added peer registration, unregistration, and listing endpoints with admin-only access.
-- ✅ Introduced a `DistributedScheduler` for cooperative tasks across nodes.
-- ✅ Implemented `SommeilParadoxal` for idle-time optimization.
-- ✅ Added `safe_apply_optimizations` to Evolution Engine for sandboxed upgrades.
-- 📝 **Planned:** Enhance the `DistributedScheduler` with more advanced task distribution strategies (e.g., load-aware routing).
-
----
-
-### **Phase 5 - Web Interface & API Refinement (Target Q1 2026)**
-
-- ✅ Basic FastAPI REST API with several endpoints (`/chat`, `/history`, `/token`) is functional.
-- ✅ Basic JWT authentication implemented with `/token` issuance.
-- ✅ Conversation history retrieval is secured per user.
-- ✅ A Django frontend serves the initial chat interface.
-- 📝 **In Progress:** Implement the backend WebSocket handler in FastAPI to complete the live chat functionality initiated by the frontend.
-- 📝 **Planned:** Replace placeholder input validation with robust, centralized validation in Pydantic models for all API endpoints.
-- 📝 **Planned:** Complete the user registration flow by connecting it to the database backend.
-- 🚧 **Future:** Publish comprehensive API documentation and example client libraries.
-
-### **Phase 6 - Self-Improvement and Research (Target Q2 2026)**
-
-- ✅ Persistence layer for personality profiles using PostgreSQL and SQLAlchemy is complete.
-- ✅ Meaningful test coverage exists for several core modules.
-- 📝 **In Progress:** Implement *real* training logic in `SelfTrainingEngine`. The current engine only simulates versioning.
-- 📝 **In Progress:** Implement dynamic personality analysis in `PersonalityEngine`. The current module only saves and loads static profiles without analyzing interactions.
-- 📝 **Planned:** Expand test coverage to all remaining modules, including WebSockets, hardware utilities, and peer communication.
-- 🚧 **Future:** Begin research and implementation of reinforcement learning loops for continuous improvement.
-
-### **Phase 7 - Advanced ML & Distributed Systems (Future)**
-
-- 🚧 **Future:** Implement the full `LLM2Vec` training framework and activate the Ray Serve inference path in `LLMIntegration` for distributed, large-scale inference.
-- 🚧 **Future:** Integrate the `EvolutionEngine` into routine, automated optimization cycles based on real performance metrics.
-- 🚧 **Future:** Automate energy usage reporting and implement more advanced hardware-aware scaling.
-- 🚧 **Future:** Enable nodes to share optimization results via the `PeerCommunicator` to accelerate collective improvements.
-
+Review [docs/implementation_status.md](docs/implementation_status.md) for a
+narrative deep dive into each phase and current discrepancies.

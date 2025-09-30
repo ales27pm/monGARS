@@ -1,46 +1,46 @@
-# Advanced Fine-Tuning and Distributed Inference Roadmap
+# Advanced Fine-Tuning & Distributed Inference Plan
 
-This document outlines the planned steps for incorporating robust fine-tuning workflows, pretraining data curation, and distributed inference into **monGARS**.
-For current implementation details, see [implementation_status.md](implementation_status.md).
+This roadmap details the steps required to move from placeholder adapters to a
+production-ready masked next-token training loop and distributed inference.
 
-## Current Architecture Overview
+## Current Capabilities
+- `LLMIntegration` streams responses from local Ollama models with retry logic
+  and a stubbed Ray Serve branch.
+- `SelfTrainingEngine` batches conversation data but simulates training cycles,
+  incrementing version metadata without touching weights.
+- The evolution engine writes placeholder artefacts to `models/encoders/` and
+  emits manifest updates that Ray Serve could consume in the future.
 
-The project is structured into modular components such as `Hippocampus`, `Neurons`, `Bouche`, and `Cortex` as described in `monGARS_structure.txt`. The FastAPI web layer defines endpoints including conversation history retrieval in `monGARS/api/web_api.py`.
+## Strategic Goals
+1. **Dataset Hygiene**
+   - Aggregate conversation data from `PersistenceRepository` and export
+     anonymised corpora.
+   - Maintain a versioned dataset catalogue (`models/datasets/`) with reproducible
+     preprocessing scripts (PII stripping, deduplication, quality filters).
+2. **Training Loop Completion**
+   - Implement masked next-token prediction in `modules/neurons/training/mntp_trainer.py`
+     with support for LoRA/QLoRA adapters.
+   - Stream metrics to MLflow and OpenTelemetry for visibility into convergence.
+   - Persist adapter weights, tokenizer assets, and metadata alongside manifest
+     updates.
+3. **Distributed Inference Activation**
+   - Replace the Ray Serve stub in `LLMIntegration` with real HTTP requests,
+     health checks, and exponential backoff tuned for replica autoscaling.
+   - Ship Helm charts or K8s manifests under `k8s/` for Ray clusters, including
+     secrets management and resource limits.
+   - Keep Ray Serve replicas synchronised with adapter manifests published by the
+     evolution engine.
+4. **Operational Guardrails**
+   - Enforce dataset lineage logging to trace which conversations generated which
+     adapters.
+   - Provide manual rollback tooling that reverts to the last known-good adapter.
+   - Update `docs/implementation_status.md` and the main `README.md` whenever new
+     training features land.
 
-`LLMIntegration` provides model access with optional Ray Serve support (see `monGARS/core/llm_integration.py`). The `SelfTrainingEngine` batches data for later training though it currently simulates updates without modifying models (`monGARS/core/self_training.py`).
-
-## Roadmap for Advanced Fine-Tuning
-
-1. **Data Collection and Cleaning**
-   - Aggregate conversation data stored by `PersistenceRepository` and user interactions in `Hippocampus`.
-   - Implement preprocessing scripts to remove personally identifiable information and low-quality text.
-   - Maintain a versioned dataset catalog under `models/datasets/`.
-2. **Fine-Tuning Workflow**
-   - Extend `MNTPTrainer` to perform real masked next token prediction training.
-   - Integrate metrics logging via MLflow for each training run.
-   - Store resulting adapters in `models/encoders/` and load them through `LLMIntegration`.
-     Each training run now updates `models/encoders/adapter_manifest.json`, allowing
-     the runtime to broadcast the newest adapter version to inference services.
-3. **Distributed Inference**
-   - Enable the Ray Serve path in `LLMIntegration` with actual requests to a cluster endpoint.
-     The `modules/ray_service.py` module exposes a production-ready `deploy_ray_service`
-     helper along with an `LLMServeDeployment` class that consumes the adapter manifest
-     and keeps replicas synchronised with new weights.
-   - Provide Helm charts under `k8s/` for scalable deployment.
-   - Add monitoring hooks using OpenTelemetry metrics already present in `TieredCache`.
-
-## Current Machine Learning Status
-
-- **LLM Integration**: Models are served locally through Ollama with an optional
-  Ray Serve backend. When Ray is enabled, `LLMIntegration` automatically attaches
-  adapter metadata from `models/encoders/adapter_manifest.json` to every request,
-  ensuring the cluster reloads freshly trained LLM2Vec adapters without manual
-  coordination.
-- **Self-Training Engine**: Present but performs simulated training cycles, recording new version numbers without altering model weights.
-
-## Next Steps
-
-1. Finalize the real training loop in `MNTPTrainer` and connect it to the `SelfTrainingEngine`.
-2. Activate Ray Serve integration for large-scale inference and document deployment procedures.
-3. Publish preprocessing guidelines and establish regular dataset refresh intervals.
-4. Update `ROADMAP.md` as milestones are achieved.
+## Immediate Next Steps
+- Wire the MNTP trainer into `SelfTrainingEngine` so scheduled runs execute real
+  training instead of placeholders.
+- Add regression tests covering Ray Serve round-trips using a lightweight mock
+  server.
+- Publish preprocessing scripts and document retention policies for captured
+  conversation data.

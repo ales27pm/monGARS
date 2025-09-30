@@ -1,34 +1,29 @@
 # Ray Serve Deployment Guide
 
-This guide describes how to provision Ray Serve for monGARS, configure the
-application to use it, and understand the fallback behaviour when Ray is not
-available. It assumes you have Docker (optional), Python 3.11, and Ray
-installed on the target hosts.
+This guide outlines how to provision Ray Serve for monGARS, configure the
+application, and understand fallback behaviour when the cluster is unavailable.
+It assumes Ray 2.x, Python 3.11, and optional Docker/Kubernetes familiarity.
 
-## 1. Provision Ray on the control plane
-
-1. Install Ray with the extras required for Serve and HTTP support:
+## 1. Provision a Ray Cluster
+1. Install Ray with Serve extras:
    ```bash
    pip install "ray[serve]" "ray[default]"
    ```
-2. Start a head node. Use the `--dashboard-host` flag if you need to expose the
-   dashboard beyond localhost:
+2. Start the head node (expose the dashboard if you need remote access):
    ```bash
    ray start --head --dashboard-host=0.0.0.0
    ```
-3. Add worker nodes by pointing them at the head node's address. Replace
-   `<HEAD_NODE_IP>` with the externally reachable IP or DNS name of the head
-   node:
+3. Join worker nodes to the head node:
    ```bash
    ray start --address='<HEAD_NODE_IP>:6379'
    ```
+4. Verify cluster health with `ray status`.
 
-## 2. Deploy the Serve application
-
-1. Package your deployment script (for example `serve_app.py`) that exposes a
-   `deployment` handle accepting the same payload shape produced by
-   `LLMIntegration.generate_response`.
-2. Use the Serve CLI to submit the deployment:
+## 2. Deploy a Serve Application
+1. Package your deployment script (e.g. `serve_app.py`) exposing a
+   `deployment = LLMDeployment.bind(...)` handle that mirrors the payload emitted
+   by `LLMIntegration.generate_response`.
+2. Submit the deployment:
    ```bash
    serve deploy serve_app:deployment
    ```
@@ -36,46 +31,34 @@ installed on the target hosts.
    ```bash
    serve status
    ```
-   The output should show your application in the `HEALTHY` state.
+   The status should report `HEALTHY` for your application.
 
 ## 3. Configure monGARS
+Set the following environment variables (e.g. in `.env` or Kubernetes secrets):
 
-monGARS discovers the Ray Serve endpoints through environment variables:
+| Variable | Purpose |
+| --- | --- |
+| `USE_RAY_SERVE` | Enable (`true`) or disable (`false`) the integration. Defaults to `true` when a URL is provided. |
+| `RAY_SERVE_URL` | Comma-separated list of Serve HTTP endpoints, e.g. `http://ray-head:8000/generate`. |
+| `RAY_CLIENT_TIMEOUT` / `RAY_CLIENT_CONNECT_TIMEOUT` | Adjust client-level timeouts for long-running requests. |
+| `RAY_CLIENT_MAX_CONNECTIONS` / `RAY_CLIENT_MAX_KEEPALIVE` | Tune connection pooling. |
+| `RAY_SCALING_STATUS_CODES` / `RAY_SCALING_BACKOFF` / `RAY_MAX_SCALE_CYCLES` | Control retry strategy while replicas scale up. |
 
-* `USE_RAY_SERVE`: set to `true` to keep Ray enabled. If omitted the
-  integration defaults to `true` when `RAY_SERVE_URL` is present.
-* `RAY_SERVE_URL`: comma-separated list of Ray Serve HTTP endpoints, e.g.
-  `http://ray-head:8000/generate`. When omitted monGARS falls back to
-  `http://localhost:8000/generate` if Ray is enabled.
-* `RAY_CLIENT_TIMEOUT`, `RAY_CLIENT_CONNECT_TIMEOUT`,
-  `RAY_CLIENT_MAX_CONNECTIONS`, `RAY_CLIENT_MAX_KEEPALIVE` allow tuning the
-  HTTP client Ray Serve uses for inference.
-* `RAY_SCALING_STATUS_CODES` and `RAY_SCALING_BACKOFF` control the response
-  codes that trigger exponential backoff before retrying requests while Ray is
-  scaling replicas.
-* `RAY_MAX_SCALE_CYCLES` limits the number of scaling retries attempted before
-  falling back to an alternative provider.
+Restart FastAPI workers after changing configuration so `LLMIntegration` reloads
+its settings.
 
-Set these variables in your `.env` file or deployment environment. Restart the
-FastAPI workers after updating the configuration so `LLMIntegration` reloads the
-settings.
+## 4. Fallback Behaviour
+`LLMIntegration` degrades gracefully when Ray is unreachable:
+- When `USE_RAY_SERVE=false` or `RAY_SERVE_URL` resolves to an empty list, the
+  service uses the local Ollama providers.
+- For scaling responses (HTTP 503/409 by default), the client performs
+  exponential backoff and rotates through the configured endpoints before
+  declaring a failure.
+- After exhausting retries or when the Ray client cannot initialise, the
+  integration logs the failure and routes the request through the local provider
+  chain.
 
-## 4. Fallback behaviour when Ray is unavailable
-
-`LLMIntegration` automatically falls back to the local provider chain when Ray
-Serve is unreachable or disabled:
-
-* If `USE_RAY_SERVE=false` or `RAY_SERVE_URL` resolves to an empty list, Ray is
-  disabled and monGARS uses the local Ollama models when available.
-* When Ray is enabled but an HTTP request fails with scaling status codes (503,
-  409 by default), the integration performs exponential backoff and rotates
-  through the configured endpoints before declaring a failure.
-* If all retries fail or the Ray client cannot be initialised, the integration
-  logs the failure and invokes the local provider path so requests still
-  succeed.
-
-Review the log stream for events named `llm.ray.disabled`, `llm.ray.backoff.*`,
-`llm.ray.request.failure`, and `llm.cache.*` to monitor the active execution
-path. These metrics help you confirm when the application is using Ray and when
-it has fallen back to local inference.
-
+Monitor structured logs for events such as `llm.ray.disabled`,
+`llm.ray.backoff.*`, and `llm.ray.request.failure` to understand which path is in
+use. Add OpenTelemetry counters if you extend the integration with additional
+fallback logic.
