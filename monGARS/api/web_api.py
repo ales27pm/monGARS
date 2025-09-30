@@ -29,10 +29,12 @@ from monGARS.core.ui_events import event_bus, make_event
 app = FastAPI(title="monGARS API")
 
 from . import authentication as auth_routes
+from . import ui as ui_routes
 from . import ws_manager
 
 app.include_router(ws_manager.router)
 app.include_router(auth_routes.router)
+app.include_router(ui_routes.router)
 app.include_router(ws_ticket_router)
 _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
