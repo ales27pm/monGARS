@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-from monGARS.config import Settings, get_settings
+from monGARS.config import Settings, ensure_secret_key, get_settings
 
 log = logging.getLogger(__name__)
 
@@ -24,18 +24,23 @@ class SecurityManager:
         algorithm: Optional[str] = None,
         settings: Optional[Settings] = None,
     ) -> None:
-        self._settings = settings or get_settings()
-        resolved_secret = secret_key or self._settings.SECRET_KEY
+        base_settings = settings or get_settings()
+        if secret_key and not base_settings.SECRET_KEY:
+            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+
+        resolved_secret = secret_key or base_settings.SECRET_KEY
         if not resolved_secret:
-            if self._settings.debug:
-                log.warning(
+            base_settings, _ = ensure_secret_key(
+                base_settings,
+                log_message=(
                     "SECRET_KEY missing during SecurityManager init; using ephemeral key."
-                )
-                resolved_secret = get_settings().SECRET_KEY
-            else:
-                raise ValueError(
-                    "SECRET_KEY must be configured before using SecurityManager"
-                )
+                ),
+            )
+            resolved_secret = base_settings.SECRET_KEY
+        elif secret_key and base_settings.SECRET_KEY != secret_key:
+            base_settings = base_settings.model_copy(update={"SECRET_KEY": secret_key})
+
+        self._settings = base_settings
         self.secret_key = resolved_secret
         self.algorithm = algorithm or self._settings.JWT_ALGORITHM
         # ``passlib`` defaults to bcrypt, but that backend is optional and
@@ -67,8 +72,7 @@ class SecurityManager:
         to_encode = data.copy()
         expire = datetime.now(timezone.utc) + (
             expires_delta
-            if expires_delta
-            else timedelta(minutes=self._settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+            or timedelta(minutes=self._settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         )
         to_encode.update({"exp": expire.timestamp()})
         return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
