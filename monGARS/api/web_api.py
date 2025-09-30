@@ -1,18 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Dict, List
 
-from fastapi import (
-    Depends,
-    FastAPI,
-    HTTPException,
-    Query,
-    WebSocket,
-    WebSocketDisconnect,
-    status,
-)
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, HttpUrl, field_validator
 
@@ -32,12 +25,15 @@ from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.security import SecurityManager, validate_user_input
+from monGARS.core.ui_events import event_bus, make_event
 
-from .ws_manager import WebSocketManager
+from .ws_manager import router as ws_router
+from .ws_manager import ws_manager as _ws_manager
 
 app = FastAPI(title="monGARS API")
 app.include_router(auth_router)
 app.include_router(ws_ticket_router)
+app.include_router(ws_router)
 sec_manager = SecurityManager()
 _shared_personality = get_personality_engine()
 _shared_dynamic = get_adaptive_response_generator(_shared_personality)
@@ -45,7 +41,7 @@ conversation_module = ConversationalModule(
     personality=_shared_personality,
     dynamic=_shared_dynamic,
 )
-ws_manager = WebSocketManager()
+ws_manager = _ws_manager
 
 
 def get_conversational_module() -> ConversationalModule:
@@ -135,50 +131,6 @@ async def conversation_history(
         ) from exc
 
 
-@app.websocket("/ws/chat/")
-async def websocket_chat(websocket: WebSocket, token: str = Query(...)) -> None:
-    """Stream conversation history and live updates over WebSocket."""
-    try:
-        payload = sec_manager.verify_token(token)
-        user_id = payload.get("sub")
-        if not user_id:
-            raise ValueError("Invalid token payload")
-    except Exception:
-        await websocket.close(code=1008)
-        return
-
-    await ws_manager.connect(user_id, websocket)
-    store = get_hippocampus()
-    try:
-        history = await store.history(user_id, limit=10)
-        for item in history:
-            await websocket.send_json(
-                {
-                    "query": item.query,
-                    "response": item.response,
-                    "timestamp": item.timestamp.isoformat(),
-                }
-            )
-        if not history:
-            await websocket.send_json(
-                {
-                    "query": None,
-                    "response": None,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }
-            )
-        await ws_manager.flush_offline(user_id)
-        while True:
-            try:
-                await websocket.receive_text()
-                await websocket.close(code=1003)
-                break
-            except WebSocketDisconnect:
-                break
-    finally:
-        await ws_manager.disconnect(user_id, websocket)
-
-
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
@@ -228,9 +180,15 @@ async def chat(
         "timestamp": datetime.now(UTC).isoformat(),
     }
     try:
-        await ws_manager.broadcast(current_user.get("sub"), response_payload)
-    except Exception:
-        pass
+        event = make_event(
+            "chat.message",
+            current_user.get("sub"),
+            response_payload,
+        )
+        await event_bus().publish(event)
+    except Exception:  # pragma: no cover - defensive logging
+        logger = logging.getLogger(__name__)
+        logger.exception("web_api.chat_event_publish_failed")
     return ChatResponse(
         response=response_payload["response"],
         confidence=result.get("confidence", 0.0),
