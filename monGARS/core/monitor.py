@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import GPUtil
 import psutil
 
+from .ui_events import event_bus, make_event
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,3 +48,20 @@ class SystemMonitor:
         except Exception as exc:  # pragma: no cover - optional GPU dependency
             logger.exception("Failed to query GPU stats", exc_info=exc)
         return {"gpu_usage": None, "gpu_memory_usage": None}
+
+
+async def maybe_alert(
+    user_id: str | None = None,
+    cpu: float | None = None,
+    ttfb_ms: int | None = None,
+) -> None:
+    """Publish performance alerts when metrics are provided."""
+
+    data: dict[str, float | int] = {}
+    if cpu is not None:
+        data["cpu"] = cpu
+    if ttfb_ms is not None:
+        data["ttfb_ms"] = ttfb_ms
+    if not data:
+        return
+    await event_bus().publish(make_event("performance.alert", user_id, data))
