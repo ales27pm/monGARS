@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy import desc, select
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -13,7 +13,12 @@ from tenacity import (
     wait_exponential,
 )
 
-from ..init_db import ConversationHistory, Interaction, async_session_factory
+from ..init_db import (
+    ConversationHistory,
+    Interaction,
+    UserAccount,
+    async_session_factory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +31,20 @@ class PersistenceRepository:
         self._session_factory = session_factory
 
     async def _execute_with_retry(
-        self, operation: SessionCallable, *, operation_name: str
+        self,
+        operation: SessionCallable,
+        *,
+        operation_name: str,
+        retry_exceptions: tuple[type[Exception], ...] = (
+            OperationalError,
+            InterfaceError,
+            DBAPIError,
+        ),
     ) -> Any:
         retrying = AsyncRetrying(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.5, min=0.5, max=5),
-            retry=retry_if_exception_type(
-                (OperationalError, InterfaceError, DBAPIError)
-            ),
+            retry=retry_if_exception_type(retry_exceptions),
             reraise=True,
         )
         try:
@@ -110,3 +121,36 @@ class PersistenceRepository:
             return result.scalars().all()
 
         return await self._execute_with_retry(operation, operation_name="get_history")
+
+    async def get_user_by_username(self, username: str) -> UserAccount | None:
+        async def operation(session):
+            result = await session.execute(
+                select(UserAccount).where(UserAccount.username == username)
+            )
+            return result.scalar_one_or_none()
+
+        return await self._execute_with_retry(
+            operation, operation_name="get_user_by_username"
+        )
+
+    async def create_user(
+        self, username: str, password_hash: str, *, is_admin: bool = False
+    ) -> UserAccount:
+        async def operation(session):
+            async with session.begin():
+                user = UserAccount(
+                    username=username,
+                    password_hash=password_hash,
+                    is_admin=is_admin,
+                )
+                session.add(user)
+            return user
+
+        try:
+            return await self._execute_with_retry(
+                operation,
+                operation_name="create_user",
+                retry_exceptions=(OperationalError, InterfaceError),
+            )
+        except IntegrityError as exc:
+            raise ValueError("Username already exists") from exc

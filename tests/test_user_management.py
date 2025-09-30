@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 os.environ.setdefault("SECRET_KEY", "test")
@@ -6,32 +7,47 @@ os.environ.setdefault("JWT_ALGORITHM", "HS256")
 import pytest
 from fastapi.testclient import TestClient
 
-from monGARS.api.dependencies import get_peer_communicator
-from monGARS.api.web_api import admin_users, app, sec_manager, users_db
+from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
+from monGARS.api.web_api import app, sec_manager
+from monGARS.init_db import reset_database
 
 
 @pytest.fixture
 def client():
-    original_users = users_db.copy()
-    original_admins = set(admin_users)
-    users_db.clear()
-    users_db.update(
-        {
-            "admin": sec_manager.get_password_hash("secret"),
-            "user": sec_manager.get_password_hash("passphrase"),
-        }
-    )
-    admin_users.clear()
-    admin_users.add("admin")
+    try:
+        previous_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        previous_loop = None
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    repo = get_persistence_repository()
+
+    async def setup() -> None:
+        await reset_database()
+        await repo.create_user(
+            "admin", sec_manager.get_password_hash("secret"), is_admin=True
+        )
+        await repo.create_user(
+            "user", sec_manager.get_password_hash("passphrase"), is_admin=False
+        )
+
+    loop.run_until_complete(setup())
     client = TestClient(app)
+
     try:
         yield client
     finally:
         client.close()
-        users_db.clear()
-        users_db.update(original_users)
-        admin_users.clear()
-        admin_users.update(original_admins)
+
+        async def teardown() -> None:
+            await reset_database()
+
+        loop.run_until_complete(teardown())
+        loop.close()
+        if previous_loop is not None and not previous_loop.is_closed():
+            asyncio.set_event_loop(previous_loop)
+        else:
+            asyncio.set_event_loop(None)
 
 
 def get_token(client, username, password):

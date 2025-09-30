@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -17,12 +17,14 @@ from monGARS.api.dependencies import (
     get_adaptive_response_generator,
     get_hippocampus,
     get_peer_communicator,
+    get_persistence_repository,
     get_personality_engine,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.peer import PeerCommunicator
+from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import event_bus, make_event
 
@@ -45,31 +47,47 @@ conversation_module = ConversationalModule(
     dynamic=_shared_dynamic,
 )
 ws_manager = _ws_manager
+DEFAULT_USERS: dict[str, dict[str, Any]] = {
+    "u1": {"password": "x", "is_admin": True},
+    "u2": {"password": "y", "is_admin": False},
+}
 
 
 def get_conversational_module() -> ConversationalModule:
     return conversation_module
 
 
-users_db: Dict[str, str] = {
-    "u1": sec_manager.get_password_hash("x"),
-    "u2": sec_manager.get_password_hash("y"),
-}
-admin_users = {"u1"}
-
-
 @app.post("/token")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
+async def login(
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+    form_data: OAuth2PasswordRequestForm = Depends(),
+) -> dict:
     """Return a simple access token."""
-    hashed = users_db.get(form_data.username)
-    if not hashed or not sec_manager.verify_password(form_data.password, hashed):
+    user = await repo.get_user_by_username(form_data.username)
+    if user is None:
+        default_user = DEFAULT_USERS.get(form_data.username)
+        if default_user and form_data.password == default_user["password"]:
+            try:
+                user = await repo.create_user(
+                    form_data.username,
+                    sec_manager.get_password_hash(default_user["password"]),
+                    is_admin=default_user["is_admin"],
+                )
+            except ValueError:
+                user = await repo.get_user_by_username(form_data.username)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+            )
+
+    if not sec_manager.verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
     token = sec_manager.create_access_token(
         {
-            "sub": form_data.username,
-            "admin": form_data.username in admin_users,
+            "sub": user.username,
+            "admin": user.is_admin,
         }
     )
     return {"access_token": token, "token_type": "bearer"}
@@ -98,10 +116,23 @@ class UserRegistration(BaseModel):
 
 
 @app.post("/api/v1/user/register")
-async def register_user(reg: UserRegistration) -> dict:
-    if reg.username in users_db:
-        raise HTTPException(status_code=400, detail="User exists")
-    users_db[reg.username] = sec_manager.get_password_hash(reg.password)
+async def register_user(
+    reg: UserRegistration,
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+) -> dict:
+    if reg.username in DEFAULT_USERS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User exists")
+    existing = await repo.get_user_by_username(reg.username)
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User exists")
+    try:
+        await repo.create_user(
+            reg.username, sec_manager.get_password_hash(reg.password)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return {"status": "registered"}
 
 

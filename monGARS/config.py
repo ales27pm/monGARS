@@ -78,6 +78,18 @@ class Settings(BaseSettings):
         description="Application secret used for JWT signing; override in production.",
     )
     JWT_ALGORITHM: str = Field(default="HS256")
+    JWT_PRIVATE_KEY: str | None = Field(
+        default=None,
+        description=(
+            "PEM-encoded RSA private key used for JWT signing when JWT_ALGORITHM is set to RS256."
+        ),
+    )
+    JWT_PUBLIC_KEY: str | None = Field(
+        default=None,
+        description=(
+            "PEM-encoded RSA public key used for JWT verification when JWT_ALGORITHM is set to RS256."
+        ),
+    )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
 
     database_url: PostgresDsn = Field(

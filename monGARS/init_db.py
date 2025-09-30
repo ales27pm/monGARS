@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncIterator
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -78,6 +78,19 @@ class UserPersonality(Base):
     adaptation_rate: Mapped[float] = mapped_column(Float, default=0.1)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     last_updated: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
 
 if HAS_AIOSQLITE:
@@ -161,7 +174,8 @@ async def _ensure_schema() -> None:
     global _initialized, _init_lock
     if _initialized:
         return
-    if _init_lock is None:
+    current_loop = asyncio.get_running_loop()
+    if _init_lock is None or getattr(_init_lock, "_loop", None) is not current_loop:
         _init_lock = asyncio.Lock()
     async with _init_lock:
         if _initialized:
@@ -198,8 +212,9 @@ async def async_session_factory() -> AsyncIterator[AsyncSession]:
 async def reset_database() -> None:
     """Utility for tests that need a clean in-memory database."""
 
-    global _init_lock
-    if _init_lock is None:
+    global _init_lock, _initialized
+    current_loop = asyncio.get_running_loop()
+    if _init_lock is None or getattr(_init_lock, "_loop", None) is not current_loop:
         _init_lock = asyncio.Lock()
     async with _init_lock:
         if HAS_AIOSQLITE:
@@ -211,3 +226,4 @@ async def reset_database() -> None:
             assert _sync_engine is not None
             await asyncio.to_thread(Base.metadata.drop_all, _sync_engine)
             await asyncio.to_thread(Base.metadata.create_all, _sync_engine)
+        _initialized = True
