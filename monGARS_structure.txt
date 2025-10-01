@@ -11,6 +11,8 @@ monGARS/
 ├── pyproject.toml
 ├── requirements.txt
 ├── setup.py
+├── configs/
+│   └── llm_models.json
 ├── scripts/
 │   └── deploy_docker.sh
 ├── tasks.py
@@ -53,6 +55,7 @@ monGARS/
     │   ├── conversation.py
     │   ├── evolution_engine.py
     │   ├── llm_integration.py
+    │   ├── model_manager.py
     │   ├── logging.py
     │   ├── monitor.py
     │   ├── neuro_symbolic/

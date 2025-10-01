@@ -11,6 +11,8 @@ from typing import Any, Dict, Optional
 
 from modules.neurons.core import NeuronManager
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
+from monGARS.config import get_settings
+from monGARS.core.model_manager import LLMModelManager
 
 logger = logging.getLogger(__name__)
 
@@ -87,15 +89,40 @@ class RayLLMDeployment:
         self._adapter_payload: dict[str, str] | None = None
         self._adapter_version = "baseline"
         self._lock = asyncio.Lock()
-        self.general_model = os.getenv(
-            "RAY_GENERAL_MODEL", "dolphin-mistral:7b-v2.8-q4_K_M"
+        settings = get_settings()
+        self._model_manager = LLMModelManager(settings)
+        general_definition = self._model_manager.get_model_definition("general")
+        coding_definition = self._model_manager.get_model_definition("coding")
+        self.general_model = os.getenv("RAY_GENERAL_MODEL", general_definition.name)
+        self.coding_model = os.getenv("RAY_CODING_MODEL", coding_definition.name)
+        resolved_temperature = self._model_manager.resolve_parameter(
+            "general", "temperature", settings.AI_MODEL_TEMPERATURE
         )
-        self.coding_model = os.getenv(
-            "RAY_CODING_MODEL", "qwen2.5-coder:7b-instruct-q6_K"
+        try:
+            default_temperature = float(resolved_temperature)
+        except (TypeError, ValueError):
+            default_temperature = float(settings.AI_MODEL_TEMPERATURE)
+        resolved_top_p = self._model_manager.resolve_parameter("general", "top_p", 0.9)
+        try:
+            default_top_p = float(resolved_top_p)
+        except (TypeError, ValueError):
+            default_top_p = 0.9
+        resolved_tokens = self._model_manager.resolve_parameter(
+            "general", "num_predict", 512
         )
-        self.temperature = _safe_float(os.getenv("RAY_MODEL_TEMPERATURE"), default=0.7)
-        self.top_p = _safe_float(os.getenv("RAY_MODEL_TOP_P"), default=0.9)
-        self.max_tokens = _safe_int(os.getenv("RAY_MODEL_MAX_TOKENS"), default=512)
+        try:
+            default_max_tokens = int(resolved_tokens)
+        except (TypeError, ValueError):
+            default_max_tokens = 512
+        if default_max_tokens <= 0:
+            default_max_tokens = 512
+        self.temperature = _safe_float(
+            os.getenv("RAY_MODEL_TEMPERATURE"), default=default_temperature
+        )
+        self.top_p = _safe_float(os.getenv("RAY_MODEL_TOP_P"), default=default_top_p)
+        self.max_tokens = _safe_int(
+            os.getenv("RAY_MODEL_MAX_TOKENS"), default=default_max_tokens
+        )
         manifest = load_manifest(self.registry_path)
         default_adapter: Optional[str] = None
         if manifest and manifest.current:

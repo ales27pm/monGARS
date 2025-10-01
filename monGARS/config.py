@@ -125,6 +125,26 @@ class Settings(BaseSettings):
         default=Path("models/encoders"),
         description="Directory storing adapter artifacts and manifest.",
     )
+    llm_models_config_path: Path = Field(
+        default=Path("configs/llm_models.json"),
+        description="JSON configuration describing LLM model profiles and provisioning rules.",
+    )
+    llm_models_profile: str = Field(
+        default="default",
+        description="Name of the LLM model profile to activate for inference.",
+    )
+    llm_models_auto_download: EnvBool = Field(
+        default=True,
+        description="Automatically download missing local models when providers support it.",
+    )
+    llm_general_model: str | None = Field(
+        default=None,
+        description="Optional override for the general-purpose conversational model.",
+    )
+    llm_coding_model: str | None = Field(
+        default=None,
+        description="Optional override for the code-focused model.",
+    )
     curiosity_similarity_threshold: float = Field(
         default=0.5,
         ge=0.0,

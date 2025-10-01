@@ -26,6 +26,7 @@ from tenacity import (
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from monGARS.config import get_settings
 
+from .model_manager import LLMModelManager, ModelDefinition
 from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
@@ -127,8 +128,13 @@ class LLMIntegration:
 
     def __init__(self) -> None:
         self._settings = get_settings()
-        self.general_model = "dolphin-mistral:7b-v2.8-q4_K_M"
-        self.coding_model = "qwen2.5-coder:7b-instruct-q6_K"
+        self._model_manager = LLMModelManager(self._settings)
+        general_definition = self._model_manager.get_model_definition("general")
+        coding_definition = self._model_manager.get_model_definition("coding")
+        self.general_model = general_definition.name
+        self.coding_model = coding_definition.name
+        self._ensure_models_lock = asyncio.Lock()
+        self._models_ready = False
         use_ray_env = os.getenv("USE_RAY_SERVE")
         # Default to Ray Serve to activate distributed inference once configured.
         self.use_ray = (
@@ -293,6 +299,40 @@ class LLMIntegration:
         await _RESPONSE_CACHE.set(cache_key, payload, ttl=ttl)
         return payload
 
+    async def _ensure_local_models(self) -> None:
+        if self._models_ready:
+            return
+        async with self._ensure_models_lock:
+            if self._models_ready:
+                return
+            report = await self._model_manager.ensure_models_installed(
+                ["general", "coding"]
+            )
+            for status in report.statuses:
+                log_payload = {
+                    "role": status.role,
+                    "model": status.name,
+                    "provider": status.provider,
+                    "action": status.action,
+                    "detail": status.detail,
+                }
+                if status.action in {"error", "unavailable"}:
+                    logger.warning("llm.models.ensure.failed", extra=log_payload)
+                elif status.action in {"installed", "exists"}:
+                    logger.info("llm.models.ensure.ready", extra=log_payload)
+                else:
+                    logger.debug("llm.models.ensure.skipped", extra=log_payload)
+            self._models_ready = True
+
+    def _build_ollama_options(self, definition: ModelDefinition) -> dict[str, Any]:
+        base_options = {
+            "temperature": float(self._settings.AI_MODEL_TEMPERATURE),
+            "top_p": 0.9,
+            "num_predict": 512,
+            "stream": False,
+        }
+        return definition.merge_parameters(base_options)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -302,23 +342,19 @@ class LLMIntegration:
             & retry_if_not_exception_type(CircuitBreakerOpenError)
         ),
     )
-    async def _ollama_call(self, model: str, prompt: str) -> dict[str, Any]:
+    async def _ollama_call(
+        self, definition: ModelDefinition, prompt: str
+    ) -> dict[str, Any]:
         """Invoke an Ollama model with retries and circuit breaking."""
 
         async def call_api() -> dict[str, Any]:
             if not ollama:
                 raise OllamaNotAvailableError("Ollama client is not available")
-            temperature = float(self._settings.AI_MODEL_TEMPERATURE)
             return await asyncio.to_thread(
                 ollama.chat,
-                model=model,
+                model=definition.name,
                 messages=[{"role": "user", "content": prompt}],
-                options={
-                    "temperature": float(temperature),
-                    "top_p": 0.9,
-                    "num_predict": 512,
-                    "stream": False,
-                },
+                options=self._build_ollama_options(definition),
             )
 
         return await self._ollama_cb.call(call_api)
@@ -380,20 +416,27 @@ class LLMIntegration:
                     )
                     return await self._fail(cache_key, message)
         else:
-            model_name = (
-                self.general_model
-                if task_type.lower() == "general"
-                else self.coding_model
-            )
+            await self._ensure_local_models()
+            model_definition = self._model_manager.get_model_definition(task_type)
+            model_name = model_definition.name
+            normalized_task = task_type.lower()
+            if normalized_task == "general":
+                self.general_model = model_name
+            elif normalized_task == "coding":
+                self.coding_model = model_name
             logger.info(
                 "llm.ollama.dispatch",
-                extra={"model_name": model_name, "task_type": task_type},
+                extra={
+                    "model_name": model_name,
+                    "task_type": task_type,
+                    "provider": model_definition.provider,
+                },
             )
             if not ollama:
                 logger.error("llm.ollama.unavailable")
                 return await self._fail(cache_key, "Ollama client is not available.")
             try:
-                response = await self._ollama_call(model_name, prompt)
+                response = await self._ollama_call(model_definition, prompt)
             except OllamaNotAvailableError:
                 logger.exception("llm.ollama.unavailable")
                 return await self._fail(cache_key, "Ollama client is not available.")

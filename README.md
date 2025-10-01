@@ -155,6 +155,10 @@ user/token.
 | `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8002/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. |
 | `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). |
+| `LLM_MODELS_CONFIG_PATH` | Path to the JSON manifest listing model profiles and download preferences. |
+| `LLM_MODELS_PROFILE` | Name of the profile within `LLM_MODELS_CONFIG_PATH` used for inference defaults. |
+| `LLM_MODELS_AUTO_DOWNLOAD` | When `true`, missing local models are pulled automatically if the provider supports it. |
+| `LLM_GENERAL_MODEL` / `LLM_CODING_MODEL` | Optional overrides for the conversational and coding model names. |
 | `DOCUMENT_RETRIEVAL_URL` | Endpoint for external research invoked by the curiosity engine. |
 | `WORKER_DEPLOYMENT_NAME` / `WORKER_DEPLOYMENT_NAMESPACE` | Kubernetes deployment targeted by the evolution engine when scaling. |
 | `VAULT_URL` / `VAULT_TOKEN` | Vault dev server address and bootstrap token for local testing. |
@@ -163,7 +167,8 @@ user/token.
 | `OPEN_TELEMETRY_EXPORTER` | Optional metrics exporter configuration for observability pipelines. |
 
 Document any new environment variable or feature flag in this table and the
-relevant module docstrings.
+relevant module docstrings. Model profiles live in `configs/llm_models.json` and
+can be extended to register additional Ollama models or alternate providers.
 
 ## Operational Workflows
 - **Testing**: `pytest -q` for unit/integration coverage. Run

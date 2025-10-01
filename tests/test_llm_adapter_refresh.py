@@ -79,6 +79,10 @@ async def test_llm_integration_ignores_corrupt_manifest_without_ray(
     class DummyOllama:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
+            self._models = {
+                "dolphin-mistral:7b-v2.8-q4_K_M",
+                "qwen2.5-coder:7b-instruct-q6_K",
+            }
 
         def chat(
             self,
@@ -91,6 +95,12 @@ async def test_llm_integration_ignores_corrupt_manifest_without_ray(
                 {"model": model, "messages": messages, "options": options}
             )
             return {"message": {"content": "local"}}
+
+        def list(self) -> dict[str, object]:
+            return {"models": [{"name": name} for name in sorted(self._models)]}
+
+        def pull(self, name: str) -> None:
+            self._models.add(name)
 
     from monGARS.core import llm_integration
 
