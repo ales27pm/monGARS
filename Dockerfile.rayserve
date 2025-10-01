@@ -1,6 +1,29 @@
 FROM rayproject/ray:2.48.0-py311
 
-RUN pip install --no-cache-dir "ray[serve]==2.48.0"
+# System dependencies for pulling model weights and executing multimedia-aware
+# pipelines from Ray Serve deployments.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        git \
+        git-lfs \
+        libgl1 \
+        unzip \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install --system
+
+# Python dependencies required for LLM inference within Ray Serve deployments.
+RUN pip install --no-cache-dir \
+        "ray[serve]==2.48.0" \
+        "accelerate>=0.33.0" \
+        "llm2vec>=0.2.3" \
+        "peft>=0.13.2" \
+        "sentencepiece>=0.2.0" \
+        "transformers>=4.44.2"
 
 ENV PYTHONUNBUFFERED=1
 
