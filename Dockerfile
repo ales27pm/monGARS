@@ -10,7 +10,7 @@ RUN python -m venv /opt/venv \
 COPY . /app
 
 # --- Final Stage ---
-FROM nvcr.io/nvidia/pytorch:23.10-py3-runtime
+FROM nvcr.io/nvidia/pytorch:23.10-py3-runtime AS runtime
 RUN groupadd --system --gid 10001 mongars \
     && useradd --system --uid 10001 --gid mongars --create-home --home-dir /home/mongars mongars
 WORKDIR /app
@@ -20,4 +20,4 @@ ENV PATH="/opt/venv/bin:${PATH}"
 USER mongars
 
 EXPOSE 8000
-CMD ["uvicorn", "monGARS.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "monGARS.api.web_api:app", "--host", "0.0.0.0", "--port", "8000"]
