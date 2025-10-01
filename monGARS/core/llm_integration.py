@@ -308,6 +308,8 @@ class LLMIntegration:
             report = await self._model_manager.ensure_models_installed(
                 ["general", "coding"]
             )
+            success_actions = {"installed", "exists", "skipped"}
+            all_success = True
             for status in report.statuses:
                 log_payload = {
                     "role": status.role,
@@ -318,11 +320,14 @@ class LLMIntegration:
                 }
                 if status.action in {"error", "unavailable"}:
                     logger.warning("llm.models.ensure.failed", extra=log_payload)
+                    all_success = False
                 elif status.action in {"installed", "exists"}:
                     logger.info("llm.models.ensure.ready", extra=log_payload)
                 else:
                     logger.debug("llm.models.ensure.skipped", extra=log_payload)
-            self._models_ready = True
+                    if status.action not in success_actions:
+                        all_success = False
+            self._models_ready = bool(report.statuses) and all_success
 
     def _build_ollama_options(self, definition: ModelDefinition) -> dict[str, Any]:
         base_options = {
