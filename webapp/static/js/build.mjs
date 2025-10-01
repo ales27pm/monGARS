@@ -11,6 +11,7 @@ const outfile = path.resolve(__dirname, "chat.js");
 const isProd = process.env.NODE_ENV === "production";
 
 await build({
+  absWorkingDir: __dirname,
   entryPoints: [entry],
   bundle: true,
   outfile,
@@ -19,5 +20,10 @@ await build({
   target: ["es2018"],
   sourcemap: isProd ? false : "inline",
   minify: isProd,
-  logLevel: "info",
+  logLevel: "error",
+  metafile: true,
+  write: true
+}).catch((err) => {
+  console.error("Build failed:", err);
+  process.exit(1);
 });
