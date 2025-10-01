@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+  echo "[monGARS] Bash 4.4 or newer is required" >&2
+  exit 1
+fi
+
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.yml"
 ENV_FILE="${PROJECT_ROOT}/.env"
@@ -56,10 +61,11 @@ ensure_env_file() {
 import secrets
 import sys
 from pathlib import Path
+from typing import Dict, Optional
 
 env_path = Path(sys.argv[1])
 content = env_path.read_text().splitlines()
-entries: dict[str, str] = {}
+entries: Dict[str, str] = {}
 for line in content:
     stripped = line.strip()
     if not stripped or stripped.startswith("#") or "=" not in line:
@@ -67,7 +73,7 @@ for line in content:
     key, _, value = line.partition("=")
     entries[key] = value
 
-def requires_refresh(value: str | None) -> bool:
+def requires_refresh(value: Optional[str]) -> bool:
     if value is None:
         return True
     candidate = value.strip()
@@ -79,7 +85,7 @@ def requires_refresh(value: str | None) -> bool:
         "django-insecure-change-me",
     }
 
-updates: dict[str, str] = {}
+updates: Dict[str, str] = {}
 if requires_refresh(entries.get("SECRET_KEY")):
     updates["SECRET_KEY"] = secrets.token_urlsafe(64)
 if requires_refresh(entries.get("DJANGO_SECRET_KEY")):
@@ -94,7 +100,8 @@ if not updates:
 
 updated_lines = []
 for line in content:
-    if "=" not in line or line.lstrip().startswith("#"):
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in line:
         updated_lines.append(line)
         continue
     key, _, _ = line.partition("=")
@@ -168,7 +175,7 @@ main() {
         profiles+=(inference ray)
         ;;
       --profile)
-        shift
+        shift || { err "--profile requires an argument"; exit 1; }
         profiles+=("$1")
         ;;
       --pull)

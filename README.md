@@ -122,8 +122,9 @@ development secrets, and keeps your Compose project name consistent. Optional
 profiles:
 
 - `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
-- `--with-ray` provisions a Ray Serve control plane; toggle `USE_RAY_SERVE=true`
-  and update `RAY_SERVE_URL` in `.env` to route traffic through it.
+- `--with-ray` provisions a Ray Serve control plane listening on
+  `${RAY_HTTP_PORT:-8002}`; toggle `USE_RAY_SERVE=true` and update
+  `RAY_SERVE_URL` in `.env` if you expose a different port.
 
 Use `scripts/deploy_docker.sh ps` to inspect container health and
 `scripts/deploy_docker.sh destroy` when you need a clean slate (volumes and
@@ -144,10 +145,16 @@ user/token.
 | Setting | Description |
 | --- | --- |
 | `SECRET_KEY` | Required for JWT signing and Fernet encryption. Never leave empty. |
-| `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints. |
+| `API_PORT` / `WEBAPP_PORT` | Host ports exposed for the FastAPI service and Django operator console. |
+| `POSTGRES_PORT`, `REDIS_PORT`, `MLFLOW_PORT`, `VAULT_PORT`, `OLLAMA_PORT`, `RAY_HTTP_PORT`, `RAY_DASHBOARD_PORT` | Host bindings for stateful and optional services managed by Compose. |
+| `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
+| `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8002/generate`). |
+| `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. |
+| `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). |
 | `DOCUMENT_RETRIEVAL_URL` | Endpoint for external research invoked by the curiosity engine. |
-| `WS_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to open WebSocket sessions. |
 | `WORKER_DEPLOYMENT_NAME` / `WORKER_DEPLOYMENT_NAMESPACE` | Kubernetes deployment targeted by the evolution engine when scaling. |
+| `VAULT_URL` / `VAULT_TOKEN` | Vault dev server address and bootstrap token for local testing. |
+| `WS_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to open WebSocket sessions. |
 | `REDIS_URL`, `DATABASE_URL` | Connection strings for cache and persistence layers. |
 | `OPEN_TELEMETRY_EXPORTER` | Optional metrics exporter configuration for observability pipelines. |
 
