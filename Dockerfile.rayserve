@@ -1,0 +1,7 @@
+FROM rayproject/ray:2.48.0-py311
+
+RUN pip install --no-cache-dir "ray[serve]==2.48.0"
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["serve", "start", "--http-host", "0.0.0.0", "--http-port", "8000", "--dashboard-host", "0.0.0.0", "--ray-remote-address="]

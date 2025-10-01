@@ -195,12 +195,15 @@ main() {
 
   local profile_args=()
   if [[ ${#profiles[@]} -gt 0 ]]; then
-    declare -A seen
-    for profile in "${profiles[@]}"; do
-      if [[ -n "${profile}" && -z "${seen[$profile]+_}" ]]; then
-        profile_args+=(--profile "$profile")
-        seen[$profile]=1
+    local unique_profiles=()
+    while IFS= read -r -d '' profile; do
+      if [[ -n "$profile" ]]; then
+        unique_profiles+=("$profile")
       fi
+    done < <(printf "%s\0" "${profiles[@]}" | sort -uz)
+
+    for profile in "${unique_profiles[@]}"; do
+      profile_args+=(--profile "$profile")
     done
   fi
 

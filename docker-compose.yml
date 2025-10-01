@@ -70,6 +70,30 @@ services:
     networks:
       - mongars
 
+  webapp-migrations:
+    image: ${MONGARS_IMAGE:-mongars-app:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    command: ["python", "webapp/manage.py", "migrate", "--noinput"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+      FASTAPI_URL: http://api:8000
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - mongars
+
   webapp:
     image: ${MONGARS_IMAGE:-mongars-app:latest}
     build:
@@ -77,11 +101,12 @@ services:
       dockerfile: Dockerfile
       target: runtime
     command: >-
-      bash -lc "python webapp/manage.py migrate --noinput &&
-      python webapp/manage.py runserver 0.0.0.0:8001"
+      bash -lc "python webapp/manage.py runserver 0.0.0.0:8001"
     depends_on:
       api:
         condition: service_started
+      webapp-migrations:
+        condition: service_completed_successfully
     ports:
       - "${WEBAPP_PORT:-8001}:8001"
     env_file:
@@ -219,17 +244,27 @@ services:
       - mongars
 
   rayserve:
-    image: rayproject/ray:2.48.0-py311
+    build:
+      context: .
+      dockerfile: Dockerfile.rayserve
+    image: mongars-rayserve:latest
     container_name: mongars-rayserve
     profiles:
       - ray
     environment:
       - PYTHONUNBUFFERED=1
-    command: >-
-      bash -lc "pip install --no-cache-dir 'ray[serve]==2.48.0' &&
-      serve start --http-host 0.0.0.0 --http-port 8000 --dashboard-host 0.0.0.0 --ray-remote-address=''"
+    command:
+      - serve
+      - start
+      - --http-host
+      - 0.0.0.0
+      - --http-port
+      - "8000"
+      - --dashboard-host
+      - 0.0.0.0
+      - --ray-remote-address=
     ports:
-      - "${RAY_HTTP_PORT:-8000}:8000"
+      - "${RAY_HTTP_PORT:-8002}:8000"
       - "${RAY_DASHBOARD_PORT:-8265}:8265"
     healthcheck:
       test:
