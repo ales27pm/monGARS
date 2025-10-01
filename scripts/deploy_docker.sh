@@ -17,18 +17,24 @@ PROJECT_NAME=${COMPOSE_PROJECT_NAME:-mongars}
 
 log() {
   printf '\033[1;34m[monGARS]\033[0m %s\n' "$1"
+
+if [[ -t 1 ]]; then
+  BLUE=$'\033[1;34m'; YELLOW=$'\033[1;33m'; RED=$'\033[1;31m'; NC=$'\033[0m'
+else
+  BLUE=""; YELLOW=""; RED=""; NC=""
+fi
+
+log() {
+  printf '%s[monGARS]%s %s\n' "${BLUE}" "${NC}" "$1"
 }
 
 warn() {
-  printf '\033[1;33m[monGARS]\033[0m %s\n' "$1"
+  printf '%s[monGARS]%s %s\n' "${YELLOW}" "${NC}" "$1"
 }
 
 err() {
-  printf '\033[1;31m[monGARS]\033[0m %s\n' "$1" >&2
+  printf '%s[monGARS]%s %s\n' "${RED}" "${NC}" "$1" >&2
 }
-
-ensure_tool() {
-  if ! command -v "$1" >/dev/null 2>&1; then
     err "Required tool '$1' is not installed or not on PATH."
     exit 1
   fi
