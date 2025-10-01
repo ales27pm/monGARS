@@ -11,6 +11,8 @@ COPY . /app
 
 # --- Final Stage ---
 FROM nvcr.io/nvidia/pytorch:23.10-py3 AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 RUN groupadd --system --gid 10001 mongars \
     && useradd --system --uid 10001 --gid mongars --create-home --home-dir /home/mongars mongars
 WORKDIR /app
