@@ -36,10 +36,10 @@ async def test_update_profile_uses_message_and_response(
 
     profile = await module.update_profile("user-positive", interaction)
 
-    assert profile["long_term"]["sentence_length"] == 7
+    assert profile["long_term"]["sentence_length"] == pytest.approx(7.0)
     assert profile["long_term"]["positive_sentiment"] > 0.5
     last_entry = profile["short_term"][-1]
-    assert last_entry["sentence_length"] == 7
+    assert last_entry["sentence_length"] == pytest.approx(7.0)
     assert last_entry["positive_sentiment"] > 0.5
 
 
@@ -58,7 +58,7 @@ async def test_update_profile_detects_negative_sentiment(
 
     profile = await module.update_profile("user-negative", interaction)
 
-    assert profile["long_term"]["sentence_length"] == 7
+    assert profile["long_term"]["sentence_length"] == pytest.approx(7.0)
     assert profile["long_term"]["positive_sentiment"] < 0.5
 
 
@@ -91,6 +91,67 @@ async def test_update_profile_empty_input(
 
     profile = await module.update_profile("user-empty", interaction)
 
-    assert profile["long_term"]["sentence_length"] == 0
+    assert profile["long_term"]["sentence_length"] == pytest.approx(0.0)
     assert profile["long_term"]["positive_sentiment"] == pytest.approx(0.5)
-    assert profile["short_term"][-1]["sentence_length"] == 0
+    assert profile["short_term"][-1]["sentence_length"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_update_profile_tracks_question_and_exclamation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = MimicryModule()
+    _setup_in_memory_profile(module, monkeypatch)
+
+    interaction = {
+        "message": "Pouvez-vous expliquer ce point ? J'ai encore une question !",
+        "response": "Je vais détailler la marche à suivre.",
+    }
+
+    profile = await module.update_profile("user-curious", interaction)
+
+    assert profile["long_term"]["question_ratio"] > 0.4
+    assert profile["long_term"]["exclamation_ratio"] > 0.4
+
+
+@pytest.mark.asyncio
+async def test_adapt_response_style_mirrors_questions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = MimicryModule()
+    _setup_in_memory_profile(module, monkeypatch)
+
+    interaction = {
+        "message": "Pourquoi cela se produit-il ? Pouvez-vous préciser ?",
+        "response": "Je vais regarder cela.",
+    }
+
+    await module.update_profile("user-questions", interaction)
+
+    adapted = await module.adapt_response_style(
+        "Voici ce que je vois.", "user-questions"
+    )
+
+    assert adapted.endswith("?")
+
+
+@pytest.mark.asyncio
+async def test_adapt_response_style_supports_negative_sentiment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = MimicryModule()
+    _setup_in_memory_profile(module, monkeypatch)
+
+    interaction = {
+        "message": "Je suis profondément insatisfait.",
+        "response": "C'est un vrai problème.",
+    }
+
+    await module.update_profile("user-sad", interaction)
+
+    adapted = await module.adapt_response_style(
+        "Je vais analyser la situation.", "user-sad"
+    )
+
+    assert "difficile" in adapted
+    assert adapted.endswith((".", "!"))
