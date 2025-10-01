@@ -262,7 +262,6 @@ services:
       - "8002"
       - --dashboard-host
       - 0.0.0.0
-      - --ray-remote-address=
     ports:
       - "${RAY_HTTP_PORT:-8002}:8002"
       - "${RAY_DASHBOARD_PORT:-8265}:8265"
