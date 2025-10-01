@@ -11,6 +11,8 @@ monGARS/
 ├── pyproject.toml
 ├── requirements.txt
 ├── setup.py
+├── scripts/
+│   └── deploy_docker.sh
 ├── tasks.py
 ├── tests/
 │   ├── __init__.py

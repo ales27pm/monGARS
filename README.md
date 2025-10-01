@@ -111,11 +111,23 @@ uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 
 ### Docker Compose Stack
 ```bash
-./setup.sh               # installs Python deps and pre-flight tooling
-cp .env.example .env
-docker-compose up        # FastAPI, Postgres, Redis, MLflow, Vault, Ollama
+scripts/deploy_docker.sh up --pull         # build images, generate secrets, start core services
+scripts/deploy_docker.sh up --with-all     # include Ollama and Ray Serve profiles
+scripts/deploy_docker.sh logs api          # follow API logs
+scripts/deploy_docker.sh destroy           # stop stack and drop volumes
 ```
-Use `docker-compose down -v` to reset stateful services when required.
+
+The helper script automatically creates `.env` from `.env.example`, rotates
+development secrets, and keeps your Compose project name consistent. Optional
+profiles:
+
+- `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
+- `--with-ray` provisions a Ray Serve control plane; toggle `USE_RAY_SERVE=true`
+  and update `RAY_SERVE_URL` in `.env` to route traffic through it.
+
+Use `scripts/deploy_docker.sh ps` to inspect container health and
+`scripts/deploy_docker.sh destroy` when you need a clean slate (volumes and
+orphan containers are removed).
 
 ### Django Operator Console
 ```bash
