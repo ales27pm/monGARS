@@ -170,6 +170,18 @@ Document any new environment variable or feature flag in this table and the
 relevant module docstrings. Model profiles live in `configs/llm_models.json` and
 can be extended to register additional Ollama models or alternate providers.
 
+### Model Management & Provisioning
+- **Inspect configuration** – `GET /api/v1/models` (admin token required) returns
+  the active profile, normalised model metadata, and available profiles defined
+  in `configs/llm_models.json`.
+- **Trigger provisioning** – `POST /api/v1/models/provision` (admin token) calls
+  into the shared `LLMModelManager` to download or validate the models backing
+  each role. Supply `{"roles": ["general", "coding"], "force": true}` to
+  re-sync specific models.
+- **CLI** – `python -m scripts.provision_models --roles general coding` runs the
+  same provisioning workflow from the shell. Pass `--json` to emit machine
+  readable output for automation.
+
 ## Operational Workflows
 - **Testing**: `pytest -q` for unit/integration coverage. Run
   `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage.
@@ -211,6 +223,7 @@ can be extended to register additional Ollama models or alternate providers.
 | Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
 | API specification & clients | [docs/api/](docs/api/README.md) |
 | Conversation workflow deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
+| Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
 | Future milestones | [ROADMAP.md](ROADMAP.md) |
 
 ## Contributing

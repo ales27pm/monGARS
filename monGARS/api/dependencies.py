@@ -4,6 +4,7 @@ from weakref import WeakKeyDictionary
 
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import Hippocampus
+from monGARS.core.model_manager import LLMModelManager
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
@@ -15,6 +16,7 @@ _adaptive_generators: WeakKeyDictionary[
     PersonalityEngine, AdaptiveResponseGenerator
 ] = WeakKeyDictionary()
 _persistence_repository = PersistenceRepository()
+_model_manager: LLMModelManager | None = None
 
 
 def _resolve_personality_engine() -> PersonalityEngine:
@@ -55,3 +57,12 @@ def get_adaptive_response_generator(
         generator = AdaptiveResponseGenerator(engine)
         _adaptive_generators[engine] = generator
     return generator
+
+
+def get_model_manager() -> LLMModelManager:
+    """Return the shared LLM model manager instance."""
+
+    global _model_manager
+    if _model_manager is None:
+        _model_manager = LLMModelManager()
+    return _model_manager

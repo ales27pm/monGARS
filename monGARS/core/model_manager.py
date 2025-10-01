@@ -46,6 +46,18 @@ class ModelDefinition:
 
         return replace(self, name=name)
 
+    def to_payload(self) -> dict[str, Any]:
+        """Serialise the definition for API responses or logging."""
+
+        return {
+            "role": self.role,
+            "name": self.name,
+            "provider": self.provider,
+            "parameters": dict(self.parameters),
+            "auto_download": self.auto_download,
+            "description": self.description,
+        }
+
 
 @dataclass(slots=True)
 class ModelProfile:
@@ -57,6 +69,13 @@ class ModelProfile:
     def get(self, role: str) -> ModelDefinition | None:
         return self.models.get(role.lower())
 
+    def to_payload(self) -> dict[str, dict[str, Any]]:
+        """Return a JSON-serialisable snapshot of configured models."""
+
+        return {
+            role: definition.to_payload() for role, definition in self.models.items()
+        }
+
 
 @dataclass(slots=True)
 class ModelProvisionStatus:
@@ -67,6 +86,17 @@ class ModelProvisionStatus:
     provider: str
     action: str
     detail: str | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        """Serialise the provisioning status for external consumers."""
+
+        return {
+            "role": self.role,
+            "name": self.name,
+            "provider": self.provider,
+            "action": self.action,
+            "detail": self.detail,
+        }
 
 
 @dataclass(slots=True)
@@ -82,6 +112,11 @@ class ModelProvisionReport:
         """Return a mapping of role -> action for quick inspection."""
 
         return {status.role: status.action for status in self.statuses}
+
+    def to_payload(self) -> dict[str, list[dict[str, Any]]]:
+        """Return a JSON representation suitable for API responses."""
+
+        return {"statuses": [status.to_payload() for status in self.statuses]}
 
 
 _DEFAULT_MODELS: dict[str, ModelDefinition] = {
@@ -143,6 +178,27 @@ class LLMModelManager:
         if key not in params or params[key] is None:
             return default
         return params[key]
+
+    def active_profile_name(self) -> str:
+        """Return the name of the currently selected profile."""
+
+        return self._profile.name
+
+    def available_profile_names(self) -> list[str]:
+        """Return all profile identifiers discovered in the manifest."""
+
+        return sorted(self._profiles)
+
+    def get_profile_snapshot(self, name: str | None = None) -> ModelProfile:
+        """Return a defensive copy of the requested profile configuration."""
+
+        if name is None:
+            profile = self._profile
+        else:
+            profile = self._profiles.get(name)
+            if profile is None:
+                raise KeyError(name)
+        return ModelProfile(name=profile.name, models=dict(profile.models))
 
     async def ensure_models_installed(
         self, roles: Iterable[str] | None = None, *, force: bool = False

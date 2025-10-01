@@ -51,6 +51,80 @@
         ]
       }
     },
+    "/api/v1/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Read Model Configuration",
+        "description": "Return the active profile and available model definitions.",
+        "operationId": "read_model_configuration_api_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMModelConfigurationResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/models/provision": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Provision Models",
+        "description": "Ensure local providers have the configured models for the requested roles.",
+        "operationId": "provision_models_api_v1_models_provision_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LLMModelProvisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMModelProvisionReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/ws/ticket": {
       "post": {
         "tags": [
@@ -464,6 +538,30 @@
           }
         ]
       }
+    },
+    "/api/v1/peer/load": {
+      "get": {
+        "summary": "Peer Load",
+        "description": "Expose this node's scheduler load metrics to peers.",
+        "operationId": "peer_load_api_v1_peer_load_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerLoadSnapshot"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -592,6 +690,182 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LLMModelConfigurationResponse": {
+        "properties": {
+          "active_profile": {
+            "type": "string",
+            "title": "Active Profile"
+          },
+          "available_profiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Profiles"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/LLMModelProfileSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active_profile",
+          "available_profiles",
+          "profile"
+        ],
+        "title": "LLMModelConfigurationResponse",
+        "description": "Response describing the active profile and available options."
+      },
+      "LLMModelDefinitionSchema": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "auto_download": {
+            "type": "boolean",
+            "title": "Auto Download",
+            "default": true
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "name",
+          "provider"
+        ],
+        "title": "LLMModelDefinitionSchema",
+        "description": "Serialised representation of a model configuration entry."
+      },
+      "LLMModelProfileSummary": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "models": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LLMModelDefinitionSchema"
+            },
+            "type": "object",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "models"
+        ],
+        "title": "LLMModelProfileSummary",
+        "description": "Summary of models defined under a profile."
+      },
+      "LLMModelProvisionReportResponse": {
+        "properties": {
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/LLMModelProvisionStatusResponse"
+            },
+            "type": "array",
+            "title": "Statuses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "statuses"
+        ],
+        "title": "LLMModelProvisionReportResponse",
+        "description": "Aggregated provisioning report returned by the API."
+      },
+      "LLMModelProvisionRequest": {
+        "properties": {
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "LLMModelProvisionRequest",
+        "description": "Request body for provisioning LLM models."
+      },
+      "LLMModelProvisionStatusResponse": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "name",
+          "provider",
+          "action"
+        ],
+        "title": "LLMModelProvisionStatusResponse",
+        "description": "Result entry returned after attempting to ensure a model."
+      },
       "MemoryItem": {
         "properties": {
           "user_id": {
@@ -619,6 +893,48 @@
           "response"
         ],
         "title": "MemoryItem"
+      },
+      "PeerLoadSnapshot": {
+        "properties": {
+          "scheduler_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Id"
+          },
+          "queue_depth": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Queue Depth",
+            "default": 0
+          },
+          "active_workers": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Active Workers",
+            "default": 0
+          },
+          "concurrency": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Concurrency",
+            "default": 0
+          },
+          "load_factor": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Load Factor",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "title": "PeerLoadSnapshot",
+        "description": "Minimal load report shared between peer schedulers."
       },
       "PeerMessage": {
         "properties": {

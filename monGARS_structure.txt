@@ -14,7 +14,8 @@ monGARS/
 ├── configs/
 │   └── llm_models.json
 ├── scripts/
-│   └── deploy_docker.sh
+│   ├── deploy_docker.sh
+│   └── provision_models.py
 ├── tasks.py
 ├── tests/
 │   ├── __init__.py
@@ -46,6 +47,7 @@ monGARS/
     │   ├── __init__.py
     │   ├── authentication.py
     │   ├── dependencies.py
+    │   ├── model_management.py
     │   └── web_api.py
     ├── core/
     │   ├── __init__.py

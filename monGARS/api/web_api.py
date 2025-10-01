@@ -41,12 +41,14 @@ app = FastAPI(title="monGARS API")
 logger = logging.getLogger(__name__)
 
 from . import authentication as auth_routes
+from . import model_management
 from . import ui as ui_routes
 from . import ws_manager
 
 app.include_router(ws_manager.router)
 app.include_router(auth_routes.router)
 app.include_router(ui_routes.router)
+app.include_router(model_management.router)
 app.include_router(ws_ticket_router)
 _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
