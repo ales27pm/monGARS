@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#!/usr/bin/env bash
-set -euo pipefail
-
 if [ -z "${BASH_VERSINFO-}" ]; then
   echo "[monGARS] This script must be run with Bash (e.g., bash scripts/deploy_docker.sh)" >&2
   exit 1
