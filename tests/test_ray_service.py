@@ -1,5 +1,81 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
 import httpx
 import pytest
+
+from modules.evolution_engine.orchestrator import EvolutionOrchestrator
+from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
+from modules.neurons.training.mntp_trainer import TrainingStatus
+
+
+class DummyNeuronManager:
+    """Minimal fake neuron manager used to observe adapter switches in tests."""
+
+    instances: list["DummyNeuronManager"] = []
+
+    def __init__(
+        self,
+        base_model_path: str,
+        default_encoder_path: str | None = None,
+        **_: Any,
+    ) -> None:
+        self.base_model_path = base_model_path
+        self.encoder_path = default_encoder_path
+        self.switch_calls: list[str] = []
+        DummyNeuronManager.instances.append(self)
+
+    def switch_encoder(self, path: str) -> None:
+        self.encoder_path = path
+        self.switch_calls.append(path)
+
+    def encode(self, prompts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.1, 0.1] for _ in prompts]
+
+
+def _make_success_trainer(*, suffix: str) -> type:
+    class SuccessTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                config_payload = json.loads(Path(training_config_path).read_text())
+            except FileNotFoundError:
+                config_payload = {"model_name_or_path": "stub"}
+            (self.output_dir / "training_config.json").write_text(
+                json.dumps(config_payload)
+            )
+
+            adapter_dir = self.output_dir / "adapter"
+            adapter_dir.mkdir(parents=True, exist_ok=True)
+            weights_path = adapter_dir / f"adapter-{suffix}.bin"
+            weights_path.write_bytes(f"weights-{suffix}".encode("utf-8"))
+
+            self.summary = {
+                "status": TrainingStatus.SUCCESS.value,
+                "artifacts": {
+                    "adapter": str(adapter_dir),
+                    "weights": str(weights_path),
+                },
+                "metrics": {"training_examples": 1, "run": suffix},
+            }
+
+        def train(self) -> dict[str, Any]:
+            return self.summary
+
+    return SuccessTrainer
+
+
+def _run_orchestrator_pipeline(registry_path: Path, trainer_cls: type) -> Path:
+    orchestrator = EvolutionOrchestrator(
+        model_registry_path=str(registry_path), trainer_cls=trainer_cls
+    )
+    return Path(orchestrator.trigger_encoder_training_pipeline())
 
 
 @pytest.mark.asyncio
@@ -138,3 +214,89 @@ def test_llm_integration_invalid_backoff_falls_back_to_defaults(monkeypatch):
     llm = LLMIntegration()
 
     assert llm._ray_scaling_backoff == [0.5, 1.0, 2.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_ray_deployment_refreshes_after_training_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modules import ray_service
+
+    registry_path = tmp_path / "encoders"
+    first_trainer = _make_success_trainer(suffix="first")
+    first_run = _run_orchestrator_pipeline(registry_path, first_trainer)
+
+    manifest = load_manifest(registry_path)
+    assert manifest is not None and manifest.current is not None
+    first_payload = manifest.build_payload()
+
+    DummyNeuronManager.instances.clear()
+    monkeypatch.setattr(ray_service, "NeuronManager", DummyNeuronManager)
+
+    deployment = ray_service.RayLLMDeployment(
+        base_model_path="base", registry_path=str(registry_path)
+    )
+
+    assert DummyNeuronManager.instances, "NeuronManager was not instantiated"
+    manager = DummyNeuronManager.instances[-1]
+    assert manager.encoder_path == first_payload["adapter_path"]
+    assert deployment._adapter_payload == first_payload
+
+    second_trainer = _make_success_trainer(suffix="second")
+    second_run = _run_orchestrator_pipeline(registry_path, second_trainer)
+    second_manifest = load_manifest(registry_path)
+    assert second_manifest is not None and second_manifest.current is not None
+    second_payload = second_manifest.build_payload()
+
+    manifest_file = registry_path / MANIFEST_FILENAME
+    stat_result = manifest_file.stat()
+    os.utime(manifest_file, (stat_result.st_atime, stat_result.st_mtime + 1))
+
+    refreshed = await deployment._refresh_adapter(None)
+
+    assert manager.switch_calls, "Expected adapter switch to be triggered"
+    assert manager.switch_calls[-1] == second_payload["adapter_path"]
+    assert refreshed == second_payload
+    assert deployment._adapter_version == second_payload["version"]
+    assert second_payload["adapter_path"] == str(second_run / "adapter")
+
+
+@pytest.mark.asyncio
+async def test_ray_deployment_rejects_invalid_adapter_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modules import ray_service
+
+    registry_path = tmp_path / "encoders"
+    trainer_cls = _make_success_trainer(suffix="only")
+    _run_orchestrator_pipeline(registry_path, trainer_cls)
+
+    manifest = load_manifest(registry_path)
+    assert manifest is not None and manifest.current is not None
+    payload = manifest.build_payload()
+
+    DummyNeuronManager.instances.clear()
+    monkeypatch.setattr(ray_service, "NeuronManager", DummyNeuronManager)
+
+    deployment = ray_service.RayLLMDeployment(
+        base_model_path="base", registry_path=str(registry_path)
+    )
+
+    manager = DummyNeuronManager.instances[-1]
+    assert not manager.switch_calls
+
+    rogue_payload = {
+        "adapter_path": str(tmp_path / "rogue"),
+        "version": payload["version"],
+    }
+    result = await deployment._refresh_adapter(rogue_payload)
+    assert result == payload
+    assert not manager.switch_calls
+
+    mismatched_version = {
+        "adapter_path": payload["adapter_path"],
+        "version": "unexpected-version",
+    }
+    result = await deployment._refresh_adapter(mismatched_version)
+    assert result == payload
+    assert not manager.switch_calls
