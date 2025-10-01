@@ -1,4 +1,7 @@
+import prettier from "eslint-config-prettier";
+
 export default [
+  prettier,
   {
     files: ["webapp/static/js/src/**/*.js"],
     languageOptions: {
