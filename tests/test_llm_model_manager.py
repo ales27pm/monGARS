@@ -14,9 +14,8 @@ def _write_config(path, data):
 
 def _build_settings(**overrides):
     base = get_settings()
-    merged = {"llm_models_profile": "default"}
-    merged.update(overrides)
-    return base.model_copy(update=merged)
+    merged_overrides = {"llm_models_profile": "default", **overrides}
+    return base.model_copy(update=merged_overrides)
 
 
 def test_model_manager_loads_profile_from_config(tmp_path):

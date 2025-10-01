@@ -126,6 +126,9 @@ class CircuitBreaker:
 class LLMIntegration:
     """Adapter responsible for generating responses via local or remote LLMs."""
 
+    SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists", "skipped"})
+    FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
+
     def __init__(self) -> None:
         self._settings = get_settings()
         self._model_manager = LLMModelManager(self._settings)
@@ -308,7 +311,6 @@ class LLMIntegration:
             report = await self._model_manager.ensure_models_installed(
                 ["general", "coding"]
             )
-            success_actions = {"installed", "exists", "skipped"}
             all_success = True
             for status in report.statuses:
                 log_payload = {
@@ -318,14 +320,14 @@ class LLMIntegration:
                     "action": status.action,
                     "detail": status.detail,
                 }
-                if status.action in {"error", "unavailable"}:
+                if status.action in self.FAILURE_ACTIONS:
                     logger.warning("llm.models.ensure.failed", extra=log_payload)
                     all_success = False
                 elif status.action in {"installed", "exists"}:
                     logger.info("llm.models.ensure.ready", extra=log_payload)
                 else:
                     logger.debug("llm.models.ensure.skipped", extra=log_payload)
-                    if status.action not in success_actions:
+                    if status.action not in self.SUCCESS_ACTIONS:
                         all_success = False
             self._models_ready = bool(report.statuses) and all_success
 
