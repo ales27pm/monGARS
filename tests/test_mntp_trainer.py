@@ -1,5 +1,8 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -13,6 +16,88 @@ def temp_dir(tmp_path: Path):
     d = tmp_path / "encoders"
     d.mkdir()
     yield d
+
+
+@pytest.fixture()
+def fixed_run_uuid(monkeypatch: pytest.MonkeyPatch) -> UUID:
+    value = UUID("00000000-0000-0000-0000-00000000abcd")
+    monkeypatch.setattr("modules.evolution_engine.orchestrator.uuid4", lambda: value)
+    return value
+
+
+def _create_trainer_stub(
+    *,
+    summary_factory: Callable[[Path, dict[str, object]], dict[str, Any]],
+    training_config: dict[str, Any] | None = None,
+    setup: Callable[[Path], dict[str, object]] | None = None,
+    persist_summary: bool = False,
+) -> type:
+    class StubTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+            if training_config:
+                (self.output_dir / "training_config.json").write_text(
+                    json.dumps(training_config)
+                )
+
+            context: dict[str, object] = {}
+            if setup is not None:
+                context = setup(self.output_dir)
+
+            self.summary = summary_factory(self.output_dir, context)
+            if persist_summary:
+                (self.output_dir / "training_summary.json").write_text(
+                    json.dumps(self.summary)
+                )
+
+        def train(self) -> dict[str, object]:
+            return self.summary
+
+    return StubTrainer
+
+
+def _setup_fallback_artifacts(output_dir: Path) -> dict[str, object]:
+    adapter_dir = output_dir / "adapter"
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    weights_payload = {
+        "rows": 4,
+        "cols": 8,
+        "matrix": [[0 for _ in range(8)] for _ in range(4)],
+    }
+    weights_path = adapter_dir / "fallback_adapter.json"
+    weights_path.write_text(json.dumps(weights_payload))
+    return {
+        "adapter_dir": adapter_dir,
+        "weights_path": weights_path,
+    }
+
+
+def _setup_binary_adapter(output_dir: Path) -> dict[str, object]:
+    adapter_dir = output_dir / "adapter"
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    weights_path = adapter_dir / "adapter.bin"
+    weights_path.write_bytes(b"weights")
+    return {"adapter_dir": adapter_dir, "weights_path": weights_path}
+
+
+TRAINING_CONFIG_PAYLOAD = {"model_name_or_path": "mistralai/Mistral-7B-Instruct-v0.2"}
+
+
+def _configure_manifest_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode_manifest(*_: object, **__: object) -> None:
+        raise RuntimeError("manifest write failed")
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_manifest",
+        explode_manifest,
+    )
+
+
+def _assert_manifest_missing(temp_dir: Path) -> None:
+    manifest_path = temp_dir / MANIFEST_FILENAME
+    assert not manifest_path.exists()
 
 
 def _assert_fallback_artifacts(output_dir: Path) -> dict[str, object]:
@@ -31,46 +116,23 @@ def _assert_fallback_artifacts(output_dir: Path) -> dict[str, object]:
 
 
 def test_orchestrator_surfaces_training_failure(temp_dir: Path) -> None:
-    class StubTrainer:
-        def __init__(self, training_config_path: str, output_dir: str) -> None:
-            self.output_dir = Path(output_dir)
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-
-            config_payload = {
-                "model_name_or_path": "mistralai/Mistral-7B-Instruct-v0.2",
-            }
-            (self.output_dir / "training_config.json").write_text(
-                json.dumps(config_payload)
-            )
-
-            adapter_dir = self.output_dir / "adapter"
-            adapter_dir.mkdir(parents=True, exist_ok=True)
-            weights_payload = {
-                "rows": 4,
-                "cols": 8,
-                "matrix": [[0 for _ in range(8)] for _ in range(4)],
-            }
-            weights_path = adapter_dir / "fallback_adapter.json"
-            weights_path.write_text(json.dumps(weights_payload))
-
-            self.summary = {
-                "status": TrainingStatus.FALLBACK.value,
-                "artifacts": {
-                    "adapter": str(adapter_dir),
-                    "weights": str(weights_path),
-                },
-                "metrics": {"training_examples": 0},
-                "reason": "missing_dependencies",
-            }
-            (self.output_dir / "training_summary.json").write_text(
-                json.dumps(self.summary)
-            )
-
-        def train(self) -> dict[str, object]:
-            return self.summary
+    fallback_trainer = _create_trainer_stub(
+        training_config=TRAINING_CONFIG_PAYLOAD,
+        setup=_setup_fallback_artifacts,
+        persist_summary=True,
+        summary_factory=lambda _, ctx: {
+            "status": TrainingStatus.FALLBACK.value,
+            "artifacts": {
+                "adapter": str(ctx["adapter_dir"]),
+                "weights": str(ctx["weights_path"]),
+            },
+            "metrics": {"training_examples": 0},
+            "reason": "missing_dependencies",
+        },
+    )
 
     orchestrator = EvolutionOrchestrator(
-        model_registry_path=str(temp_dir), trainer_cls=StubTrainer
+        model_registry_path=str(temp_dir), trainer_cls=fallback_trainer
     )
 
     with pytest.raises(RuntimeError) as excinfo:
@@ -92,39 +154,152 @@ def test_orchestrator_surfaces_training_failure(temp_dir: Path) -> None:
     _assert_fallback_artifacts(out)
 
 
+def test_orchestrator_updates_manifest_on_success(
+    temp_dir: Path, fixed_run_uuid: UUID
+) -> None:
+    successful_trainer = _create_trainer_stub(
+        training_config=TRAINING_CONFIG_PAYLOAD,
+        setup=_setup_binary_adapter,
+        persist_summary=True,
+        summary_factory=lambda _, ctx: {
+            "status": TrainingStatus.SUCCESS.value,
+            "artifacts": {
+                "adapter": str(ctx["adapter_dir"]),
+                "weights": str(ctx["weights_path"]),
+            },
+            "metrics": {"training_examples": 4, "loss": 0.1},
+        },
+    )
+
+    orchestrator = EvolutionOrchestrator(
+        model_registry_path=str(temp_dir), trainer_cls=successful_trainer
+    )
+
+    run_path = Path(orchestrator.trigger_encoder_training_pipeline())
+    assert run_path.exists()
+    assert run_path.name == f"temp-mistral-mntp-step-{fixed_run_uuid}"
+
+    manifest = load_manifest(temp_dir)
+    assert manifest is not None
+    assert manifest.current is not None
+    assert manifest.current.status == TrainingStatus.SUCCESS.value
+    assert manifest.current.summary["metrics"]["training_examples"] == 4
+
+    adapter_dir = manifest.current.resolve_adapter_path(Path(temp_dir))
+    weights_path = manifest.current.resolve_weights_path(Path(temp_dir))
+    assert adapter_dir == run_path / "adapter"
+    assert weights_path == run_path / "adapter" / "adapter.bin"
+
+    latest_link = Path(temp_dir) / "latest"
+    assert latest_link.exists(), "The 'latest' symlink was not created"
+    assert latest_link.is_symlink()
+    assert latest_link.resolve() == adapter_dir.resolve()
+
+
 def test_orchestrator_rejects_weights_outside_run(
     temp_dir: Path, tmp_path: Path
 ) -> None:
     rogue_weights = tmp_path / "rogue.bin"
     rogue_weights.write_bytes(b"1")
 
-    class StubTrainer:
-        def __init__(self, training_config_path: str, output_dir: str) -> None:
-            self.output_dir = Path(output_dir)
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            adapter_dir = self.output_dir / "adapter"
-            adapter_dir.mkdir(parents=True, exist_ok=True)
-            (adapter_dir / "adapter_config.json").write_text("{}")
-            (adapter_dir / "adapter_model.bin").write_bytes(b"0")
-            self.summary = {
-                "status": TrainingStatus.SUCCESS.value,
-                "artifacts": {
-                    "adapter": str(adapter_dir),
-                    "weights": str(rogue_weights),
-                },
-                "metrics": {"training_examples": 1},
-            }
-
-        def train(self) -> dict[str, object]:
-            return self.summary
+    rogue_weights_trainer = _create_trainer_stub(
+        setup=_setup_binary_adapter,
+        summary_factory=lambda _, ctx: {
+            "status": TrainingStatus.SUCCESS.value,
+            "artifacts": {
+                "adapter": str(ctx["adapter_dir"]),
+                "weights": str(rogue_weights),
+            },
+            "metrics": {"training_examples": 1},
+        },
+    )
 
     orchestrator = EvolutionOrchestrator(
-        model_registry_path=str(temp_dir), trainer_cls=StubTrainer
+        model_registry_path=str(temp_dir), trainer_cls=rogue_weights_trainer
     )
 
     with pytest.raises(RuntimeError) as excinfo:
         orchestrator.trigger_encoder_training_pipeline()
     assert "weights outside orchestrator output directory" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    (
+        "trainer_cls",
+        "configure",
+        "post_check",
+        "expected_message",
+    ),
+    [
+        pytest.param(
+            _create_trainer_stub(
+                summary_factory=lambda _, __: {
+                    "status": TrainingStatus.SUCCESS.value,
+                    "artifacts": {},
+                    "metrics": {},
+                }
+            ),
+            None,
+            None,
+            "did not return an adapter artifact",
+            id="missing-adapter",
+        ),
+        pytest.param(
+            _create_trainer_stub(
+                summary_factory=lambda output_dir, __: {
+                    "status": TrainingStatus.SUCCESS.value,
+                    "artifacts": {
+                        "adapter": str(output_dir / "adapter" / "missing"),
+                    },
+                    "metrics": {},
+                }
+            ),
+            None,
+            None,
+            "does not exist",
+            id="invalid-adapter-path",
+        ),
+        pytest.param(
+            _create_trainer_stub(
+                training_config=TRAINING_CONFIG_PAYLOAD,
+                setup=_setup_binary_adapter,
+                summary_factory=lambda _, ctx: {
+                    "status": TrainingStatus.SUCCESS.value,
+                    "artifacts": {
+                        "adapter": str(ctx["adapter_dir"]),
+                        "weights": str(ctx["weights_path"]),
+                    },
+                    "metrics": {"training_examples": 1},
+                },
+            ),
+            _configure_manifest_failure,
+            _assert_manifest_missing,
+            "manifest write failed",
+            id="manifest-write-failure",
+        ),
+    ],
+)
+def test_orchestrator_failure_scenarios(
+    temp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trainer_cls: type,
+    configure: Callable[[pytest.MonkeyPatch], None] | None,
+    post_check: Callable[[Path], None] | None,
+    expected_message: str,
+) -> None:
+    if configure is not None:
+        configure(monkeypatch)
+
+    orchestrator = EvolutionOrchestrator(
+        model_registry_path=str(temp_dir), trainer_cls=trainer_cls
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        orchestrator.trigger_encoder_training_pipeline()
+    assert expected_message in str(excinfo.value)
+
+    if post_check is not None:
+        post_check(temp_dir)
 
 
 def test_mntp_trainer_generates_deterministic_fallback(
@@ -264,3 +439,76 @@ def test_persist_model_raises_when_weights_missing(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError):
         trainer._persist_model(BrokenModel())
+
+
+def test_mntp_trainer_curated_training_success(tmp_path: Path) -> None:
+    output_dir = tmp_path / "curated"
+    trainer = MNTPTrainer(
+        training_config_path="configs/training/mntp_mistral_config.json",
+        output_dir=str(output_dir),
+    )
+
+    curated_records = [
+        {
+            "embedding": [0.2, 0.4, 0.6],
+            "target": 0.8,
+            "confidence": 0.9,
+            "source_id": "record-1",
+            "text_preview": "example",
+        },
+        {
+            "embedding": [0.1, 0.3, 0.5],
+            "target": 0.5,
+            "confidence": 0.85,
+            "source_id": "record-2",
+            "text_preview": "second",
+        },
+    ]
+
+    summary = trainer.train(curated_records=curated_records)
+
+    assert summary["status"] == TrainingStatus.SUCCESS.value
+    assert summary["mode"] == "curated_linear_adapter"
+    assert summary["metrics"]["training_examples"] == len(curated_records)
+    assert summary["metrics"]["feature_dimension"] == len(
+        curated_records[0]["embedding"]
+    )
+
+    artifacts = summary["artifacts"]
+    adapter_dir = Path(artifacts["adapter"])
+    weights_path = Path(artifacts["weights"])
+    assert adapter_dir.exists()
+    assert weights_path.exists()
+
+    payload = json.loads(weights_path.read_text())
+    assert payload["feature_dimension"] == len(curated_records[0]["embedding"])
+    expected_epochs = int(trainer.config.get("curated_epochs", 15))
+    assert payload["metrics"]["epochs"] == expected_epochs
+    assert len(payload["records"]) == len(curated_records)
+
+    summary_path = output_dir / "training_summary.json"
+    assert summary_path.exists()
+    persisted_summary = json.loads(summary_path.read_text())
+    assert persisted_summary["status"] == TrainingStatus.SUCCESS.value
+
+
+def test_mntp_trainer_curated_training_rejects_invalid_records(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "curated_failure"
+    trainer = MNTPTrainer(
+        training_config_path="configs/training/mntp_mistral_config.json",
+        output_dir=str(output_dir),
+    )
+
+    invalid_curated_records = [
+        {"target": 0.5},
+        {"embedding": [], "target": 0.6},
+    ]
+
+    with pytest.raises(ValueError) as excinfo:
+        trainer.train(curated_records=invalid_curated_records)
+    assert "No valid curated records" in str(excinfo.value)
+
+    summary_path = output_dir / "training_summary.json"
+    assert not summary_path.exists()
