@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+
+if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
+    from monGARS.core.model_manager import ModelDefinition as CoreModelDefinition
+    from monGARS.core.model_manager import ModelProfile as CoreModelProfile
+    from monGARS.core.model_manager import (
+        ModelProvisionReport as CoreModelProvisionReport,
+    )
+    from monGARS.core.model_manager import (
+        ModelProvisionStatus as CoreModelProvisionStatus,
+    )
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -142,6 +153,121 @@ class SuggestResponse(BaseModel):
     model: str
 
 
+class LLMModelDefinitionSchema(BaseModel):
+    """Serialised representation of a model configuration entry."""
+
+    role: str
+    name: str
+    provider: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    auto_download: bool = True
+    description: str | None = None
+
+    @classmethod
+    def from_definition(
+        cls, definition: "CoreModelDefinition"
+    ) -> "LLMModelDefinitionSchema":
+        payload = definition.to_payload()
+        return cls(**payload)
+
+
+class LLMModelProfileSummary(BaseModel):
+    """Summary of models defined under a profile."""
+
+    name: str
+    models: dict[str, LLMModelDefinitionSchema]
+
+    @classmethod
+    def from_profile(cls, profile: "CoreModelProfile") -> "LLMModelProfileSummary":
+        return cls(
+            name=profile.name,
+            models={
+                role: LLMModelDefinitionSchema.from_definition(definition)
+                for role, definition in profile.models.items()
+            },
+        )
+
+
+class LLMModelConfigurationResponse(BaseModel):
+    """Response describing the active profile and available options."""
+
+    active_profile: str
+    available_profiles: list[str]
+    profile: LLMModelProfileSummary
+
+    @classmethod
+    def from_profile(
+        cls,
+        *,
+        active_profile: str,
+        available_profiles: list[str],
+        profile: "CoreModelProfile",
+    ) -> "LLMModelConfigurationResponse":
+        return cls(
+            active_profile=active_profile,
+            available_profiles=available_profiles,
+            profile=LLMModelProfileSummary.from_profile(profile),
+        )
+
+
+class LLMModelProvisionStatusResponse(BaseModel):
+    """Result entry returned after attempting to ensure a model."""
+
+    role: str
+    name: str
+    provider: str
+    action: str
+    detail: str | None = None
+
+    @classmethod
+    def from_status(
+        cls, status: "CoreModelProvisionStatus"
+    ) -> "LLMModelProvisionStatusResponse":
+        payload = status.to_payload()
+        return cls(**payload)
+
+
+class LLMModelProvisionReportResponse(BaseModel):
+    """Aggregated provisioning report returned by the API."""
+
+    statuses: list[LLMModelProvisionStatusResponse]
+
+    @classmethod
+    def from_report(
+        cls, report: "CoreModelProvisionReport"
+    ) -> "LLMModelProvisionReportResponse":
+        return cls(
+            statuses=[
+                LLMModelProvisionStatusResponse.from_status(status)
+                for status in report.statuses
+            ]
+        )
+
+
+class LLMModelProvisionRequest(BaseModel):
+    """Request body for provisioning LLM models."""
+
+    roles: list[str] | None = None
+    force: bool = False
+
+    @field_validator("roles")
+    @classmethod
+    def validate_roles(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalised: list[str] = []
+        for role in value:
+            cleaned = role.strip()
+            if not cleaned:
+                raise ValueError("roles cannot contain empty values")
+            lowered = cleaned.lower()
+            if lowered not in normalised:
+                normalised.append(lowered)
+        if not normalised:
+            raise ValueError("roles must include at least one entry")
+        return normalised
+
+
 __all__ = [
     "ChatRequest",
     "ChatResponse",
@@ -151,4 +277,10 @@ __all__ = [
     "SuggestRequest",
     "SuggestResponse",
     "UserRegistration",
+    "LLMModelConfigurationResponse",
+    "LLMModelDefinitionSchema",
+    "LLMModelProfileSummary",
+    "LLMModelProvisionReportResponse",
+    "LLMModelProvisionRequest",
+    "LLMModelProvisionStatusResponse",
 ]
