@@ -102,9 +102,16 @@ class MimicryModule:
         if cached_profile and expiry > time.monotonic():
             return cached_profile
 
-        profile = await self._load_profile_from_storage(user_id)
-        self._cache_profile(user_id, profile)
-        return profile
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            cached_profile = self.user_profiles.get(user_id)
+            expiry = self._profile_expirations.get(user_id, 0.0)
+            if cached_profile and expiry > time.monotonic():
+                return cached_profile
+
+            profile = await self._load_profile_from_storage(user_id)
+            self._cache_profile(user_id, profile)
+            return profile
 
     async def _update_profile_db(self, user_id: str, profile: dict) -> None:
         """Persist a profile update back to the database."""
