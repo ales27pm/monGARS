@@ -1,0 +1,15 @@
+{
+  "name": "mongars-webapp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node webapp/static/js/build.mjs",
+    "build:chat": "node webapp/static/js/build.mjs",
+    "lint": "eslint webapp/static/js/src --max-warnings=0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0"
+  }
+}
