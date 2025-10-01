@@ -1,0 +1,28 @@
+{
+  "profiles": {
+    "default": {
+      "models": {
+        "general": {
+          "name": "dolphin-mistral:7b-v2.8-q4_K_M",
+          "provider": "ollama",
+          "auto_download": true,
+          "parameters": {
+            "top_p": 0.9,
+            "num_predict": 512
+          },
+          "description": "Default bilingual conversation model shipped with the developer profile."
+        },
+        "coding": {
+          "name": "qwen2.5-coder:7b-instruct-q6_K",
+          "provider": "ollama",
+          "auto_download": true,
+          "parameters": {
+            "top_p": 0.9,
+            "num_predict": 512
+          },
+          "description": "Code-oriented model tuned for lightweight local inference."
+        }
+      }
+    }
+  }
+}
