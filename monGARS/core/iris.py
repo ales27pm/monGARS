@@ -84,7 +84,7 @@ class Iris:
         response = await self._get_response(url)
         if response is None:
             return None
-        document = self._extract_document(response)
+        document = await self._extract_document(response)
         return document
 
     async def fetch_text(self, url: str) -> Optional[str]:
@@ -235,11 +235,13 @@ class Iris:
                 return True
         return len(response.text) > self._max_content_length
 
-    def _extract_document(self, response: httpx.Response) -> IrisDocument | None:
+    async def _extract_document(self, response: httpx.Response) -> IrisDocument | None:
         extracted_json: str | None = None
         try:
-            extracted_json = trafilatura.extract(
-                response.text,
+            html_text = response.text
+            extracted_json = await asyncio.to_thread(
+                trafilatura.extract,
+                html_text,
                 include_comments=False,
                 include_tables=False,
                 favor_precision=True,
