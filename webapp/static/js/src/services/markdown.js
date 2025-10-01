@@ -18,7 +18,9 @@ export function renderMarkdown(text) {
           USE_PROFILES: { html: true },
         });
       }
-      return fallback();
+      // Fallback: escape raw text and do minimal formatting to avoid XSS
+      const escaped = escapeHTML(value);
+      return escaped.replace(/\n/g, "<br>");
     }
   } catch (err) {
     console.warn("Markdown rendering failed", err);
