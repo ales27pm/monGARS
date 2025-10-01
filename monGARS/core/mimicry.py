@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import re
 from collections import deque
@@ -62,6 +63,38 @@ def _make_default_profile(history_length: int) -> ProfileDict:
     return {"long_term": {}, "short_term": deque(maxlen=history_length)}
 
 
+def _serialise_profile(profile: ProfileDict) -> str:
+    """Convert profile data into a JSON payload for cache storage."""
+
+    payload = dict(profile)
+    payload["short_term"] = list(profile.get("short_term", []))
+    payload.setdefault("long_term", {})
+    return json.dumps(payload)
+
+
+def _deserialise_profile(data: object, history_length: int) -> ProfileDict:
+    """Convert cached payloads back into a runtime profile structure."""
+
+    if isinstance(data, (bytes, bytearray)):
+        raw = data.decode("utf-8")
+    elif isinstance(data, str):
+        raw = data
+    elif isinstance(data, MutableMapping):
+        payload = dict(data)
+        payload.setdefault("long_term", {})
+        payload["short_term"] = deque(
+            payload.get("short_term", []), maxlen=history_length
+        )
+        return payload
+    else:
+        raise TypeError(f"Unsupported cache payload type: {type(data)!r}")
+
+    payload = json.loads(raw)
+    payload.setdefault("long_term", {})
+    payload["short_term"] = deque(payload.get("short_term", []), maxlen=history_length)
+    return payload
+
+
 class MimicryModule:
     """Adapt responses based on long- and short-term interaction patterns."""
 
@@ -91,9 +124,17 @@ class MimicryModule:
         if not user_id:
             return
         ttl = int(self.cache_ttl_seconds)
+        try:
+            payload = _serialise_profile(profile)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "mimicry.cache.serialisation_failed",
+                extra={"user": _redact_user(user_id), "error": str(exc)},
+            )
+            return
         await self._profile_cache.set(
             f"{_PROFILE_CACHE_PREFIX}{user_id}",
-            profile,
+            payload,
             ttl=ttl if ttl > 0 else None,
         )
 
@@ -137,7 +178,13 @@ class MimicryModule:
         cache_key = f"{_PROFILE_CACHE_PREFIX}{user_id}"
         cached_profile = await self._profile_cache.get(cache_key)
         if cached_profile:
-            return self._normalise_profile(cached_profile)
+            try:
+                return _deserialise_profile(cached_profile, self.history_length)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "mimicry.cache.deserialisation_failed",
+                    extra={"user": _redact_user(user_id), "error": str(exc)},
+                )
 
         profile = await self._load_profile_from_storage(user_id)
         await self._cache_profile(user_id, profile)

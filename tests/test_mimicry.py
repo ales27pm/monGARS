@@ -174,3 +174,27 @@ async def test_adapt_response_style_supports_negative_sentiment(
 
     assert "difficile" in adapted
     assert adapted.endswith((".", "!"))
+
+
+@pytest.mark.asyncio
+async def test_shared_cache_across_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    config.get_settings.cache_clear()
+    shared_cache = _InMemoryCache(store={})
+    preferences = _InMemoryPreferences()
+    module_a = MimicryModule(persistence_repo=preferences, profile_cache=shared_cache)
+    module_b = MimicryModule(persistence_repo=preferences, profile_cache=shared_cache)
+
+    interaction = {
+        "message": "Merci pour votre assistance continue.",
+        "response": "Je suis heureux de soutenir vos recherches.",
+    }
+
+    await module_a.update_profile("shared-user", interaction)
+    preferences._data.clear()
+
+    cached_profile = await module_b._get_profile("shared-user")
+
+    assert len(cached_profile["short_term"]) == 1
+    assert cached_profile["long_term"]["sentence_length"] > 0
+    config.get_settings.cache_clear()
