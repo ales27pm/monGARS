@@ -5,6 +5,10 @@ export function renderMarkdown(text) {
     return "";
   }
   const value = String(text);
+  const fallback = () => {
+    const escaped = escapeHTML(value);
+    return escaped.replace(/\n/g, "<br>");
+  };
   try {
     if (window.marked && typeof window.marked.parse === "function") {
       const rendered = window.marked.parse(value);
@@ -14,11 +18,10 @@ export function renderMarkdown(text) {
           USE_PROFILES: { html: true },
         });
       }
-      return rendered;
+      return fallback();
     }
   } catch (err) {
     console.warn("Markdown rendering failed", err);
   }
-  const escaped = escapeHTML(value);
-  return escaped.replace(/\n/g, "<br>");
+  return fallback();
 }

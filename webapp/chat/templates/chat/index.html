@@ -276,9 +276,7 @@
                     rows="1"
                     maxlength="1000"
                     aria-describedby="composer-hint"
-                  >
-{{ prompt_value|default_if_none:"" }}</textarea
-                  >
+                  >{{ prompt_value|default_if_none:"" }}</textarea>
                   <button
                     id="send"
                     type="submit"

@@ -37,13 +37,13 @@ export function createTimelineStore() {
     return messageId;
   }
 
-  function update(id, patch) {
+  function update(id, patch = {}) {
     if (!map.has(id)) {
       return null;
     }
     const entry = map.get(id);
     const next = { ...entry, ...patch };
-    if (patch.metadata) {
+    if (patch && typeof patch.metadata === "object" && patch.metadata !== null) {
       const merged = { ...entry.metadata };
       Object.entries(patch.metadata).forEach(([key, value]) => {
         if (value === undefined || value === null) {
@@ -55,10 +55,17 @@ export function createTimelineStore() {
       next.metadata = merged;
     }
     map.set(id, next);
-    if (next.row) {
-      next.row.dataset.rawText = next.text || "";
-      next.row.dataset.timestamp = next.timestamp || "";
-      next.row.dataset.role = next.role || entry.role;
+    const { row } = next;
+    if (row && row.isConnected) {
+      if (next.text !== entry.text) {
+        row.dataset.rawText = next.text || "";
+      }
+      if (next.timestamp !== entry.timestamp) {
+        row.dataset.timestamp = next.timestamp || "";
+      }
+      if (next.role && next.role !== entry.role) {
+        row.dataset.role = next.role;
+      }
     }
     return next;
   }

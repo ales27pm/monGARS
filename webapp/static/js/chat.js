@@ -63,13 +63,13 @@
       }
       return messageId;
     }
-    function update(id, patch) {
+    function update(id, patch = {}) {
       if (!map.has(id)) {
         return null;
       }
       const entry = map.get(id);
       const next = { ...entry, ...patch };
-      if (patch.metadata) {
+      if (patch && typeof patch.metadata === "object" && patch.metadata !== null) {
         const merged = { ...entry.metadata };
         Object.entries(patch.metadata).forEach(([key, value]) => {
           if (value === void 0 || value === null) {
@@ -81,10 +81,17 @@
         next.metadata = merged;
       }
       map.set(id, next);
-      if (next.row) {
-        next.row.dataset.rawText = next.text || "";
-        next.row.dataset.timestamp = next.timestamp || "";
-        next.row.dataset.role = next.role || entry.role;
+      const { row } = next;
+      if (row && row.isConnected) {
+        if (next.text !== entry.text) {
+          row.dataset.rawText = next.text || "";
+        }
+        if (next.timestamp !== entry.timestamp) {
+          row.dataset.timestamp = next.timestamp || "";
+        }
+        if (next.role && next.role !== entry.role) {
+          row.dataset.role = next.role;
+        }
       }
       return next;
     }
@@ -180,6 +187,10 @@
       return "";
     }
     const value = String(text);
+    const fallback = () => {
+      const escaped = escapeHTML(value);
+      return escaped.replace(/\n/g, "<br>");
+    };
     try {
       if (window.marked && typeof window.marked.parse === "function") {
         const rendered = window.marked.parse(value);
@@ -189,13 +200,12 @@
             USE_PROFILES: { html: true }
           });
         }
-        return rendered;
+        return fallback();
       }
     } catch (err) {
       console.warn("Markdown rendering failed", err);
     }
-    const escaped = escapeHTML(value);
-    return escaped.replace(/\n/g, "<br>");
+    return fallback();
   }
 
   // webapp/static/js/src/ui/chatUi.js
@@ -655,6 +665,55 @@
         timelineStore.clear();
       }
       if (state.historyBootstrapped && !replace) {
+        state.bootstrapping = true;
+        const rows = Array.from(
+          elements.transcript.querySelectorAll(".chat-row")
+        );
+        rows.forEach((row) => {
+          const existingId = row.dataset.messageId;
+          if (existingId && timelineStore.map.has(existingId)) {
+            const currentRole = row.dataset.role || "";
+            if (currentRole) {
+              decorateRow(row, currentRole);
+            }
+            return;
+          }
+          const bubble = row.querySelector(".chat-bubble");
+          const meta = (bubble == null ? void 0 : bubble.querySelector(".chat-meta")) || null;
+          const role =
+            row.dataset.role ||
+            (row.classList.contains("chat-user")
+              ? "user"
+              : row.classList.contains("chat-assistant")
+              ? "assistant"
+              : "system");
+          const text =
+            row.dataset.rawText && row.dataset.rawText.length > 0
+              ? row.dataset.rawText
+              : bubble
+              ? extractBubbleText(bubble)
+              : row.textContent.trim();
+          const timestamp =
+            row.dataset.timestamp && row.dataset.timestamp.length > 0
+              ? row.dataset.timestamp
+              : meta
+              ? meta.textContent.trim()
+              : nowISO();
+          const messageId = timelineStore.register({
+            id: existingId,
+            role,
+            text,
+            timestamp,
+            row
+          });
+          row.dataset.messageId = messageId;
+          row.dataset.role = role;
+          row.dataset.rawText = text;
+          row.dataset.timestamp = timestamp;
+          decorateRow(row, role);
+        });
+        state.bootstrapping = false;
+        reapplyTranscriptFilter();
         return;
       }
       state.bootstrapping = true;
