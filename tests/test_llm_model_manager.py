@@ -1,8 +1,9 @@
 import json
+import os
 
 import pytest
 
-from monGARS.config import Settings
+from monGARS.config import get_settings
 from monGARS.core import model_manager
 from monGARS.core.model_manager import LLMModelManager
 
@@ -13,10 +14,14 @@ def _write_config(path, data):
 
 
 def _build_settings(**overrides):
-    base = Settings()
-    merged = {"llm_models_profile": "default"}
-    merged.update(overrides)
-    return base.model_copy(update=merged)
+    os.environ.setdefault("SECRET_KEY", "not-for-production")
+    base = get_settings()
+    merged_overrides = {
+        "llm_models_profile": "default",
+        "debug": True,
+        **overrides,
+    }
+    return base.model_copy(update=merged_overrides)
 
 
 def test_model_manager_loads_profile_from_config(tmp_path):
