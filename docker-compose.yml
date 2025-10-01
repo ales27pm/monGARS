@@ -46,10 +46,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      vault:
-        condition: service_healthy
-      mlflow:
-        condition: service_healthy
     ports:
       - "${API_PORT:-8000}:8000"
     env_file:
