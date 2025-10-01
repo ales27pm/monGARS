@@ -13,9 +13,9 @@ export function escapeHTML(str) {
 }
 
 export function htmlToText(html) {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container.textContent || "";
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  return doc.body.textContent || "";
 }
 
 export function extractBubbleText(bubble) {
