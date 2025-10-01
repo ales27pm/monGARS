@@ -59,10 +59,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - >-
-          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',8000,timeout=5);
-          conn.request('GET','/healthz');
-          sys.exit(0 if conn.getresponse().status == 200 else 1)"
+        - "curl -fsS http://127.0.0.1:8000/healthz >/dev/null || exit 1"
       interval: 30s
       timeout: 10s
       retries: 5
