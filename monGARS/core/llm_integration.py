@@ -74,6 +74,13 @@ class AsyncTTLCache:
 _RESPONSE_CACHE = AsyncTTLCache()
 
 
+def _pseudonymize_user_id(user_id: str) -> str:
+    """Return a deterministic hash that redacts the raw user identifier."""
+
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+    return digest[:10]
+
+
 class OllamaNotAvailableError(RuntimeError):
     """Raised when the optional Ollama client is unavailable."""
 
@@ -126,7 +133,8 @@ class CircuitBreaker:
 class LLMIntegration:
     """Adapter responsible for generating responses via local or remote LLMs."""
 
-    SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists", "skipped"})
+    SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists"})
+    SKIPPED_ALLOWED_DETAILS: frozenset[str] = frozenset({"already_ensured"})
     FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
 
     def __init__(self) -> None:
@@ -323,12 +331,17 @@ class LLMIntegration:
                 if status.action in self.FAILURE_ACTIONS:
                     logger.warning("llm.models.ensure.failed", extra=log_payload)
                     all_success = False
-                elif status.action in {"installed", "exists"}:
+                elif status.action in self.SUCCESS_ACTIONS:
                     logger.info("llm.models.ensure.ready", extra=log_payload)
+                elif status.action == "skipped":
+                    if status.detail in self.SKIPPED_ALLOWED_DETAILS:
+                        logger.debug("llm.models.ensure.skipped", extra=log_payload)
+                    else:
+                        logger.warning("llm.models.ensure.skipped", extra=log_payload)
+                        all_success = False
                 else:
                     logger.debug("llm.models.ensure.skipped", extra=log_payload)
-                    if status.action not in self.SUCCESS_ACTIONS:
-                        all_success = False
+                    all_success = False
             self._models_ready = bool(report.statuses) and all_success
 
     def _build_ollama_options(self, definition: ModelDefinition) -> dict[str, Any]:
@@ -425,6 +438,31 @@ class LLMIntegration:
         else:
             await self._ensure_local_models()
             model_definition = self._model_manager.get_model_definition(task_type)
+            try:
+                await self._model_manager.ensure_models_installed(
+                    [model_definition.role]
+                )
+            except Exception:
+                logger.exception(
+                    "llm.models.ensure.error",
+                    extra={
+                        "role": model_definition.role,
+                        "provider": model_definition.provider,
+                    },
+                )
+                return await self._fail(cache_key, "Model provisioning failed.")
+            if model_definition.provider.lower() != "ollama":
+                logger.warning(
+                    "llm.local.provider.unsupported",
+                    extra={
+                        "role": model_definition.role,
+                        "provider": model_definition.provider,
+                    },
+                )
+                return await self._fail(
+                    cache_key,
+                    f"Local provider unsupported: {model_definition.provider}",
+                )
             model_name = model_definition.name
             normalized_task = task_type.lower()
             if normalized_task == "general":
@@ -625,9 +663,10 @@ class LLMIntegration:
     async def chat(self, user_id: str, prompt: str, stream: bool = True) -> str | None:
         """Generate chat responses and publish UI streaming events."""
 
+        user_hash = _pseudonymize_user_id(user_id)
         logger.info(
             "llm.chat.start",
-            extra={"user_id": user_id, "stream": stream},
+            extra={"user_id_hash": user_hash, "stream": stream},
         )
         try:
             if stream:
@@ -660,9 +699,10 @@ class LLMIntegration:
             )
             return text
         except asyncio.CancelledError:
+            user_hash = _pseudonymize_user_id(user_id)
             logger.info(
                 "llm.chat.cancelled",
-                extra={"user_id": user_id, "stream": stream},
+                extra={"user_id_hash": user_hash, "stream": stream},
             )
             await event_bus().publish(
                 make_event(
@@ -673,9 +713,10 @@ class LLMIntegration:
             )
             raise
         except Exception as exc:
+            user_hash = _pseudonymize_user_id(user_id)
             logger.exception(
                 "llm.chat.error",
-                extra={"user_id": user_id, "stream": stream},
+                extra={"user_id_hash": user_hash, "stream": stream},
             )
             await event_bus().publish(
                 make_event(
