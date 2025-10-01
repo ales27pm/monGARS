@@ -1,33 +1,59 @@
 from collections import deque
+from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
+from monGARS import config
 from monGARS.core.mimicry import MimicryModule
 
 
-def _setup_in_memory_profile(
-    module: MimicryModule, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def fake_get_profile(user_id: str) -> dict:
-        return module.user_profiles.get(user_id) or {
-            "long_term": {},
-            "short_term": deque(maxlen=module.history_length),
-        }
+@dataclass
+class _InMemoryCache:
+    store: dict[str, dict]
 
-    async def fake_update_profile_db(user_id: str, profile: dict) -> None:
-        return None
+    async def get(self, key: str) -> dict | None:
+        return self.store.get(key)
 
-    monkeypatch.setattr(module, "_get_profile", fake_get_profile)
-    monkeypatch.setattr(module, "_update_profile_db", fake_update_profile_db)
+    async def set(self, key: str, value: dict, ttl: int | None = None) -> None:
+        self.store[key] = value
+
+
+class _InMemoryPreferences:
+    def __init__(self) -> None:
+        self._data: dict[str, dict] = {}
+
+    async def get_user_preferences(self, user_id: str) -> SimpleNamespace | None:
+        if user_id not in self._data:
+            return None
+        return SimpleNamespace(user_id=user_id, interaction_style=self._data[user_id])
+
+    async def upsert_user_preferences(
+        self,
+        *,
+        user_id: str,
+        interaction_style: dict,
+        preferred_topics: dict | None = None,
+    ) -> None:
+        self._data[user_id] = interaction_style
+
+
+@pytest.fixture
+def mimicry_module(monkeypatch: pytest.MonkeyPatch) -> MimicryModule:
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    config.get_settings.cache_clear()
+    cache = _InMemoryCache(store={})
+    preferences = _InMemoryPreferences()
+    module = MimicryModule(persistence_repo=preferences, profile_cache=cache)
+    yield module
+    config.get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
 async def test_update_profile_uses_message_and_response(
-    monkeypatch: pytest.MonkeyPatch,
+    mimicry_module: MimicryModule,
 ) -> None:
-    module = MimicryModule()
-
-    _setup_in_memory_profile(module, monkeypatch)
+    module = mimicry_module
 
     interaction = {
         "message": "Bonjour et merci pour votre aide précieuse",
@@ -36,20 +62,18 @@ async def test_update_profile_uses_message_and_response(
 
     profile = await module.update_profile("user-positive", interaction)
 
-    assert profile["long_term"]["sentence_length"] == 7
+    assert profile["long_term"]["sentence_length"] == pytest.approx(7.0)
     assert profile["long_term"]["positive_sentiment"] > 0.5
     last_entry = profile["short_term"][-1]
-    assert last_entry["sentence_length"] == 7
+    assert last_entry["sentence_length"] == pytest.approx(7.0)
     assert last_entry["positive_sentiment"] > 0.5
 
 
 @pytest.mark.asyncio
 async def test_update_profile_detects_negative_sentiment(
-    monkeypatch: pytest.MonkeyPatch,
+    mimicry_module: MimicryModule,
 ) -> None:
-    module = MimicryModule()
-
-    _setup_in_memory_profile(module, monkeypatch)
+    module = mimicry_module
 
     interaction = {
         "message": "Je suis contrarié par la situation actuelle",
@@ -58,16 +82,15 @@ async def test_update_profile_detects_negative_sentiment(
 
     profile = await module.update_profile("user-negative", interaction)
 
-    assert profile["long_term"]["sentence_length"] == 7
+    assert profile["long_term"]["sentence_length"] == pytest.approx(7.0)
     assert profile["long_term"]["positive_sentiment"] < 0.5
 
 
 @pytest.mark.asyncio
 async def test_update_profile_neutral_sentiment(
-    monkeypatch: pytest.MonkeyPatch,
+    mimicry_module: MimicryModule,
 ) -> None:
-    module = MimicryModule()
-    _setup_in_memory_profile(module, monkeypatch)
+    module = mimicry_module
 
     interaction = {
         "message": "La météo est acceptable aujourd'hui.",
@@ -82,15 +105,96 @@ async def test_update_profile_neutral_sentiment(
 
 @pytest.mark.asyncio
 async def test_update_profile_empty_input(
-    monkeypatch: pytest.MonkeyPatch,
+    mimicry_module: MimicryModule,
 ) -> None:
-    module = MimicryModule()
-    _setup_in_memory_profile(module, monkeypatch)
+    module = mimicry_module
 
     interaction = {"message": "", "response": ""}
 
     profile = await module.update_profile("user-empty", interaction)
 
-    assert profile["long_term"]["sentence_length"] == 0
+    assert profile["long_term"]["sentence_length"] == pytest.approx(0.0)
     assert profile["long_term"]["positive_sentiment"] == pytest.approx(0.5)
-    assert profile["short_term"][-1]["sentence_length"] == 0
+    assert profile["short_term"][-1]["sentence_length"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_update_profile_tracks_question_and_exclamation(
+    mimicry_module: MimicryModule,
+) -> None:
+    module = mimicry_module
+
+    interaction = {
+        "message": "Pouvez-vous expliquer ce point ? J'ai encore une question !",
+        "response": "Je vais détailler la marche à suivre.",
+    }
+
+    profile = await module.update_profile("user-curious", interaction)
+
+    assert profile["long_term"]["question_ratio"] > 0.4
+    assert profile["long_term"]["exclamation_ratio"] > 0.4
+
+
+@pytest.mark.asyncio
+async def test_adapt_response_style_mirrors_questions(
+    mimicry_module: MimicryModule,
+) -> None:
+    module = mimicry_module
+
+    interaction = {
+        "message": "Pourquoi cela se produit-il ? Pouvez-vous préciser ?",
+        "response": "Je vais regarder cela.",
+    }
+
+    await module.update_profile("user-questions", interaction)
+
+    adapted = await module.adapt_response_style(
+        "Voici ce que je vois.", "user-questions"
+    )
+
+    assert adapted.endswith("?")
+
+
+@pytest.mark.asyncio
+async def test_adapt_response_style_supports_negative_sentiment(
+    mimicry_module: MimicryModule,
+) -> None:
+    module = mimicry_module
+
+    interaction = {
+        "message": "Je suis profondément insatisfait.",
+        "response": "C'est un vrai problème.",
+    }
+
+    await module.update_profile("user-sad", interaction)
+
+    adapted = await module.adapt_response_style(
+        "Je vais analyser la situation.", "user-sad"
+    )
+
+    assert "difficile" in adapted
+    assert adapted.endswith((".", "!"))
+
+
+@pytest.mark.asyncio
+async def test_shared_cache_across_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    config.get_settings.cache_clear()
+    shared_cache = _InMemoryCache(store={})
+    preferences = _InMemoryPreferences()
+    module_a = MimicryModule(persistence_repo=preferences, profile_cache=shared_cache)
+    module_b = MimicryModule(persistence_repo=preferences, profile_cache=shared_cache)
+
+    interaction = {
+        "message": "Merci pour votre assistance continue.",
+        "response": "Je suis heureux de soutenir vos recherches.",
+    }
+
+    await module_a.update_profile("shared-user", interaction)
+    preferences._data.clear()
+
+    cached_profile = await module_b._get_profile("shared-user")
+
+    assert len(cached_profile["short_term"]) == 1
+    assert cached_profile["long_term"]["sentence_length"] > 0
+    config.get_settings.cache_clear()
