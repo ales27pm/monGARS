@@ -12,7 +12,7 @@ x-app-environment: &app-environment
   OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
   VAULT_URL: http://vault:8200
   VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
-  WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-["http://localhost:8000","http://localhost:8001"]}
+  WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-http://localhost:8000,http://localhost:8001}
 
 services:
   migrations:
