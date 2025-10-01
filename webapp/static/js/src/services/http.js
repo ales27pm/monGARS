@@ -2,11 +2,17 @@ import { apiUrl } from "../config.js";
 
 export function createHttpService({ config, auth }) {
   async function authorisedFetch(path, options = {}) {
-    const jwt = await auth.getJwt();
-    const headers = {
-      ...(options.headers || {}),
-      Authorization: `Bearer ${jwt}`,
-    };
+    let jwt;
+    try {
+      jwt = await auth.getJwt();
+    } catch (err) {
+      // Surface a consistent error and preserve abort semantics
+      throw new Error("Authorization failed: missing or unreadable JWT");
+    }
+    const headers = new Headers(options.headers || {});
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${jwt}`);
+    }
     return fetch(apiUrl(config, path), { ...options, headers });
   }
 
