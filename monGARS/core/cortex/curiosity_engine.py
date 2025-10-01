@@ -5,8 +5,9 @@ import inspect
 import logging
 import math
 import types
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from typing import Any, Callable
 
 import httpx
 import spacy
@@ -37,6 +38,18 @@ _external_research_counter = meter.create_counter(
     unit="1",
     description="Number of external research requests initiated by the curiosity engine.",
 )
+_kg_lookup_counter = meter.create_counter(
+    "curiosity_kg_lookup_events",
+    unit="1",
+    description="Knowledge graph lookup hits and misses for curiosity gap detection.",
+)
+_research_cache_counter = meter.create_counter(
+    "curiosity_research_cache_events",
+    unit="1",
+    description="Cache events for external research queries triggered by the curiosity engine.",
+)
+
+AsyncClientFactory = Callable[[], AsyncIterator[httpx.AsyncClient]]
 
 
 def _tokenize(text: str) -> set[str]:
@@ -51,7 +64,12 @@ class CuriosityEngine:
     _MAX_HISTORY_CANDIDATES = 50
     _HISTORY_KEY_PRIORITY: tuple[str, ...] = ("query", "message", "prompt", "text")
 
-    def __init__(self, iris: Iris | None = None) -> None:
+    def __init__(
+        self,
+        iris: Iris | None = None,
+        *,
+        http_client_factory: AsyncClientFactory | None = None,
+    ) -> None:
         """Initialise the curiosity engine with NLP and embedding utilities."""
 
         self.embedding_system = EmbeddingSystem()
@@ -83,6 +101,28 @@ class CuriosityEngine:
         self._kg_cache_lock = asyncio.Lock()
         self._kg_inflight_lock = asyncio.Lock()
         self._kg_inflight: dict[str, asyncio.Future[bool]] = {}
+        self._research_cache_ttl = max(
+            30, getattr(settings, "curiosity_research_cache_ttl", 900)
+        )
+        self._research_cache_max_entries = max(
+            8, getattr(settings, "curiosity_research_cache_max_entries", 256)
+        )
+        self._research_cache: TTLCache[str, str] = TTLCache(
+            maxsize=self._research_cache_max_entries,
+            ttl=self._research_cache_ttl,
+        )
+        self._research_cache_lock = asyncio.Lock()
+
+        if http_client_factory is None:
+
+            @asynccontextmanager
+            async def default_http_client_factory() -> AsyncIterator[httpx.AsyncClient]:
+                async with httpx.AsyncClient() as client:
+                    yield client
+
+            self._http_client_factory = default_http_client_factory
+        else:
+            self._http_client_factory = http_client_factory
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
@@ -391,10 +431,13 @@ class CuriosityEngine:
 
         loop = asyncio.get_running_loop()
         cached, missing = await self._collect_cache_hits(normalized_map.keys())
+        if cached:
+            _kg_lookup_counter.add(len(cached), {"outcome": "hit"})
         waiters, pending = await self._register_inflight_waiters(missing, loop)
 
         fetched_results: dict[str, bool] = {}
         if pending:
+            _kg_lookup_counter.add(len(pending), {"outcome": "miss"})
             try:
                 fetched_results = await self._query_kg_entities(pending)
             except asyncio.CancelledError:
@@ -683,10 +726,43 @@ class CuriosityEngine:
     async def _perform_research(self, query: str) -> str:
         """Fetch additional context from the document service or Iris."""
 
+        normalised_query = query.strip()
+        if not normalised_query:
+            return "Aucun contexte supplémentaire trouvé."
+
+        cached_response = await self._get_cached_research(normalised_query)
+        if cached_response is not None:
+            _research_cache_counter.add(1, {"event": "hit"})
+            return cached_response
+
+        _research_cache_counter.add(1, {"event": "miss"})
         _external_research_counter.add(1, {"channel": "document_service"})
 
-        async with httpx.AsyncClient() as client:
-            try:
+        document_summary = await self._fetch_document_summary(normalised_query)
+        if document_summary:
+            enriched = f"Contexte supplémentaire: {document_summary}"
+            await self._set_cached_research(normalised_query, enriched)
+            return enriched
+
+        logger.info(
+            "curiosity.iris_fallback",
+            extra={"query_len": len(normalised_query)},
+        )
+        _external_research_counter.add(1, {"channel": "iris"})
+        result = await self.iris.search(normalised_query)
+        if result:
+            enriched = f"Contexte supplémentaire: {result}"
+            await self._set_cached_research(normalised_query, enriched)
+            return enriched
+        fallback = "Aucun contexte supplémentaire trouvé."
+        await self._set_cached_research(normalised_query, fallback)
+        return fallback
+
+    async def _fetch_document_summary(self, query: str) -> str:
+        """Return a concatenated summary from the document retrieval service."""
+
+        try:
+            async with self._http_client_factory() as client:
                 response = await client.post(
                     f"{settings.DOC_RETRIEVAL_URL}/api/search",
                     json={"query": query},
@@ -694,23 +770,41 @@ class CuriosityEngine:
                 )
                 response.raise_for_status()
                 documents = response.json().get("documents", [])
-                if documents:
-                    summary = " ".join(
-                        doc.get("summary", "")
-                        for doc in documents
-                        if doc.get("summary")
-                    )
-                    if summary:
-                        return f"Contexte supplémentaire: {summary}"
-            except Exception as exc:  # pragma: no cover - network optional
-                logger.debug("Document retrieval error: %s", exc)
+        except httpx.HTTPStatusError as exc:  # pragma: no cover - depends on network
+            logger.warning(
+                "curiosity.document_service.status_error",
+                extra={
+                    "status_code": exc.response.status_code,
+                    "query_len": len(query),
+                },
+            )
+            return ""
+        except Exception as exc:  # pragma: no cover - network optional
+            logger.debug("Document retrieval error: %s", exc)
+            return ""
 
-        logger.info(
-            "curiosity.iris_fallback",
-            extra={"query_len": len(query)},
-        )
-        _external_research_counter.add(1, {"channel": "iris"})
-        result = await self.iris.search(query)
-        if result:
-            return f"Contexte supplémentaire: {result}"
-        return "Aucun contexte supplémentaire trouvé."
+        return self._summarise_documents(documents)
+
+    async def _get_cached_research(self, query: str) -> str | None:
+        """Return a cached research result for ``query`` if available."""
+
+        async with self._research_cache_lock:
+            return self._research_cache.get(query)
+
+    async def _set_cached_research(self, query: str, value: str) -> None:
+        """Store ``value`` in the research cache for ``query``."""
+
+        async with self._research_cache_lock:
+            self._research_cache[query] = value
+
+    def _summarise_documents(self, documents: Sequence[Mapping[str, Any]]) -> str:
+        """Combine document summaries into a compact string."""
+
+        cleaned_summaries: list[str] = []
+        for document in documents:
+            if not isinstance(document, Mapping):
+                continue
+            summary = document.get("summary")
+            if isinstance(summary, str) and (stripped := summary.strip()):
+                cleaned_summaries.append(stripped)
+        return " ".join(cleaned_summaries)

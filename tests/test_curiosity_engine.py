@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -536,3 +537,74 @@ async def test_perform_research_records_iris_fallback_channel(monkeypatch):
         (1, {"channel": "document_service"}),
         (1, {"channel": "iris"}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_perform_research_uses_cache(monkeypatch):
+    cache_events: list[tuple[int, dict[str, str]]] = []
+    research_events: list[tuple[int, dict[str, str]]] = []
+
+    def record_cache(amount: int, attributes: dict[str, str]) -> None:
+        cache_events.append((amount, attributes.copy()))
+
+    def record_research(amount: int, attributes: dict[str, str]) -> None:
+        research_events.append((amount, attributes.copy()))
+
+    response_calls: list[str] = []
+
+    class CachedResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"documents": [{"summary": "Résumé depuis le service"}]}
+
+    class RecordingClient:
+        async def post(self, url: str, *, json: dict, timeout: int) -> CachedResponse:
+            response_calls.append(json["query"])
+            return CachedResponse()
+
+        async def __aenter__(self) -> "RecordingClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    async def client_factory():  # pragma: no cover - helper for context manager
+        client = RecordingClient()
+        try:
+            yield client
+        finally:
+            return
+
+    engine = CuriosityEngine(http_client_factory=asynccontextmanager(client_factory))
+
+    monkeypatch.setattr(curiosity_module._research_cache_counter, "add", record_cache)
+    monkeypatch.setattr(
+        curiosity_module._external_research_counter, "add", record_research
+    )
+    monkeypatch.setattr(engine.iris, "search", lambda query: "")
+
+    result_first = await engine._perform_research("Analyse des réseaux")
+    result_second = await engine._perform_research("Analyse des réseaux")
+
+    assert result_first == result_second
+    assert response_calls == ["Analyse des réseaux"]
+    assert cache_events == [
+        (1, {"event": "miss"}),
+        (1, {"event": "hit"}),
+    ]
+    assert research_events == [(1, {"channel": "document_service"})]
+
+
+def test_summarise_documents_filters_invalid_payloads():
+    engine = CuriosityEngine()
+
+    documents = [
+        {"summary": " Première synthèse. "},
+        {"summary": ""},
+        {"not_summary": "ignored"},
+        "invalid",
+    ]
+
+    assert engine._summarise_documents(documents) == "Première synthèse."
