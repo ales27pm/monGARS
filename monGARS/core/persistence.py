@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from sqlalchemy import desc, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from tenacity import (
     AsyncRetrying,
@@ -17,6 +18,7 @@ from ..init_db import (
     ConversationHistory,
     Interaction,
     UserAccount,
+    UserPreferences,
     async_session_factory,
 )
 
@@ -131,6 +133,46 @@ class PersistenceRepository:
 
         return await self._execute_with_retry(
             operation, operation_name="get_user_by_username"
+        )
+
+    async def get_user_preferences(self, user_id: str) -> UserPreferences | None:
+        async def operation(session):
+            result = await session.execute(
+                select(UserPreferences).where(UserPreferences.user_id == user_id)
+            )
+            return result.scalar_one_or_none()
+
+        return await self._execute_with_retry(
+            operation, operation_name="get_user_preferences"
+        )
+
+    async def upsert_user_preferences(
+        self,
+        *,
+        user_id: str,
+        interaction_style: dict,
+        preferred_topics: dict | None = None,
+    ) -> None:
+        topics = preferred_topics or {}
+
+        async def operation(session) -> None:
+            async with session.begin():
+                stmt = insert(UserPreferences).values(
+                    user_id=user_id,
+                    interaction_style=interaction_style,
+                    preferred_topics=topics,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[UserPreferences.user_id],
+                    set_={
+                        "interaction_style": interaction_style,
+                        "preferred_topics": topics,
+                    },
+                )
+                await session.execute(stmt)
+
+        await self._execute_with_retry(
+            operation, operation_name="upsert_user_preferences"
         )
 
     async def create_user(
