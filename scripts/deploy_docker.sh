@@ -68,60 +68,65 @@ ensure_env_file() {
 import secrets
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
+
+WEAK_DEFAULTS = {
+    "SECRET_KEY": {"dev-secret-change-me", ""},
+    "DJANGO_SECRET_KEY": {"django-insecure-change-me", ""},
+    "DB_PASSWORD": {"changeme", ""},
+    "VAULT_TOKEN": {"dev-root-token"},
+}
+
+GENERATORS = {
+    "SECRET_KEY": lambda: secrets.token_urlsafe(64),
+    "DJANGO_SECRET_KEY": lambda: secrets.token_urlsafe(64),
+    "DB_PASSWORD": lambda: secrets.token_urlsafe(24),
+    "VAULT_TOKEN": lambda: secrets.token_hex(16),
+}
 
 env_path = Path(sys.argv[1])
-content = env_path.read_text().splitlines()
-entries: Dict[str, str] = {}
-for line in content:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in line:
-        continue
-    key, _, value = line.partition("=")
-    entries[key] = value
+lines = env_path.read_text().splitlines()
 
-def requires_refresh(value: Optional[str]) -> bool:
-    if value is None:
-        return True
-    candidate = value.strip()
-    if not candidate:
-        return True
-    return candidate in {
-        "changeme",
-        "dev-secret-change-me",
-        "django-insecure-change-me",
-    }
+# Parse only simple KEY=VALUE lines; preserve others verbatim.
+def parse_kv(line: str):
+    if "=" not in line or line.lstrip().startswith("#"):
+        return None
+    key, _, value = line.partition("=")
+    return key, value
+
+values: Dict[str, str] = {}
+for line in lines:
+    kv = parse_kv(line)
+    if kv:
+        k, v = kv
+        values[k] = v
 
 updates: Dict[str, str] = {}
-if requires_refresh(entries.get("SECRET_KEY")):
-    updates["SECRET_KEY"] = secrets.token_urlsafe(64)
-if requires_refresh(entries.get("DJANGO_SECRET_KEY")):
-    updates["DJANGO_SECRET_KEY"] = secrets.token_urlsafe(64)
-if requires_refresh(entries.get("DB_PASSWORD")):
-    updates["DB_PASSWORD"] = secrets.token_urlsafe(24)
-if requires_refresh(entries.get("VAULT_TOKEN")):
-    updates["VAULT_TOKEN"] = secrets.token_hex(16)
+for key, weak_set in WEAK_DEFAULTS.items():
+    current = values.get(key)
+    if current is not None and current in weak_set:
+        updates[key] = GENERATORS[key]()
 
 if not updates:
     sys.exit(0)
 
-updated_lines = []
-for line in content:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in line:
-        updated_lines.append(line)
+new_lines = []
+for line in lines:
+    kv = parse_kv(line)
+    if not kv:
+        new_lines.append(line)
         continue
-    key, _, _ = line.partition("=")
+    key, _ = kv
     if key in updates:
-        updated_lines.append(f"{key}={updates[key]}")
-        updates.pop(key)
+        new_lines.append(f"{key}={updates[key]}")
+        updates.pop(key, None)
     else:
-        updated_lines.append(line)
+        new_lines.append(line)
 
-for key, value in updates.items():
-    updated_lines.append(f"{key}={value}")
+for key, val in updates.items():
+    new_lines.append(f"{key}={val}")
 
-env_path.write_text("\n".join(updated_lines) + "\n")
+env_path.write_text("\n".join(new_lines) + "\n")
 print("Refreshed sensitive defaults in", env_path)
 PY
 }
