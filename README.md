@@ -125,6 +125,10 @@ profiles:
 - `--with-ray` provisions a Ray Serve control plane listening on
   `${RAY_HTTP_PORT:-8002}`; toggle `USE_RAY_SERVE=true` and update
   `RAY_SERVE_URL` in `.env` if you expose a different port.
+- Base images ship with Git, Git LFS, FFmpeg, spaCy's `fr_core_news_sm` model,
+  and transformer tooling (`accelerate`, `peft`, `transformers`, `llm2vec`) so
+  containers can pull adapters, process multimedia context, and invoke LLMs out
+  of the box.
 
 Use `scripts/deploy_docker.sh ps` to inspect container health and
 `scripts/deploy_docker.sh destroy` when you need a clean slate (volumes and
