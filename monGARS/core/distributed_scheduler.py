@@ -244,6 +244,7 @@ class DistributedScheduler:
             for index in range(self.concurrency)
         ]
         try:
+            await self._emit_metrics_log(force=True)
             while self._running:
                 await asyncio.sleep(0.1)
                 await self._update_metrics()
