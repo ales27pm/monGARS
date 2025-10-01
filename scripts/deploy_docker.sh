@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -z "${BASH_VERSINFO-}" ]; then
+  echo "[monGARS] This script must be run with Bash (e.g., bash scripts/deploy_docker.sh)" >&2
+  exit 1
+fi
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
   echo "[monGARS] Bash 4.4 or newer is required" >&2
   exit 1
