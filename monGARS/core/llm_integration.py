@@ -322,7 +322,13 @@ class LLMIntegration:
                     logger.info("llm.models.ensure.ready", extra=log_payload)
                 else:
                     logger.debug("llm.models.ensure.skipped", extra=log_payload)
-            self._models_ready = True
+            success_actions = {"installed", "exists", "skipped"}
+            if report.statuses and all(
+                status.action in success_actions for status in report.statuses
+            ):
+                self._models_ready = True
+            else:
+                self._models_ready = False
 
     def _build_ollama_options(self, definition: ModelDefinition) -> dict[str, Any]:
         base_options = {

@@ -356,9 +356,9 @@ class LLMModelManager:
         self, role: str, payload: Any
     ) -> ModelDefinition | None:
         if isinstance(payload, str):
-            return _DEFAULT_MODELS.get(
-                role.lower(), _DEFAULT_MODELS["general"]
-            ).with_name(payload)
+            role_key = role.lower()
+            base_definition = _DEFAULT_MODELS.get(role_key, _DEFAULT_MODELS["general"])
+            return replace(base_definition, role=role_key, name=str(payload))
         if not isinstance(payload, Mapping):
             return None
         name_value = payload.get("name") or payload.get("model") or payload.get("id")
@@ -374,6 +374,13 @@ class LLMModelManager:
         auto_download = payload.get("auto_download")
         if auto_download is None:
             auto_download_flag = True
+        elif isinstance(auto_download, str):
+            auto_download_flag = auto_download.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "on",
+            }
         else:
             auto_download_flag = bool(auto_download)
         description = payload.get("description")

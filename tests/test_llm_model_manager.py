@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from monGARS.config import get_settings
+from monGARS.config import Settings
 from monGARS.core import model_manager
 from monGARS.core.model_manager import LLMModelManager
 
@@ -13,7 +13,7 @@ def _write_config(path, data):
 
 
 def _build_settings(**overrides):
-    base = get_settings()
+    base = Settings()
     merged = {"llm_models_profile": "default"}
     merged.update(overrides)
     return base.model_copy(update=merged)
@@ -31,7 +31,7 @@ def test_model_manager_loads_profile_from_config(tmp_path):
                     "coding": {
                         "name": "ollama/custom-coder",
                         "provider": "ollama",
-                        "auto_download": False,
+                        "auto_download": "false",
                     },
                 }
             }
@@ -53,6 +53,26 @@ def test_model_manager_loads_profile_from_config(tmp_path):
     coding = manager.get_model_definition("coding")
     assert coding.name == "ollama/custom-coder"
     assert coding.auto_download is False
+
+
+def test_model_definition_string_entries_preserve_role(tmp_path):
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "summarisation": "ollama/summarise",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+
+    manager = LLMModelManager(settings)
+
+    definition = manager.get_model_definition("summarisation")
+    assert definition.role == "summarisation"
+    assert definition.name == "ollama/summarise"
 
 
 @pytest.mark.asyncio
