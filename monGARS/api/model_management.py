@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -19,17 +18,6 @@ from monGARS.core.model_manager import LLMModelManager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
-
-
-def _normalise_roles(roles: Iterable[str] | None) -> list[str] | None:
-    if roles is None:
-        return None
-    normalised: list[str] = []
-    for role in roles:
-        cleaned = role.strip().lower()
-        if cleaned and cleaned not in normalised:
-            normalised.append(cleaned)
-    return normalised or None
 
 
 @router.get("", response_model=LLMModelConfigurationResponse)
@@ -64,7 +52,7 @@ async def provision_models(
 ) -> LLMModelProvisionReportResponse:
     """Ensure local providers have the configured models for the requested roles."""
 
-    roles = _normalise_roles(payload.roles)
+    roles = payload.roles
     try:
         report = await manager.ensure_models_installed(roles, force=payload.force)
     except Exception as exc:  # pragma: no cover - provider failure bubble-up

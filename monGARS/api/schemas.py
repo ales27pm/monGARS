@@ -253,19 +253,19 @@ class LLMModelProvisionRequest(BaseModel):
     @field_validator("roles")
     @classmethod
     def validate_roles(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
+        if not value:
             return None
+        seen: set[str] = set()
         normalised: list[str] = []
         for role in value:
             cleaned = role.strip()
             if not cleaned:
                 raise ValueError("roles cannot contain empty values")
             lowered = cleaned.lower()
-            if lowered not in normalised:
+            if lowered not in seen:
+                seen.add(lowered)
                 normalised.append(lowered)
-        if not normalised:
-            raise ValueError("roles must include at least one entry")
-        return normalised
+        return normalised or None
 
 
 __all__ = [

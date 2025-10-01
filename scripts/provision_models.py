@@ -6,8 +6,10 @@ import argparse
 import asyncio
 import json
 import logging
-from typing import Iterable
 
+from pydantic import ValidationError
+
+from monGARS.api.schemas import LLMModelProvisionRequest
 from monGARS.config import get_settings
 from monGARS.core.model_manager import LLMModelManager
 
@@ -37,22 +39,19 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _normalise_roles(roles: Iterable[str] | None) -> list[str] | None:
-    if roles is None:
-        return None
-    normalised: list[str] = []
-    for role in roles:
-        cleaned = role.strip().lower()
-        if cleaned and cleaned not in normalised:
-            normalised.append(cleaned)
-    return normalised or None
-
-
 async def _provision_models(args: argparse.Namespace) -> int:
     settings = get_settings()
     manager = LLMModelManager(settings)
-    roles = _normalise_roles(args.roles)
-    report = await manager.ensure_models_installed(roles, force=args.force)
+    try:
+        request = LLMModelProvisionRequest(roles=args.roles, force=args.force)
+    except ValidationError as exc:
+        logger.error(
+            "scripts.models.provision.invalid_roles", extra={"error": exc.errors()}
+        )
+        print("Invalid roles provided; see logs for details.")
+        return 1
+    roles = request.roles
+    report = await manager.ensure_models_installed(roles, force=request.force)
     if args.as_json:
         print(json.dumps(report.to_payload(), indent=2))
     else:

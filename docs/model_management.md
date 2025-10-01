@@ -44,7 +44,7 @@ surface in the generated OpenAPI specification (`docs/api/openapi.json`).
 `python -m scripts.provision_models` wraps the same provisioning workflow for
 local development, CI pipelines, or remote maintenance. Options include:
 
-```
+```bash
 python -m scripts.provision_models --roles general coding --force --json
 ```
 
