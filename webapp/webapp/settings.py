@@ -48,12 +48,24 @@ def _private_interface_addresses(hostname: str | None) -> Iterable[str]:
     if hostname:
         discovered.update(_resolve_private_ips(hostname))
 
-    for info in (
-        _safe_socket_call(socket.getaddrinfo, None, 0, proto=socket.IPPROTO_TCP) or []
-    ):
-        host = info[4][0]
-        if _is_private_ip(host):
-            discovered.add(host)
+    try:
+        import netifaces
+        for iface in netifaces.interfaces():
+            for family, addresses in netifaces.ifaddresses(iface).items():
+                if family not in (netifaces.AF_INET, netifaces.AF_INET6):
+                    continue
+                for addr_info in addresses:
+                    host = addr_info.get("addr")
+                    if host and _is_private_ip(host):
+                        discovered.add(host)
+    except ImportError:
+        # Fallback for when netifaces is not installed
+        for info in (
+            _safe_socket_call(socket.getaddrinfo, None, 0, proto=socket.IPPROTO_TCP) or []
+        ):
+            host = info[4][0]
+            if _is_private_ip(host):
+                discovered.add(host)
 
     return sorted(discovered)
 
