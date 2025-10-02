@@ -1,4 +1,4 @@
-from monGARS.core.bouche import Bouche
+from monGARS.core.bouche import Bouche, SpeechTurn
 from monGARS.core.hippocampus import Hippocampus
 
 
@@ -17,5 +17,5 @@ class SpeakerService:
     def __init__(self, bouche: Bouche):
         self._bouche = bouche
 
-    async def speak(self, text: str) -> str:
+    async def speak(self, text: str) -> SpeechTurn:
         return await self._bouche.speak(text)

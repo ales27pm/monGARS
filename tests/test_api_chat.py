@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+from datetime import UTC, datetime
 
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("SECRET_KEY", "test")
@@ -11,6 +12,19 @@ from fastapi.testclient import TestClient
 from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app
 from monGARS.core.conversation import ConversationalModule
+
+
+def _speech_turn_payload(text: str) -> dict:
+    return {
+        "turn_id": "turn-1",
+        "text": text,
+        "created_at": datetime.now(UTC).isoformat(),
+        "segments": [
+            {"text": text, "estimated_duration": 0.5, "pause_after": 0.3},
+        ],
+        "average_words_per_second": 2.5,
+        "tempo": 1.0,
+    }
 
 
 @pytest.fixture
@@ -28,7 +42,12 @@ def client(monkeypatch):
     async def fake_generate_response(
         self, user_id, query, session_id=None, image_data=None
     ):
-        return {"text": "ok", "confidence": 0.9, "processing_time": 0.1}
+        return {
+            "text": "ok",
+            "confidence": 0.9,
+            "processing_time": 0.1,
+            "speech_turn": _speech_turn_payload("ok"),
+        }
 
     monkeypatch.setattr(
         ConversationalModule, "generate_response", fake_generate_response
@@ -55,10 +74,12 @@ async def test_chat_returns_response(client: TestClient):
     assert resp.status_code == 200
     data = resp.json()
     # Validate response fields and types
-    assert set(data) == {"response", "confidence", "processing_time"}
+    assert set(data) == {"response", "confidence", "processing_time", "speech_turn"}
     assert isinstance(data["response"], str)
     assert isinstance(data["confidence"], float)
     assert isinstance(data["processing_time"], float)
+    assert isinstance(data["speech_turn"], dict)
+    assert data["speech_turn"]["text"] == "ok"
 
     assert data["response"] == "ok"
     assert data["confidence"] == pytest.approx(0.9)

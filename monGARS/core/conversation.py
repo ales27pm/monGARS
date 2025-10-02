@@ -119,6 +119,8 @@ class ConversationalModule:
 
         processing_time = (datetime.utcnow() - start).total_seconds()
 
+        speech_turn = await self.speaker.speak(final)
+
         await self.persistence.save_interaction(
             Interaction(
                 user_id=user_id,
@@ -132,6 +134,7 @@ class ConversationalModule:
                 output_data={
                     "raw_llm": llm_out,
                     "adapted_text": final,
+                    "speech_turn": speech_turn.to_payload(),
                 },
                 message=augmented_query,
                 response=final,
@@ -145,10 +148,9 @@ class ConversationalModule:
             history_response=final,
         )
         await self.memory.store(user_id, augmented_query, final)
-
-        spoken = await self.speaker.speak(final)
         return {
-            "text": spoken,
+            "text": speech_turn.text,
             "confidence": llm_out.get("confidence", 0.0),
             "processing_time": processing_time,
+            "speech_turn": speech_turn.to_payload(),
         }
