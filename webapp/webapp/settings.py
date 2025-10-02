@@ -122,20 +122,51 @@ def _safe_socket_call(func: Callable[..., T], *args, **kwargs) -> T | None:
         return None
 
 
+def _dedupe_hosts(hosts: Iterable[str]) -> list[str]:
+    """Return hosts with whitespace stripped and duplicates removed."""
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for host in hosts:
+        trimmed = host.strip()
+        if trimmed and trimmed not in seen:
+            deduped.append(trimmed)
+            seen.add(trimmed)
+    return deduped
+
+
+def _parse_host_csv(raw_hosts: str | None) -> list[str]:
+    """Parse comma separated hosts from environment variables."""
+
+    if not raw_hosts:
+        return []
+    return _dedupe_hosts(raw_hosts.split(","))
+
+
+def _default_allowed_hosts_list() -> list[str]:
+    """Compose the baseline ALLOWED_HOSTS for container and local setups."""
+
+    base_hosts = ["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]
+    compose_hosts = []
+    compose_hosts.extend(_parse_host_csv(os.environ.get("WEBAPP_HOST")))
+    compose_hosts.extend(_parse_host_csv(os.environ.get("HOST")))
+    return _dedupe_hosts([*base_hosts, *compose_hosts])
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("DJANGO_SECRET_KEY environment variable required")
 DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("true", "1")
-_default_allowed_hosts = "localhost,127.0.0.1,[::1]"
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.environ.get("DJANGO_ALLOWED_HOSTS", _default_allowed_hosts).split(
-        ","
-    )
-    if host.strip()
-]
+_DEFAULT_ALLOWED_HOSTS = _default_allowed_hosts_list()
+_default_allowed_hosts = ",".join(_DEFAULT_ALLOWED_HOSTS)
+_explicit_allowed_hosts = os.environ.get("DJANGO_ALLOWED_HOSTS")
+
+if _explicit_allowed_hosts:
+    ALLOWED_HOSTS = _parse_host_csv(_explicit_allowed_hosts)
+else:
+    ALLOWED_HOSTS = list(_DEFAULT_ALLOWED_HOSTS)
 
 if DEBUG:
     for debug_host in _iter_debug_hosts():
