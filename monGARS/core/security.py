@@ -10,6 +10,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from jose import JWTError, jwt
+from passlib import exc as passlib_exc
 from passlib.context import CryptContext
 
 from monGARS.config import Settings, ensure_secret_key, get_settings
@@ -161,7 +162,23 @@ class SecurityManager:
         return self.pwd_context.hash(password)
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return self.pwd_context.verify(plain_password, hashed_password)
+        try:
+            return self.pwd_context.verify(plain_password, hashed_password)
+        except passlib_exc.UnknownHashError:
+            log.debug(
+                "security.unknown_password_hash",
+                extra={
+                    "hash_preview": (hashed_password or "")[:6],
+                },
+            )
+            return False
+        except (ValueError, TypeError) as exc:
+            log.debug(
+                "security.password_verification_error",
+                extra={"reason": str(exc)},
+                exc_info=exc,
+            )
+            return False
 
 
 def _get_fernet(key: Union[str, bytes, None] = None) -> Fernet:
