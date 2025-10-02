@@ -101,9 +101,9 @@ export function createSocketClient({ config, http, ui, onEvent }) {
 
       ws.onmessage = (evt) => {
         const receivedAt = nowISO();
-        ui.setDiagnostics({ lastMessageAt: receivedAt });
         try {
           const ev = JSON.parse(evt.data);
+          ui.setDiagnostics({ lastMessageAt: receivedAt });
           onEvent(ev);
         } catch (err) {
           console.error("Bad event payload", err, evt.data);
