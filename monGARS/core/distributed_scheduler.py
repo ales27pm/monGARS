@@ -461,9 +461,9 @@ class DistributedScheduler:
             return []
         telemetry_map: dict[str, dict[str, Any]] = {}
         get_map = getattr(self.communicator, "get_peer_telemetry_map", None)
+        horizon = max(30.0, self.metrics_interval * 5)
         if get_map is not None:
             try:
-                horizon = max(30.0, self.metrics_interval * 5)
                 telemetry_map = get_map(max_age=horizon)
             except Exception:  # pragma: no cover - defensive
                 logger.warning(
@@ -472,8 +472,21 @@ class DistributedScheduler:
                     exc_info=True,
                 )
 
+        if not telemetry_map and peer_loads:
+            logger.warning(
+                "scheduler.selection_fallback_no_telemetry",
+                extra={"scheduler_id": self.instance_id},
+            )
+            telemetry_map = {}
+            for peer, load in peer_loads.items():
+                if not isinstance(load, (int, float)):
+                    continue
+                load_value = float(load)
+                if not math.isfinite(load_value) or load_value < 0.0:
+                    continue
+                telemetry_map[peer] = {"load_factor": load_value}
+
         candidates: list[tuple[str, float, float, float]] = []
-        horizon = max(30.0, self.metrics_interval * 5)
         for peer, load in peer_loads.items():
             if (
                 not isinstance(load, (int, float))

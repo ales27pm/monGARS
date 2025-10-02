@@ -312,17 +312,23 @@ class PeerCommunicator:
     def _normalise_telemetry(
         self, snapshot: Mapping[str, Any], source: str | None = None
     ) -> dict[str, Any]:
-        observed_at = snapshot.get("observed_at")
-        if isinstance(observed_at, str):
+        observed_at_val = snapshot.get("observed_at")
+        observed_at_dt: datetime | None = None
+        if isinstance(observed_at_val, str):
             try:
-                datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+                observed_at_dt = datetime.fromisoformat(
+                    observed_at_val.replace("Z", "+00:00")
+                )
             except ValueError:
-                observed_at = None
-        elif isinstance(observed_at, datetime):
-            if observed_at.tzinfo is None:
-                observed_at = observed_at.replace(tzinfo=timezone.utc)
-            observed_at = observed_at.astimezone(timezone.utc).isoformat()
-        if not observed_at:
+                observed_at_dt = None
+        elif isinstance(observed_at_val, datetime):
+            observed_at_dt = observed_at_val
+
+        if observed_at_dt:
+            if observed_at_dt.tzinfo is None:
+                observed_at_dt = observed_at_dt.replace(tzinfo=timezone.utc)
+            observed_at = observed_at_dt.astimezone(timezone.utc).isoformat()
+        else:
             observed_at = datetime.now(timezone.utc).isoformat()
 
         def _float(value: Any, default: float = 0.0) -> float:
