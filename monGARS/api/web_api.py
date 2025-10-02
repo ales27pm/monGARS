@@ -32,6 +32,8 @@ from monGARS.api.schemas import (
     PeerLoadSnapshot,
     PeerMessage,
     PeerRegistration,
+    PeerTelemetryEnvelope,
+    PeerTelemetryPayload,
     UserRegistration,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
@@ -279,3 +281,27 @@ async def peer_load(
 
     snapshot = await communicator.get_local_load()
     return PeerLoadSnapshot(**snapshot)
+
+
+@app.post("/api/v1/peer/telemetry", status_code=status.HTTP_202_ACCEPTED)
+async def peer_telemetry_ingest(
+    report: PeerTelemetryPayload,
+    current_user: dict = Depends(get_current_admin_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> dict[str, str]:
+    """Accept telemetry published by peer schedulers."""
+
+    communicator.ingest_remote_telemetry(report.source, report.model_dump())
+    return {"status": "accepted"}
+
+
+@app.get("/api/v1/peer/telemetry", response_model=PeerTelemetryEnvelope)
+async def peer_telemetry_snapshot(
+    current_user: dict = Depends(get_current_admin_user),
+    communicator: PeerCommunicator = Depends(get_peer_communicator),
+) -> PeerTelemetryEnvelope:
+    """Return cached telemetry for local and remote schedulers."""
+
+    telemetry = communicator.get_peer_telemetry(include_self=True)
+    payloads = [PeerTelemetryPayload(**entry) for entry in telemetry]
+    return PeerTelemetryEnvelope(telemetry=payloads)

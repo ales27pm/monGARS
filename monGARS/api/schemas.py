@@ -194,6 +194,30 @@ class PeerLoadSnapshot(BaseModel):
         return value
 
 
+class PeerTelemetryPayload(PeerLoadSnapshot):
+    """Detailed telemetry snapshot propagated between schedulers."""
+
+    worker_uptime_seconds: float = Field(default=0.0, ge=0.0)
+    tasks_processed: int = Field(default=0, ge=0)
+    tasks_failed: int = Field(default=0, ge=0)
+    task_failure_rate: float = Field(default=0.0, ge=0.0)
+    observed_at: datetime | None = None
+    source: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("task_failure_rate")
+    @classmethod
+    def validate_failure_rate(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("task_failure_rate cannot be negative")
+        return value
+
+
+class PeerTelemetryEnvelope(BaseModel):
+    """Aggregated telemetry view returned by the peer telemetry endpoint."""
+
+    telemetry: list[PeerTelemetryPayload] = Field(default_factory=list)
+
+
 class SuggestRequest(BaseModel):
     """Request body for the UI suggestion endpoint."""
 

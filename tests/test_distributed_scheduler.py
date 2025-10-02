@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
 
@@ -185,6 +186,12 @@ async def test_scheduler_routes_to_least_loaded(monkeypatch):
             "http://peer2/api/v1/peer/message",
         ]
     )
+
+    async def noop_broadcast(payload):
+        communicator.update_local_telemetry(payload)
+        return True
+
+    monkeypatch.setattr(communicator, "broadcast_telemetry", noop_broadcast)
     routed: list[tuple[tuple[str, ...], dict[str, Any]]] = []
 
     async def fake_send_to(peers, message):
@@ -228,6 +235,12 @@ async def test_scheduler_falls_back_to_broadcast_when_no_better_peer(monkeypatch
     communicator = PeerCommunicator(["http://peer/api/v1/peer/message"])
     calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
 
+    async def noop_broadcast(payload):
+        communicator.update_local_telemetry(payload)
+        return True
+
+    monkeypatch.setattr(communicator, "broadcast_telemetry", noop_broadcast)
+
     async def fake_send(message):
         calls.append((("broadcast",), message))
         return [True]
@@ -257,4 +270,64 @@ async def test_scheduler_falls_back_to_broadcast_when_no_better_peer(monkeypatch
     assert calls
     route, message = calls[0]
     assert route == ("broadcast",)
+    assert message["result"] == "payload"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_prefers_cached_peer_load(monkeypatch):
+    communicator = PeerCommunicator(["http://peer/api/v1/peer/message"])
+    communicator.ingest_remote_telemetry(
+        "http://peer/api/v1/peer/message",
+        {
+            "scheduler_id": "remote",
+            "queue_depth": 0,
+            "active_workers": 0,
+            "concurrency": 1,
+            "load_factor": 0.1,
+            "worker_uptime_seconds": 1.0,
+            "tasks_processed": 5,
+            "tasks_failed": 0,
+            "task_failure_rate": 0.0,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "source": "http://peer/api/v1/peer/message",
+        },
+    )
+
+    routed: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+
+    async def fake_send_to(peers, message):
+        routed.append((tuple(peers), message))
+        return [True] * len(tuple(peers))
+
+    async def fake_send(message):
+        routed.append((("broadcast",), message))
+        return [True]
+
+    async def fail_fetch():
+        raise AssertionError("fetch should not be called")
+
+    async def noop_broadcast(payload):
+        communicator.update_local_telemetry(payload)
+        return True
+
+    monkeypatch.setattr(communicator, "send_to", fake_send_to)
+    monkeypatch.setattr(communicator, "send", fake_send)
+    monkeypatch.setattr(communicator, "fetch_peer_loads", fail_fetch)
+    monkeypatch.setattr(communicator, "broadcast_telemetry", noop_broadcast)
+
+    scheduler = DistributedScheduler(communicator, concurrency=1, metrics_interval=0.1)
+
+    async def task():
+        await asyncio.sleep(0.01)
+        return "payload"
+
+    await scheduler.add_task(task)
+    runner = asyncio.create_task(scheduler.run())
+    await asyncio.sleep(0.2)
+    scheduler.stop()
+    await runner
+
+    assert routed
+    first_route, message = routed[0]
+    assert first_route == ("http://peer/api/v1/peer/message",)
     assert message["result"] == "payload"
