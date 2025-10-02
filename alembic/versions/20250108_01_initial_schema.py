@@ -84,38 +84,6 @@ def upgrade() -> None:
     )
 
     op.create_table(
-        "user_accounts",
-        sa.Column("id", sa.Integer(), primary_key=True, nullable=False),
-        sa.Column("username", sa.String(length=150), nullable=False),
-        sa.Column("password_hash", sa.String(length=255), nullable=False),
-        sa.Column(
-            "is_admin",
-            sa.Boolean(),
-            server_default=sa.text("false"),
-            nullable=False,
-        ),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
-            server_onupdate=sa.func.now(),
-            nullable=False,
-        ),
-    )
-    op.create_index(
-        "ix_user_accounts_username",
-        "user_accounts",
-        ["username"],
-        unique=True,
-    )
-
-    op.create_table(
         "emotion_trends",
         sa.Column("id", sa.Integer(), primary_key=True, nullable=False),
         sa.Column("user_id", sa.String(), nullable=True),
@@ -168,9 +136,6 @@ def downgrade() -> None:
     op.drop_table("interactions")
 
     op.drop_table("emotion_trends")
-
-    op.drop_index("ix_user_accounts_username", table_name="user_accounts")
-    op.drop_table("user_accounts")
 
     op.drop_index(op.f("ix_user_personality_user_id"), table_name="user_personality")
     op.drop_table("user_personality")
