@@ -717,10 +717,10 @@ class LLMIntegration:
         path = ""
         if endpoint:
             parsed = urlparse(endpoint)
-            host = parsed.netloc or parsed.path or endpoint
+            host = parsed.netloc or "unknown"
             path = parsed.path or ""
         attributes: dict[str, str | int | float | bool] = {
-            "endpoint": host or "unknown"
+            "endpoint": host
         }
         if path and path != "/":
             attributes["path"] = path
