@@ -221,6 +221,7 @@ can be extended to register additional Ollama models or alternate providers.
 | Code audit notes | [docs/code_audit_summary.md](docs/code_audit_summary.md) |
 | Ray Serve deployment | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
 | Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
+| RAG context enrichment | [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md) |
 | API specification & clients | [docs/api/](docs/api/README.md) |
 | Conversation workflow deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
 | Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
