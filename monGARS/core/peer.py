@@ -6,7 +6,10 @@ import asyncio
 import json
 import logging
 import math
-from collections.abc import Awaitable, Callable, Iterable
+import threading
+import time
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from datetime import datetime, timezone
 from typing import Any, List, Optional, Set
 
 import httpx
@@ -21,11 +24,16 @@ class PeerCommunicator:
         self,
         peers: Iterable[str] | None = None,
         client: Optional[httpx.AsyncClient] = None,
+        identity: str | None = None,
     ) -> None:
         # Store peers in a set to avoid duplicates
         self.peers: Set[str] = {p.rstrip("/") for p in peers or []}
         self._client = client
         self._load_provider: Callable[[], Awaitable[dict[str, Any]]] | None = None
+        self.identity = identity.rstrip("/") if identity else None
+        self._telemetry_cache: dict[str, dict[str, Any]] = {}
+        self._telemetry_lock = threading.Lock()
+        self._telemetry_ttl_seconds = 120.0
 
     async def send(self, message: Optional[dict]) -> List[bool]:
         """Encrypt and broadcast message to all configured peers."""
@@ -77,6 +85,133 @@ class PeerCommunicator:
         """Decrypt incoming payload into a message dict."""
         data = decrypt_token(payload)
         return json.loads(data)
+
+    def set_identity(self, identity: str | None) -> None:
+        """Set the local identity advertised to peers."""
+
+        self.identity = identity.rstrip("/") if identity else None
+
+    # ------------------------------------------------------------------
+    # Telemetry helpers
+    # ------------------------------------------------------------------
+
+    def update_local_telemetry(self, snapshot: Mapping[str, Any]) -> None:
+        """Store the latest local telemetry snapshot."""
+
+        data = self._normalise_telemetry(snapshot, source="local")
+        self._store_telemetry("local", data)
+
+    def ingest_remote_telemetry(
+        self, peer_identifier: str | None, snapshot: Mapping[str, Any]
+    ) -> None:
+        """Record telemetry received from a remote peer."""
+
+        source = (
+            peer_identifier.rstrip("/") if isinstance(peer_identifier, str) else None
+        )
+        data = self._normalise_telemetry(snapshot, source=source)
+        key = source or data.get("scheduler_id") or f"unknown:{id(snapshot)}"
+        self._store_telemetry(key, data)
+
+    async def broadcast_telemetry(self, snapshot: Mapping[str, Any]) -> None:
+        """Publish telemetry to peers and cache it locally."""
+
+        local_payload = self._normalise_telemetry(snapshot, source="local")
+        self._store_telemetry("local", local_payload)
+        if not self.peers:
+            return
+
+        remote_source = (
+            self.identity
+            or snapshot.get("source")
+            or local_payload.get("scheduler_id")
+            or "anonymous"
+        )
+        payload = self._normalise_telemetry(snapshot, source=remote_source)
+
+        body = payload.copy()
+        body.pop("monotonic_ts", None)
+
+        async def _post(client: httpx.AsyncClient, peer_url: str) -> None:
+            endpoint = self._build_peer_endpoint(peer_url, "telemetry")
+            try:
+                response = await client.post(endpoint, json=body)
+            except httpx.HTTPError as exc:
+                logging.warning("Failed to push telemetry to %s: %s", endpoint, exc)
+                return
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.warning(
+                    "Unexpected error pushing telemetry to %s: %s", endpoint, exc
+                )
+                return
+            finally:
+                if "response" in locals():
+                    await response.aclose()
+
+        async def _broadcast(client: httpx.AsyncClient) -> None:
+            tasks = [_post(client, peer) for peer in sorted(self.peers)]
+            if tasks:
+                await asyncio.gather(*tasks)
+
+        if self._client:
+            await _broadcast(self._client)
+            return
+
+        async with httpx.AsyncClient() as client:
+            await _broadcast(client)
+
+    def get_cached_peer_loads(self, max_age: float = 30.0) -> dict[str, float]:
+        """Return recently observed peer load factors keyed by identifier."""
+
+        telemetry = self.get_peer_telemetry_map(max_age=max_age)
+        loads: dict[str, float] = {}
+        for peer_id, data in telemetry.items():
+            if data.get("source") == "local":
+                continue
+            load = data.get("load_factor")
+            if isinstance(load, (int, float)) and math.isfinite(load):
+                loads[peer_id] = float(load)
+        return loads
+
+    def get_peer_telemetry(
+        self, include_self: bool = False, max_age: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Return telemetry snapshots ordered by recency."""
+
+        telemetry_map = self.get_peer_telemetry_map(
+            max_age=max_age or self._telemetry_ttl_seconds,
+            include_self=include_self,
+        )
+        return sorted(
+            [
+                {k: v for k, v in data.items() if k != "age_seconds"}
+                for data in telemetry_map.values()
+            ],
+            key=lambda item: item.get("observed_at") or "",
+            reverse=True,
+        )
+
+    def get_peer_telemetry_map(
+        self, max_age: float = 120.0, include_self: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        """Return telemetry keyed by peer identifier with age metadata."""
+
+        now = time.monotonic()
+        result: dict[str, dict[str, Any]] = {}
+        with self._telemetry_lock:
+            self._prune_telemetry_locked(now)
+            for key, data in self._telemetry_cache.items():
+                if not include_self and data.get("source") == "local":
+                    continue
+                age = now - data.get("monotonic_ts", now)
+                if age > max_age:
+                    continue
+                record = data.copy()
+                record["age_seconds"] = age
+                record.pop("monotonic_ts", None)
+                source_key = record.get("source") or key
+                result[source_key] = record
+        return result
 
     def register_load_provider(
         self, provider: Callable[[], Awaitable[dict[str, Any]]]
@@ -131,6 +266,7 @@ class PeerCommunicator:
 
             if not isinstance(data, dict):
                 return None
+            self.ingest_remote_telemetry(peer_url, data)
             load = data.get("load_factor")
             if isinstance(load, (int, float)) and math.isfinite(load):
                 return peer_url, float(load)
@@ -152,6 +288,77 @@ class PeerCommunicator:
 
         async with httpx.AsyncClient() as client:
             return await _collect(client)
+
+    def _store_telemetry(self, key: str, data: dict[str, Any]) -> None:
+        timestamp = time.monotonic()
+        record = data.copy()
+        record["monotonic_ts"] = timestamp
+        with self._telemetry_lock:
+            self._telemetry_cache[key] = record
+            self._prune_telemetry_locked(timestamp)
+
+    def _prune_telemetry_locked(self, now: float) -> None:
+        ttl = self._telemetry_ttl_seconds
+        expired: list[str] = []
+        for key, value in self._telemetry_cache.items():
+            ts = value.get("monotonic_ts")
+            if ts is None:
+                continue
+            if now - ts > ttl:
+                expired.append(key)
+        for key in expired:
+            self._telemetry_cache.pop(key, None)
+
+    def _normalise_telemetry(
+        self, snapshot: Mapping[str, Any], source: str | None = None
+    ) -> dict[str, Any]:
+        observed_at = snapshot.get("observed_at")
+        if isinstance(observed_at, str):
+            try:
+                datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+            except ValueError:
+                observed_at = None
+        elif isinstance(observed_at, datetime):
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+            observed_at = observed_at.astimezone(timezone.utc).isoformat()
+        if not observed_at:
+            observed_at = datetime.now(timezone.utc).isoformat()
+
+        def _float(value: Any, default: float = 0.0) -> float:
+            try:
+                result = float(value)
+            except (TypeError, ValueError):
+                return default
+            if not math.isfinite(result) or result < 0:
+                return default
+            return result
+
+        def _int(value: Any, default: int = 0) -> int:
+            try:
+                result = int(value)
+            except (TypeError, ValueError):
+                return default
+            return max(default, result)
+
+        scheduler_id = snapshot.get("scheduler_id")
+        if scheduler_id is not None:
+            scheduler_id = str(scheduler_id)
+
+        normalised = {
+            "scheduler_id": scheduler_id,
+            "queue_depth": _int(snapshot.get("queue_depth")),
+            "active_workers": _int(snapshot.get("active_workers")),
+            "concurrency": max(1, _int(snapshot.get("concurrency"), 1)),
+            "load_factor": _float(snapshot.get("load_factor")),
+            "worker_uptime_seconds": _float(snapshot.get("worker_uptime_seconds"), 0.0),
+            "tasks_processed": _int(snapshot.get("tasks_processed")),
+            "tasks_failed": _int(snapshot.get("tasks_failed")),
+            "task_failure_rate": _float(snapshot.get("task_failure_rate")),
+            "observed_at": observed_at,
+            "source": source or snapshot.get("source"),
+        }
+        return normalised
 
     def _build_peer_endpoint(self, peer_url: str, suffix: str) -> str:
         base = peer_url.rstrip("/")

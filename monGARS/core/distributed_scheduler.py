@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Coroutine, Iterable
+from datetime import datetime, timezone
 from typing import Any
 from weakref import WeakSet
 
@@ -141,6 +142,7 @@ class DistributedScheduler:
         }
         self._loop: asyncio.AbstractEventLoop | None = None
         self._metrics_registered_with_meter = False
+        self._telemetry_last_broadcast: float = 0.0
         self._register_with_communicator()
 
     @property
@@ -228,6 +230,44 @@ class DistributedScheduler:
             extra={"scheduler_id": self.instance_id, **snapshot},
         )
         self._last_metrics_emit = now
+        await self._publish_telemetry(snapshot, force=force)
+
+    async def _publish_telemetry(
+        self, snapshot: dict[str, float | int], force: bool = False
+    ) -> None:
+        payload = dict(snapshot)
+        payload["scheduler_id"] = self.instance_id
+        payload.setdefault("observed_at", datetime.now(timezone.utc).isoformat())
+
+        update_local = getattr(self.communicator, "update_local_telemetry", None)
+        if update_local is not None:
+            try:
+                update_local(payload)
+            except Exception:  # pragma: no cover - defensive
+                logger.warning(
+                    "scheduler.telemetry_cache_failed",
+                    extra={"scheduler_id": self.instance_id},
+                    exc_info=True,
+                )
+
+        now = time.monotonic()
+        if not force and now - self._telemetry_last_broadcast < self.metrics_interval:
+            return
+
+        broadcast = getattr(self.communicator, "broadcast_telemetry", None)
+        if broadcast is None:
+            return
+        try:
+            await broadcast(payload)
+        except Exception:  # pragma: no cover - defensive
+            logger.warning(
+                "scheduler.telemetry_broadcast_failed",
+                extra={"scheduler_id": self.instance_id},
+                exc_info=True,
+            )
+            return
+
+        self._telemetry_last_broadcast = time.monotonic()
 
     async def run(self) -> None:
         if self._running:
@@ -378,45 +418,127 @@ class DistributedScheduler:
         await self.communicator.send(payload)
 
     async def _get_peer_loads(self) -> dict[str, float]:
+        loads: dict[str, float] = {}
+        get_cached = getattr(self.communicator, "get_cached_peer_loads", None)
+        if get_cached is not None:
+            try:
+                horizon = max(10.0, self.metrics_interval * 3)
+                cached = get_cached(max_age=horizon)
+                if cached:
+                    loads.update({k: float(v) for k, v in cached.items()})
+            except Exception:  # pragma: no cover - defensive
+                logger.warning(
+                    "scheduler.peer_load_cache_failed",
+                    extra={"scheduler_id": self.instance_id},
+                    exc_info=True,
+                )
+
+        peers = getattr(self.communicator, "peers", None)
+        needs_refresh = not loads or (
+            peers and any(peer not in loads for peer in peers)
+        )
         fetch = getattr(self.communicator, "fetch_peer_loads", None)
         if fetch is None:
-            return {}
+            return loads
+        if not needs_refresh:
+            return loads
         try:
-            return await fetch()
+            fresh = await fetch()
         except Exception:  # pragma: no cover - defensive
             logger.warning(
                 "scheduler.peer_load_fetch_failed",
                 extra={"scheduler_id": self.instance_id},
                 exc_info=True,
             )
-            return {}
+            return loads
+        loads.update({k: float(v) for k, v in fresh.items()})
+        return loads
 
     def _select_peer_targets(
         self, peer_loads: dict[str, float], local_load: float
     ) -> list[str]:
         if not peer_loads:
             return []
-        candidates: list[tuple[str, float]] = []
+        telemetry_map: dict[str, dict[str, Any]] = {}
+        get_map = getattr(self.communicator, "get_peer_telemetry_map", None)
+        if get_map is not None:
+            try:
+                horizon = max(30.0, self.metrics_interval * 5)
+                telemetry_map = get_map(max_age=horizon)
+            except Exception:  # pragma: no cover - defensive
+                logger.warning(
+                    "scheduler.peer_telemetry_read_failed",
+                    extra={"scheduler_id": self.instance_id},
+                    exc_info=True,
+                )
+
+        candidates: list[tuple[str, float, float, float]] = []
+        horizon = max(30.0, self.metrics_interval * 5)
         for peer, load in peer_loads.items():
-            if isinstance(load, (int, float)) and math.isfinite(load) and load >= 0:
-                candidates.append((peer, float(load)))
+            if (
+                not isinstance(load, (int, float))
+                or not math.isfinite(load)
+                or load < 0
+            ):
+                continue
+            metadata = telemetry_map.get(peer, {})
+            base_load = metadata.get("load_factor")
+            if not isinstance(base_load, (int, float)) or not math.isfinite(base_load):
+                base_load = float(load)
+            failure_rate = metadata.get("task_failure_rate") or 0.0
+            try:
+                failure_rate = float(failure_rate)
+            except (TypeError, ValueError):
+                failure_rate = 0.0
+            queue_depth = metadata.get("queue_depth") or 0
+            concurrency = metadata.get("concurrency") or 1
+            try:
+                queue_depth = int(queue_depth)
+            except (TypeError, ValueError):
+                queue_depth = 0
+            try:
+                concurrency = int(concurrency)
+            except (TypeError, ValueError):
+                concurrency = 1
+            concurrency = max(1, concurrency)
+            queue_pressure = queue_depth / concurrency
+            queue_penalty = min(0.5, queue_pressure * 0.05)
+            age = metadata.get("age_seconds") or 0.0
+            try:
+                age = float(age)
+            except (TypeError, ValueError):
+                age = 0.0
+            age_penalty = min(0.5, age / horizon)
+            effective_load = (
+                float(base_load) + max(0.0, failure_rate) + queue_penalty + age_penalty
+            )
+            candidates.append((peer, float(load), effective_load, float(failure_rate)))
+
         if not candidates:
             return []
-        candidates.sort(key=lambda item: item[1])
-        best_load = candidates[0][1]
-        tolerance = 0.15
-        if local_load <= best_load + tolerance:
-            return []
+
+        candidates.sort(key=lambda item: item[2])
+        tolerance = max(0.05, min(0.35, local_load * 0.2))
         selected: list[str] = []
-        for peer, load in candidates:
-            if load < local_load and load <= best_load + tolerance:
+        for peer, reported_load, effective_load, failure_rate in candidates:
+            if failure_rate >= 0.9:
+                continue
+            if effective_load + tolerance < local_load:
+                selected.append(peer)
+            elif (
+                effective_load <= candidates[0][2] + tolerance
+                and reported_load + tolerance < local_load
+            ):
                 selected.append(peer)
             if len(selected) >= self.concurrency:
                 break
+
         if selected:
             return selected
-        if best_load < local_load:
-            return [candidates[0][0]]
+
+        best_peer, _, best_effective, failure_rate = candidates[0]
+        if failure_rate < 0.9 and best_effective + tolerance < local_load:
+            return [best_peer]
         return []
 
     def _calculate_load(self, queue_depth: int, active_workers: int) -> float:

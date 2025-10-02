@@ -46,7 +46,8 @@ and reality.
   and background jobs.
 - Safe optimisation wrappers prevent destructive upgrades by executing changes in
   a sandbox.
-- Next step: smarter load-aware scheduling and cross-node telemetry sharing.
+- Smarter load-aware scheduling now prioritises lower-risk peers using shared telemetry, and
+  nodes broadcast scheduler metrics for collaborative optimisation.
 
 ## Phase 5 – Web Interface & API Refinement (Target Q1 2026)
 - FastAPI routes for `/token`, `/api/v1/conversation/chat`, `/api/v1/conversation/history`,

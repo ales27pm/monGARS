@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -34,6 +35,8 @@ async def client(secret_key_env):
         comm = get_peer_communicator()
         comm.peers = set()
         comm._client = async_client
+        if hasattr(comm, "_telemetry_cache"):
+            comm._telemetry_cache.clear()
         yield async_client
         app.dependency_overrides.clear()
 
@@ -166,3 +169,58 @@ async def test_peer_load_endpoint(client):
         assert data["load_factor"] == pytest.approx(2.0)
     finally:
         communicator._load_provider = original_provider
+
+
+@pytest.mark.asyncio
+async def test_peer_telemetry_roundtrip(client):
+    communicator = get_peer_communicator()
+    communicator.ingest_remote_telemetry(
+        "http://seed/api/v1/peer/message",
+        {
+            "scheduler_id": "seed",
+            "queue_depth": 1,
+            "active_workers": 1,
+            "concurrency": 1,
+            "load_factor": 0.5,
+            "worker_uptime_seconds": 2.0,
+            "tasks_processed": 4,
+            "tasks_failed": 1,
+            "task_failure_rate": 0.25,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "source": "http://seed/api/v1/peer/message",
+        },
+    )
+
+    payload = {
+        "scheduler_id": "remote-1",
+        "queue_depth": 2,
+        "active_workers": 1,
+        "concurrency": 2,
+        "load_factor": 0.4,
+        "worker_uptime_seconds": 5.0,
+        "tasks_processed": 10,
+        "tasks_failed": 1,
+        "task_failure_rate": 0.1,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "http://remote/api/v1/peer/message",
+    }
+
+    resp = await client.post(
+        "/api/v1/peer/telemetry",
+        json=payload,
+        headers={"Authorization": "Bearer token"},
+    )
+    assert resp.status_code == 202
+
+    telemetry = communicator.get_peer_telemetry()
+    assert any(item["scheduler_id"] == "remote-1" for item in telemetry)
+
+    resp_get = await client.get(
+        "/api/v1/peer/telemetry",
+        headers={"Authorization": "Bearer token"},
+    )
+    assert resp_get.status_code == 200
+    data = resp_get.json()
+    assert "telemetry" in data
+    identifiers = {entry["scheduler_id"] for entry in data["telemetry"]}
+    assert "remote-1" in identifiers
