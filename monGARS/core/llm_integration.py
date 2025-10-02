@@ -607,6 +607,11 @@ class LLMIntegration:
                 for attempt in range(max_attempts):
                     endpoint = endpoints[attempt % len(endpoints)]
                     last_endpoint = endpoint
+                    attributes = self._ray_metric_attributes(
+                        endpoint, status="attempt", attempt=attempt + 1
+                    )
+                    if attributes:
+                        _RAY_REQUEST_COUNTER.add(1, attributes)
                     start_time = time.perf_counter()
                     try:
                         resp = await client.post(endpoint, json=payload)
@@ -700,10 +705,6 @@ class LLMIntegration:
             except ValueError:
                 return
             self._ray_endpoint_index = (index + 1) % len(self._ray_endpoints)
-
-        attributes = self._ray_metric_attributes(endpoint, status="success")
-        if attributes:
-            _RAY_REQUEST_COUNTER.add(1, attributes)
 
     def _ray_metric_attributes(
         self,

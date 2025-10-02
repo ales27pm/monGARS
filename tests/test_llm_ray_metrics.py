@@ -12,12 +12,13 @@ async def test_ray_metrics_success_records(monkeypatch: pytest.MonkeyPatch) -> N
 
     latency_records: list[tuple[float, dict[str, object] | None]] = []
     captured_attrs: list[tuple[str | None, dict[str, object]]] = []
+    attempt_records: list[tuple[int, dict[str, object] | None]] = []
 
     monkeypatch.setattr(module, "_RESPONSE_CACHE", module.AsyncTTLCache())
     monkeypatch.setattr(
         module._RAY_REQUEST_COUNTER,
         "add",
-        lambda amount, attributes=None: None,
+        lambda amount, attributes=None: attempt_records.append((amount, attributes)),
     )
     monkeypatch.setattr(
         module._RAY_FAILURE_COUNTER,
@@ -81,6 +82,10 @@ async def test_ray_metrics_success_records(monkeypatch: pytest.MonkeyPatch) -> N
     assert any(extra.get("status") == "success" for _, extra in captured_attrs)
     assert latency_records
     assert all(extra.get("status") != "failure" for _, extra in captured_attrs)
+    assert attempt_records
+    amount, attributes = attempt_records[0]
+    assert amount == 1
+    assert attributes is not None and attributes.get("status") == "attempt"
 
 
 @pytest.mark.asyncio
@@ -94,12 +99,13 @@ async def test_ray_metrics_failure_records(monkeypatch: pytest.MonkeyPatch) -> N
     latency_records: list[tuple[float, dict[str, object] | None]] = []
     captured_attrs: list[tuple[str | None, dict[str, object]]] = []
     failure_records: list[tuple[int, dict[str, object] | None]] = []
+    attempt_records: list[tuple[int, dict[str, object] | None]] = []
 
     monkeypatch.setattr(module, "_RESPONSE_CACHE", module.AsyncTTLCache())
     monkeypatch.setattr(
         module._RAY_REQUEST_COUNTER,
         "add",
-        lambda amount, attributes=None: None,
+        lambda amount, attributes=None: attempt_records.append((amount, attributes)),
     )
     monkeypatch.setattr(
         module._RAY_FAILURE_COUNTER,
@@ -162,3 +168,5 @@ async def test_ray_metrics_failure_records(monkeypatch: pytest.MonkeyPatch) -> N
     assert failure_records
     assert any(extra.get("reason") == "transport_error" for _, extra in captured_attrs)
     assert any(extra.get("reason") == "exhausted" for _, extra in captured_attrs)
+    assert attempt_records
+    assert all(amount == 1 for amount, _ in attempt_records)
