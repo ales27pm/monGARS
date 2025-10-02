@@ -59,12 +59,23 @@ and reality.
   the database-backed auth flow, and publish polished client SDKs.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
-- Personality profiles persist via SQLModel and now refresh dynamically using the
-  style fine-tuning adapters.
-- SelfTrainingEngine records version metadata but still simulates training loops.
-- Reinforcement learning experiments remain future work.
-- Testing coverage for cognition and scheduling modules is substantive, but gaps
-  remain around WebSockets and hardware utilities.
+- ✅ Personality profiles persist via SQLModel and reload into memory-backed
+  caches on demand. When new conversations arrive the PersonalityEngine asks the
+  style fine-tuning adapters for a fresh analysis, applies the deltas, and
+  requeues a persistence task so database rows stay aligned with the latest
+  LoRA fingerprints.
+- ✅ SelfTrainingEngine captures dataset catalogue versions, curated record
+  counts, and training summaries for each simulated run. The trainer stub still
+  exercises placeholder loops, but every cycle now emits traceable metadata so a
+  real MNTP implementation can consume the same manifests without schema
+  changes.
+- 🚧 Reinforcement learning experiments remain future work. Open design notes in
+  `docs/advanced_fine_tuning.md` describe candidate reward signals and replay
+  buffers, but no executable pipeline exists yet.
+- ⚠️ Testing coverage for cognition and scheduling modules is substantive, while
+  WebSocket fan-out and hardware utility helpers still rely on smoke tests.
+  Expand targeted async WebSocket suites and Raspberry Pi/Jetson fakes before
+  declaring the phase complete.
 
 ## Phase 7 – Sustainability & Longevity (Future)
 - Evolution Engine orchestrates diagnostics and safe optimisation cycles but the

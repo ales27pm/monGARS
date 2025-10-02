@@ -26,6 +26,9 @@ modules so contributors can experiment end-to-end without bespoke tooling.
   and Redis/disk caching layers.
 - **Evolution engine** to retrain adapters, roll out artefacts, and trigger safe
   optimisations during idle windows.
+- **Self-improvement loop** where personality profiles persist via SQLModel and
+  refresh through LoRA-style adapters, while SelfTrainingEngine versions curated
+  datasets for upcoming MNTP integrations.
 - **Web interface** powered by Django async views that proxy authentication and
   chat history to FastAPI.
 - **Hardware-aware operations** with worker tuning for Raspberry Pi/Jetson,
