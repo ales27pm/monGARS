@@ -58,6 +58,17 @@ Logs are emitted under the `scripts.models.provision` namespace with the roles
 and actions taken, allowing operators to forward results into structured log
 pipelines.
 
+## Runtime Behaviour
+
+- `LLMIntegration` calls `LLMModelManager.ensure_models_installed()` before
+  dispatching to Ollama, ensuring the active profile is available even after
+  container rebuilds.
+- When Ray Serve is enabled, adapter manifests stored under
+  `settings.llm_adapter_registry_path` keep API workers and Ray replicas aligned
+  with the latest training artefacts.
+- Provisioning reports are cached per-role during a process lifetime to avoid
+  redundant downloads when multiple requests arrive concurrently.
+
 ## Extending Profiles
 
 1. Add a new profile or role in `configs/llm_models.json`. Use either the

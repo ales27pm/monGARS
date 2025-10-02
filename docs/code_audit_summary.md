@@ -1,27 +1,33 @@
-# Code Audit Summary — 2024-11-26
+# Code Audit Summary — 2025-05-20
 
 ## Scope
-- Executed the full `pytest` suite to surface runtime defects.
-- Focused on the authentication stack where import-time user bootstrapping
-  exercises password hashing routines.
+- Executed the full `pytest` suite to surface runtime defects and confirm Ray
+  Serve fallbacks (`tests/test_llm_ray.py`, `tests/test_llm_adapter_refresh.py`).
+- Focused on the authentication stack and WebSocket flow where credential,
+  ticket, and Fernet handling intersect (`monGARS/core/security.py`,
+  `monGARS/api/ws_manager.py`).
 
 ## Findings
-- `monGARS/core/security.py` instantiated a `CryptContext` with the `bcrypt`
-  scheme. In environments lacking the optional C backend, Passlib raised
-  `ValueError: password cannot be longer than 72 bytes` during backend detection,
-  preventing FastAPI modules from importing.
+- `SecurityManager` initialises a `CryptContext` with `pbkdf2_sha256` and
+  opportunistically enables `bcrypt` when the extension is available. Password
+  hashing now works in pure-Python environments while still accepting legacy
+  bcrypt hashes.
+- WebSocket connections are gated by `WS_ALLOWED_ORIGINS`, `WS_ENABLE_EVENTS`, and
+  signed ticket verification before history replay begins.
+- Ray Serve requests respect per-endpoint circuit breakers and degrade to the
+  local Ollama path when HTTP errors or scaling events occur.
 
 ## Remediation
-- Switched password hashing to `pbkdf2_sha256` with 390k iterations—a pure-Python
-  implementation that avoids brittle backend detection while maintaining a strong
-  work factor.
-- Added inline documentation clarifying the trade-offs so future maintainers know
-  why bcrypt was replaced.
+- Documented the password hashing trade-offs inline and in the README to avoid
+  regressions when future maintainers revisit algorithm choices.
+- Added structured log context (`ws_manager.history_failed`, `llm.ray.*`) so
+  operators can triage authentication or inference issues without enabling debug
+  logging globally.
 
 ## Recommendations
-- If legacy bcrypt hashes exist, rehash to PBKDF2 on the next successful login or
-  bundle the `bcrypt` wheel in deployment images.
 - Pin `passlib` in `requirements.txt` and record backend availability in CI to
   prevent regressions.
+- Emit OpenTelemetry counters for Ray Serve success/failure buckets to complement
+  existing structured logs.
 - Periodically rerun the audit after dependency upgrades or authentication flow
   changes.

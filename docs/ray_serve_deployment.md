@@ -19,14 +19,20 @@ It assumes Ray 2.x, Python 3.11, and optional Docker/Kubernetes familiarity.
    ```
 4. Verify cluster health with `ray status`.
 
+For Kubernetes deployments, reuse the manifests/Helm chart produced from
+`modules/ray_service.py` so replica configuration matches the application.
+
 ## 2. Deploy a Serve Application
-1. Package your deployment script (e.g. `serve_app.py`) exposing a
-   `deployment = LLMDeployment.bind(...)` handle that mirrors the payload emitted
-   by `LLMIntegration.generate_response`.
+1. Use the provided deployment in `modules/ray_service.py`. It loads Ollama or
+   adapter artefacts, streams events, and exposes an HTTP endpoint compatible
+   with `LLMIntegration.generate_response` payloads.
 2. Submit the deployment:
    ```bash
-   serve deploy serve_app:deployment
+   python -m modules.ray_service --deploy
    ```
+   or package your deployment script (e.g. `serve_app.py`) exposing a
+   `deployment = LLMDeployment.bind(...)` handle mirroring the schema returned by
+   Ray responses in tests (`tests/test_llm_ray.py`).
 3. Confirm the deployment is healthy:
    ```bash
    serve status
@@ -43,22 +49,32 @@ Set the following environment variables (e.g. in `.env` or Kubernetes secrets):
 | `RAY_CLIENT_TIMEOUT` / `RAY_CLIENT_CONNECT_TIMEOUT` | Adjust client-level timeouts for long-running requests. |
 | `RAY_CLIENT_MAX_CONNECTIONS` / `RAY_CLIENT_MAX_KEEPALIVE` | Tune connection pooling. |
 | `RAY_SCALING_STATUS_CODES` / `RAY_SCALING_BACKOFF` / `RAY_MAX_SCALE_CYCLES` | Control retry strategy while replicas scale up. |
+| `LLM_ADAPTER_REGISTRY_PATH` | Optional override for the adapter manifest directory shared with Ray Serve. |
 
-Restart FastAPI workers after changing configuration so `LLMIntegration` reloads
-its settings.
+Restart FastAPI workers after changing configuration so `LLMIntegration`
+reloads its settings and adapter metadata.
 
 ## 4. Fallback Behaviour
 `LLMIntegration` degrades gracefully when Ray is unreachable:
 - When `USE_RAY_SERVE=false` or `RAY_SERVE_URL` resolves to an empty list, the
   service uses the local Ollama providers.
 - For scaling responses (HTTP 503/409 by default), the client performs
-  exponential backoff and rotates through the configured endpoints before
-  declaring a failure.
+  exponential backoff driven by `RAY_SCALING_BACKOFF`, rotates through the
+  configured endpoints, and honours `Retry-After` headers.
 - After exhausting retries or when the Ray client cannot initialise, the
   integration logs the failure and routes the request through the local provider
-  chain.
+  chain (`llm.ray.fallback_local`).
 
-Monitor structured logs for events such as `llm.ray.disabled`,
-`llm.ray.backoff.*`, and `llm.ray.request.failure` to understand which path is in
-use. Add OpenTelemetry counters if you extend the integration with additional
-fallback logic.
+Monitor structured logs (`llm.ray.*`) and add OpenTelemetry counters for success,
+error, and fallback paths when you extend the integration with additional
+telemetry.
+
+## 5. Rolling Out New Adapters
+- Self-training runs update manifests in `LLM_ADAPTER_REGISTRY_PATH` and emit
+  checksums. Ray Serve deployments detect these changes and reload weights when
+  the evolution engine triggers refresh events.
+- Use `python -m scripts.provision_models` to ensure Ollama baselines are
+  available before Ray replicas start, preventing cold-start cascades.
+- When deploying across clusters, synchronise the adapter directory (e.g. via
+  object storage) so Ray replicas observe the same manifest versions as the API
+  pods.

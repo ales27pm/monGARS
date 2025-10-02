@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-_Last updated: 2025-03_
+_Last updated: 2025-05-20_
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -15,80 +15,77 @@ and reality.
   MLflow, Vault, and Ollama for local and cluster deployment.
 
 ## Phase 2 – Functional Expansion (Completed Q2 2025)
-- Mimicry, Personality, and Adaptive Response engines collaborate to personalise
-  chat output. Style fine-tuning now updates LoRA adapters per user session.
-- Mains Virtuelles image captioning uses BLIP with guarded imports so CPU-only
-  deployments remain operational.
-- Iris scraping and Curiosity Engine perform asynchronous retrieval with
-  fallbacks to document ingestion when the retrieval service is unavailable.
-- Contrary to the original roadmap, tests are no longer placeholders: `chaos_test.py`,
-  `property_test.py`, and `self_training_test.py` exercise circuit breakers,
-  tiered caching, and self-training workflows.
-- `LLMIntegration` issues real Ollama requests with caching, retries, and an
-  optional Ray Serve path (still stubbed, see Phase 3).
+- Mimicry, Personality, Adaptive Response, and BLIP-powered captioning modules
+  personalise chat output while guarding optional dependencies.
+- Iris scraping and the Curiosity Engine perform asynchronous retrieval with
+  graceful fallbacks to local document ingestion when the external service is
+  unavailable.
+- The test suite covers chaos, property-based cache guarantees, self-training,
+  WebSocket flows, Ray Serve, and API contracts (`tests/test_websocket.py`,
+  `tests/test_llm_ray.py`, `tests/test_api_chat.py`).
+- RAG enrichment is now part of the baseline feature set with dedicated FastAPI
+  endpoints and typed client utilities.
 
 ## Phase 3 – Hardware & Performance Optimisation (In Progress – Target Q3 2025)
 - ✅ Worker auto-tuning for Raspberry Pi/Jetson via
   `monGARS.utils.hardware.recommended_worker_count()`.
 - ✅ Multi-architecture build scripts (`build_embedded.sh`, `build_native.sh`) and
   corresponding Dockerfiles.
-- ✅ Tiered cache metrics exported through OpenTelemetry.
-- ✅ Hardened Kubernetes RBAC manifests.
-- 🔄 Outstanding: real Ray Serve integration (current implementation logs intent
-  but falls back to local inference) and full MNTP training loop (persists
-  placeholders today).
-- 🔄 Outstanding: version-pin container images in `docker-compose.yml` and expand
-  Alembic migrations for newly introduced tables.
+- ✅ Tiered cache metrics exported through OpenTelemetry plus scheduler gauges in
+  `monGARS/core/distributed_scheduler.py`.
+- ✅ Ray Serve integration issues real HTTP requests with circuit breaking,
+  endpoint rotation, and adapter manifest awareness in
+  `monGARS/core/llm_integration.py`.
+- ✅ Docker Compose pins images for Postgres/Redis/MLflow and defaults to a tagged
+  application image (`mongars-app:0.1.0`).
+- 🔄 Outstanding: expand Alembic migrations for the latest SQLModel tables and add
+  Ray Serve health telemetry to OpenTelemetry exporters.
 
 ## Phase 4 – Collaborative Networking (In Progress – Target Q4 2025)
 - Peer registry, encrypted messaging, and admin-guarded endpoints are live.
 - DistributedScheduler and Sommeil Paradoxal coordinate idle-time optimisation
-  and background jobs.
+  and background jobs, broadcasting health metrics to peers.
 - Safe optimisation wrappers prevent destructive upgrades by executing changes in
   a sandbox.
-- Smarter load-aware scheduling now prioritises lower-risk peers using shared telemetry, and
-  nodes broadcast scheduler metrics for collaborative optimisation.
+- Remaining gaps: richer peer reputation scoring and replication of evolution
+  artefacts across the mesh.
 
 ## Phase 5 – Web Interface & API Refinement (Target Q1 2026)
-- FastAPI routes for `/token`, `/api/v1/conversation/chat`, `/api/v1/conversation/history`,
-  and peer management are implemented with Pydantic validation.
-- Django chat UI renders progressive templates and attempts to open a WebSocket
-  connection; the backend WebSocket handler still needs completion to match the
-  frontend expectations.
-- Planned work: consolidate validation rules, replace demo credential stores with
-  the database-backed auth flow, and publish polished client SDKs.
+- FastAPI routes for `/token`, `/api/v1/conversation/chat`,
+  `/api/v1/conversation/history`, `/api/v1/review/rag-context`, and peer
+  management are implemented with Pydantic validation.
+- Django chat UI renders progressive templates, and the FastAPI WebSocket handler
+  (`monGARS/api/ws_manager.py`) now authenticates tickets, replays history, and
+  streams responses when `WS_ENABLE_EVENTS` is true.
+- Planned work: consolidate validation rules, migrate demo credentials to the
+  database-backed auth flow, and publish polished client SDKs.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
 - ✅ Personality profiles persist via SQLModel and reload into memory-backed
-  caches on demand. When new conversations arrive the PersonalityEngine asks the
-  style fine-tuning adapters for a fresh analysis, applies the deltas, and
-  requeues a persistence task so database rows stay aligned with the latest
-  LoRA fingerprints.
-- ✅ SelfTrainingEngine captures dataset catalogue versions, curated record
-  counts, and training summaries for each simulated run. The trainer stub still
-  exercises placeholder loops, but every cycle now emits traceable metadata so a
-  real MNTP implementation can consume the same manifests without schema
-  changes.
+  caches on demand.
+- ✅ SelfTrainingEngine batches curated records, persists anonymised datasets, and
+  launches `modules.neurons.training.mntp_trainer.MNTPTrainer` for both curated
+  linear adapters and LoRA fine-tuning when dependencies are available.
 - 🚧 Reinforcement learning experiments remain future work. Open design notes in
   `docs/advanced_fine_tuning.md` describe candidate reward signals and replay
   buffers, but no executable pipeline exists yet.
-- ⚠️ Testing coverage for cognition and scheduling modules is substantive, while
-  WebSocket fan-out and hardware utility helpers still rely on smoke tests.
-  Expand targeted async WebSocket suites and Raspberry Pi/Jetson fakes before
-  declaring the phase complete.
+- ⚠️ Testing coverage for cognition and scheduling modules is solid; expand
+  end-to-end evaluations for long-running MNTP jobs and multi-replica Ray Serve
+  rollouts before declaring the phase complete.
 
 ## Phase 7 – Sustainability & Longevity (Future)
-- Evolution Engine orchestrates diagnostics and safe optimisation cycles but the
-  underlying training remains placeholder-heavy.
+- Evolution Engine orchestrates diagnostics and safe optimisation cycles, now
+  backed by tangible adapter artefacts.
 - Energy-usage reporting, advanced hardware-aware scaling, and cross-node sharing
-  of optimisation artefacts are open research topics.
+  of optimisation artefacts remain open research topics.
 
 ## Key Contradictions & Actions
-- **Testing maturity**: Update the roadmap to reflect that chaos/property/self-training
-  tests are substantive, not placeholders.
-- **LLM2Vec training**: Replace simulated MNTP trainer output with real masked
-  next-token training and manifest updates.
-- **Ray Serve**: Wire actual HTTP requests and replica rollouts in `LLMIntegration`
-  before advertising the integration as complete.
-- **WebSockets**: Implement the backend handler to satisfy the Django frontend’s
-  connection attempts.
+- **Schema evolution**: add Alembic migrations for new persistence tables so
+  deployments avoid relying on `init_db.py` bootstrap runs.
+- **Telemetry**: emit Ray Serve success/failure counters through OpenTelemetry to
+  complement structured logs.
+- **Credential hardening**: replace demo admin bootstrapping with the
+  database-backed auth workflow before exposing the stack beyond trusted labs.
+- **RAG operations**: document retention policies for the curated datasets stored
+  under `models/datasets/curated/` and ensure operators scrub sensitive context
+  before exporting artefacts.
