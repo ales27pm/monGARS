@@ -39,9 +39,12 @@ def client(monkeypatch):
 
     monkeypatch.setattr(ce, "spacy", types.SimpleNamespace(load=lambda n: object()))
 
+    captured_sessions: list[str | None] = []
+
     async def fake_generate_response(
         self, user_id, query, session_id=None, image_data=None
     ):
+        captured_sessions.append(session_id)
         return {
             "text": "ok",
             "confidence": 0.9,
@@ -53,6 +56,7 @@ def client(monkeypatch):
         ConversationalModule, "generate_response", fake_generate_response
     )
     client = TestClient(app)
+    client.captured_sessions = captured_sessions
     try:
         yield client
     finally:
@@ -83,6 +87,21 @@ async def test_chat_returns_response(client: TestClient):
 
     assert data["response"] == "ok"
     assert data["confidence"] == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_chat_forwards_session_id(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    session_id = "session-123"
+    resp = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hi", "session_id": session_id},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert client.captured_sessions[-1] == session_id
 
 
 @pytest.mark.asyncio

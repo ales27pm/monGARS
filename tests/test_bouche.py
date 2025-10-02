@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from monGARS.core.bouche import Bouche
+from monGARS.core.services import SpeakerService
 
 
 def _assert_segment_payload(turn_payload: dict) -> None:
@@ -57,3 +58,22 @@ async def test_bouche_conversation_profile_tracks_turns() -> None:
         (first_avg_pause + second_avg_pause) / 2
     )
     assert profile["average_pause"] >= 0.18
+
+
+@pytest.mark.asyncio
+async def test_speaker_service_tracks_state_per_session() -> None:
+    service = SpeakerService()
+
+    await service.speak("One", session_id="alpha")
+    await service.speak("Two", session_id="alpha")
+    await service.speak("Hello", session_id="beta")
+
+    alpha_profile = service.conversation_profile("alpha")
+    beta_profile = service.conversation_profile("beta")
+
+    assert alpha_profile["turn_count"] == 2
+    assert beta_profile["turn_count"] == 1
+
+    # Ensure the fallback session remains untouched when using explicit IDs.
+    default_profile = service.conversation_profile()
+    assert default_profile["turn_count"] == 0

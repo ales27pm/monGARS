@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Optional
 
 from monGARS.config import get_settings
-from monGARS.core.bouche import Bouche
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.evolution_engine import EvolutionEngine
@@ -46,7 +45,7 @@ class ConversationalModule:
         self.mimicry = mimicry or MimicryModule()
         self.captioner = captioner or ImageCaptioning()
         self.memory = memory or MemoryService(Hippocampus())
-        self.speaker = speaker or SpeakerService(Bouche())
+        self.speaker = speaker or SpeakerService()
         self.persistence = persistence or PersistenceRepository()
         self.evolution_engine = EvolutionEngine()
 
@@ -119,7 +118,8 @@ class ConversationalModule:
 
         processing_time = (datetime.utcnow() - start).total_seconds()
 
-        speech_turn = await self.speaker.speak(final)
+        speech_session_id = session_id or user_id
+        speech_turn = await self.speaker.speak(final, session_id=speech_session_id)
 
         await self.persistence.save_interaction(
             Interaction(

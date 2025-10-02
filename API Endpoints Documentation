@@ -10,8 +10,9 @@
 - **Description:** Send a chat message and receive a response.
 - **Request Body:**
   - `message` (string): The chat message.
-  - `context` (object): Additional context for the conversation.
-  - `personality_traits` (object): Personality traits of the user.
+  - `session_id` (string, optional): Identifier used to retain adaptive speech
+    tempo across turns for the same conversation. When omitted, the user's ID is
+    used so pacing still evolves during a session.
 - **Response:**
   - `200 OK`: The chat response payload containing:
     - `response` (string): The assistant's textual reply optimised for display.
