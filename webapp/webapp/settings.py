@@ -2,7 +2,8 @@ import os
 import socket
 from ipaddress import ip_address, ip_network
 from pathlib import Path
-from typing import Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from dotenv import load_dotenv
 
@@ -213,12 +214,182 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "webapp.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+
+def _sqlite_database_settings(path: str | None = None) -> dict[str, Any]:
+    """Return a SQLite configuration for explicit local development."""
+
+    sqlite_path = path or os.environ.get("DJANGO_SQLITE_PATH")
+    if not sqlite_path:
+        sqlite_path = str(BASE_DIR / "db.sqlite3")
+    return {"ENGINE": "django.db.backends.sqlite3", "NAME": sqlite_path}
+
+
+def _database_conn_max_age(engine: str) -> int:
+    """Return the connection persistence configured for ``engine``."""
+
+    env_value = os.environ.get("DJANGO_DB_CONN_MAX_AGE")
+    if env_value is not None:
+        try:
+            return int(env_value)
+        except ValueError as exc:
+            raise RuntimeError("DJANGO_DB_CONN_MAX_AGE must be an integer") from exc
+
+    return 0 if engine == "django.db.backends.sqlite3" else 60
+
+
+def _database_config_from_url(url: str) -> dict[str, Any]:
+    """Build a Django DATABASES configuration from a RFC-1738 style URL."""
+
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if "+" in scheme:
+        scheme = scheme.split("+", 1)[0]
+
+    if scheme in {"postgres", "postgresql"}:
+        engine = "django.db.backends.postgresql"
+    elif scheme in {"mysql", "mariadb"}:
+        engine = "django.db.backends.mysql"
+    elif scheme in {"sqlite", "sqlite3"}:
+        raw_path = f"{parsed.netloc or ''}{parsed.path or ''}"
+        if raw_path.startswith("//"):
+            normalized_path = "/" + unquote(raw_path.lstrip("/"))
+        else:
+            normalized_path = unquote(raw_path.lstrip("/"))
+        sqlite_name = normalized_path or ":memory:"
+        return _sqlite_database_settings(sqlite_name)
+    else:
+        raise RuntimeError(f"Unsupported database scheme: {parsed.scheme!r}")
+
+    name = unquote(parsed.path.lstrip("/")) or os.environ.get("DB_NAME") or ""
+    host = parsed.hostname or os.environ.get("DB_HOST", "")
+    port = str(parsed.port or os.environ.get("DB_PORT", ""))
+    user = (
+        unquote(parsed.username) if parsed.username else os.environ.get("DB_USER", "")
+    )
+    password = (
+        unquote(parsed.password)
+        if parsed.password
+        else os.environ.get("DB_PASSWORD", "")
+    )
+    options = {
+        key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     }
-}
+
+    config: dict[str, Any] = {
+        "ENGINE": engine,
+        "NAME": name,
+        "USER": user,
+        "PASSWORD": password,
+        "HOST": host,
+        "PORT": port,
+    }
+
+    conn_max_age = _database_conn_max_age(engine)
+    if conn_max_age:
+        config["CONN_MAX_AGE"] = conn_max_age
+
+    if options:
+        config["OPTIONS"] = options
+
+    return config
+
+
+def _database_config_from_discrete_env() -> dict[str, Any] | None:
+    """Derive database settings from ``DB_*`` environment variables."""
+
+    env_values = {key: os.environ.get(key) for key in ("DB_NAME", "DB_USER", "DB_HOST")}
+    engine_hint = os.environ.get("DB_ENGINE")
+    if not engine_hint and not any(env_values.values()):
+        return None
+
+    normalized_engine = (engine_hint or "postgresql").lower()
+    if normalized_engine in {"sqlite", "sqlite3"}:
+        sqlite_name = os.environ.get("DB_NAME") or os.environ.get("DB_PATH")
+        return _sqlite_database_settings(sqlite_name)
+    if normalized_engine in {"postgres", "postgresql", "psql"}:
+        engine = "django.db.backends.postgresql"
+    elif normalized_engine in {"mysql", "mariadb"}:
+        engine = "django.db.backends.mysql"
+    else:
+        engine = engine_hint or "django.db.backends.postgresql"
+
+    name = os.environ.get("DB_NAME") or os.environ.get("POSTGRES_DB", "mongars_db")
+    user = os.environ.get("DB_USER") or os.environ.get("POSTGRES_USER", "mongars")
+    password = os.environ.get("DB_PASSWORD") or os.environ.get(
+        "POSTGRES_PASSWORD", "changeme"
+    )
+    host = os.environ.get("DB_HOST") or "postgres"
+    port = str(os.environ.get("DB_PORT") or os.environ.get("POSTGRES_PORT") or "5432")
+
+    config: dict[str, Any] = {
+        "ENGINE": engine,
+        "NAME": name,
+        "USER": user,
+        "PASSWORD": password,
+        "HOST": host,
+        "PORT": port,
+    }
+
+    conn_max_age = _database_conn_max_age(engine)
+    if conn_max_age:
+        config["CONN_MAX_AGE"] = conn_max_age
+
+    return config
+
+
+def _default_postgres_settings() -> dict[str, Any]:
+    """Return the production-ready Postgres configuration."""
+
+    config: dict[str, Any] = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_NAME")
+        or os.environ.get("POSTGRES_DB")
+        or "mongars_db",
+        "USER": os.environ.get("DB_USER")
+        or os.environ.get("POSTGRES_USER")
+        or "mongars",
+        "PASSWORD": os.environ.get("DB_PASSWORD")
+        or os.environ.get("POSTGRES_PASSWORD")
+        or "changeme",
+        "HOST": os.environ.get("DB_HOST") or "postgres",
+        "PORT": str(
+            os.environ.get("DB_PORT") or os.environ.get("POSTGRES_PORT") or "5432"
+        ),
+    }
+
+    conn_max_age = _database_conn_max_age(config["ENGINE"])
+    if conn_max_age:
+        config["CONN_MAX_AGE"] = conn_max_age
+
+    return config
+
+
+def _build_database_settings() -> dict[str, Any]:
+    """Compose the DATABASES['default'] configuration from the environment."""
+
+    database_url = os.environ.get("DJANGO_DATABASE_URL") or os.environ.get(
+        "DATABASE_URL"
+    )
+    if database_url:
+        return _database_config_from_url(database_url)
+
+    discrete = _database_config_from_discrete_env()
+    if discrete:
+        return discrete
+
+    sqlite_requested = os.environ.get("DJANGO_USE_SQLITE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if sqlite_requested or os.environ.get("DJANGO_SQLITE_PATH"):
+        return _sqlite_database_settings()
+
+    return _default_postgres_settings()
+
+
+DATABASES = {"default": _build_database_settings()}
 
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
