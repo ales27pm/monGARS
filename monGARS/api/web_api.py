@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
+
+try:
+    from datetime import UTC  # Python 3.11+
+except ImportError:  # Python 3.10 fallback
+    from datetime import timezone
+
+    UTC = timezone.utc
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
