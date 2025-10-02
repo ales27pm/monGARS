@@ -3,6 +3,8 @@ import os
 os.environ.setdefault("SECRET_KEY", "test")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
+import asyncio
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -144,15 +146,17 @@ async def test_websocket_disconnect_removes_connection(client):
 class _DummyWebSocket:
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.event = asyncio.Event()
 
     async def accept(self) -> None:
         return None
 
-    async def close(self) -> None:
+    async def close(self, code: int | None = None) -> None:  # noqa: ARG002
         return None
 
     async def send_text(self, payload: str) -> None:
         self.sent.append(payload)
+        self.event.set()
 
 
 @pytest.mark.asyncio
@@ -161,14 +165,63 @@ async def test_rate_limiter_drops_events(monkeypatch):
     monkeypatch.setattr(ws_module.settings, "WS_RATE_LIMIT_MAX_TOKENS", 2)
     monkeypatch.setattr(ws_module.settings, "WS_RATE_LIMIT_REFILL_SECONDS", 60.0)
     ws = _DummyWebSocket()
-    await manager.connect(ws, "rate-user")
+    state = await manager.connect(ws, "rate-user")
+    state.sender_task = asyncio.create_task(ws_module._sender_loop(state))
 
     event = make_event("chat.message", "rate-user", {"seq": 1})
     await manager.send_event(event)
+    await asyncio.wait_for(ws.event.wait(), timeout=0.5)
+    ws.event.clear()
     await manager.send_event(event)
+    await asyncio.wait_for(ws.event.wait(), timeout=0.5)
+    ws.event.clear()
     await manager.send_event(event)
+    await asyncio.sleep(0.05)
 
     assert len(ws.sent) == 2
 
     await manager.disconnect(ws, "rate-user")
     assert not manager.connections
+
+
+@pytest.mark.asyncio
+async def test_websocket_acknowledges_client_messages(client):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    ticket = _issue_ws_ticket(client, token)
+
+    with _connect_ws(client, ticket) as ws:
+        ws.receive_json()
+        ws.receive_json()
+        payload = {
+            "id": str(uuid.uuid4()),
+            "type": "client.message",
+            "payload": {"ok": True},
+        }
+        ws.send_json(payload)
+        ack = ws.receive_json()
+        assert ack["type"] == "ack"
+        assert ack["id"] == payload["id"]
+        assert ack["payload"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_websocket_heartbeat_ping_pong(client, monkeypatch):
+    monkeypatch.setattr(ws_module.settings, "WS_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(ws_module.settings, "WS_HEARTBEAT_TIMEOUT_SECONDS", 0.2)
+
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    ticket = _issue_ws_ticket(client, token)
+
+    with _connect_ws(client, ticket) as ws:
+        ws.receive_json()
+        ws.receive_json()
+        ping = ws.receive_json()
+        assert ping["type"] == "ping"
+        ws.send_json({"id": ping["id"], "type": "pong", "payload": None})
+        ack = ws.receive_json()
+        assert ack["type"] == "ack"
+        assert ack["id"] == ping["id"]

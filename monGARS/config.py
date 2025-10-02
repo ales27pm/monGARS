@@ -200,6 +200,21 @@ class Settings(BaseSettings):
         ),
     )
     WS_TICKET_TTL_SECONDS: int = Field(default=45, ge=1)
+    WS_CONNECTION_QUEUE_SIZE: int = Field(
+        default=32,
+        ge=1,
+        description="Maximum number of outbound events buffered per WebSocket connection.",
+    )
+    WS_HEARTBEAT_INTERVAL_SECONDS: float = Field(
+        default=20.0,
+        gt=0.0,
+        description="Interval in seconds between ping heartbeats for WebSocket connections.",
+    )
+    WS_HEARTBEAT_TIMEOUT_SECONDS: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="Maximum allowed silence after a ping before the WebSocket connection is closed.",
+    )
     REDIS_URL: AnyUrl | None = Field(
         default=None,
         description="Optional override for the Redis connection string, e.g. redis://localhost:6379/0.",

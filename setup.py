@@ -44,5 +44,6 @@ setup(
         "oauthlib>=3.3.1",
         "requests-oauthlib>=2.0.0",
         "websocket-client>=1.8.0",
+        "websockets>=12.0",
     ],
 )
