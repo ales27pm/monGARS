@@ -4,11 +4,14 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 import httpx
+from opentelemetry import metrics
 
 try:  # pragma: no cover - optional dependency during tests
     import ollama
@@ -34,6 +37,29 @@ logger = logging.getLogger(__name__)
 STREAM_CHUNK_SIZE = 64
 
 T = TypeVar("T")
+
+
+meter = metrics.get_meter(__name__)
+_RAY_REQUEST_COUNTER = meter.create_counter(
+    "llm.ray.requests",
+    unit="1",
+    description="Number of Ray Serve inference attempts",
+)
+_RAY_FAILURE_COUNTER = meter.create_counter(
+    "llm.ray.failures",
+    unit="1",
+    description="Number of Ray Serve inference attempts that failed",
+)
+_RAY_SCALING_COUNTER = meter.create_counter(
+    "llm.ray.scaling_events",
+    unit="1",
+    description="Number of Ray Serve scaling or throttling events",
+)
+_RAY_LATENCY_HISTOGRAM = meter.create_histogram(
+    "llm.ray.latency",
+    unit="s",
+    description="Latency distribution for Ray Serve responses",
+)
 
 
 class AsyncTTLCache:
@@ -138,6 +164,9 @@ class LLMIntegration:
         self.coding_model = coding_definition.name
         self._ensure_models_lock = asyncio.Lock()
         self._models_ready = False
+        self._metrics_enabled = bool(
+            getattr(self._settings, "otel_metrics_enabled", False)
+        )
         use_ray_env = os.getenv("USE_RAY_SERVE")
         # Default to Ray Serve to activate distributed inference once configured.
         self.use_ray = (
@@ -564,17 +593,26 @@ class LLMIntegration:
                 payload["adapter"] = adapter
             endpoints = await self._prepare_ray_endpoints()
             if not endpoints:
+                self._record_ray_failure("configuration", endpoint=None)
                 raise RuntimeError("No Ray Serve endpoints configured")
             max_attempts = max(
                 len(endpoints) * self._ray_max_scale_cycles, len(endpoints)
             )
             last_exception: Exception | None = None
+            last_endpoint: str | None = None
             async with httpx.AsyncClient(
                 timeout=self._ray_client_timeout,
                 limits=self._ray_client_limits,
             ) as client:
                 for attempt in range(max_attempts):
                     endpoint = endpoints[attempt % len(endpoints)]
+                    last_endpoint = endpoint
+                    attributes = self._ray_metric_attributes(
+                        endpoint, status="attempt", attempt=attempt + 1
+                    )
+                    if attributes:
+                        _RAY_REQUEST_COUNTER.add(1, attributes)
+                    start_time = time.perf_counter()
                     try:
                         resp = await client.post(endpoint, json=payload)
                         resp.raise_for_status()
@@ -590,6 +628,9 @@ class LLMIntegration:
                                     "delay_seconds": delay,
                                 },
                             )
+                            self._record_ray_scaling_event(
+                                endpoint, status_code=status_code
+                            )
                             await asyncio.sleep(delay)
                             last_exception = exc
                             continue
@@ -601,15 +642,26 @@ class LLMIntegration:
                                     "status_code": status_code,
                                 },
                             )
+                            self._record_ray_failure(
+                                "server_error",
+                                endpoint=endpoint,
+                                status_code=status_code,
+                            )
                             await asyncio.sleep(min(2**attempt, 5))
                             last_exception = exc
                             continue
+                        self._record_ray_failure(
+                            "client_error",
+                            endpoint=endpoint,
+                            status_code=status_code,
+                        )
                         raise
                     except httpx.RequestError as exc:
                         logger.warning(
                             "llm.ray.transport_error",
                             extra={"endpoint": endpoint, "error": str(exc)},
                         )
+                        self._record_ray_failure("transport_error", endpoint=endpoint)
                         await asyncio.sleep(min(2**attempt, 5))
                         last_exception = exc
                         continue
@@ -621,10 +673,17 @@ class LLMIntegration:
                             "llm.ray.invalid_json",
                             extra={"status_code": resp.status_code},
                         )
+                        self._record_ray_failure(
+                            "invalid_json",
+                            endpoint=endpoint,
+                            status_code=getattr(resp, "status_code", None),
+                        )
                         raise RuntimeError("Ray Serve returned invalid JSON") from exc
 
                     await self._record_ray_success(endpoint)
+                    self._record_ray_latency(endpoint, time.perf_counter() - start_time)
                     return data
+            self._record_ray_failure("exhausted", endpoint=last_endpoint)
             raise RuntimeError("Ray Serve request failed") from last_exception
 
         return await self._ray_cb.call(call_api)
@@ -646,6 +705,66 @@ class LLMIntegration:
             except ValueError:
                 return
             self._ray_endpoint_index = (index + 1) % len(self._ray_endpoints)
+
+    def _ray_metric_attributes(
+        self,
+        endpoint: str | None,
+        **extra: str | int | float | bool | None,
+    ) -> dict[str, str | int | float | bool] | None:
+        if not self._metrics_enabled:
+            return None
+        host = "unknown"
+        path = ""
+        if endpoint:
+            parsed = urlparse(endpoint)
+            host = parsed.netloc or "unknown"
+            path = parsed.path or ""
+        attributes: dict[str, str | int | float | bool] = {
+            "endpoint": host
+        }
+        if path and path != "/":
+            attributes["path"] = path
+        for key, value in extra.items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                attributes[key] = value
+            else:  # pragma: no cover - defensive conversion
+                attributes[key] = str(value)
+        return attributes
+
+    def _record_ray_failure(
+        self,
+        reason: str,
+        *,
+        endpoint: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        attributes = self._ray_metric_attributes(
+            endpoint,
+            status="failure",
+            reason=reason,
+            status_code=status_code,
+        )
+        if attributes:
+            _RAY_FAILURE_COUNTER.add(1, attributes)
+
+    def _record_ray_latency(self, endpoint: str, duration: float) -> None:
+        attributes = self._ray_metric_attributes(endpoint, status="success")
+        if attributes:
+            _RAY_LATENCY_HISTOGRAM.record(duration, attributes)
+
+    def _record_ray_scaling_event(
+        self, endpoint: str, *, status_code: int | None = None
+    ) -> None:
+        attributes = self._ray_metric_attributes(
+            endpoint,
+            status="scaling",
+            reason="status_code",
+            status_code=status_code,
+        )
+        if attributes:
+            _RAY_SCALING_COUNTER.add(1, attributes)
 
     def _scale_delay(self, attempt: int, response: httpx.Response | None) -> float:
         if response is not None:
