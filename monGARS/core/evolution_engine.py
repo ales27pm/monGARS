@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from statistics import fmean
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
 from kubernetes import client, config
 
+from modules.evolution_engine.energy import EnergyTracker
+from modules.evolution_engine.hardware import HardwareProfile
+from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from monGARS.config import get_settings
 from monGARS.core.monitor import SystemMonitor, SystemStats
+from monGARS.core.peer import PeerCommunicator
 
 from .ui_events import event_bus, make_event
 
@@ -28,12 +35,40 @@ class PerformanceIssue:
     details: dict[str, float | int]
 
 
+@dataclass(frozen=True)
+class TrainingRunResult:
+    """Summary of a completed training pipeline run."""
+
+    artifact_path: Path
+    summary: dict[str, Any]
+    energy: dict[str, Any] | None
+
+
 class EvolutionEngine:
-    def __init__(self) -> None:
-        self.monitor = SystemMonitor(update_interval=1)
+    def __init__(
+        self,
+        *,
+        monitor: SystemMonitor | None = None,
+        orchestrator_factory: Callable[[], EvolutionOrchestrator] | None = None,
+        peer_communicator: PeerCommunicator | None = None,
+    ) -> None:
+        self.monitor = monitor or SystemMonitor(update_interval=1)
         self._stat_history: deque[SystemStats] = deque(maxlen=10)
         self._last_scale_timestamp: float = 0.0
         self._scale_cooldown_seconds: int = 60
+        self._hardware_profile = HardwareProfile.detect()
+        baseline_watts = self._hardware_profile.estimate_training_power_draw()
+        if orchestrator_factory is None:
+            self._orchestrator_factory: Callable[[], EvolutionOrchestrator] = (
+                lambda: EvolutionOrchestrator(
+                    energy_tracker_factory=lambda: EnergyTracker(
+                        baseline_cpu_power_watts=baseline_watts
+                    )
+                )
+            )
+        else:
+            self._orchestrator_factory = orchestrator_factory
+        self._peer_communicator = peer_communicator or PeerCommunicator()
 
     async def diagnose_performance(self) -> list[PerformanceIssue]:
         """Analyze system statistics and return actionable performance issues."""
@@ -169,6 +204,19 @@ class EvolutionEngine:
         if delta == 0:
             return
 
+        if current_replicas is not None:
+            delta = self._constrain_scale_delta(delta, current_replicas)
+            if delta == 0:
+                logger.info(
+                    "Skipping worker scale due to hardware bounds",
+                    extra={
+                        "reason": reason,
+                        "current": current_replicas,
+                        "hardware": self._hardware_profile.to_snapshot(),
+                    },
+                )
+                return
+
         if current_replicas is not None and current_replicas + delta < 1:
             logger.info(
                 "Skipping worker scale %s to avoid zero replicas",
@@ -279,8 +327,10 @@ class EvolutionEngine:
             "evolution.train_cycle.start",
             extra={"user_id": user_id, "version": version},
         )
+        training_result: TrainingRunResult | None = None
         try:
             await self.apply_optimizations()
+            training_result = await self._execute_training_run(version=version)
         except Exception as exc:
             await event_bus().publish(
                 make_event(
@@ -295,17 +345,148 @@ class EvolutionEngine:
             )
             raise
 
-        await event_bus().publish(
-            make_event(
-                "evolution_engine.training_complete",
-                user_id,
-                {"version": version},
+        if training_result is not None:
+            await self._share_training_summary(
+                training_result, user_id=user_id, version=version
             )
+            event_payload = {
+                "version": version,
+                "status": training_result.summary.get("status"),
+                "artifacts": training_result.summary.get("artifacts", {}),
+                "metrics": training_result.summary.get("metrics", {}),
+                "energy": training_result.energy,
+            }
+            await event_bus().publish(
+                make_event(
+                    "evolution_engine.training_complete",
+                    user_id,
+                    event_payload,
+                )
+            )
+            logger.info(
+                "evolution.train_cycle.complete",
+                extra={
+                    "user_id": user_id,
+                    "version": version,
+                    "artifacts": training_result.summary.get("artifacts", {}),
+                    "energy_wh": (
+                        training_result.energy.get("energy_wh")
+                        if training_result.energy
+                        else None
+                    ),
+                },
+            )
+
+    def _constrain_scale_delta(self, delta: int, current: int) -> int:
+        if delta > 0:
+            max_replicas = self._hardware_profile.max_recommended_workers(
+                settings.workers
+            )
+            if current >= max_replicas:
+                return 0
+            if current + delta > max_replicas:
+                adjusted = max_replicas - current
+                logger.info(
+                    "Adjusting scale up to hardware ceiling",
+                    extra={
+                        "requested_delta": delta,
+                        "adjusted_delta": adjusted,
+                        "max_replicas": max_replicas,
+                    },
+                )
+                return adjusted
+        elif delta < 0:
+            min_replicas = self._hardware_profile.min_recommended_workers()
+            if current + delta < min_replicas:
+                adjusted = min_replicas - current
+                if adjusted >= 0:
+                    logger.info(
+                        "Skipping scale down to respect hardware floor",
+                        extra={
+                            "requested_delta": delta,
+                            "current": current,
+                            "min_replicas": min_replicas,
+                        },
+                    )
+                    return 0
+                logger.info(
+                    "Adjusting scale down to hardware floor",
+                    extra={
+                        "requested_delta": delta,
+                        "adjusted_delta": adjusted,
+                        "min_replicas": min_replicas,
+                    },
+                )
+                return adjusted
+        return delta
+
+    async def _execute_training_run(self, *, version: str) -> TrainingRunResult:
+        orchestrator = self._orchestrator_factory()
+        loop = asyncio.get_running_loop()
+        run_path_str = await loop.run_in_executor(
+            None, orchestrator.trigger_encoder_training_pipeline
         )
-        logger.info(
-            "evolution.train_cycle.complete",
-            extra={"user_id": user_id, "version": version},
+        run_path = Path(run_path_str)
+        summary = self._load_json(run_path / "training_summary.json") or {}
+        energy = self._load_json(run_path / "energy_report.json")
+        summary.setdefault("version", version)
+        return TrainingRunResult(artifact_path=run_path, summary=summary, energy=energy)
+
+    async def _share_training_summary(
+        self,
+        result: TrainingRunResult,
+        *,
+        user_id: str | None,
+        version: str,
+    ) -> None:
+        telemetry = {
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "source": settings.host,
+            "training_version": version,
+            "status": result.summary.get("status"),
+            "artifacts": result.summary.get("artifacts", {}),
+            "metrics": result.summary.get("metrics", {}),
+            "energy": result.energy,
+            "hardware": self._hardware_profile.to_snapshot(),
+            "user": user_id,
+        }
+        if self._peer_communicator:
+            self._peer_communicator.update_local_telemetry(telemetry)
+            try:
+                await self._peer_communicator.broadcast_telemetry(telemetry)
+            except Exception:  # pragma: no cover - defensive guard
+                logger.warning(
+                    "Failed to broadcast training telemetry",
+                    extra={"version": version},
+                    exc_info=True,
+                )
+
+    def _load_json(self, path: Path) -> dict[str, Any] | None:
+        try:
+            raw = path.read_text()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "training_summary.read_failed",
+                extra={"path": str(path), "error": str(exc)},
+            )
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "training_summary.invalid_json",
+                extra={"path": str(path), "error": str(exc)},
+            )
+            return None
+        if isinstance(data, dict):
+            return data
+        logger.warning(
+            "training_summary.unexpected_payload",
+            extra={"path": str(path), "type": type(data).__name__},
         )
+        return None
 
 
 def _collect_numeric(values: Iterable[float | None]) -> list[float]:

@@ -206,6 +206,16 @@ def test_orchestrator_updates_manifest_on_success(
     assert adapter_dir == run_path / "adapter"
     assert weights_path == run_path / "adapter" / "adapter.bin"
 
+    energy_report = run_path / "energy_report.json"
+    assert energy_report.exists()
+    energy_payload = json.loads(energy_report.read_text())
+    assert "energy_wh" in energy_payload
+
+    summary_payload = json.loads((run_path / "training_summary.json").read_text())
+    assert summary_payload["metrics"]["energy_wh"] == pytest.approx(
+        energy_payload["energy_wh"], rel=1e-3, abs=1e-4
+    )
+
     latest_link = Path(temp_dir) / "latest"
     assert latest_link.exists(), "The 'latest' symlink was not created"
     assert latest_link.is_symlink()
