@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
 
 from monGARS.config import get_settings
 from monGARS.core.persistence import PersistenceRepository
@@ -64,6 +65,25 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     try:
         payload = sec.verify_token(token)
     except Exception as exc:  # pragma: no cover - FastAPI handles response
+        missing_subject = False
+        try:
+            claims = jwt.get_unverified_claims(token)
+        except JWTError:
+            claims = {}
+        if isinstance(claims, Mapping):
+            subject = claims.get("sub")
+            missing_subject = subject is None or (
+                isinstance(subject, str) and not subject
+            )
+        if missing_subject:
+            logger.warning(
+                "auth.invalid_token_missing_sub_unverified",
+                extra={"payload_type": type(claims).__name__},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing subject",
+            ) from exc
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
     subject = None
     if isinstance(payload, Mapping):
