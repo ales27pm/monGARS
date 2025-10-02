@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app
 from monGARS.core.conversation import ConversationalModule
+from monGARS.core.security import SecurityManager
 
 
 def _speech_turn_payload(text: str) -> dict:
@@ -149,3 +150,17 @@ async def test_chat_session_id_too_long_returns_422(client: TestClient):
 async def test_chat_requires_auth(client: TestClient):
     resp = client.post("/api/v1/conversation/chat", json={"message": "hello"})
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_chat_missing_sub_in_token_returns_401(client: TestClient):
+    token = SecurityManager(secret_key="test", algorithm="HS256").create_access_token(
+        {"admin": False}
+    )
+    resp = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid token: missing subject"
