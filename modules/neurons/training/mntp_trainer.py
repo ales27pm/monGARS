@@ -514,7 +514,11 @@ class MNTPTrainer:
 
     def _compute_file_checksum(self, path: Path) -> str:
         try:
-            data = path.read_bytes()
+        try:
+            hasher = hashlib.sha256()
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
         except OSError as exc:
             logger.error(
                 "Failed to compute checksum for artifact",
@@ -522,7 +526,7 @@ class MNTPTrainer:
                 exc_info=exc,
             )
             raise RuntimeError("Failed to compute artifact checksum") from exc
-        return hashlib.sha256(data).hexdigest()
+        return hasher.hexdigest()
 
     def _derive_fallback_weights(self) -> dict[str, Any]:
         fingerprint: dict[str, Any] = {
