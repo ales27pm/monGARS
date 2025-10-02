@@ -327,7 +327,7 @@ def _prepare_ack(
     raw_id = message.get("id")
     if isinstance(raw_id, str) and raw_id:
         ack_id = raw_id
-    elif msg_type not in {"client.ping"}:
+    elif msg_type != "client.ping":
         errors.append("missing_id")
 
     if errors:
@@ -354,7 +354,8 @@ def _prepare_ack(
 
     if msg_type == "client.ping":
         state.mark_pong()
-        state.expected_pong = None
+        if state.expected_pong and raw_id == state.expected_pong:
+            state.expected_pong = None
         return {
             "id": ack_id,
             "type": "ack",

@@ -18,7 +18,6 @@ from monGARS.config import get_settings
 
 from .security import SecurityManager, decrypt_token, encrypt_token
 
-
 logger = logging.getLogger(__name__)
 
 
