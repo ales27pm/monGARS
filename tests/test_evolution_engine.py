@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from modules.evolution_engine.hardware import HardwareProfile
-from monGARS.config import get_settings
+from monGARS.config import HardwareHeuristics, get_settings
 from monGARS.core.evolution_engine import EvolutionEngine, PerformanceIssue
 from monGARS.core.monitor import SystemStats
 
@@ -185,3 +185,49 @@ async def test_train_cycle_executes_training_and_broadcasts(
     assert bus.events
     event = bus.events[-1]
     assert event.data["energy"]["energy_wh"] == 1.25
+
+
+def test_hardware_profile_uses_configured_heuristics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HARDWARE_HEURISTICS__BASE_POWER_DRAW", "55.5")
+    monkeypatch.setenv("HARDWARE_HEURISTICS__GPU_WORKER_BONUS", "4")
+    get_settings.cache_clear()
+    try:
+        profile = HardwareProfile.detect()
+        assert profile.heuristics.base_power_draw == 55.5
+        assert profile.heuristics.gpu_worker_bonus == 4
+    finally:
+        get_settings.cache_clear()
+
+
+def test_custom_heuristics_affect_estimations() -> None:
+    heuristics = HardwareHeuristics(
+        base_power_draw=10.0,
+        power_per_core=1.0,
+        power_per_gpu=50.0,
+        minimum_power_draw=5.0,
+        low_memory_power_threshold_gb=32.0,
+        low_memory_power_scale=0.5,
+        cpu_capacity_divisor=1,
+        gpu_worker_bonus=5,
+        worker_low_memory_soft_limit_gb=32.0,
+        worker_memory_floor_gb=16.0,
+        worker_low_memory_increment=3,
+        worker_default_increment=6,
+        warm_pool_memory_threshold_gb=1.0,
+        warm_pool_divisor=1,
+        warm_pool_cap=10,
+        warm_pool_floor=2,
+    )
+    profile = HardwareProfile(
+        physical_cores=2,
+        logical_cpus=4,
+        total_memory_gb=16.0,
+        gpu_count=1,
+        heuristics=heuristics,
+    )
+
+    assert profile.estimate_training_power_draw() == pytest.approx(31.0)
+    assert profile.max_recommended_workers(configured_default=1) == 8
+    assert profile.min_recommended_workers() == 2

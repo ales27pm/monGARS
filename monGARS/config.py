@@ -19,7 +19,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from pydantic import (
     AnyUrl,
+    BaseModel,
     BeforeValidator,
+    ConfigDict,
     Field,
     PostgresDsn,
     RedisDsn,
@@ -52,6 +54,29 @@ def _parse_env_bool(value: Any) -> bool:
 EnvBool = Annotated[bool, BeforeValidator(_parse_env_bool)]
 
 
+class HardwareHeuristics(BaseModel):
+    """Tunable parameters for hardware-aware scaling and power estimation."""
+
+    model_config = ConfigDict(alias_generator=str.upper, populate_by_name=True)
+
+    base_power_draw: float = Field(default=20.0, ge=0.0)
+    power_per_core: float = Field(default=5.0, ge=0.0)
+    power_per_gpu: float = Field(default=75.0, ge=0.0)
+    minimum_power_draw: float = Field(default=15.0, ge=0.0)
+    low_memory_power_threshold_gb: float = Field(default=8.0, ge=0.0)
+    low_memory_power_scale: float = Field(default=0.8, ge=0.0)
+    cpu_capacity_divisor: int = Field(default=2, ge=1)
+    gpu_worker_bonus: int = Field(default=2, ge=0)
+    worker_low_memory_soft_limit_gb: float = Field(default=8.0, ge=0.0)
+    worker_memory_floor_gb: float = Field(default=4.0, ge=0.0)
+    worker_low_memory_increment: int = Field(default=1, ge=0)
+    worker_default_increment: int = Field(default=2, ge=0)
+    warm_pool_memory_threshold_gb: float = Field(default=2.0, ge=0.0)
+    warm_pool_divisor: int = Field(default=4, ge=1)
+    warm_pool_cap: int = Field(default=2, ge=1)
+    warm_pool_floor: int = Field(default=1, ge=1)
+
+
 class Settings(BaseSettings):
     """Application configuration."""
 
@@ -61,6 +86,7 @@ class Settings(BaseSettings):
         extra="ignore",
         alias_generator=str.upper,
         populate_by_name=True,
+        env_nested_delimiter="__",
     )
 
     app_name: str = "monGARS"
@@ -70,6 +96,10 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1")
     port: int = Field(default=8000)
     workers: int = recommended_worker_count()
+    hardware_heuristics: HardwareHeuristics = Field(
+        default_factory=HardwareHeuristics,
+        description="Parameters controlling hardware-aware scaling and power estimation.",
+    )
     worker_deployment_name: str = Field(default="mongars-workers")
     worker_deployment_namespace: str = Field(default="default")
 
