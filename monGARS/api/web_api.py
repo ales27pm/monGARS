@@ -172,9 +172,18 @@ async def chat(
     current_user: Annotated[dict, Depends(get_current_user)],
     conv: Annotated[ConversationalModule, Depends(get_conversational_module)],
 ) -> ChatResponse:
-    data = validate_user_input(
-        {"user_id": current_user.get("sub"), "query": chat.message}
-    )
+    try:
+        data = validate_user_input(
+            {"user_id": current_user.get("sub"), "query": chat.message}
+        )
+    except ValueError as exc:
+        logger.warning(
+            "web_api.chat_invalid_input",
+            extra={"user": current_user.get("sub"), "detail": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     try:
         result = await conv.generate_response(
             current_user.get("sub"), data["query"], session_id=chat.session_id
@@ -195,8 +204,7 @@ async def chat(
         )
         await event_bus().publish(event)
     except Exception:  # pragma: no cover - defensive logging
-        logger = logging.getLogger(__name__)
-        logger.exception("web_api.chat_event_publish_failed")
+        logging.getLogger(__name__).exception("web_api.chat_event_publish_failed")
     return ChatResponse(
         response=response_payload["response"],
         confidence=result.get("confidence", 0.0),
