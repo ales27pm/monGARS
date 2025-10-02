@@ -189,6 +189,7 @@ async def test_scheduler_routes_to_least_loaded(monkeypatch):
 
     async def noop_broadcast(payload):
         communicator.update_local_telemetry(payload)
+        return True
 
     monkeypatch.setattr(communicator, "broadcast_telemetry", noop_broadcast)
     routed: list[tuple[tuple[str, ...], dict[str, Any]]] = []
@@ -236,6 +237,7 @@ async def test_scheduler_falls_back_to_broadcast_when_no_better_peer(monkeypatch
 
     async def noop_broadcast(payload):
         communicator.update_local_telemetry(payload)
+        return True
 
     monkeypatch.setattr(communicator, "broadcast_telemetry", noop_broadcast)
 
@@ -306,6 +308,7 @@ async def test_scheduler_prefers_cached_peer_load(monkeypatch):
 
     async def noop_broadcast(payload):
         communicator.update_local_telemetry(payload)
+        return True
 
     monkeypatch.setattr(communicator, "send_to", fake_send_to)
     monkeypatch.setattr(communicator, "send", fake_send)

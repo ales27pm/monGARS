@@ -257,8 +257,9 @@ class DistributedScheduler:
         broadcast = getattr(self.communicator, "broadcast_telemetry", None)
         if broadcast is None:
             return
+        success = False
         try:
-            await broadcast(payload)
+            success = await broadcast(payload)
         except Exception:  # pragma: no cover - defensive
             logger.warning(
                 "scheduler.telemetry_broadcast_failed",
@@ -267,7 +268,8 @@ class DistributedScheduler:
             )
             return
 
-        self._telemetry_last_broadcast = time.monotonic()
+        if success:
+            self._telemetry_last_broadcast = time.monotonic()
 
     async def run(self) -> None:
         if self._running:
