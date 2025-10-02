@@ -125,9 +125,11 @@ class WebSocketManager:
             state.closed = True
             sender = state.sender_task
             if sender:
+                current = asyncio.current_task()
                 sender.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await sender
+                if sender is not current:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await sender
         with contextlib.suppress(Exception):
             await ws.close(code=code)
 
@@ -217,10 +219,13 @@ class WebSocketManager:
             self._reverse.clear()
             self._state.clear()
             self._buckets.clear()
+        current = asyncio.current_task()
         for state in states:
             sender = state.sender_task
             if sender:
                 sender.cancel()
+                if sender is current:
+                    continue
                 with contextlib.suppress(asyncio.CancelledError):
                     await sender
         for ws in sockets:
