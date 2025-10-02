@@ -138,7 +138,7 @@ services:
       - mongars
 
   postgres:
-    image: ankane/pgvector:latest
+    image: pgvector/pgvector:pg18
     container_name: mongars-postgres
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
