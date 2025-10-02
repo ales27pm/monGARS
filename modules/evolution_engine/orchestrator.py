@@ -131,6 +131,9 @@ class EvolutionOrchestrator:
                     "Trainer produced adapter weights outside orchestrator output directory"
                 ) from exc
 
+        if energy_report is not None:
+            self._augment_summary_with_energy(unique_dir, summary, energy_report)
+
         try:
             manifest = update_manifest(self.model_registry_path, summary)
         except Exception:
@@ -144,9 +147,6 @@ class EvolutionOrchestrator:
                 exc_info=True,
             )
             raise
-
-        if energy_report is not None:
-            self._augment_summary_with_energy(unique_dir, summary, energy_report)
         logger.info(
             "Pipeline finished",
             extra={
@@ -164,10 +164,10 @@ class EvolutionOrchestrator:
         summary: dict[str, object],
         report: EnergyUsageReport,
     ) -> None:
-        metrics = summary.setdefault("metrics", {})
-        if not isinstance(metrics, dict):
-            metrics = {}
-            summary["metrics"] = metrics
+        if not isinstance(summary.get("metrics"), dict):
+            summary["metrics"] = {}
+
+        metrics = summary["metrics"]
         metrics.update(
             {
                 "energy_wh": round(report.energy_wh, 4),

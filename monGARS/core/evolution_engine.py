@@ -399,6 +399,16 @@ class EvolutionEngine:
             min_replicas = self._hardware_profile.min_recommended_workers()
             if current + delta < min_replicas:
                 adjusted = min_replicas - current
+                if adjusted >= 0:
+                    logger.info(
+                        "Skipping scale down to respect hardware floor",
+                        extra={
+                            "requested_delta": delta,
+                            "current": current,
+                            "min_replicas": min_replicas,
+                        },
+                    )
+                    return 0
                 logger.info(
                     "Adjusting scale down to hardware floor",
                     extra={
@@ -436,12 +446,7 @@ class EvolutionEngine:
             "status": result.summary.get("status"),
             "artifacts": result.summary.get("artifacts", {}),
             "metrics": result.summary.get("metrics", {}),
-            "energy": result.energy
-            or (
-                result.summary.get("telemetry", {}).get("energy")
-                if isinstance(result.summary.get("telemetry"), dict)
-                else None
-            ),
+            "energy": result.energy,
             "hardware": self._hardware_profile.to_snapshot(),
             "user": user_id,
         }

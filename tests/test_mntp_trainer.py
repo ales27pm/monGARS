@@ -213,7 +213,7 @@ def test_orchestrator_updates_manifest_on_success(
 
     summary_payload = json.loads((run_path / "training_summary.json").read_text())
     assert summary_payload["metrics"]["energy_wh"] == pytest.approx(
-        energy_payload["energy_wh"]
+        energy_payload["energy_wh"], rel=1e-3, abs=1e-4
     )
 
     latest_link = Path(temp_dir) / "latest"

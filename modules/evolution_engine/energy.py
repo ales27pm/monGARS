@@ -51,6 +51,7 @@ class EnergyTracker:
         self._start_time: float | None = None
         self._tracker = None
         self._backend = "psutil"
+        self._last_report: EnergyUsageReport | None = None
 
     def start(self) -> None:
         """Begin tracking energy usage for the current process."""
@@ -116,11 +117,16 @@ class EnergyTracker:
                 data = self._tracker.stop()
                 backend = "codecarbon"
                 if data is not None:
-                    energy_wh = float(getattr(data, "energy_consumed", energy_wh))
-                    emissions_grams = float(getattr(data, "emissions", 0.0))
-                    carbon_intensity = float(
-                        getattr(data, "emissions_rate", carbon_intensity or 0.0)
+                    energy_kwh = getattr(data, "energy_consumed", None)
+                    if energy_kwh is not None:
+                        energy_wh = float(energy_kwh) * 1000.0
+                    emissions_kg = getattr(data, "emissions", None)
+                    if emissions_kg is not None:
+                        emissions_grams = float(emissions_kg) * 1000.0
+                    emissions_rate = getattr(
+                        data, "emissions_rate", carbon_intensity or 0.0
                     )
+                    carbon_intensity = float(emissions_rate) * 1000.0
             except Exception as exc:  # pragma: no cover - defensive guard
                 logger.warning(
                     "energy_tracker.emissions_stop_failed",
@@ -128,7 +134,7 @@ class EnergyTracker:
                 )
                 backend = "psutil"
 
-        return EnergyUsageReport(
+        report = EnergyUsageReport(
             energy_wh=energy_wh,
             duration_seconds=duration,
             cpu_seconds=cpu_seconds,
@@ -137,16 +143,24 @@ class EnergyTracker:
             emissions_grams=emissions_grams,
             carbon_intensity_g_co2_per_kwh=carbon_intensity,
         )
+        self._last_report = report
+        return report
 
     @contextmanager
-    def track(self) -> Iterator[None]:
+    def track(self) -> Iterator["EnergyTracker"]:
         """Context manager to track energy usage for a block."""
 
         self.start()
         try:
-            yield
+            yield self
         finally:
             try:
                 self.stop()
             except Exception:  # pragma: no cover - defensive guard
                 logger.exception("energy_tracker.stop_failed")
+
+    @property
+    def last_report(self) -> EnergyUsageReport | None:
+        """Return the most recent energy usage report, if available."""
+
+        return self._last_report
