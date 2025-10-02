@@ -11,6 +11,7 @@ architecture or naming conventions change.
 | Security model | `monGARS/api/authentication.py`, `monGARS/core/security.py` | OAuth2 password flow, JWT issuance, Fernet utilities. |
 | Backend scaffolding | `monGARS/api/dependencies.py` | Dependency injection helpers for FastAPI routes. |
 | Speech/Browser clients | `monGARS/api/ws_manager.py` | WebSocket fan-out with connection bookkeeping. |
+| RAG enrichment API | `monGARS/api/review.py`, `monGARS/core/rag/context_enricher.py` | `/api/v1/review/rag-context` endpoint, typed client, and enrichment fallbacks. |
 
 ## Core Services
 | Memory Term | Repository Target | Notes |
@@ -20,6 +21,8 @@ architecture or naming conventions change.
 | Evolution Engine / Sommeil Paradoxal | `monGARS/core/evolution_engine.py`, `monGARS/core/sommeil.py` | Diagnostics, safe optimisation, idle-time triggers. |
 | Mémoire Autobiographique | `monGARS/core/logging.py`, `monGARS/core/ui_events.py` | Structured logging and typed event bus. |
 | Tronc (neuro-symbolic reasoning) | `monGARS/core/neuro_symbolic/advanced_reasoner.py` | Heuristic reasoning hints for the LLM pipeline. |
+| Self-training loop | `monGARS/core/self_training.py`, `modules/neurons/training/mntp_trainer.py` | Curated dataset batching plus MNTP/LoRA training with fallbacks. |
+| Distributed inference | `monGARS/core/llm_integration.py`, `modules/ray_service.py` | Ray Serve HTTP client, adapter manifest sync, and Serve deployment. |
 
 ## Testing Infrastructure
 | Memory Term | Repository Target | Notes |
@@ -36,6 +39,7 @@ architecture or naming conventions change.
 | Background scheduling | `tasks.py`, `monGARS/core/distributed_scheduler.py` | Celery-style helpers and async queues. |
 | Container orchestration | `docker-compose.yml`, `Dockerfile*` | Local stack provisioning and build scripts. |
 | Kubernetes manifests | `k8s/*.yaml` | Deployments, Prometheus scraping, RBAC, secrets. |
+| RAG configuration | `monGARS/config.py`, `docs/rag_context_enrichment.md` | Feature flag (`rag_enabled`), service URL, and enrichment documentation. |
 
 ## Documentation
 - `monGARS_structure.txt` – canonical directory overview referenced by long-term

@@ -1,46 +1,53 @@
 # Advanced Fine-Tuning & Distributed Inference Plan
 
-This roadmap details the steps required to move from placeholder adapters to a
-production-ready masked next-token training loop and distributed inference.
+This roadmap details the steps required to take the existing MNTP trainer,
+curated-dataset pipeline, and Ray Serve deployment from "operational" to
+"production-hardened" status.
 
 ## Current Capabilities
-- `LLMIntegration` streams responses from local Ollama models with retry logic
-  and a stubbed Ray Serve branch.
-- `SelfTrainingEngine` batches conversation data but simulates training cycles,
-  incrementing version metadata without touching weights.
-- The evolution engine writes placeholder artefacts to `models/encoders/` and
-  emits manifest updates that Ray Serve could consume in the future.
+- `LLMIntegration` streams responses from local Ollama models and performs real
+  Ray Serve round-trips with endpoint rotation, scaling-aware retries, and
+  adapter manifest tracking (`monGARS/core/llm_integration.py`).
+- `SelfTrainingEngine` batches curated conversation records, persists anonymised
+  datasets, and launches `modules.neurons.training.mntp_trainer.MNTPTrainer` to
+  train either deterministic linear adapters or LoRA/QLoRA weights depending on
+  dependency availability.
+- The evolution engine writes adapter manifests under
+  `models/encoders/`, emits MLflow metrics, and triggers Ray Serve refresh hooks
+  when new artefacts land.
 
 ## Strategic Goals
 1. **Dataset Hygiene**
-   - Aggregate conversation data from `PersistenceRepository` and export
-     anonymised corpora.
-   - Maintain a versioned dataset catalogue (`models/datasets/`) with reproducible
-     preprocessing scripts (PII stripping, deduplication, quality filters).
-2. **Training Loop Completion**
-   - Implement masked next-token prediction in `modules/neurons/training/mntp_trainer.py`
-     with support for LoRA/QLoRA adapters.
-   - Stream metrics to MLflow and OpenTelemetry for visibility into convergence.
-   - Persist adapter weights, tokenizer assets, and metadata alongside manifest
-     updates.
-3. **Distributed Inference Activation**
-   - Replace the Ray Serve stub in `LLMIntegration` with real HTTP requests,
-     health checks, and exponential backoff tuned for replica autoscaling.
-   - Ship Helm charts or K8s manifests under `k8s/` for Ray clusters, including
-     secrets management and resource limits.
-   - Keep Ray Serve replicas synchronised with adapter manifests published by the
-     evolution engine.
+   - Expand the dataset catalogue retained under `models/datasets/curated/` with
+     provenance metadata (source peer, confidence, anonymisation timestamp).
+   - Provide redaction/scrubbing utilities that operators can run before exporting
+     datasets for offline experimentation.
+2. **Training Loop Hardening**
+   - Add evaluation harnesses (perplexity, regression tasks) that run after
+     MNTP training and surface metrics in MLflow/OpenTelemetry.
+   - Support resumable training by persisting optimiser state and learning-rate
+     scheduler checkpoints.
+   - Parallelise curated linear adapter training to speed up deterministic
+     fallbacks on CPU-only hardware.
+3. **Distributed Inference Operations**
+   - Expose Ray Serve health counters (`llm.ray.*`) via OpenTelemetry and
+     integrate them with the existing scheduler telemetry.
+   - Publish a hardened Helm chart referencing `modules/ray_service.py` so teams
+     can deploy inference clusters alongside monGARS core services.
+   - Automate adapter rollouts by wiring SelfTrainingEngine summaries to the Ray
+     Serve deployment refresh endpoint.
 4. **Operational Guardrails**
-   - Enforce dataset lineage logging to trace which conversations generated which
-     adapters.
-   - Provide manual rollback tooling that reverts to the last known-good adapter.
-   - Update `docs/implementation_status.md` and the main `README.md` whenever new
-     training features land.
+   - Implement policy checks that require human approval when confidence metrics
+     drop below configurable thresholds during training.
+   - Provide rollback tooling that reinstates previous adapter manifests and
+     notifies Ray replicas.
+   - Update docs/implementation_status.md and the main README whenever new
+     training or deployment capabilities land.
 
 ## Immediate Next Steps
-- Wire the MNTP trainer into `SelfTrainingEngine` so scheduled runs execute real
-  training instead of placeholders.
-- Add regression tests covering Ray Serve round-trips using a lightweight mock
-  server.
-- Publish preprocessing scripts and document retention policies for captured
-  conversation data.
+- Extend `tests/test_llm_ray.py` with scenarios that assert OpenTelemetry counters
+  after Ray retries/fallbacks.
+- Ship a dataset sanitiser CLI under `scripts/` that mirrors
+  `models.datasets.sanitize_record` and emits audit logs.
+- Document expected hardware profiles for LoRA fine-tuning and provide guidance
+  for GPU memory pinning in `modules/neurons/training/mntp_trainer.py`.

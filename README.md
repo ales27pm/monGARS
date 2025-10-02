@@ -27,12 +27,15 @@ modules so contributors can experiment end-to-end without bespoke tooling.
 - **Evolution engine** to retrain adapters, roll out artefacts, and trigger safe
   optimisations during idle windows.
 - **Self-improvement loop** where personality profiles persist via SQLModel and
-  refresh through LoRA-style adapters, while SelfTrainingEngine versions curated
-  datasets for upcoming MNTP integrations.
+  refresh through LoRA-style adapters, while SelfTrainingEngine now feeds the
+  MNTP trainer for curated batches and materialises deterministic adapters when
+  heavyweight ML dependencies are unavailable.
 - **Web interface** powered by Django async views that proxy authentication and
   chat history to FastAPI.
 - **Hardware-aware operations** with worker tuning for Raspberry Pi/Jetson,
   container build scripts for multiple architectures, and Kubernetes manifests.
+- **Repository-aware RAG enrichment** that augments `/ask`, `/review`, and
+  compliance flows when `rag_enabled` is set.
 
 ## Architecture at a Glance
 ![System overview diagram](docs/images/system-overview.svg)
@@ -40,7 +43,9 @@ modules so contributors can experiment end-to-end without bespoke tooling.
 The system is intentionally modular:
 - **FastAPI surface (`monGARS.api`)** exposes OAuth2 authentication, chat,
   conversation history, and peer-management endpoints. WebSockets are mediated by
-  a dedicated manager so broadcasts remain consistent.
+  a dedicated manager so broadcasts remain consistent, and Ray Serve requests are
+  issued directly with per-endpoint retries when distributed inference is
+  enabled.
 - **Core cognition (`monGARS.core`)** orchestrates Hippocampus memory, curiosity
   heuristics, neuro-symbolic reasoning, LLM adapters (Ollama or Ray Serve), and
   personality/mimicry engines.
@@ -68,10 +73,19 @@ slide decks or ops runbooks.
 ![Evolution engine workflow](docs/images/evolution-engine.svg)
 - Diagnostics collect OpenTelemetry counters, system metrics, and curiosity gap
   reports.
-- `MNTPTrainer` produces new adapters, publishes metrics to MLflow, and updates
-  the shared manifest.
+- `MNTPTrainer` produces new adapters (LoRA when GPU/PEFT dependencies are
+  present, deterministic linear adapters otherwise), publishes metrics to MLflow,
+  and updates the shared manifest.
 - Deployments notify Ray Serve replicas (when enabled) and trigger idle-time
   optimisation cycles through `SommeilParadoxal`.
+
+### RAG Context Enrichment
+- When `rag_enabled=true`, `RagContextEnricher` calls the configured
+  `rag_service_url`/`DOC_RETRIEVAL_URL` endpoint.
+- Focus areas and references are normalised into typed objects consumed by
+  FastAPI review tooling and `/api/v1/review/rag-context`.
+- Network hiccups degrade gracefully to an empty enrichment payload so chat and
+  review flows remain responsive.
 
 ### Operator Console Flow
 ![Web application flow](docs/images/webapp-flow.svg)
@@ -163,9 +177,10 @@ user/token.
 | `LLM_MODELS_AUTO_DOWNLOAD` | When `true`, missing local models are pulled automatically if the provider supports it. |
 | `LLM_GENERAL_MODEL` / `LLM_CODING_MODEL` | Optional overrides for the conversational and coding model names. |
 | `DOCUMENT_RETRIEVAL_URL` | Endpoint for external research invoked by the curiosity engine. |
+| `RAG_ENABLED` / `RAG_SERVICE_URL` / `RAG_REPO_LIST` / `RAG_MAX_RESULTS` | Toggle repository-aware enrichment, direct the enrichment service, scope repositories, and clamp the number of references. |
 | `WORKER_DEPLOYMENT_NAME` / `WORKER_DEPLOYMENT_NAMESPACE` | Kubernetes deployment targeted by the evolution engine when scaling. |
 | `VAULT_URL` / `VAULT_TOKEN` | Vault dev server address and bootstrap token for local testing. |
-| `WS_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to open WebSocket sessions. |
+| `WS_ALLOWED_ORIGINS` / `WS_ENABLE_EVENTS` | Comma-separated list of origins allowed to open WebSocket sessions and a feature flag to disable streaming entirely. |
 | `REDIS_URL`, `DATABASE_URL` | Connection strings for cache and persistence layers. |
 | `OPEN_TELEMETRY_EXPORTER` | Optional metrics exporter configuration for observability pipelines. |
 
@@ -190,6 +205,8 @@ can be extended to register additional Ollama models or alternate providers.
   `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage.
 - **Static analysis**: `black . && isort .` before committing. Add type hints when
   editing public APIs.
+- **Provisioning**: `python -m scripts.provision_models --json` ensures Ollama
+  weights for the active profile are present before running integration tests.
 - **Database migrations**: define new SQLModel tables in `init_db.py`, generate an
   Alembic migration, and document schema changes.
 - **Worker tuning**: `monGARS.utils.hardware.recommended_worker_count()` auto-tunes
@@ -204,6 +221,9 @@ can be extended to register additional Ollama models or alternate providers.
   scraping, and secrets. Update RBAC when introducing new controllers.
 - **Ray Serve**: follow [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md)
   to provision inference clusters with graceful fallbacks.
+- **RAG**: enable enrichment by setting `rag_enabled=true`, configuring
+  `rag_service_url`, and following
+  [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md).
 
 ## Security & Observability
 - Restrict WebSocket origins via `WS_ALLOWED_ORIGINS` and terminate TLS at your

@@ -26,10 +26,10 @@ required to reach production readiness.
 - ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
 - ✅ Multi-architecture build scripts and cache metrics.
 - ✅ Hardened RBAC manifests.
-- 🔄 Implement real masked next-token training in `MNTPTrainer` and wire Ray Serve
-  HTTP requests in `LLMIntegration`.
-- 🔄 Pin container image versions in `docker-compose.yml` and extend Alembic
-  migrations.
+- ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support
+  for LoRA and curated adapters.
+- 🔄 Extend Alembic migrations for the newest SQLModel tables and expose Ray Serve
+  success/failure counters via OpenTelemetry.
 
 ## Phase 4 – Collaborative Networking (🔄 In Progress, Target Q4 2025)
 - ✅ Encrypted peer registry, admin-guarded endpoints, and distributed scheduler.
@@ -40,15 +40,18 @@ required to reach production readiness.
 ## Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)
 - ✅ FastAPI chat/history/token endpoints with validation.
 - ✅ Django chat UI with progressive enhancement.
-- 🔄 Implement FastAPI WebSocket handler to match frontend expectations.
+- ✅ FastAPI WebSocket handler with ticket verification, history replay, and
+  streaming guarded by `WS_ENABLE_EVENTS`.
 - 🔄 Replace hard-coded credential stores with database-backed auth flows.
 - 🚧 Publish polished SDKs and reference clients.
 
 ## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)
 - ✅ Personality profiles persisted via SQLModel with live adapter updates.
-- 🔄 Execute real self-training cycles instead of simulated versioning.
+- ✅ Self-training cycles produce real adapter artefacts via
+  `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
 - 🚧 Explore reinforcement learning loops and advanced scaling strategies.
-- 🔄 Expand tests for WebSockets, hardware utilities, and distributed workflows.
+- 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts,
+  and distributed workflows.
 
 ## Phase 7 – Sustainability & Longevity (🌱 Future)
 - 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.

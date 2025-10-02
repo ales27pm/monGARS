@@ -22,7 +22,9 @@ or onboarding new contributors.
    fields before the data reaches LLM integrations.
 3. WebSocket subscribers connect to `/ws/chat/` with the same JWT. The server
    replays recent conversation history via Hippocampus and registers the
-   connection with `WebSocketManager` so later responses can broadcast.
+   connection with `WebSocketManager` so later responses can broadcast. Origins
+   are validated against `WS_ALLOWED_ORIGINS` and the feature can be disabled via
+   `WS_ENABLE_EVENTS` for hardened deployments.
 
 ## 3. Orchestrate Cognition
 `ConversationalModule.generate_response` coordinates the following stages:
@@ -35,8 +37,9 @@ or onboarding new contributors.
 3. **Reasoning hints** – The neuro-symbolic advanced reasoner adds structured
    hints for “why/how” prompts before invoking the LLM.
 4. **LLM invocation** – `LLMIntegration` selects Ollama or Ray Serve, wraps calls
-   in circuit breakers and retries, and caches responses. Graceful fallbacks keep
-   the system responsive when optional dependencies are missing.
+   in circuit breakers and retries, rotates endpoints, and caches responses.
+   Graceful fallbacks keep the system responsive when optional dependencies are
+   missing.
 5. **Personality & mimicry** – PersonalityEngine collaborates with the LoRA-based
    StyleFineTuner and MimicryModule to adapt responses using recent interaction
    statistics and stored personality profiles.
