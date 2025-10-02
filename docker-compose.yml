@@ -1,12 +1,21 @@
 version: "3.9"
 
+x-database-environment: &database-environment
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://mongars:${DB_PASSWORD:-changeme}@postgres:5432/mongars_db}
+  DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
+  DB_HOST: ${DB_HOST:-postgres}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_USER: ${DB_USER:-mongars}
+  DB_PASSWORD: ${DB_PASSWORD:-changeme}
+  DB_NAME: ${DB_NAME:-mongars_db}
+
 x-app-environment: &app-environment
+  <<: *database-environment
   ENV: production
   HOST: 0.0.0.0
   PORT: ${API_PORT:-8000}
   USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
   RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8002/generate}
-  DATABASE_URL: postgresql+asyncpg://mongars:${DB_PASSWORD:-changeme}@postgres:5432/mongars_db
   REDIS_URL: redis://redis:6379/0
   MLFLOW_TRACKING_URI: http://mlflow:5000
   OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
@@ -81,6 +90,7 @@ services:
     env_file:
       - .env
     environment:
+      <<: *database-environment
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
@@ -107,6 +117,7 @@ services:
     env_file:
       - .env
     environment:
+      <<: *database-environment
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
