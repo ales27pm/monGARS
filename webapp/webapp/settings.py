@@ -104,10 +104,7 @@ def _is_private_ip(value: str) -> bool:
     except ValueError:
         return False
 
-    if address.version == 4:
-        return any(address in network for network in _PRIVATE_IPV4_NETWORKS)
-
-    return any(address in network for network in _PRIVATE_IPV6_NETWORKS)
+    return address.is_private
 
 
 T = TypeVar("T")
