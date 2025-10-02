@@ -1,3 +1,4 @@
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -47,6 +48,18 @@ def _create_trainer_stub(
                 context = setup(self.output_dir)
 
             self.summary = summary_factory(self.output_dir, context)
+            artifacts = self.summary.setdefault("artifacts", {})
+            weights_value = artifacts.get("weights")
+            if weights_value and "weights_checksum" not in artifacts:
+                weights_path = Path(weights_value)
+                checksum = (
+                    hashlib.sha256(weights_path.read_bytes()).hexdigest()
+                    if weights_path.exists()
+                    else "stub"
+                )
+                artifacts["weights_checksum"] = checksum
+            if "version" not in self.summary and "weights_checksum" in artifacts:
+                self.summary["version"] = artifacts["weights_checksum"]
             if persist_summary:
                 (self.output_dir / "training_summary.json").write_text(
                     json.dumps(self.summary)
@@ -105,6 +118,9 @@ def _assert_fallback_artifacts(output_dir: Path) -> dict[str, object]:
     assert summary_path.exists()
     summary = json.loads(summary_path.read_text())
     assert summary["status"] == TrainingStatus.FALLBACK.value
+    assert "version" in summary
+    artifacts = summary["artifacts"]
+    assert artifacts["weights_checksum"] == summary["version"]
 
     weights_path = output_dir / "adapter" / "fallback_adapter.json"
     assert weights_path.exists()
@@ -317,7 +333,7 @@ def test_mntp_trainer_generates_deterministic_fallback(
     assert summary["status"] == TrainingStatus.FALLBACK.value
     assert summary["reason"] == "missing_dependencies"
     artifacts = summary["artifacts"]
-    assert set(artifacts) == {"adapter", "weights"}
+    assert set(artifacts) == {"adapter", "weights", "weights_checksum"}
     assert artifacts["adapter"].startswith(str(output_dir))
 
     weights = _assert_fallback_artifacts(output_dir)
@@ -331,7 +347,7 @@ def test_mntp_trainer_generates_deterministic_fallback(
     assert repeat_summary["status"] == TrainingStatus.FALLBACK.value
     assert repeat_summary["reason"] == "missing_dependencies"
     repeat_artifacts = repeat_summary["artifacts"]
-    assert set(repeat_artifacts) == {"adapter", "weights"}
+    assert set(repeat_artifacts) == {"adapter", "weights", "weights_checksum"}
     assert repeat_artifacts["adapter"].startswith(str(second_dir))
 
     repeat_weights = _assert_fallback_artifacts(second_dir)
@@ -473,12 +489,14 @@ def test_mntp_trainer_curated_training_success(tmp_path: Path) -> None:
     assert summary["metrics"]["feature_dimension"] == len(
         curated_records[0]["embedding"]
     )
+    assert summary["version"]
 
     artifacts = summary["artifacts"]
     adapter_dir = Path(artifacts["adapter"])
     weights_path = Path(artifacts["weights"])
     assert adapter_dir.exists()
     assert weights_path.exists()
+    assert artifacts["weights_checksum"] == summary["version"]
 
     payload = json.loads(weights_path.read_text())
     assert payload["feature_dimension"] == len(curated_records[0]["embedding"])

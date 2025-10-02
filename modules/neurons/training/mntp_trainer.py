@@ -429,6 +429,7 @@ class MNTPTrainer:
             "records": [sample.metadata for sample in dataset],
         }
         artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        checksum = self._compute_file_checksum(artifact_path)
 
         logger.info(
             "Curated MNTP training complete",
@@ -436,13 +437,19 @@ class MNTPTrainer:
                 "records": len(dataset),
                 "artifact_path": str(artifact_path),
                 "loss": metrics.get("loss"),
+                "checksum": checksum,
             },
         )
 
         return {
             "status": TrainingStatus.SUCCESS.value,
             "mode": "curated_linear_adapter",
-            "artifacts": {"adapter": str(adapter_dir), "weights": str(artifact_path)},
+            "version": checksum,
+            "artifacts": {
+                "adapter": str(adapter_dir),
+                "weights": str(artifact_path),
+                "weights_checksum": checksum,
+            },
             "metrics": metrics
             | {
                 "training_examples": len(dataset),
@@ -469,17 +476,27 @@ class MNTPTrainer:
         weights_payload = self._derive_fallback_weights()
         weights_path = adapter_dir / "fallback_adapter.json"
         weights_path.write_text(json.dumps(weights_payload, indent=2, sort_keys=True))
+        checksum = self._compute_file_checksum(weights_path)
 
         logger.info(
             "Fallback adapter generated",
-            extra={"reason": reason, "weights_path": str(weights_path)},
+            extra={
+                "reason": reason,
+                "weights_path": str(weights_path),
+                "checksum": checksum,
+            },
         )
 
         return {
             "status": TrainingStatus.FALLBACK.value,
             "reason": reason,
             "details": details,
-            "artifacts": {"adapter": str(adapter_dir), "weights": str(weights_path)},
+            "version": checksum,
+            "artifacts": {
+                "adapter": str(adapter_dir),
+                "weights": str(weights_path),
+                "weights_checksum": checksum,
+            },
             "metrics": {
                 "training_examples": 0,
                 "per_device_train_batch_size": self.config[
@@ -494,6 +511,22 @@ class MNTPTrainer:
     def _write_summary(self, summary: dict[str, Any]) -> None:
         summary_path = self.output_dir / "training_summary.json"
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+
+    def _compute_file_checksum(self, path: Path) -> str:
+        try:
+        try:
+            hasher = hashlib.sha256()
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+        except OSError as exc:
+            logger.error(
+                "Failed to compute checksum for artifact",
+                extra={"path": str(path)},
+                exc_info=exc,
+            )
+            raise RuntimeError("Failed to compute artifact checksum") from exc
+        return hasher.hexdigest()
 
     def _derive_fallback_weights(self) -> dict[str, Any]:
         fingerprint: dict[str, Any] = {
@@ -572,6 +605,7 @@ class MNTPTrainer:
         if source_records is not None:
             metrics.setdefault("source_records", source_records)
         artifact_dir, weights_path = self._persist_model(model)
+        checksum = self._compute_file_checksum(weights_path)
 
         logger.info(
             "Model training finished",
@@ -579,15 +613,19 @@ class MNTPTrainer:
                 "artifact_dir": str(artifact_dir),
                 "model_name": model_name,
                 "examples": metrics.get("training_examples"),
+                "checksum": checksum,
             },
         )
-        artifacts: dict[str, str] = {"adapter": str(artifact_dir)}
-        if weights_path is not None:
-            artifacts["weights"] = str(weights_path)
+        artifacts: dict[str, str] = {
+            "adapter": str(artifact_dir),
+            "weights": str(weights_path),
+            "weights_checksum": checksum,
+        }
         return {
             "status": TrainingStatus.SUCCESS.value,
             "model_name": model_name,
             "dataset_name": self.config["dataset_name"],
+            "version": checksum,
             "artifacts": artifacts,
             "metrics": metrics,
         }

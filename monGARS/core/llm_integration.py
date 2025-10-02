@@ -340,6 +340,13 @@ class LLMIntegration:
         }
         return definition.merge_parameters(base_options)
 
+    class LocalProviderError(RuntimeError):
+        """Raised when the local provider cannot serve a request."""
+
+        def __init__(self, message: str) -> None:
+            super().__init__(message)
+            self.message = message
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -366,6 +373,57 @@ class LLMIntegration:
 
         return await self._ollama_cb.call(call_api)
 
+    async def _call_local_provider(self, prompt: str, task_type: str) -> dict[str, Any]:
+        """Invoke the local Ollama provider and return its response."""
+
+        await self._ensure_local_models()
+        model_definition = self._model_manager.get_model_definition(task_type)
+        model_name = model_definition.name
+        normalized_task = task_type.lower()
+        if normalized_task == "general":
+            self.general_model = model_name
+        elif normalized_task == "coding":
+            self.coding_model = model_name
+
+        logger.info(
+            "llm.ollama.dispatch",
+            extra={
+                "model_name": model_name,
+                "task_type": task_type,
+                "provider": model_definition.provider,
+            },
+        )
+
+        if not ollama:
+            logger.error("llm.ollama.unavailable")
+            raise self.LocalProviderError("Ollama client is not available.")
+
+        try:
+            return await self._ollama_call(model_definition, prompt)
+        except OllamaNotAvailableError:
+            logger.exception("llm.ollama.unavailable")
+            raise self.LocalProviderError("Ollama client is not available.")
+        except RetryError:
+            logger.exception(
+                "llm.ollama.retry_exhausted",
+                extra={"model_name": model_name, "task_type": task_type},
+            )
+            raise self.LocalProviderError("Unable to generate response at this time.")
+        except CircuitBreakerOpenError:
+            logger.error(
+                "llm.ollama.circuit_open",
+                extra={"model_name": model_name, "task_type": task_type},
+            )
+            raise self.LocalProviderError("Ollama circuit is temporarily open.")
+        except Exception as exc:
+            logger.exception(
+                "llm.ollama.error",
+                extra={"model_name": model_name, "task_type": task_type},
+            )
+            raise self.LocalProviderError(
+                "An error occurred while generating the response."
+            ) from exc
+
     async def generate_response(
         self, prompt: str, task_type: str = "general"
     ) -> dict[str, Any]:
@@ -382,96 +440,82 @@ class LLMIntegration:
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:
             return cached_response
-        if self.use_ray:
-            logger.info(
-                "llm.ray.dispatch",
+        response_source = "ray" if self.use_ray else "local"
+        try:
+            if self.use_ray:
+                logger.info(
+                    "llm.ray.dispatch",
+                    extra={
+                        "task_type": task_type,
+                        "ray_url": self.ray_url,
+                        "adapter_version": self._current_adapter_version,
+                    },
+                )
+                try:
+                    response = await self._ray_call(prompt, task_type, adapter_metadata)
+                except Exception:
+                    logger.exception(
+                        "llm.ray.error",
+                        extra={"task_type": task_type, "cache_key": cache_key},
+                    )
+                    response = await self._call_local_provider(prompt, task_type)
+                    response_source = "local"
+                    logger.info(
+                        "llm.ray.fallback_local",
+                        extra={
+                            "task_type": task_type,
+                            "adapter_version": self._current_adapter_version,
+                            "reason": "ray_exception",
+                        },
+                    )
+                else:
+                    error_message = self._ray_response_error(response)
+                    if error_message:
+                        logger.warning(
+                            "llm.ray.error_response",
+                            extra={
+                                "task_type": task_type,
+                                "cache_key": cache_key,
+                                "error": error_message,
+                            },
+                        )
+                        response = await self._call_local_provider(prompt, task_type)
+                        response_source = "local"
+                        logger.info(
+                            "llm.ray.fallback_local",
+                            extra={
+                                "task_type": task_type,
+                                "adapter_version": self._current_adapter_version,
+                                "reason": "error_response",
+                            },
+                        )
+            else:
+                response = await self._call_local_provider(prompt, task_type)
+        except self.LocalProviderError as exc:
+            return await self._fail(cache_key, exc.message)
+        generated_text = self._extract_text(response)
+        if not generated_text and response_source == "ray":
+            logger.warning(
+                "llm.ray.empty_response",
                 extra={
                     "task_type": task_type,
-                    "ray_url": self.ray_url,
                     "adapter_version": self._current_adapter_version,
                 },
             )
             try:
-                response = await self._ray_call(prompt, task_type, adapter_metadata)
-            except Exception:
-                logger.exception(
-                    "llm.ray.error",
-                    extra={"task_type": task_type, "cache_key": cache_key},
-                )
-                return await self._fail(cache_key, "Ray Serve unavailable.")
-            else:
-                if isinstance(response, dict):
-                    ray_error = response.get("error")
-                else:
-                    ray_error = None
-                if ray_error:
-                    detail = (
-                        response.get("detail") if isinstance(response, dict) else None
-                    )
-                    message = (
-                        detail
-                        if isinstance(detail, str) and detail
-                        else f"Ray Serve reported error: {ray_error}"
-                    )
-                    logger.warning(
-                        "llm.ray.error_response",
-                        extra={
-                            "task_type": task_type,
-                            "cache_key": cache_key,
-                            "error": ray_error,
-                        },
-                    )
-                    return await self._fail(cache_key, message)
-        else:
-            await self._ensure_local_models()
-            model_definition = self._model_manager.get_model_definition(task_type)
-            model_name = model_definition.name
-            normalized_task = task_type.lower()
-            if normalized_task == "general":
-                self.general_model = model_name
-            elif normalized_task == "coding":
-                self.coding_model = model_name
+                response = await self._call_local_provider(prompt, task_type)
+            except self.LocalProviderError as exc:
+                return await self._fail(cache_key, exc.message)
+            generated_text = self._extract_text(response)
+            response_source = "local"
             logger.info(
-                "llm.ollama.dispatch",
+                "llm.ray.fallback_local",
                 extra={
-                    "model_name": model_name,
                     "task_type": task_type,
-                    "provider": model_definition.provider,
+                    "adapter_version": self._current_adapter_version,
+                    "reason": "empty_response",
                 },
             )
-            if not ollama:
-                logger.error("llm.ollama.unavailable")
-                return await self._fail(cache_key, "Ollama client is not available.")
-            try:
-                response = await self._ollama_call(model_definition, prompt)
-            except OllamaNotAvailableError:
-                logger.exception("llm.ollama.unavailable")
-                return await self._fail(cache_key, "Ollama client is not available.")
-            except RetryError:
-                logger.exception(
-                    "llm.ollama.retry_exhausted",
-                    extra={"model_name": model_name, "task_type": task_type},
-                )
-                return await self._fail(
-                    cache_key, "Unable to generate response at this time."
-                )
-            except CircuitBreakerOpenError:
-                logger.error(
-                    "llm.ollama.circuit_open",
-                    extra={"model_name": model_name, "task_type": task_type},
-                )
-                return await self._fail(
-                    cache_key, "Ollama circuit is temporarily open."
-                )
-            except Exception:
-                logger.exception(
-                    "llm.ollama.error",
-                    extra={"model_name": model_name, "task_type": task_type},
-                )
-                return await self._fail(
-                    cache_key, "An error occurred while generating the response."
-                )
-        generated_text = self._extract_text(response)
         confidence = self._calculate_confidence(generated_text)
         tokens_used = len(generated_text.split())
         result = {
@@ -621,6 +665,19 @@ class LLMIntegration:
         if not value:
             return []
         return [entry.strip() for entry in value.split(",") if entry.strip()]
+
+    def _ray_response_error(self, response: dict[str, Any] | None) -> str | None:
+        if not isinstance(response, dict):
+            return None
+        error = response.get("error")
+        if not error:
+            return None
+        detail = response.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail
+        if isinstance(error, str):
+            return error
+        return str(error)
 
     async def chat(self, user_id: str, prompt: str, stream: bool = True) -> str | None:
         """Generate chat responses and publish UI streaming events."""
