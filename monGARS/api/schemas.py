@@ -70,6 +70,67 @@ class ChatResponse(BaseModel):
     processing_time: float
 
 
+class RagContextRequest(BaseModel):
+    """Request payload for the RAG context enrichment endpoint."""
+
+    query: str = Field(..., min_length=1, max_length=4000)
+    repositories: list[str] | None = None
+    max_results: int | None = Field(default=None, ge=1, le=50)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("query cannot be empty")
+        return cleaned
+
+    @field_validator("repositories")
+    @classmethod
+    def validate_repositories(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for item in value:
+            trimmed = item.strip()
+            if not trimmed:
+                raise ValueError("repositories cannot contain empty values")
+            lowered = trimmed.lower()
+            if lowered == "all":
+                return ["all"]
+            if lowered not in seen:
+                seen.add(lowered)
+                cleaned.append(trimmed)
+        return cleaned or None
+
+
+class RagReferenceSchema(BaseModel):
+    """Single reference entry returned by the RAG service."""
+
+    repository: str
+    file_path: str
+    summary: str
+    score: float | None = None
+    url: str | None = None
+
+    @field_validator("repository", "file_path", "summary")
+    @classmethod
+    def validate_required_fields(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value cannot be empty")
+        return cleaned
+
+
+class RagContextResponse(BaseModel):
+    """Response payload for the RAG context enrichment endpoint."""
+
+    enabled: bool = True
+    focus_areas: list[str] = Field(default_factory=list)
+    references: list[RagReferenceSchema] = Field(default_factory=list)
+
+
 class PeerMessage(BaseModel):
     """Payload accepted by the peer message endpoint."""
 

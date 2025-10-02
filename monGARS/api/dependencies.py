@@ -8,6 +8,7 @@ from monGARS.core.model_manager import LLMModelManager
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
+from monGARS.core.rag import RagContextEnricher
 
 hippocampus = Hippocampus()
 peer_communicator = PeerCommunicator()
@@ -17,6 +18,7 @@ _adaptive_generators: WeakKeyDictionary[
 ] = WeakKeyDictionary()
 _persistence_repository = PersistenceRepository()
 _model_manager: LLMModelManager | None = None
+_rag_context_enricher: RagContextEnricher | None = None
 
 
 def _resolve_personality_engine() -> PersonalityEngine:
@@ -66,3 +68,12 @@ def get_model_manager() -> LLMModelManager:
     if _model_manager is None:
         _model_manager = LLMModelManager()
     return _model_manager
+
+
+def get_rag_context_enricher() -> RagContextEnricher:
+    """Return the shared RAG context enricher instance."""
+
+    global _rag_context_enricher
+    if _rag_context_enricher is None:
+        _rag_context_enricher = RagContextEnricher()
+    return _rag_context_enricher

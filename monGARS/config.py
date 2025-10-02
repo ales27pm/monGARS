@@ -4,6 +4,7 @@ import logging
 import os
 import secrets
 import sys
+from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
@@ -121,6 +122,24 @@ class Settings(BaseSettings):
     IN_MEMORY_CACHE_SIZE: int = Field(default=10000)
     DISK_CACHE_PATH: str = Field(default="/tmp/mongars_cache")
     DOC_RETRIEVAL_URL: str = Field(default="http://localhost:8080")
+    rag_enabled: EnvBool = Field(
+        default=False,
+        description="Enable repository-aware RAG context enrichment.",
+    )
+    rag_repo_list: list[str] = Field(
+        default_factory=list,
+        description="Repositories eligible for RAG enrichment when overrides are not supplied.",
+    )
+    rag_max_results: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description="Maximum number of references requested from the RAG service.",
+    )
+    rag_service_url: AnyUrl | None = Field(
+        default=None,
+        description="Optional override for the RAG context enrichment service URL.",
+    )
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
         description="Directory storing adapter artifacts and manifest.",
@@ -255,6 +274,38 @@ class Settings(BaseSettings):
                 parsed = [item.strip() for item in cleaned.split(",") if item.strip()]
             return parsed
         return value
+
+    @field_validator("rag_repo_list", mode="before")
+    @classmethod
+    def parse_rag_repo_list(cls, value: Any) -> list[str]:
+        """Normalise repository lists passed via environment variables."""
+
+        if value is None:
+            return []
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return []
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                parsed = [item.strip() for item in cleaned.split(",") if item.strip()]
+            else:
+                if isinstance(parsed, str):
+                    parsed = [parsed]
+                elif not isinstance(parsed, Sequence):
+                    raise ValueError("rag_repo_list must be a sequence of strings")
+            value = parsed
+        if isinstance(value, Sequence):
+            cleaned_values: list[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                trimmed = item.strip()
+                if trimmed:
+                    cleaned_values.append(trimmed)
+            return cleaned_values
+        raise ValueError("rag_repo_list must be a sequence or comma separated string")
 
     @model_validator(mode="after")
     def sync_redis_url(self) -> "Settings":
