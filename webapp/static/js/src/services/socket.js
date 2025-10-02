@@ -26,12 +26,12 @@ export function createSocketClient({ config, http, ui, onEvent }) {
     }
     retryTimer = window.setTimeout(() => {
       retryTimer = null;
+      reconnectBackoff = Math.min(
+        BACKOFF_MAX,
+        Math.max(500, reconnectBackoff * 2),
+      );
       void openSocket();
     }, delay);
-    reconnectBackoff = Math.min(
-      BACKOFF_MAX,
-      Math.max(500, reconnectBackoff * 2),
-    );
     return delay;
   }
 
