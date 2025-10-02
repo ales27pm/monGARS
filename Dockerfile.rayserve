@@ -1,5 +1,9 @@
 FROM rayproject/ray:2.48.0-py311
 
+# Elevate to root to install system level dependencies, then drop back to the
+# default non-root user for runtime execution.
+USER root
+
 # System dependencies for pulling model weights and executing multimedia-aware
 # pipelines from Ray Serve deployments.
 RUN apt-get update \
@@ -24,6 +28,9 @@ RUN pip install --no-cache-dir \
         "peft>=0.13.2" \
         "sentencepiece>=0.2.0" \
         "transformers>=4.44.2"
+
+# Return to the default ray user for runtime safety.
+USER ray
 
 ENV PYTHONUNBUFFERED=1
 
