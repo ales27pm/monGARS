@@ -225,3 +225,25 @@ async def test_websocket_heartbeat_ping_pong(client, monkeypatch):
         ack = ws.receive_json()
         assert ack["type"] == "ack"
         assert ack["id"] == ping["id"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_accepts_client_ping(client, monkeypatch):
+    monkeypatch.setattr(ws_module.settings, "WS_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(ws_module.settings, "WS_HEARTBEAT_TIMEOUT_SECONDS", 0.2)
+
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    ticket = _issue_ws_ticket(client, token)
+
+    with _connect_ws(client, ticket) as ws:
+        ws.receive_json()
+        ws.receive_json()
+        ws.send_json({"type": "client.ping", "ts": "now"})
+        ack = ws.receive_json()
+        assert ack["type"] == "ack"
+        assert ack["payload"]["status"] == "ok"
+        assert ack["payload"].get("detail") == "client.ping"
+        ping = ws.receive_json()
+        assert ping["type"] == "ping"
