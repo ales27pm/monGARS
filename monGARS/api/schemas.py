@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -62,12 +63,32 @@ class ChatRequest(BaseModel):
         return cleaned
 
 
+class SpeechSegmentSchema(BaseModel):
+    """Schema describing a single speech segment."""
+
+    text: str
+    estimated_duration: float
+    pause_after: float
+
+
+class SpeechTurnSchema(BaseModel):
+    """Schema describing the structure of a conversational speech turn."""
+
+    turn_id: str
+    text: str
+    created_at: datetime
+    segments: list[SpeechSegmentSchema]
+    average_words_per_second: float
+    tempo: float
+
+
 class ChatResponse(BaseModel):
     """Canonical response body returned by the chat endpoint."""
 
     response: str
     confidence: float
     processing_time: float
+    speech_turn: SpeechTurnSchema
 
 
 class RagContextRequest(BaseModel):

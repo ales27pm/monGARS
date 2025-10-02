@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Optional
 
 from monGARS.config import get_settings
-from monGARS.core.bouche import Bouche
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.evolution_engine import EvolutionEngine
@@ -46,7 +45,7 @@ class ConversationalModule:
         self.mimicry = mimicry or MimicryModule()
         self.captioner = captioner or ImageCaptioning()
         self.memory = memory or MemoryService(Hippocampus())
-        self.speaker = speaker or SpeakerService(Bouche())
+        self.speaker = speaker or SpeakerService()
         self.persistence = persistence or PersistenceRepository()
         self.evolution_engine = EvolutionEngine()
 
@@ -119,6 +118,9 @@ class ConversationalModule:
 
         processing_time = (datetime.utcnow() - start).total_seconds()
 
+        speech_session_id = session_id or user_id
+        speech_turn = await self.speaker.speak(final, session_id=speech_session_id)
+
         await self.persistence.save_interaction(
             Interaction(
                 user_id=user_id,
@@ -132,6 +134,7 @@ class ConversationalModule:
                 output_data={
                     "raw_llm": llm_out,
                     "adapted_text": final,
+                    "speech_turn": speech_turn.to_payload(),
                 },
                 message=augmented_query,
                 response=final,
@@ -145,10 +148,9 @@ class ConversationalModule:
             history_response=final,
         )
         await self.memory.store(user_id, augmented_query, final)
-
-        spoken = await self.speaker.speak(final)
         return {
-            "text": spoken,
+            "text": speech_turn.text,
             "confidence": llm_out.get("confidence", 0.0),
             "processing_time": processing_time,
+            "speech_turn": speech_turn.to_payload(),
         }

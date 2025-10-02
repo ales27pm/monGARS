@@ -3,6 +3,8 @@ import os
 os.environ.setdefault("SECRET_KEY", "test")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
+from datetime import UTC, datetime
+
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -24,7 +26,21 @@ async def client(monkeypatch):
     async def fake_generate_response(
         self, user_id, query, session_id=None, image_data=None
     ):
-        return {"text": "resp", "confidence": 1.0, "processing_time": 0.1}
+        return {
+            "text": "resp",
+            "confidence": 1.0,
+            "processing_time": 0.1,
+            "speech_turn": {
+                "turn_id": "turn-1",
+                "text": "resp",
+                "created_at": datetime.now(UTC).isoformat(),
+                "segments": [
+                    {"text": "resp", "estimated_duration": 0.5, "pause_after": 0.3}
+                ],
+                "average_words_per_second": 2.4,
+                "tempo": 1.0,
+            },
+        }
 
     monkeypatch.setattr(
         ConversationalModule, "generate_response", fake_generate_response

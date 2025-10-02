@@ -10,10 +10,24 @@
 - **Description:** Send a chat message and receive a response.
 - **Request Body:**
   - `message` (string): The chat message.
-  - `context` (object): Additional context for the conversation.
-  - `personality_traits` (object): Personality traits of the user.
+  - `session_id` (string, optional): Identifier used to retain adaptive speech
+    tempo across turns for the same conversation. When omitted, the user's ID is
+    used so pacing still evolves during a session.
 - **Response:**
-  - `200 OK`: The chat response.
+  - `200 OK`: The chat response payload containing:
+    - `response` (string): The assistant's textual reply optimised for display.
+    - `confidence` (number): Confidence score returned by the reasoning pipeline.
+    - `processing_time` (number): Time in seconds spent generating the reply.
+    - `speech_turn` (object): Structured speech metadata with fields:
+      - `turn_id` (string): Unique identifier for the speech plan.
+      - `text` (string): Raw text delivered for text-to-speech.
+      - `created_at` (ISO 8601 string): Timestamp when the plan was generated.
+      - `segments` (array): Sequenced speech segments with `text`,
+        `estimated_duration`, and `pause_after` values tuned for natural pacing.
+      - `average_words_per_second` (number): Observed speaking rate for the
+        turn.
+      - `tempo` (number): Normalised tempo value blending recent conversation
+        cadence.
   - `400 Bad Request`: If the input is invalid.
   - `401 Unauthorized`: If the user is not authenticated.
 

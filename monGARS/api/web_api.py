@@ -185,6 +185,7 @@ async def chat(
         "query": data["query"],
         "response": result.get("text", ""),
         "timestamp": datetime.now(UTC).isoformat(),
+        "speech_turn": result.get("speech_turn"),
     }
     try:
         event = make_event(
@@ -200,6 +201,7 @@ async def chat(
         response=response_payload["response"],
         confidence=result.get("confidence", 0.0),
         processing_time=result.get("processing_time", 0.0),
+        speech_turn=result.get("speech_turn"),
     )
 
 
