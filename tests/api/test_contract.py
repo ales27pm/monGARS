@@ -280,6 +280,7 @@ async def test_register_conflict_returns_409(
 
 
 def test_openapi_schema_matches_lockfile() -> None:
+    app.dependency_overrides.clear()
     schema = app.openapi()
     lock_path = Path("openapi.lock.json")
     assert lock_path.exists(), "openapi.lock.json is missing"
