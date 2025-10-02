@@ -15,7 +15,13 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "user_accounts",
-        sa.Column("id", sa.Integer(), primary_key=True, nullable=False),
+        sa.Column(
+            "id",
+            sa.Integer(),
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
         sa.Column("username", sa.String(length=150), nullable=False),
         sa.Column("password_hash", sa.String(length=255), nullable=False),
         sa.Column(
@@ -34,6 +40,7 @@ def upgrade() -> None:
             "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
+            onupdate=sa.func.now(),
             nullable=False,
         ),
     )
@@ -43,29 +50,19 @@ def upgrade() -> None:
         ["username"],
         unique=True,
     )
-    op.execute(
-        """
-        CREATE OR REPLACE FUNCTION update_user_accounts_updated_at()
-        RETURNS TRIGGER AS $$
-        BEGIN
-            NEW.updated_at = now();
-            RETURN NEW;
-        END;
-        $$ LANGUAGE 'plpgsql';
-        """
-    )
-    op.execute(
-        """
-        CREATE TRIGGER update_user_accounts_updated_at
-        BEFORE UPDATE ON user_accounts
-        FOR EACH ROW
-        EXECUTE FUNCTION update_user_accounts_updated_at();
-        """
-    )
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_user_accounts_username_lower
+            ON user_accounts (LOWER(username));
+            """
+        )
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS update_user_accounts_updated_at ON user_accounts")
-    op.execute("DROP FUNCTION IF EXISTS update_user_accounts_updated_at()")
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute("DROP INDEX IF EXISTS ix_user_accounts_username_lower")
     op.drop_index("ix_user_accounts_username", table_name="user_accounts")
     op.drop_table("user_accounts")
