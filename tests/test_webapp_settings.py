@@ -15,6 +15,8 @@ def test_debug_includes_private_addresses(monkeypatch):
     monkeypatch.setenv("DJANGO_DEBUG", "true")
     monkeypatch.delenv("DJANGO_ALLOWED_HOSTS", raising=False)
     monkeypatch.delenv("DJANGO_DEBUG_HOSTS", raising=False)
+    monkeypatch.delenv("WEBAPP_HOST", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
 
     monkeypatch.setattr("socket.gethostname", lambda: "mongars-dev")
     monkeypatch.setattr("socket.getfqdn", lambda: "mongars-dev.local")
@@ -44,7 +46,7 @@ def test_debug_includes_private_addresses(monkeypatch):
         "fd00::1",
     } <= allowed
     assert "203.0.113.9" not in allowed
-    assert "0.0.0.0" not in allowed
+    assert "0.0.0.0" in allowed
     assert "2001:4860::1" not in allowed
 
 
@@ -55,6 +57,8 @@ def test_debug_env_hosts_are_preserved(monkeypatch):
     monkeypatch.setenv("DJANGO_DEBUG", "true")
     monkeypatch.setenv("DJANGO_DEBUG_HOSTS", "dev.box,192.168.99.88")
     monkeypatch.delenv("DJANGO_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("WEBAPP_HOST", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
 
     monkeypatch.setattr("socket.gethostname", lambda: "broken", raising=False)
 
@@ -71,6 +75,23 @@ def test_debug_env_hosts_are_preserved(monkeypatch):
 
     assert "dev.box" in settings.ALLOWED_HOSTS
     assert "192.168.99.88" in settings.ALLOWED_HOSTS
+
+
+def test_compose_defaults_include_container_host(monkeypatch):
+    """Docker Compose environments should not require manual host overrides."""
+
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "dummy")
+    monkeypatch.delenv("DJANGO_DEBUG", raising=False)
+    monkeypatch.delenv("DJANGO_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("DJANGO_DEBUG_HOSTS", raising=False)
+    monkeypatch.setenv("WEBAPP_HOST", "compose.webapp")
+    monkeypatch.setenv("HOST", "compose.webapp")
+
+    settings = _reload_settings()
+
+    assert "0.0.0.0" in settings.ALLOWED_HOSTS
+    assert settings.ALLOWED_HOSTS.count("compose.webapp") == 1
+    assert "compose.webapp" in settings.ALLOWED_HOSTS
 
 
 def _reload_settings():
