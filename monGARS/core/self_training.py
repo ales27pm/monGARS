@@ -3,7 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
+
+try:
+    from datetime import UTC  # Python 3.11+
+except ImportError:  # Python 3.10 fallback
+    from datetime import timezone
+
+    UTC = timezone.utc
 from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 from uuid import uuid4

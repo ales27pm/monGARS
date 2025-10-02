@@ -4,7 +4,14 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+
+try:
+    from datetime import UTC  # Python 3.11+
+except ImportError:  # Python 3.10 fallback
+    from datetime import timezone
+
+    UTC = timezone.utc
 from typing import Iterable
 
 logger = logging.getLogger(__name__)
