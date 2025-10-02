@@ -314,13 +314,7 @@ def _prepare_ack(
             "payload": {"status": "error", "detail": "invalid_envelope"},
         }, None
 
-    raw_id = message.get("id")
     errors: list[str] = []
-    if isinstance(raw_id, str) and raw_id:
-        ack_id = raw_id
-    else:
-        errors.append("missing_id")
-
     msg_type = message.get("type")
     if not isinstance(msg_type, str) or not msg_type:
         errors.append("missing_type")
@@ -329,6 +323,12 @@ def _prepare_ack(
             "type": "ack",
             "payload": {"status": "error", "detail": ",".join(errors)},
         }, None
+
+    raw_id = message.get("id")
+    if isinstance(raw_id, str) and raw_id:
+        ack_id = raw_id
+    elif msg_type != "client.ping":
+        errors.append("missing_id")
 
     if errors:
         return {
@@ -351,6 +351,16 @@ def _prepare_ack(
             )
         state.expected_pong = None
         return {"id": ack_id, "type": "ack", "payload": {"status": "ok"}}, None
+
+    if msg_type == "client.ping":
+        state.mark_pong()
+        if state.expected_pong and raw_id == state.expected_pong:
+            state.expected_pong = None
+        return {
+            "id": ack_id,
+            "type": "ack",
+            "payload": {"status": "ok", "detail": "client.ping"},
+        }, None
 
     if msg_type == "close":
         return {"id": ack_id, "type": "ack", "payload": {"status": "ok"}}, 1000

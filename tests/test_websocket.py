@@ -225,3 +225,40 @@ async def test_websocket_heartbeat_ping_pong(client, monkeypatch):
         ack = ws.receive_json()
         assert ack["type"] == "ack"
         assert ack["id"] == ping["id"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_accepts_client_ping(client, monkeypatch):
+    monkeypatch.setattr(ws_module.settings, "WS_HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(ws_module.settings, "WS_HEARTBEAT_TIMEOUT_SECONDS", 0.2)
+
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    ticket = _issue_ws_ticket(client, token)
+
+    with _connect_ws(client, ticket) as ws:
+        ws.receive_json()  # history
+        ws.receive_json()  # user_state
+
+        # 1. Test simple client.ping without an ID
+        ws.send_json({"type": "client.ping", "ts": "now"})
+        ack_ping = ws.receive_json()
+        assert ack_ping["type"] == "ack"
+        assert ack_ping["payload"]["status"] == "ok"
+        assert ack_ping["payload"].get("detail") == "client.ping"
+
+        # 2. Test that client.ping doesn't break the server ping/pong flow
+        server_ping = ws.receive_json()
+        assert server_ping["type"] == "ping"
+
+        # Send a client.ping before the required pong
+        ws.send_json({"type": "client.ping", "ts": "now"})
+        ws.receive_json()  # Ack for client.ping
+
+        # Now send the required pong
+        ws.send_json({"id": server_ping["id"], "type": "pong", "payload": None})
+        ack_pong = ws.receive_json()
+        assert ack_pong["type"] == "ack"
+        assert ack_pong["id"] == server_ping["id"]
+        assert ack_pong["payload"]["status"] == "ok", "Pong should be accepted"
