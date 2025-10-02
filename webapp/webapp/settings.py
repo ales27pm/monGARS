@@ -50,6 +50,7 @@ def _private_interface_addresses(hostname: str | None) -> Iterable[str]:
 
     try:
         import netifaces
+
         for iface in netifaces.interfaces():
             for family, addresses in netifaces.ifaddresses(iface).items():
                 if family not in (netifaces.AF_INET, netifaces.AF_INET6):
@@ -61,7 +62,8 @@ def _private_interface_addresses(hostname: str | None) -> Iterable[str]:
     except ImportError:
         # Fallback for when netifaces is not installed
         for info in (
-            _safe_socket_call(socket.getaddrinfo, None, 0, proto=socket.IPPROTO_TCP) or []
+            _safe_socket_call(socket.getaddrinfo, None, 0, proto=socket.IPPROTO_TCP)
+            or []
         ):
             host = info[4][0]
             if _is_private_ip(host):
@@ -104,7 +106,10 @@ def _is_private_ip(value: str) -> bool:
     except ValueError:
         return False
 
-    return address.is_private
+    if address.version == 4:
+        return any(address in network for network in _PRIVATE_IPV4_NETWORKS)
+
+    return any(address in network for network in _PRIVATE_IPV6_NETWORKS)
 
 
 T = TypeVar("T")

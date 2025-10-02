@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import ast
 import hashlib
 import json
@@ -42,13 +43,11 @@ os.environ.setdefault("SECRET_KEY", "inventory-placeholder")
 class SourceEntry:
     path: Path
     sha256: str
-    definitions: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": self.path.as_posix(),
             "sha256": self.sha256,
-            "definitions": self.definitions,
         }
 
 
@@ -172,18 +171,6 @@ def iter_python_files() -> Iterator[Path]:
         yield path
 
 
-def collect_definitions(source: str) -> list[str]:
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-    definitions: list[str] = []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            definitions.append(node.name)
-    return definitions
-
-
 def collect_source_tree() -> list[dict[str, Any]]:
     entries: list[SourceEntry] = []
     for path in iter_python_files():
@@ -193,13 +180,7 @@ def collect_source_tree() -> list[dict[str, Any]]:
         except OSError:
             continue
         sha = hashlib.sha256(data).hexdigest()
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError:
-            definitions: list[str] = []
-        else:
-            definitions = collect_definitions(text)
-        entries.append(SourceEntry(path=relative, sha256=sha, definitions=definitions))
+        entries.append(SourceEntry(path=relative, sha256=sha))
     return [
         entry.to_dict()
         for entry in sorted(entries, key=lambda entry: entry.path.as_posix())
@@ -266,7 +247,28 @@ def validate_sections(sections: dict[str, Any]) -> None:
         )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate a repository inventory")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=OUTPUT_FILE,
+        help="Path to write the inventory JSON file",
+    )
+    return parser.parse_args()
+
+
+def resolve_output_path(path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
+
+
 def main() -> None:
+    args = parse_args()
+    output_path = resolve_output_path(args.output)
+
     packages = collect_packages()
     source_tree = collect_source_tree()
     app = load_fastapi_app()
@@ -283,7 +285,8 @@ def main() -> None:
 
     validate_sections(inventory)
 
-    OUTPUT_FILE.write_text(
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
         json.dumps(inventory, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
