@@ -63,9 +63,21 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     )
     try:
         payload = sec.verify_token(token)
-        return payload
     except Exception as exc:  # pragma: no cover - FastAPI handles response
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}") from exc
+    subject = None
+    if isinstance(payload, Mapping):
+        subject = payload.get("sub")
+    if subject is None or (isinstance(subject, str) and not subject):
+        logger.warning(
+            "auth.invalid_token_missing_sub",
+            extra={"payload_type": type(payload).__name__},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing subject",
+        )
+    return payload
 
 
 def get_current_admin_user(current_user: dict = Depends(get_current_user)) -> dict:

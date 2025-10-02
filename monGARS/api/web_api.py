@@ -172,21 +172,20 @@ async def chat(
     current_user: Annotated[dict, Depends(get_current_user)],
     conv: Annotated[ConversationalModule, Depends(get_conversational_module)],
 ) -> ChatResponse:
+    user_id = current_user["sub"]
     try:
-        data = validate_user_input(
-            {"user_id": current_user.get("sub"), "query": chat.message}
-        )
+        data = validate_user_input({"user_id": user_id, "query": chat.message})
     except ValueError as exc:
-        logger.warning(
+        logging.getLogger(__name__).warning(
             "web_api.chat_invalid_input",
-            extra={"user": current_user.get("sub"), "detail": str(exc)},
+            extra={"user": user_id, "detail": str(exc)},
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
     try:
         result = await conv.generate_response(
-            current_user.get("sub"), data["query"], session_id=chat.session_id
+            user_id, data["query"], session_id=chat.session_id
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -199,7 +198,7 @@ async def chat(
     try:
         event = make_event(
             "chat.message",
-            current_user.get("sub"),
+            user_id,
             response_payload,
         )
         await event_bus().publish(event)

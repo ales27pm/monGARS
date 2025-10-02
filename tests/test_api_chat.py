@@ -153,7 +153,7 @@ async def test_chat_requires_auth(client: TestClient):
 
 
 @pytest.mark.asyncio
-async def test_chat_missing_sub_in_token_returns_422(client: TestClient):
+async def test_chat_missing_sub_in_token_returns_401(client: TestClient):
     token = SecurityManager(secret_key="test", algorithm="HS256").create_access_token(
         {"admin": False}
     )
@@ -162,5 +162,5 @@ async def test_chat_missing_sub_in_token_returns_422(client: TestClient):
         json={"message": "hello"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 422
-    assert resp.json()["detail"] == "Missing required fields: user_id and query."
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Invalid token: missing subject"
