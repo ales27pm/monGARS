@@ -235,7 +235,8 @@ def test_user_registration_contract_model() -> None:
 async def test_chat_invalid_payload_returns_422(
     contract_client: Iterable[Tuple[TestClient, _FakePersistenceRepository]],
 ):
-    client, _ = contract_client
+    client, repo = contract_client
+    await repo.create_user("u1", "hashed_password")
     token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
         "access_token"
     ]
