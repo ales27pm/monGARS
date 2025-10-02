@@ -1,0 +1,1350 @@
+{
+  "components": {
+    "schemas": {
+      "Body_login_token_post": {
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "password",
+            "title": "Client Secret"
+          },
+          "grant_type": {
+            "anyOf": [
+              {
+                "pattern": "^password$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Type"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string"
+          },
+          "scope": {
+            "default": "",
+            "title": "Scope",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "Body_login_token_post",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "description": "Incoming chat message sent to the conversational endpoint.",
+        "properties": {
+          "message": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "ChatResponse": {
+        "description": "Canonical response body returned by the chat endpoint.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "processing_time": {
+            "title": "Processing Time",
+            "type": "number"
+          },
+          "response": {
+            "title": "Response",
+            "type": "string"
+          },
+          "speech_turn": {
+            "$ref": "#/components/schemas/SpeechTurnSchema"
+          }
+        },
+        "required": [
+          "response",
+          "confidence",
+          "processing_time",
+          "speech_turn"
+        ],
+        "title": "ChatResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LLMModelConfigurationResponse": {
+        "description": "Response describing the active profile and available options.",
+        "properties": {
+          "active_profile": {
+            "title": "Active Profile",
+            "type": "string"
+          },
+          "available_profiles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Profiles",
+            "type": "array"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/LLMModelProfileSummary"
+          }
+        },
+        "required": [
+          "active_profile",
+          "available_profiles",
+          "profile"
+        ],
+        "title": "LLMModelConfigurationResponse",
+        "type": "object"
+      },
+      "LLMModelDefinitionSchema": {
+        "description": "Serialised representation of a model configuration entry.",
+        "properties": {
+          "auto_download": {
+            "default": true,
+            "title": "Auto Download",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "name",
+          "provider"
+        ],
+        "title": "LLMModelDefinitionSchema",
+        "type": "object"
+      },
+      "LLMModelProfileSummary": {
+        "description": "Summary of models defined under a profile.",
+        "properties": {
+          "models": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LLMModelDefinitionSchema"
+            },
+            "title": "Models",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "models"
+        ],
+        "title": "LLMModelProfileSummary",
+        "type": "object"
+      },
+      "LLMModelProvisionReportResponse": {
+        "description": "Aggregated provisioning report returned by the API.",
+        "properties": {
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/LLMModelProvisionStatusResponse"
+            },
+            "title": "Statuses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "statuses"
+        ],
+        "title": "LLMModelProvisionReportResponse",
+        "type": "object"
+      },
+      "LLMModelProvisionRequest": {
+        "description": "Request body for provisioning LLM models.",
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          }
+        },
+        "title": "LLMModelProvisionRequest",
+        "type": "object"
+      },
+      "LLMModelProvisionStatusResponse": {
+        "description": "Result entry returned after attempting to ensure a model.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "name",
+          "provider",
+          "action"
+        ],
+        "title": "LLMModelProvisionStatusResponse",
+        "type": "object"
+      },
+      "MemoryItem": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "response": {
+            "title": "Response",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "query",
+          "response"
+        ],
+        "title": "MemoryItem",
+        "type": "object"
+      },
+      "PeerLoadSnapshot": {
+        "description": "Minimal load report shared between peer schedulers.",
+        "properties": {
+          "active_workers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Active Workers",
+            "type": "integer"
+          },
+          "concurrency": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "load_factor": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Load Factor",
+            "type": "number"
+          },
+          "queue_depth": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Queue Depth",
+            "type": "integer"
+          },
+          "scheduler_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Id"
+          }
+        },
+        "title": "PeerLoadSnapshot",
+        "type": "object"
+      },
+      "PeerMessage": {
+        "description": "Payload accepted by the peer message endpoint.",
+        "properties": {
+          "payload": {
+            "minLength": 1,
+            "title": "Payload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "PeerMessage",
+        "type": "object"
+      },
+      "PeerRegistration": {
+        "description": "Model describing a peer registration request.",
+        "properties": {
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "PeerRegistration",
+        "type": "object"
+      },
+      "RagContextRequest": {
+        "description": "Request payload for the RAG context enrichment endpoint.",
+        "properties": {
+          "max_results": {
+            "anyOf": [
+              {
+                "maximum": 50.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Results"
+          },
+          "query": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "repositories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repositories"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "RagContextRequest",
+        "type": "object"
+      },
+      "RagContextResponse": {
+        "description": "Response payload for the RAG context enrichment endpoint.",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "focus_areas": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Focus Areas",
+            "type": "array"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/RagReferenceSchema"
+            },
+            "title": "References",
+            "type": "array"
+          }
+        },
+        "title": "RagContextResponse",
+        "type": "object"
+      },
+      "RagReferenceSchema": {
+        "description": "Single reference entry returned by the RAG service.",
+        "properties": {
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "repository",
+          "file_path",
+          "summary"
+        ],
+        "title": "RagReferenceSchema",
+        "type": "object"
+      },
+      "SpeechSegmentSchema": {
+        "description": "Schema describing a single speech segment.",
+        "properties": {
+          "estimated_duration": {
+            "title": "Estimated Duration",
+            "type": "number"
+          },
+          "pause_after": {
+            "title": "Pause After",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "estimated_duration",
+          "pause_after"
+        ],
+        "title": "SpeechSegmentSchema",
+        "type": "object"
+      },
+      "SpeechTurnSchema": {
+        "description": "Schema describing the structure of a conversational speech turn.",
+        "properties": {
+          "average_words_per_second": {
+            "title": "Average Words Per Second",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SpeechSegmentSchema"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "tempo": {
+            "title": "Tempo",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id",
+          "text",
+          "created_at",
+          "segments",
+          "average_words_per_second",
+          "tempo"
+        ],
+        "title": "SpeechTurnSchema",
+        "type": "object"
+      },
+      "SuggestRequest": {
+        "description": "Request body for the UI suggestion endpoint.",
+        "properties": {
+          "actions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actions"
+          },
+          "prompt": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "SuggestRequest",
+        "type": "object"
+      },
+      "SuggestResponse": {
+        "description": "Response model returned by the UI suggestion endpoint.",
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Scores",
+            "type": "object"
+          }
+        },
+        "required": [
+          "actions",
+          "scores",
+          "model"
+        ],
+        "title": "SuggestResponse",
+        "type": "object"
+      },
+      "UserRegistration": {
+        "description": "Input payload for user registration requests.",
+        "properties": {
+          "password": {
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "UserRegistration",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WSTicketResponse": {
+        "properties": {
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          },
+          "ttl": {
+            "title": "Ttl",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticket",
+          "ttl"
+        ],
+        "title": "WSTicketResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "token"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "info": {
+    "title": "monGARS API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/auth/ws/ticket": {
+      "post": {
+        "operationId": "issue_ws_ticket_api_v1_auth_ws_ticket_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WSTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Issue Ws Ticket",
+        "tags": [
+          "ws-ticket"
+        ]
+      }
+    },
+    "/api/v1/conversation/chat": {
+      "post": {
+        "operationId": "chat_api_v1_conversation_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Chat"
+      }
+    },
+    "/api/v1/conversation/history": {
+      "get": {
+        "operationId": "conversation_history_api_v1_conversation_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MemoryItem"
+                  },
+                  "title": "Response Conversation History Api V1 Conversation History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Conversation History"
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "description": "Return the active profile and available model definitions.",
+        "operationId": "read_model_configuration_api_v1_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMModelConfigurationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Read Model Configuration",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/provision": {
+      "post": {
+        "description": "Ensure local providers have the configured models for the requested roles.",
+        "operationId": "provision_models_api_v1_models_provision_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LLMModelProvisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMModelProvisionReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Provision Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/peer/list": {
+      "get": {
+        "description": "Return the list of registered peer URLs.",
+        "operationId": "peer_list_api_v1_peer_list_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Peer List Api V1 Peer List Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer List"
+      }
+    },
+    "/api/v1/peer/load": {
+      "get": {
+        "description": "Expose this node's scheduler load metrics to peers.",
+        "operationId": "peer_load_api_v1_peer_load_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerLoadSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer Load"
+      }
+    },
+    "/api/v1/peer/message": {
+      "post": {
+        "description": "Receive an encrypted message from a peer.",
+        "operationId": "peer_message_api_v1_peer_message_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Peer Message Api V1 Peer Message Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer Message"
+      }
+    },
+    "/api/v1/peer/register": {
+      "post": {
+        "description": "Register a peer URL for future broadcasts.",
+        "operationId": "peer_register_api_v1_peer_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Peer Register Api V1 Peer Register Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer Register"
+      }
+    },
+    "/api/v1/peer/unregister": {
+      "post": {
+        "description": "Remove a previously registered peer URL.",
+        "operationId": "peer_unregister_api_v1_peer_unregister_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Peer Unregister Api V1 Peer Unregister Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer Unregister"
+      }
+    },
+    "/api/v1/review/rag-context": {
+      "post": {
+        "description": "Return contextual code references relevant to the supplied query.",
+        "operationId": "fetch_rag_context_api_v1_review_rag_context_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RagContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagContextResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Fetch Rag Context",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/api/v1/ui/suggestions": {
+      "post": {
+        "operationId": "suggestions_api_v1_ui_suggestions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Suggestions",
+        "tags": [
+          "ui"
+        ]
+      }
+    },
+    "/api/v1/user/register": {
+      "post": {
+        "operationId": "register_user_api_v1_user_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register User Api V1 User Register Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register User"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ready Ready Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready"
+      }
+    },
+    "/token": {
+      "post": {
+        "description": "Return a simple access token.",
+        "operationId": "login_token_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_login_token_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Login Token Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login"
+      }
+    }
+  }
+}
