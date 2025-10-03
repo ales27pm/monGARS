@@ -108,9 +108,7 @@ async def training_workflow(
         return
 
     if engine_factory is None:
-        from monGARS.core.evolution_engine import (
-            EvolutionEngine as _EvolutionEngine,
-        )
+        from monGARS.core.evolution_engine import EvolutionEngine as _EvolutionEngine
 
         engine_ctor = _EvolutionEngine
     else:
