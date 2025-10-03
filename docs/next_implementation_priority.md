@@ -46,8 +46,8 @@ additions deploy cleanly without relying on ad-hoc bootstrap scripts.
 5. **Document Rollout** – Record upgrade steps in `docs/ray_serve_deployment.md`
    and ops runbooks so operators know how to apply the new migrations.
 6. **Add Tests** – Extend integration tests (or add new fixtures) that spin up an
-   empty database, apply migrations, and verify the ORM can interact with the
-   resulting schema.
+   empty database, apply migrations up and down to `head` and back to `base`, and
+   verify the ORM can interact with the resulting schema at each stage.
 
 ## Success Criteria & Validation
 - Alembic `upgrade head` completes on a blank database without manual scripts.
