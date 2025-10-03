@@ -24,32 +24,32 @@ required to reach production readiness.
 - Replaced placeholder tests with meaningful coverage for circuit breakers,
   caching, and self-training.
 
-## Phase 3 – Hardware & Performance (🔄 In Progress, Target Q3 2025)
+## Phase 3 – Hardware & Performance (✅ Completed Q3 2025)
 
 - ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
 - ✅ Multi-architecture build scripts and cache metrics.
 - ✅ Hardened RBAC manifests.
 - ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support
   for LoRA and curated adapters.
-- 🔄 Extend Alembic migrations for the newest SQLModel tables, including legacy
+- ✅ Extend Alembic migrations for the newest SQLModel tables, including legacy
   tables created outside the current ORM layer.
 - ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*`
   metrics emitted by `LLMIntegration`).
 
-## Phase 4 – Collaborative Networking (🔄 In Progress, Target Q4 2025)
+## Phase 4 – Collaborative Networking (✅ Completed Q4 2025)
 
 - ✅ Encrypted peer registry, admin-guarded endpoints, and distributed scheduler.
 - ✅ Sommeil Paradoxal idle-time optimisation and safe apply pipeline.
-- 🔄 Implement load-aware scheduling strategies and share optimisation telemetry
+- ✅ Implemented load-aware scheduling strategies and shared optimisation telemetry
   across nodes.
 
-## Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)
+## Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)
 
 - ✅ FastAPI chat/history/token endpoints with validation.
 - ✅ Django chat UI with progressive enhancement.
 - ✅ FastAPI WebSocket handler with ticket verification, history replay, and
   streaming guarded by `WS_ENABLE_EVENTS`.
-- 🔄 Replace hard-coded credential stores with database-backed auth flows.
+- ✅ Replaced hard-coded credential stores with database-backed auth flows.
 - 🚧 Publish polished SDKs and reference clients.
 
 ## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)

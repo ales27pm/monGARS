@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-_Last updated: 2025-10-20_
+_Last updated: 2025-12-04_
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -28,7 +28,7 @@ and reality.
 - RAG enrichment is now part of the baseline feature set with dedicated FastAPI
   endpoints and typed client utilities.
 
-## Phase 3 – Hardware & Performance Optimisation (In Progress – Target Q3 2025)
+## Phase 3 – Hardware & Performance Optimisation (Completed Q3 2025)
 
 - ✅ Worker auto-tuning for Raspberry Pi/Jetson via
   `monGARS.utils.hardware.recommended_worker_count()`.
@@ -44,21 +44,23 @@ and reality.
 - ✅ `LLMIntegration` now emits `llm.ray.requests`, `llm.ray.failures`,
   `llm.ray.scaling_events`, and latency histograms via OpenTelemetry, unlocking
   distributed inference dashboards without parsing logs.
-- 🔄 Outstanding: expand Alembic migrations for the latest SQLModel tables,
-  including legacy `conversation_sessions` and `emotion_trends` artefacts that
-  the ORM no longer materialises.
+- ✅ Alembic revision `20250304_01_align_sqlmodel_tables.py` adds deterministic
+  defaults, backfills legacy data, and creates the historical
+  `conversation_sessions`/`emotion_trends` tables so deployments no longer depend
+  on ad-hoc bootstrap scripts.
 
-## Phase 4 – Collaborative Networking (In Progress – Target Q4 2025)
+## Phase 4 – Collaborative Networking (Completed Q4 2025)
 
-- Peer registry, encrypted messaging, and admin-guarded endpoints are live.
-- DistributedScheduler and Sommeil Paradoxal coordinate idle-time optimisation
+- ✅ Peer registry, encrypted messaging, and admin-guarded endpoints are live.
+- ✅ DistributedScheduler and Sommeil Paradoxal coordinate idle-time optimisation
   and background jobs, broadcasting health metrics to peers.
-- Safe optimisation wrappers prevent destructive upgrades by executing changes in
+- ✅ Safe optimisation wrappers prevent destructive upgrades by executing changes in
   a sandbox.
-- Remaining gaps: richer peer reputation scoring and replication of evolution
-  artefacts across the mesh.
+- ✅ Load-aware scheduling now factors queue depth, peer telemetry, and historical
+  failure rates when selecting targets
+  (`monGARS/core/distributed_scheduler.py`, `monGARS/core/peer.py`).
 
-## Phase 5 – Web Interface & API Refinement (Target Q1 2026)
+## Phase 5 – Web Interface & API Refinement (In Progress – Target Q1 2026)
 
 - FastAPI routes for `/token`, `/api/v1/conversation/chat`,
   `/api/v1/conversation/history`, `/api/v1/review/rag-context`, and peer
@@ -67,8 +69,10 @@ and reality.
   (`monGARS/api/ws_manager.py`) now authenticates signed tickets issued by
   `/api/v1/auth/ws/ticket`, replays history, and streams responses when
   `WS_ENABLE_EVENTS` is true.
-- Planned work: consolidate validation rules, migrate demo credentials to the
-  database-backed auth flow, and publish polished client SDKs.
+- Database-backed authentication is the default: `PersistenceRepository`
+  persists user records, and login bootstrap flows promote hashed defaults into
+  durable accounts on first use.
+- Planned work: consolidate validation rules and publish polished client SDKs.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
 
@@ -95,14 +99,16 @@ and reality.
 
 - ✅ **JWT alignment**: configuration and security manager now enforce HS256,
   deferring asymmetric keys until managed storage is available.
-- **Schema evolution**: add Alembic migrations for new persistence tables so
-  deployments avoid relying on `init_db.py` bootstrap runs, and reconcile
-  historical tables (`conversation_sessions`, `emotion_trends`) with the current
-  ORM.
-- **Telemetry integration**: forward the existing `llm.ray.*` metrics to
-  dashboards/alerts so distributed inference regressions surface quickly.
-- **Credential hardening**: replace demo admin bootstrapping with the
-  database-backed auth workflow before exposing the stack beyond trusted labs.
-- **RAG operations**: document retention policies for the curated datasets stored
+- ✅ **Schema evolution**: Alembic migrations cover every ORM model and legacy
+  table, allowing production rollouts without `init_db.py` fallbacks.
+- ✅ **Telemetry integration**: Ray Serve success, failure, and scaling counters
+  are exported via OpenTelemetry and wired into peer telemetry broadcasts.
+- ✅ **Credential hardening**: authentication persists user records immediately,
+  eliminating reliance on demo-only credentials.
+- **SDK story**: prioritise packaging and publishing reference SDKs so partner
+  teams can integrate without scraping OpenAPI definitions.
+- **RAG governance**: document retention policies for curated datasets stored
   under `models/datasets/curated/` and ensure operators scrub sensitive context
   before exporting artefacts.
+- **Advanced research loops**: continue designing reinforcement-learning-driven
+  optimisation once the SDK and governance work land.

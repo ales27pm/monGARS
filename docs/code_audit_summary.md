@@ -27,7 +27,7 @@
 ## Recommendations
 - Pin `passlib` in `requirements.txt` and record backend availability in CI to
   prevent regressions.
-- Emit OpenTelemetry counters for Ray Serve success/failure buckets to complement
-  existing structured logs.
-- Periodically rerun the audit after dependency upgrades or authentication flow
-  changes.
+- Keep the new Ray Serve OpenTelemetry metrics wired into dashboards and alarms
+  so SDK-driven traffic inherits the same visibility as operator workflows.
+- Fold SDK contract tests into the audit cycle once the client packages ship to
+  ensure credential, ticket, and streaming flows remain hardened.
