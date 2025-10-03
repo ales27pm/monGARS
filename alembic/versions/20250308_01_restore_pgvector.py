@@ -51,6 +51,8 @@ def _normalise_vector(
             return None
         payload = json.loads(candidate)
         if not isinstance(payload, (list, tuple)):
+        payload = json.loads(candidate)
+        if not isinstance(payload, (list, tuple)):
             return None
     if isinstance(payload, (list, tuple)):
         try:
