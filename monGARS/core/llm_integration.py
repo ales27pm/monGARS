@@ -719,9 +719,7 @@ class LLMIntegration:
             parsed = urlparse(endpoint)
             host = parsed.netloc or "unknown"
             path = parsed.path or ""
-        attributes: dict[str, str | int | float | bool] = {
-            "endpoint": host
-        }
+        attributes: dict[str, str | int | float | bool] = {"endpoint": host}
         if path and path != "/":
             attributes["path"] = path
         for key, value in extra.items():

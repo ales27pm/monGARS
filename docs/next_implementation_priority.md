@@ -1,5 +1,9 @@
 # Next Implementation Priority
 
+> **Note:** This planning document is intentionally temporary. Archive or remove
+> it once the migration initiative completes so the permanent documentation
+> stays focused on long-lived workflows.
+
 ## Summary
 Documentation across the roadmap and implementation audit identifies schema
 evolution gaps as the most pressing blocker to production readiness. The
