@@ -93,18 +93,24 @@ async def test_training_workflow_exits_on_shutdown_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_training_workflow_exits_immediately_on_non_positive_max_cycles() -> None:
+@pytest.mark.parametrize("limit", (0, -1))
+async def test_training_workflow_exits_immediately_on_non_positive_max_cycles(
+    limit: int,
+) -> None:
     settings = get_settings().model_copy(update={"training_cycle_jitter_seconds": 0})
-    for limit in (0, -1):
-        engine = _StubEngine()
-        await training_workflow(
-            engine_factory=lambda: engine,
-            max_cycles=limit,
-            settings_override=settings,
-            interval_override=0,
-            jitter_override=0,
-        )
-        assert engine.calls == []
+    engine = _StubEngine()
+
+    def _engine_factory(_engine: _StubEngine = engine) -> _StubEngine:
+        return _engine
+
+    await training_workflow(
+        engine_factory=_engine_factory,
+        max_cycles=limit,
+        settings_override=settings,
+        interval_override=0,
+        jitter_override=0,
+    )
+    assert engine.calls == []
 
 
 def test_compute_delay_respects_interval_and_jitter_bounds() -> None:
