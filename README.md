@@ -114,6 +114,8 @@ slide decks or ops runbooks.
 ### Prerequisites
 - Python 3.11+
 - Docker & Docker Compose for container workflows
+- NVIDIA drivers compatible with CUDA 12.1 when running GPU workloads inside the
+  official `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image
 - Optional: GPU drivers for Ollama or Torch-based adapters
 
 ### Local Development
@@ -142,8 +144,11 @@ profiles:
 - `--with-ray` provisions a Ray Serve control plane listening on
   `${RAY_HTTP_PORT:-8002}`; toggle `USE_RAY_SERVE=true` and update
   `RAY_SERVE_URL` in `.env` if you expose a different port.
-- Base images ship with Git, Git LFS, FFmpeg, spaCy's `fr_core_news_sm` model,
-  and transformer tooling (`accelerate`, `peft`, `transformers`, `llm2vec`) so
+- Base images (now built from the public
+  `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image—no NVIDIA Container
+  Registry login required) ship with Git, Git LFS, FFmpeg, spaCy's
+  `fr_core_news_sm` model, and transformer tooling (`accelerate`, `peft`,
+  `transformers`, `llm2vec`) so
   containers can pull adapters, process multimedia context, and invoke LLMs out
   of the box.
 
