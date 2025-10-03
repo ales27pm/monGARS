@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monGARS-sdk"
+version = "0.1.0"
+description = "Official Python SDK for the monGARS conversational AI platform"
+readme = "README.md"
+authors = [{ name = "monGARS Team" }]
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.28.1",
+  "pydantic>=2.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/monGARS/monGARS"
+Documentation = "https://github.com/monGARS/monGARS/tree/main/docs"
