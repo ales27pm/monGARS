@@ -1,0 +1,26 @@
+{
+  "name": "@mongars/sdk",
+  "version": "0.1.0",
+  "description": "Official TypeScript SDK for the monGARS API",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts"
+  },
+  "keywords": [
+    "ai",
+    "sdk",
+    "mongars"
+  ],
+  "author": "monGARS Team",
+  "license": "MIT",
+  "dependencies": {
+    "cross-fetch": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.6.3"
+  }
+}
