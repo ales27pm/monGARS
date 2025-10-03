@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -300,3 +301,46 @@ async def test_ray_deployment_rejects_invalid_adapter_payload(
     result = await deployment._refresh_adapter(mismatched_version)
     assert result == payload
     assert not manager.switch_calls
+
+
+@pytest.mark.asyncio
+async def test_ray_deployment_accepts_multi_replica_payload_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from modules import ray_service
+
+    monkeypatch.setenv("SECRET_KEY", "test")
+    registry_path = tmp_path / "encoders"
+    initial_trainer = _make_success_trainer(suffix="baseline")
+    _run_orchestrator_pipeline(registry_path, initial_trainer)
+
+    DummyNeuronManager.instances.clear()
+    monkeypatch.setattr(ray_service, "NeuronManager", DummyNeuronManager)
+
+    deployment = ray_service.RayLLMDeployment(
+        base_model_path="base", registry_path=str(registry_path)
+    )
+
+    manager = DummyNeuronManager.instances[-1]
+    assert not manager.switch_calls
+
+    updated_trainer = _make_success_trainer(suffix="multi")
+    _run_orchestrator_pipeline(registry_path, updated_trainer)
+
+    manifest = load_manifest(registry_path)
+    assert manifest is not None and manifest.current is not None
+    payload = manifest.build_payload()
+
+    replica_payload = {
+        "adapter_path": payload["adapter_path"],
+        "version": payload["version"],
+    }
+
+    results = await asyncio.gather(
+        deployment._refresh_adapter(replica_payload),
+        deployment._refresh_adapter(replica_payload),
+    )
+
+    assert all(result == replica_payload for result in results)
+    assert manager.switch_calls.count(replica_payload["adapter_path"]) == 1
+    assert deployment._adapter_version == payload["version"]
