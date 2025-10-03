@@ -1,5 +1,4 @@
 import logging
-import re
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
@@ -31,27 +30,25 @@ class SecurityManager:
         original_algorithm = algorithm or base_settings.JWT_ALGORITHM
         configured_algorithm = original_algorithm.upper()
 
-        self.algorithm = original_algorithm
-        self._is_asymmetric = configured_algorithm.startswith("RS")
+        if private_key or public_key:
+            raise ValueError(
+                "Asymmetric JWT keys are not supported; configure SECRET_KEY for HS256 instead."
+            )
 
-        if self._is_asymmetric:
-            (
-                self._settings,
-                self.private_key,
-                self.public_key,
-            ) = self._init_asymmetric(
-                base_settings,
-                private_key=private_key,
-                public_key=public_key,
+        if configured_algorithm != "HS256":
+            raise ValueError(
+                "Unsupported JWT algorithm "
+                f"'{original_algorithm}'. monGARS currently requires HS256 to align with deployed secrets."
             )
-            self.secret_key = None
-        else:
-            self._settings, self.secret_key = self._init_symmetric(
-                base_settings,
-                secret_key=secret_key,
-            )
-            self.private_key = None
-            self.public_key = None
+
+        self.algorithm = "HS256"
+        self._is_asymmetric = False
+        self._settings, self.secret_key = self._init_symmetric(
+            base_settings,
+            secret_key=secret_key,
+        )
+        self.private_key = None
+        self.public_key = None
 
         self._signing_key = self.private_key or self.secret_key
         self._verification_key = self.public_key or self.secret_key
@@ -77,34 +74,6 @@ class SecurityManager:
         else:
             schemes.append("bcrypt")
         self.pwd_context = CryptContext(**context_kwargs)
-
-    @staticmethod
-    def _validate_pem_key(key: str, *, expected: str) -> None:
-        pattern = rf"-----BEGIN (?:RSA )?{expected} KEY-----"
-        if not re.search(pattern, key):
-            raise ValueError(
-                f"Invalid RSA {expected.lower()} key format; expected PEM-encoded key."
-            )
-
-    def _init_asymmetric(
-        self,
-        base_settings: Settings,
-        *,
-        private_key: Optional[str],
-        public_key: Optional[str],
-    ) -> tuple[Settings, str, str]:
-        resolved_private = private_key or getattr(
-            base_settings, "JWT_PRIVATE_KEY", None
-        )
-        resolved_public = public_key or getattr(base_settings, "JWT_PUBLIC_KEY", None)
-
-        if not resolved_private or not resolved_public:
-            raise ValueError("RSA JWT algorithms require both private and public keys.")
-
-        self._validate_pem_key(resolved_private, expected="PRIVATE")
-        self._validate_pem_key(resolved_public, expected="PUBLIC")
-
-        return base_settings, resolved_private, resolved_public
 
     def _init_symmetric(
         self,
