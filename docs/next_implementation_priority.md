@@ -1,63 +1,61 @@
 # Next Implementation Priority
 
-> **Note:** This planning document is intentionally temporary. Archive or remove
-> it once the migration initiative completes so the permanent documentation
-> stays focused on long-lived workflows.
-
 ## Summary
-Documentation across the roadmap and implementation audit identifies schema
-evolution gaps as the most pressing blocker to production readiness. The
-immediate focus should be expanding Alembic migrations so recent SQLModel
-additions deploy cleanly without relying on ad-hoc bootstrap scripts.
+Now that schema evolution and telemetry upgrades are complete, the next
+high-impact milestone is publishing first-party SDKs and reference clients while
+credential hardening work wraps up.
+Operators and partner teams currently rely on OpenAPI scraping or ad-hoc scripts;
+packaged SDKs will harden integrations and shrink the support surface area as
+the project moves into long-term maintenance.
 
 ## Supporting Signals from Existing Documentation
-- **Roadmap**: Phase 3 highlights the need to "extend Alembic migrations for the
-  newest SQLModel tables" before the hardware and performance milestone can be
-  closed.
-- **Implementation Status Report**: Lists expanded Alembic migrations as the
-  outstanding item for Phase 3 and flags schema evolution as a key
-  contradiction, warning that deployments still depend on `init_db.py` instead
-  of structured migrations.
-- **Security & Stability Charter**: Treats schema drift as a reliability risk
-  alongside telemetry gaps and credential hardening, reinforcing its priority in
-  the hotlist.
+- **Roadmap**: Phase 5 keeps SDKs and reference clients as the final deliverable
+  but still flags the presence of demo credential defaults that must be removed.
+- **Implementation Status Report**: Highlights SDK packaging as the new
+  contradiction to resolve, notes the outstanding credential cleanup, and calls
+  out the need for clear RAG governance to accompany client distribution.
+- **Roadmap Charter (AGENTS.md)**: Security & Stability items are satisfied,
+  shifting attention to sustainable integration stories for external teams.
 
-## Rationale for Prioritising Alembic Migration Coverage
-1. **Deployment Safety** – Environments that skip `init_db.py` (e.g. production
-   rollouts that assume migrations) currently miss new tables, risking runtime
-   failures and data loss.
-2. **Upgrade Automation** – Formal migrations are prerequisites for blue/green
-   and rolling upgrades across Kubernetes clusters.
-3. **Downstream Tasks Depend on It** – Credential hardening and database-backed
-   auth flows require consistent schemas; completing migrations unblocks those
-   efforts.
+## Rationale for Prioritising SDK Publication
+1. **Developer Experience** – Typed clients for Python/TypeScript remove the need
+   for manual request crafting and ensure authentication, retries, and ticket
+   handling remain consistent with production expectations.
+2. **Operational Safety** – Providing vetted tooling reduces the temptation to
+   embed long-lived tokens or bypass telemetry hooks, keeping observability and
+   governance intact.
+3. **Ecosystem Enablement** – Documented SDKs accelerate integrations with peer
+   services, dashboards, and research notebooks without exposing internal
+   modules or requiring Django coupling.
 
 ## Implementation Outline
-1. **Inventory Current Models** – Enumerate SQLModel tables introduced since the
-   last Alembic revision (e.g. via `SQLModel.metadata.tables`).
-2. **Generate Revisions** – Use `alembic revision --autogenerate -m "<summary>"`
-   to capture schema deltas, then review and hand-tune for deterministic
-   defaults and indexes.
-3. **Backfill Data** – Introduce migration steps that populate critical columns
-   or seed reference data previously inserted by `init_db.py`.
-4. **Update Bootstrap Scripts** – Trim redundant table creation from
-   `init_db.py` once migrations cover the same structures; keep idempotent data
-   seeding where necessary.
-5. **Document Rollout** – Record upgrade steps in `docs/ray_serve_deployment.md`
-   and ops runbooks so operators know how to apply the new migrations.
-6. **Add Tests** – Extend integration tests (or add new fixtures) that spin up an
-   empty database, apply migrations up and down to `head` and back to `base`, and
-   verify the ORM can interact with the resulting schema at each stage.
+1. **Define API Surfaces** – Lock the minimal stable routes (chat, history,
+   review, peer management) and document any feature flags they depend on. Fold
+   the credential cleanup into this pass by removing the `DEFAULT_USERS`
+   bootstrap so SDK consumers cannot rely on demo logins.
+2. **Generate Typed Clients** – Use `openapi-python-client` and `openapi-typescript`
+   (or equivalent) to scaffold SDKs, layering ergonomic helpers for
+   authentication flows, ticket refresh, and streaming responses.
+3. **Harden Tooling** – Add CI jobs that build the SDK packages, run lint/tests,
+   and verify compatibility with the published OpenAPI schema.
+4. **Document Usage** – Provide quick-start guides in `docs/` plus inline docstrings
+   covering auth bootstrapping, WebSocket streaming, and RAG toggles.
+5. **Distribution Plan** – Decide on publication channels (private index, GitHub
+   releases, internal registry) and automate version bumps alongside backend
+   releases.
+6. **Feedback Loop** – Capture telemetry and user feedback from SDK adoption to
+   drive future roadmap refinements.
 
 ## Success Criteria & Validation
-- Alembic `upgrade head` completes on a blank database without manual scripts.
-- Existing test suites pass using only migrations for schema creation.
-- Documentation reflects the new workflow, including rollback guidance if a
-  migration fails in staging.
+- Python and TypeScript SDKs install via package manager and authenticate against
+  a fresh deployment without manual token crafting.
+- Streaming chat flows, history pagination, and RAG review helpers function
+  end-to-end using the SDK abstractions.
+- SDK documentation and code examples are verified to be accurate and sufficient
+  for a developer to integrate the client successfully.
 
-## Follow-On Work Once Migrations Ship
-- Emit Ray Serve success/failure counters through OpenTelemetry as captured in
-  the roadmap and audit documents.
-- Replace demo credential stores with the database-backed authentication flow,
-  now safe to deploy thanks to consistent schema evolution.
-- Continue credential and secrets hardening once the database layer is stable.
+## Follow-On Work Once SDKs Ship
+- Finalise RAG dataset retention guidance and automation ahead of wider partner
+  adoption.
+- Resume experimentation on reinforcement learning loops and sustainability
+  metrics as outlined in Phases 6 and 7 of the roadmap.
