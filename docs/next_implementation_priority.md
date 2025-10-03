@@ -30,7 +30,9 @@ the project moves into long-term maintenance.
 
 ## Implementation Outline
 1. **Define API Surfaces** – Lock the minimal stable routes (chat, history,
-   review, peer management) and document any feature flags they depend on.
+   review, peer management) and document any feature flags they depend on. Fold
+   the credential cleanup into this pass by removing the `DEFAULT_USERS`
+   bootstrap so SDK consumers cannot rely on demo logins.
 2. **Generate Typed Clients** – Use `openapi-python-client` and `openapi-typescript`
    (or equivalent) to scaffold SDKs, layering ergonomic helpers for
    authentication flows, ticket refresh, and streaming responses.

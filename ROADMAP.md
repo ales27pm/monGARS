@@ -50,8 +50,9 @@ required to reach production readiness.
 - ✅ Django chat UI with progressive enhancement.
 - ✅ FastAPI WebSocket handler with ticket verification, history replay, and
   streaming guarded by `WS_ENABLE_EVENTS`.
-- 🔄 Replaced hard-coded credential stores with database-backed auth flows (demo
-  defaults are promoted but still present until the credential cleanup lands).
+- 🔄 Replaced hard-coded credential stores with database-backed auth flows (the
+  `DEFAULT_USERS` bootstrap in `monGARS/api/web_api.py` still provisions demo
+  accounts until the cleanup lands).
 - 🚧 Publish polished SDKs and reference clients.
 
 ## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)
