@@ -13,14 +13,18 @@ export function createAuthService(config = {}) {
   const storageKey = config.storageKey || DEFAULT_STORAGE_KEY;
   let fallbackToken =
     typeof config.token === "string" && config.token.trim() !== ""
-      ? config.token
+      ? config.token.trim()
       : undefined;
 
   function persistToken(token) {
+    if (typeof token === "string") {
+      token = token.trim();
+    }
+    fallbackToken = token || undefined;
     if (!token) {
+      clearToken();
       return;
     }
-    fallbackToken = token;
 
     if (!hasLocalStorage()) {
       return;
@@ -73,9 +77,7 @@ export function createAuthService(config = {}) {
     if (fallbackToken) {
       return fallbackToken;
     }
-    throw new Error(
-      `Missing JWT (store it in localStorage as '${storageKey}' or provide it in the chat config).`,
-    );
+    throw new Error("Missing JWT for chat authentication.");
   }
 
   return {

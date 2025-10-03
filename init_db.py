@@ -60,8 +60,9 @@ async def init_db() -> None:
     """Apply database migrations and ensure required extensions are present."""
 
     try:
-        async with async_engine.begin() as conn:
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        if async_engine.dialect.name == "postgresql":
+            async with async_engine.begin() as conn:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     except Exception as exc:  # pragma: no cover - extension optional in tests
         logger.warning("Unable to ensure pgvector extension: %s", exc)
 
@@ -75,6 +76,7 @@ async def main() -> None:
         await init_db()
     except Exception:
         logger.exception("Failed to initialize database")
+        raise
 
 
 if __name__ == "__main__":
