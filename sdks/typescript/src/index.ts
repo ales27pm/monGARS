@@ -21,10 +21,17 @@ import { ApiError, AuthenticationError } from "./errors.js";
 export * from "./errors.js";
 export * from "./models.js";
 
+type RequestCredentialsOption = "omit" | "same-origin" | "include";
+
 export interface ClientOptions {
   baseUrl: string;
   defaultHeaders?: HeadersInit;
   fetchImpl?: typeof fetch;
+  /**
+   * Controls whether browser credentials (cookies, basic auth) are forwarded with requests.
+   * Defaults to "omit" to prevent CSRF exposure when using the SDK from a browser context.
+   */
+  credentials?: RequestCredentialsOption;
 }
 
 async function parseResponse(response: Response): Promise<any> {
@@ -61,6 +68,7 @@ export class MonGARSClient {
   private token?: string;
   private readonly defaultHeaders: HeadersInit;
   private readonly fetchImpl: typeof fetch;
+  private readonly credentials: RequestCredentialsOption;
 
   constructor(options: ClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -69,6 +77,7 @@ export class MonGARSClient {
       "User-Agent": "monGARS-SDK/1.0",
     };
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.credentials = options.credentials ?? "omit";
   }
 
   private buildHeaders(extra?: HeadersInit): HeadersInit {
@@ -85,10 +94,17 @@ export class MonGARSClient {
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+    const requestInit: RequestInit = {
       ...init,
       headers: this.buildHeaders(init.headers as HeadersInit),
-    });
+    };
+    if (requestInit.credentials === undefined) {
+      requestInit.credentials = this.credentials;
+    }
+    const response = await this.fetchImpl(
+      `${this.baseUrl}${path}`,
+      requestInit,
+    );
     if (!response.ok) {
       const payload = await parseResponse(response);
       raiseForStatus(response.status, payload);
@@ -104,13 +120,17 @@ export class MonGARSClient {
     const body = new URLSearchParams();
     body.append("username", credentials.username);
     body.append("password", credentials.password);
-    const response = await this.fetchImpl(`${this.baseUrl}/token`, {
+    const requestInit: RequestInit = {
       method: "POST",
       headers: this.buildHeaders({
         "Content-Type": "application/x-www-form-urlencoded",
       }),
       body,
-    });
+    };
+    if (requestInit.credentials === undefined) {
+      requestInit.credentials = this.credentials;
+    }
+    const response = await this.fetchImpl(`${this.baseUrl}/token`, requestInit);
     const payload = await parseResponse(response);
     if (!response.ok) {
       raiseForStatus(response.status, payload);

@@ -49,8 +49,9 @@ asyncio.run(main())
 Two reference client implementations live in [`examples/`](examples/):
 
 - `chat_cli.py` demonstrates an interactive terminal chat experience with token
-  management and graceful error handling.
-- `peer_metrics.py` showcases periodic telemetry publication.
+  management, bounded login retries, and graceful error handling.
+- `peer_metrics.py` showcases periodic telemetry publication with exponential
+  backoff to avoid hammering the API during outages.
 
 These scripts are safe to copy and adapt for bespoke workflows.
 

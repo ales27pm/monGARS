@@ -33,6 +33,27 @@ console.log(reply.response);
 Check the [`examples/`](examples/) folder for an interactive CLI example that
 covers login, chat, and streaming suggestions.
 
+### Browser security guidance
+
+When instantiating the client inside a browser, the SDK defaults to
+`credentials: "omit"` so cross-site requests never forward cookies or other
+ambient credentials. If your deployment relies on a CSRF token, pass it via
+custom headers and keep bearer tokens in memory (or a hardened storage
+mechanism) rather than mixing them with cookie-based sessions:
+
+```ts
+const client = new MonGARSClient({
+  baseUrl: "https://api.mongars.local",
+  credentials: "omit", // default, shown for clarity
+  defaultHeaders: {
+    "X-CSRF-Token": window.csrfToken,
+  },
+});
+```
+
+Avoid enabling `credentials: "include"` unless you have server-side CSRF
+protections (such as same-site cookies and rotating anti-CSRF tokens) in place.
+
 ## API coverage
 
 - Authentication: `login`, `registerUser`
