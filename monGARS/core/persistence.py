@@ -124,7 +124,7 @@ class PersistenceRepository:
             return None
         payload = self._compose_history_payload(query, response)
         if not payload.strip():
-            return []
+            return None
         try:
             vector, used_fallback = await self._embedder.embed_text(
                 payload, instruction=self._settings.llm2vec_instruction
@@ -174,7 +174,14 @@ class PersistenceRepository:
 
     @staticmethod
     def _cosine_distance(left: Sequence[float], right: Sequence[float]) -> float:
-        dot = sum(l * r for l, r in zip(left, right))
+        if len(left) != len(right):
+            raise ValueError(
+                "Vectors must have the same dimensions for cosine distance."
+            )
+        dot = sum(
+            left_component * right_component
+            for left_component, right_component in zip(left, right)
+        )
         norm_left = math.sqrt(sum(component * component for component in left))
         norm_right = math.sqrt(sum(component * component for component in right))
         if norm_left == 0 or norm_right == 0:
@@ -312,7 +319,14 @@ class PersistenceRepository:
                 candidate_vector = self._normalise_vector(record.vector)
                 if candidate_vector is None:
                     continue
-                distance = self._cosine_distance(prepared_vector, candidate_vector)
+                try:
+                    distance = self._cosine_distance(prepared_vector, candidate_vector)
+                except ValueError:
+                    logger.warning(
+                        "persistence.vector_search.dimension_mismatch",
+                        extra={"record_id": record.id},
+                    )
+                    continue
                 if max_distance is not None and distance > max_distance:
                     continue
                 matches.append(VectorMatch(record=record, distance=distance))

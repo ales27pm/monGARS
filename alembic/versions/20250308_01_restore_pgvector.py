@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from typing import Any
 
 import sqlalchemy as sa
 
@@ -20,28 +20,57 @@ branch_labels = None
 depends_on = None
 
 
-def _load_rows(bind: sa.Connection, table: sa.Table) -> list[sa.Row[Any]]:
+VECTOR_DIMENSIONS = 3072
+ROW_BATCH_SIZE = 500
+
+
+def _iter_rows(
+    bind: sa.Connection, table: sa.Table, *, batch_size: int = ROW_BATCH_SIZE
+):
     stmt = sa.select(table.c.id, table.c.vector)
-    result: Iterable[sa.Row[Any]] = bind.execute(stmt)
-    return list(result)
+    result = bind.execute(stmt)
+    try:
+        while True:
+            chunk = result.fetchmany(batch_size)
+            if not chunk:
+                break
+            for row in chunk:
+                yield row
+    finally:
+        result.close()
 
 
-def _normalise_vector(payload: Any) -> list[float] | None:
+def _normalise_vector(
+    payload: Any, *, dimensions: int = VECTOR_DIMENSIONS
+) -> list[float] | None:
     if payload is None:
         return None
     if isinstance(payload, str):
         candidate = payload.strip()
         if not candidate:
             return None
-        payload = json.loads(candidate)
+        try:
+            payload = json.loads(candidate)
+        except ValueError:
+            # Malformed JSON payloads should be ignored so the migration can continue.
+            return None
+        if not isinstance(payload, (list, tuple)):
+            return None
     if isinstance(payload, (list, tuple)):
         try:
-            return [float(value) for value in payload]
+            floats = [float(value) for value in payload]
         except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
             raise TypeError("Vector payload contains non-numeric values") from exc
+        if not floats:
+            return None
+        if len(floats) > dimensions:
+            floats = floats[:dimensions]
+        elif len(floats) < dimensions:
+            floats.extend(0.0 for _ in range(dimensions - len(floats)))
+        return floats
     if hasattr(payload, "tolist"):
         raw = payload.tolist()
-        return _normalise_vector(raw)
+        return _normalise_vector(raw, dimensions=dimensions)
     return None
 
 
@@ -55,7 +84,9 @@ def upgrade() -> None:
     op.execute(sa.text("DROP INDEX IF EXISTS ix_conversation_history_vector_cosine"))
 
     with op.batch_alter_table("conversation_history", schema=None) as batch_op:
-        batch_op.add_column(sa.Column("vector_new", Vector(3072), nullable=True))
+        batch_op.add_column(
+            sa.Column("vector_new", Vector(VECTOR_DIMENSIONS), nullable=True)
+        )
 
     metadata = sa.MetaData()
     history = sa.Table(
@@ -65,14 +96,13 @@ def upgrade() -> None:
         sa.Column("vector", sa.JSON()),
     )
 
-    rows = _load_rows(bind, history)
     update_stmt = sa.text(
         "UPDATE conversation_history SET vector_new = :vector WHERE id = :id"
     )
 
-    for row in rows:
+    for row in _iter_rows(bind, history):
         vector = _normalise_vector(row.vector)
-        if not vector:
+        if vector is None:
             continue
         bind.execute(update_stmt, {"id": row.id, "vector": vector})
 
@@ -81,7 +111,7 @@ def upgrade() -> None:
         batch_op.alter_column(
             "vector_new",
             new_column_name="vector",
-            existing_type=Vector(3072),
+            existing_type=Vector(VECTOR_DIMENSIONS),
             existing_nullable=True,
         )
 
@@ -107,7 +137,7 @@ def downgrade() -> None:
         "conversation_history",
         metadata,
         sa.Column("id", sa.Integer, primary_key=True),
-        sa.Column("vector", Vector(3072)),
+        sa.Column("vector", Vector(VECTOR_DIMENSIONS)),
     )
 
     with op.batch_alter_table("conversation_history", schema=None) as batch_op:
@@ -123,8 +153,7 @@ def downgrade() -> None:
         "UPDATE conversation_history SET vector_json = :vector WHERE id = :id"
     )
 
-    rows = _load_rows(bind, history)
-    for row in rows:
+    for row in _iter_rows(bind, history):
         payload = _normalise_vector(row.vector)
         if payload is None:
             continue
