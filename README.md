@@ -124,7 +124,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env  # update secrets + URLs
-python init_db.py
+python init_db.py      # applies Alembic migrations and prepares persistence tables
 uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
