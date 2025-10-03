@@ -595,14 +595,18 @@ class ReinforcementLearningLoop:
                 executor.submit(self._run_episode, batch_index, idx)
                 for idx in range(episodes)
             ]
+            episode_idx = 0
             for future in as_completed(futures):
                 try:
                     results.append(future.result())
                 except Exception as exc:  # pragma: no cover - unexpected worker error
                     logger.exception("Episode execution failed", exc_info=True)
+                    failed_index = (
+                        batch_index * max(1, self._max_workers) + episode_idx
+                    )
                     results.append(
                         EpisodeResult(
-                            index=-1,
+                            index=failed_index,
                             reward=0.0,
                             steps=0,
                             duration=0.0,
@@ -611,6 +615,7 @@ class ReinforcementLearningLoop:
                             error=str(exc),
                         )
                     )
+                episode_idx += 1
         return results
 
     def _run_episode(self, batch_index: int, offset: int) -> EpisodeResult:
@@ -668,6 +673,13 @@ class ReinforcementLearningLoop:
                 failed=True,
                 error=str(exc),
             )
+        finally:
+            close = getattr(environment, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # pragma: no cover - best-effort cleanup
+                    logger.debug("Environment close() failed", exc_info=True)
 
     def _clone_policy(self) -> PolicyProtocol:
         try:
