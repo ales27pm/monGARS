@@ -207,21 +207,11 @@ async def test_peer_endpoints_require_admin(
 async def test_authenticate_user_requires_persisted_account() -> None:
     await reset_database()
     repo = get_persistence_repository()
-    with pytest.raises(HTTPException):
+
+    with pytest.raises(HTTPException) as exc_info:
         await authenticate_user(repo, "ghost", "pw", sec_manager)
-    await reset_database()
 
-@pytest.mark.asyncio
-async def test_authenticate_user_incorrect_password_fails() -> None:
-    await reset_database()
-    repo = get_persistence_repository()
-    # Create a user
-    username = "testuser"
-    password = "correctpassword"
-    await repo.create_user(username=username, password=password)
-    # Try to authenticate with incorrect password
-    with pytest.raises(HTTPException):
-        await authenticate_user(repo, username, "wrongpassword", sec_manager)
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
     await reset_database()
 
 
@@ -229,29 +219,15 @@ async def test_authenticate_user_incorrect_password_fails() -> None:
 async def test_authenticate_user_incorrect_password_fails() -> None:
     await reset_database()
     repo = get_persistence_repository()
+
     username = "testuser"
     password_hash = sec_manager.get_password_hash("correctpassword")
-    await repo.create_user(username=username, password_hash=password_hash)
+    await repo.create_user(username, password_hash)
 
     with pytest.raises(HTTPException) as exc_info:
         await authenticate_user(repo, username, "wrongpassword", sec_manager)
+
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-
-    await reset_database()
-
-
-@pytest.mark.asyncio
-async def test_authenticate_user_incorrect_password_fails() -> None:
-    await reset_database()
-    repo = get_persistence_repository()
-    username = "testuser"
-    password_hash = sec_manager.get_password_hash("correctpassword")
-    await repo.create_user(username=username, password_hash=password_hash)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await authenticate_user(repo, username, "wrongpassword", sec_manager)
-    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-
     await reset_database()
 
 

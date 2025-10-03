@@ -40,15 +40,23 @@ async def publish_loop(base_url: str, username: str, password: str) -> None:
                 raise
             except APIError as exc:
                 consecutive_errors += 1
-                backoff = min(INTERVAL_SECONDS * 2 ** (consecutive_errors - 1), MAX_BACKOFF_SECONDS)
+                backoff = min(
+                    INTERVAL_SECONDS * 2 ** (consecutive_errors - 1),
+                    MAX_BACKOFF_SECONDS,
+                )
                 logger.warning(
-                    "Telemetry publish failed with API error (attempt %s): %s", consecutive_errors, exc
+                    "Telemetry publish failed with API error (attempt %s): %s",
+                    consecutive_errors,
+                    exc,
                 )
                 await asyncio.sleep(backoff)
                 continue
-            except Exception as exc:  # pragma: no cover - defensive logging for manual runs
+            except Exception as exc:  # pragma: no cover - defensive logging
                 consecutive_errors += 1
-                backoff = min(INTERVAL_SECONDS * 2 ** (consecutive_errors - 1), MAX_BACKOFF_SECONDS)
+                backoff = min(
+                    INTERVAL_SECONDS * 2 ** (consecutive_errors - 1),
+                    MAX_BACKOFF_SECONDS,
+                )
                 logger.exception(
                     "Unexpected telemetry failure (attempt %s)", consecutive_errors
                 )
