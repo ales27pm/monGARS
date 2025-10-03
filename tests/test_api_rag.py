@@ -80,13 +80,10 @@ def client(monkeypatch):
         lambda: types.SimpleNamespace(),
     )
 
-    client = TestClient(app)
-    try:
+    with TestClient(app) as client:
         yield client, dummy_enricher
-    finally:
-        client.close()
-        hippocampus._memory.clear()
-        hippocampus._locks.clear()
+    hippocampus._memory.clear()
+    hippocampus._locks.clear()
 
 
 @pytest.mark.asyncio

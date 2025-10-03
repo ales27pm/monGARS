@@ -23,9 +23,11 @@ async def client() -> AsyncClient:
     )
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
-        yield async_client
-
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as async_client:
+            yield async_client
     await reset_database()
 
 
@@ -232,9 +234,9 @@ async def test_bootstrap_users_create_demo_accounts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_token_bootstraps_default_users(client: AsyncClient) -> None:
-    response = await client.post("/token", data={"username": "u1", "password": "x"})
-    assert response.status_code == status.HTTP_200_OK
+async def test_startup_bootstraps_default_users(client: AsyncClient) -> None:
+    ready = await client.get("/ready")
+    assert ready.status_code == status.HTTP_200_OK
     repo = get_persistence_repository()
     user = await repo.get_user_by_username("u1")
     assert user is not None

@@ -86,12 +86,9 @@ def fake_model_manager() -> FakeModelManager:
 @pytest.fixture
 def client(fake_model_manager: FakeModelManager):
     app.dependency_overrides[get_model_manager] = lambda: fake_model_manager
-    client = TestClient(app)
-    try:
+    with TestClient(app) as client:
         yield client
-    finally:
-        client.close()
-        app.dependency_overrides.pop(get_model_manager, None)
+    app.dependency_overrides.pop(get_model_manager, None)
 
 
 def _get_token(client: TestClient, username: str, password: str) -> str:

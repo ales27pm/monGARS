@@ -134,12 +134,9 @@ def contract_client() -> Iterable[Tuple[TestClient, _FakePersistenceRepository]]
     app.dependency_overrides[get_peer_communicator] = lambda: communicator
     app.dependency_overrides[get_conversational_module] = lambda: conversation
 
-    client = TestClient(app)
-    try:
+    with TestClient(app) as client:
         yield client, repo
-    finally:
-        client.close()
-        app.dependency_overrides.clear()
+    app.dependency_overrides.clear()
 
 
 def _get_route(path: str, method: str) -> APIRoute:
@@ -237,7 +234,8 @@ async def test_chat_invalid_payload_returns_422(
     contract_client: Iterable[Tuple[TestClient, _FakePersistenceRepository]],
 ):
     client, repo = contract_client
-    await repo.create_user("u1", sec_manager.get_password_hash("x"))
+    if await repo.get_user_by_username("u1") is None:
+        await repo.create_user("u1", sec_manager.get_password_hash("x"))
     token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
         "access_token"
     ]

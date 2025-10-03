@@ -56,14 +56,11 @@ def client(monkeypatch):
     monkeypatch.setattr(
         ConversationalModule, "generate_response", fake_generate_response
     )
-    client = TestClient(app)
-    client.captured_sessions = captured_sessions
-    try:
+    with TestClient(app) as client:
+        client.captured_sessions = captured_sessions
         yield client
-    finally:
-        client.close()
-        hippocampus._memory.clear()
-        hippocampus._locks.clear()
+    hippocampus._memory.clear()
+    hippocampus._locks.clear()
 
 
 @pytest.mark.asyncio

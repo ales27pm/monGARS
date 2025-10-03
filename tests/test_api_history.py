@@ -15,13 +15,10 @@ def client() -> TestClient:
     """Return a test client with isolated hippocampus state."""
     hippocampus._memory.clear()
     hippocampus._locks.clear()
-    client = TestClient(app)
-    try:
+    with TestClient(app) as client:
         yield client
-    finally:
-        client.close()
-        hippocampus._memory.clear()
-        hippocampus._locks.clear()
+    hippocampus._memory.clear()
+    hippocampus._locks.clear()
 
 
 @pytest.mark.asyncio

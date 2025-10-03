@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 try:
@@ -47,25 +49,14 @@ from monGARS.core.personality import PersonalityEngine
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import event_bus, make_event
 
-app = FastAPI(title="monGARS API")
-logger = logging.getLogger(__name__)
-
 from . import authentication as auth_routes
 from . import model_management
 from . import rag as rag_routes
 from . import ui as ui_routes
 from . import ws_manager
 
-app.include_router(ws_manager.router)
-app.include_router(auth_routes.router)
-app.include_router(ui_routes.router)
-app.include_router(model_management.router)
-app.include_router(ws_ticket_router)
-app.include_router(rag_routes.router)
 _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
-conversation_module: ConversationalModule | None = None
-ws_manager = _ws_manager
 DEFAULT_USERS: dict[str, dict[str, Any]] = {
     "u1": {
         "password_hash": sec_manager.get_password_hash("x"),
@@ -76,6 +67,34 @@ DEFAULT_USERS: dict[str, dict[str, Any]] = {
         "is_admin": False,
     },
 }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Seed demo users when the application starts."""
+
+    override = app.dependency_overrides.get(get_persistence_repository)
+    if override is not None:
+        candidate = override()
+        repo = await candidate if inspect.isawaitable(candidate) else candidate
+    else:
+        repo = get_persistence_repository()
+    await ensure_bootstrap_users(repo, DEFAULT_USERS)
+    yield
+
+
+app = FastAPI(title="monGARS API", lifespan=lifespan)
+logger = logging.getLogger(__name__)
+
+app.include_router(ws_manager.router)
+app.include_router(auth_routes.router)
+app.include_router(ui_routes.router)
+app.include_router(model_management.router)
+app.include_router(ws_ticket_router)
+app.include_router(rag_routes.router)
+
+conversation_module: ConversationalModule | None = None
+ws_manager = _ws_manager
 
 
 def _get_adaptive_response_generator_for_personality(
@@ -108,7 +127,6 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
 ) -> dict:
     """Return a simple access token."""
-    await ensure_bootstrap_users(repo, DEFAULT_USERS)
     user = await authenticate_user(
         repo,
         form_data.username,
