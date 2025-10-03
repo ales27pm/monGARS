@@ -7,8 +7,8 @@ from uuid import UUID
 
 import pytest
 
-from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from modules.evolution_engine.energy import EnergyUsageReport
+from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
 
@@ -416,9 +416,7 @@ def test_orchestrator_records_energy_metrics_for_long_running_jobs(
 
     assert calls == ["start", "stop"], "Energy tracker lifecycle was not invoked"
     assert summary_payload["metrics"]["training_examples"] == 8
-    assert summary_payload["metrics"]["run_duration_seconds"] == pytest.approx(
-        7200.0
-    )
+    assert summary_payload["metrics"]["run_duration_seconds"] == pytest.approx(7200.0)
     assert summary_payload["metrics"]["cpu_seconds"] == pytest.approx(3600.0)
     assert summary_payload["metrics"]["energy_wh"] == pytest.approx(4321.0)
     assert summary_payload["metrics"]["energy_backend"] == "stub-energy"
