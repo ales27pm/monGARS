@@ -54,11 +54,11 @@ RUN apt-get update \
         git \
         git-lfs \
         python3-venv \
-        libffi8 \
+        libffi7 \
         libgl1 \
         libjpeg-turbo8 \
         libpq5 \
-        libssl3 \
+        libssl1.1 \
         libxml2 \
         libxslt1.1 \
         unzip \
