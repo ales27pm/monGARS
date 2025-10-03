@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-Last updated: 2025-12-04
+Last updated: 2025-12-11
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -85,9 +85,11 @@ and reality.
 - ✅ SelfTrainingEngine batches curated records, persists anonymised datasets, and
   launches `modules.neurons.training.mntp_trainer.MNTPTrainer` for both curated
   linear adapters and LoRA fine-tuning when dependencies are available.
-- 🚧 Reinforcement learning experiments remain future work. Open design notes in
-  `docs/advanced_fine_tuning.md` describe candidate reward signals and replay
-  buffers, but no executable pipeline exists yet.
+- 🔄 Reinforcement learning research loops now live in
+  `modules/neurons/training/reinforcement_loop.py`, complete with adaptive
+  scaling strategies and summary telemetry. Integration with production
+  automation and long-haul observability remains outstanding, so the milestone
+  stays in progress until rollout controls land.
 - ⚠️ Testing coverage for cognition and scheduling modules is solid; expand
   end-to-end evaluations for long-running MNTP jobs and multi-replica Ray Serve
   rollouts before declaring the phase complete.
@@ -116,5 +118,6 @@ and reality.
 - **RAG governance**: document retention policies for curated datasets stored
   under `models/datasets/curated/` and ensure operators scrub sensitive context
   before exporting artefacts.
-- **Advanced research loops**: continue designing reinforcement-learning-driven
-  optimisation once the SDK and governance work land.
+- **Advanced research loops**: wire the reinforcement-learning utilities into
+  production workflows (telemetry, rollback, operator approval) before closing
+  the milestone.

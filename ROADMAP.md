@@ -60,7 +60,9 @@ required to reach production readiness.
 - ✅ Personality profiles persisted via SQLModel with live adapter updates.
 - ✅ Self-training cycles produce real adapter artefacts via
   `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-- 🚧 Explore reinforcement learning loops and advanced scaling strategies.
+- 🔄 Reinforcement-learning research loops ship under
+  `modules/neurons/training/reinforcement_loop.py`; integrate telemetry,
+  rollout, and operator controls before calling the milestone complete.
 - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts,
   and distributed workflows.
 
