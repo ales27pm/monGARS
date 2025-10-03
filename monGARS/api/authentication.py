@@ -24,38 +24,66 @@ async def authenticate_user(
     username: str,
     password: str,
     sec_manager: SecurityManager,
-    defaults: Mapping[str, Mapping[str, Any]],
 ) -> UserAccount:
-    """Authenticate ``username`` using persisted accounts or default fallbacks."""
+    """Authenticate ``username`` using persisted accounts only."""
 
     user = await repo.get_user_by_username(username)
     if user and sec_manager.verify_password(password, user.password_hash):
         return user
 
-    default_user = defaults.get(username)
-    if default_user and sec_manager.verify_password(
-        password, default_user["password_hash"]
-    ):
-        try:
-            return await repo.create_user(
-                username,
-                default_user["password_hash"],
-                is_admin=default_user["is_admin"],
-            )
-        except ValueError as exc:
-            logger.debug(
-                "auth.default_user_race",
-                extra={"username": username},
-                exc_info=exc,
-            )
-            user = await repo.get_user_by_username(username)
-            if user:
-                return user
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid credentials",
     )
+
+
+async def ensure_bootstrap_users(
+    repo: PersistenceRepository,
+    defaults: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Persist default demo users without relying on in-memory fallbacks."""
+
+    for username, config in defaults.items():
+        try:
+            existing = await repo.get_user_by_username(username)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "auth.bootstrap.lookup_failed",
+                extra={"username": username},
+                exc_info=exc,
+            )
+            continue
+
+        if existing:
+            continue
+
+        password_hash = config.get("password_hash")
+        if not isinstance(password_hash, str) or not password_hash:
+            logger.warning(
+                "auth.bootstrap.invalid_password_hash",
+                extra={"username": username},
+            )
+            continue
+
+        is_admin = bool(config.get("is_admin", False))
+
+        try:
+            await repo.create_user(
+                username,
+                password_hash,
+                is_admin=is_admin,
+            )
+        except ValueError:
+            logger.debug(
+                "auth.bootstrap.user_exists",
+                extra={"username": username},
+            )
+        except Exception as exc:  # pragma: no cover - unexpected failure
+            logger.warning(
+                "auth.bootstrap.create_failed",
+                extra={"username": username},
+                exc_info=exc,
+            )
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:

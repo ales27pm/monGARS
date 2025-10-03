@@ -2,11 +2,12 @@
 
 import pytest
 import pytest_asyncio
-from fastapi import status
+from fastapi import HTTPException, status
 from httpx import ASGITransport, AsyncClient
 
+from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
 from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
-from monGARS.api.web_api import app, sec_manager
+from monGARS.api.web_api import DEFAULT_USERS, app, sec_manager
 from monGARS.init_db import reset_database
 
 
@@ -198,3 +199,43 @@ async def test_peer_endpoints_require_admin(
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_requires_persisted_account() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    with pytest.raises(HTTPException):
+        await authenticate_user(repo, "ghost", "pw", sec_manager)
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_users_create_demo_accounts() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    demo_defaults = {
+        "demo": {
+            "password_hash": sec_manager.get_password_hash("demo-pass"),
+            "is_admin": True,
+        }
+    }
+    await ensure_bootstrap_users(repo, demo_defaults)
+    user = await repo.get_user_by_username("demo")
+    assert user is not None
+    assert user.is_admin is True
+
+    await ensure_bootstrap_users(repo, demo_defaults)
+    second = await repo.get_user_by_username("demo")
+    assert second is not None
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_token_bootstraps_default_users(client: AsyncClient) -> None:
+    response = await client.post("/token", data={"username": "u1", "password": "x"})
+    assert response.status_code == status.HTTP_200_OK
+    repo = get_persistence_repository()
+    user = await repo.get_user_by_username("u1")
+    assert user is not None
+    assert user.is_admin == DEFAULT_USERS["u1"]["is_admin"]

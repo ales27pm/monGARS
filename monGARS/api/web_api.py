@@ -16,6 +16,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from monGARS.api.authentication import (
     authenticate_user,
+    ensure_bootstrap_users,
     get_current_admin_user,
     get_current_user,
 )
@@ -107,12 +108,12 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
 ) -> dict:
     """Return a simple access token."""
+    await ensure_bootstrap_users(repo, DEFAULT_USERS)
     user = await authenticate_user(
         repo,
         form_data.username,
         form_data.password,
         sec_manager,
-        DEFAULT_USERS,
     )
     token = sec_manager.create_access_token(
         {

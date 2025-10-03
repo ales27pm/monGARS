@@ -23,6 +23,7 @@ from monGARS.api.dependencies import (  # noqa: E402  # isort:skip
 from monGARS.api.web_api import (  # noqa: E402  # isort:skip
     app,
     get_conversational_module,
+    sec_manager,
 )
 from monGARS.api.schemas import (  # noqa: E402  # isort:skip
     ChatRequest,
@@ -236,7 +237,7 @@ async def test_chat_invalid_payload_returns_422(
     contract_client: Iterable[Tuple[TestClient, _FakePersistenceRepository]],
 ):
     client, repo = contract_client
-    await repo.create_user("u1", "hashed_password")
+    await repo.create_user("u1", sec_manager.get_password_hash("x"))
     token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
         "access_token"
     ]
