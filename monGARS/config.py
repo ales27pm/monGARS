@@ -274,6 +274,28 @@ class Settings(BaseSettings):
     default_language: str = "fr-CA"
     caption_prefix: str = Field(default="Description de l'image:")
     otel_logs_enabled: EnvBool = Field(default=True)
+    training_pipeline_enabled: EnvBool = Field(
+        default=True,
+        description="Flag controlling whether the background evolution training workflow runs.",
+    )
+    training_pipeline_user_id: str = Field(
+        default="system-training",
+        description="User identifier recorded for background training cycles.",
+    )
+    training_pipeline_version_prefix: str = Field(
+        default="enc-auto",
+        description="Prefix used when generating automatic training version identifiers.",
+    )
+    training_cycle_interval_seconds: int = Field(
+        default=7200,
+        ge=60,
+        description="Base interval in seconds between background training cycles.",
+    )
+    training_cycle_jitter_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="Maximum random jitter in seconds applied to the training interval.",
+    )
     style_base_model: str = Field(default="hf-internal-testing/tiny-random-gpt2")
     style_adapter_dir: str = Field(default="/tmp/mongars_style")
     style_max_history: int = Field(default=20)

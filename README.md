@@ -188,6 +188,8 @@ user/token.
 | `WS_ALLOWED_ORIGINS` / `WS_ENABLE_EVENTS` | Comma-separated list of origins allowed to open WebSocket sessions and a feature flag to disable streaming entirely. |
 | `REDIS_URL`, `DATABASE_URL` | Connection strings for cache and persistence layers. |
 | `OPEN_TELEMETRY_EXPORTER` | Optional metrics exporter configuration for observability pipelines. |
+| `TRAINING_PIPELINE_ENABLED` / `TRAINING_CYCLE_INTERVAL_SECONDS` / `TRAINING_CYCLE_JITTER_SECONDS` | Control whether the background evolution training workflow runs and how often cycles are executed. |
+| `TRAINING_PIPELINE_USER_ID` / `TRAINING_PIPELINE_VERSION_PREFIX` | Identify background training cycles in telemetry and manifest updates. |
 
 Document any new environment variable or feature flag in this table and the
 relevant module docstrings. Model profiles live in `configs/llm_models.json` and
@@ -212,6 +214,10 @@ can be extended to register additional Ollama models or alternate providers.
   editing public APIs.
 - **Provisioning**: `python -m scripts.provision_models --json` ensures Ollama
   weights for the active profile are present before running integration tests.
+- **Evolution cadence**: The background pipeline launched from `main.py` uses
+  `monGARS.mlops.training_pipeline.training_workflow` to trigger adapter refresh
+  cycles. Tune cadence and identifiers with the `TRAINING_PIPELINE_*`
+  environment variables documented above.
 - **Database migrations**: define new SQLModel tables in `init_db.py`, generate an
   Alembic migration, and document schema changes.
 - **Worker tuning**: `monGARS.utils.hardware.recommended_worker_count()` auto-tunes
