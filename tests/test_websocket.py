@@ -48,14 +48,11 @@ async def client(monkeypatch):
         ConversationalModule, "generate_response", fake_generate_response
     )
 
-    client = TestClient(app)
-    try:
+    with TestClient(app) as client:
         yield client
-    finally:
-        client.close()
-        hippocampus._memory.clear()
-        hippocampus._locks.clear()
-        await ws_manager.reset()
+    hippocampus._memory.clear()
+    hippocampus._locks.clear()
+    await ws_manager.reset()
 
 
 def _issue_ws_ticket(client: TestClient, token: str) -> str:

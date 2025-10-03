@@ -2,11 +2,12 @@
 
 import pytest
 import pytest_asyncio
-from fastapi import status
+from fastapi import HTTPException, status
 from httpx import ASGITransport, AsyncClient
 
+from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
 from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
-from monGARS.api.web_api import app, sec_manager
+from monGARS.api.web_api import DEFAULT_USERS, app, sec_manager
 from monGARS.init_db import reset_database
 
 
@@ -22,9 +23,11 @@ async def client() -> AsyncClient:
     )
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as async_client:
-        yield async_client
-
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as async_client:
+            yield async_client
     await reset_database()
 
 
@@ -75,12 +78,12 @@ async def test_register_invalid_username(client: AsyncClient) -> None:
     resp = await client.post(
         "/api/v1/user/register", json={"username": "", "password": "password123"}
     )
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     resp = await client.post(
         "/api/v1/user/register",
         json={"username": "invalid user!", "password": "password123"},
     )
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -89,7 +92,7 @@ async def test_register_short_password(client: AsyncClient) -> None:
         "/api/v1/user/register",
         json={"username": "shortpwuser", "password": "pw"},
     )
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -198,3 +201,86 @@ async def test_peer_endpoints_require_admin(
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_requires_persisted_account() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    with pytest.raises(HTTPException):
+        await authenticate_user(repo, "ghost", "pw", sec_manager)
+    await reset_database()
+
+@pytest.mark.asyncio
+async def test_authenticate_user_incorrect_password_fails() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    # Create a user
+    username = "testuser"
+    password = "correctpassword"
+    await repo.create_user(username=username, password=password)
+    # Try to authenticate with incorrect password
+    with pytest.raises(HTTPException):
+        await authenticate_user(repo, username, "wrongpassword", sec_manager)
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_incorrect_password_fails() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    username = "testuser"
+    password_hash = sec_manager.get_password_hash("correctpassword")
+    await repo.create_user(username=username, password_hash=password_hash)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authenticate_user(repo, username, "wrongpassword", sec_manager)
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_incorrect_password_fails() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    username = "testuser"
+    password_hash = sec_manager.get_password_hash("correctpassword")
+    await repo.create_user(username=username, password_hash=password_hash)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authenticate_user(repo, username, "wrongpassword", sec_manager)
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_users_create_demo_accounts() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    demo_defaults = {
+        "demo": {
+            "password_hash": sec_manager.get_password_hash("demo-pass"),
+            "is_admin": True,
+        }
+    }
+    await ensure_bootstrap_users(repo, demo_defaults)
+    user = await repo.get_user_by_username("demo")
+    assert user is not None
+    assert user.is_admin is True
+
+    await ensure_bootstrap_users(repo, demo_defaults)
+    second = await repo.get_user_by_username("demo")
+    assert second is not None
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_startup_bootstraps_default_users(client: AsyncClient) -> None:
+    ready = await client.get("/ready")
+    assert ready.status_code == status.HTTP_200_OK
+    repo = get_persistence_repository()
+    user = await repo.get_user_by_username("u1")
+    assert user is not None
+    assert user.is_admin == DEFAULT_USERS["u1"]["is_admin"]
