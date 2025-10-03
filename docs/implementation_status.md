@@ -7,6 +7,7 @@ what has shipped, what remains, and any discrepancies between historical plans
 and reality.
 
 ## Phase 1 – Core Infrastructure (Completed Q1 2025)
+
 - Cortex, Hippocampus, Neurons, and Bouche modules exist with concrete
   orchestrations (`monGARS/core/conversation.py`, `monGARS/core/bouche.py`).
 - Memory stack combines in-memory Hippocampus with SQLModel persistence and
@@ -15,6 +16,7 @@ and reality.
   MLflow, Vault, and Ollama for local and cluster deployment.
 
 ## Phase 2 – Functional Expansion (Completed Q2 2025)
+
 - Mimicry, Personality, Adaptive Response, and BLIP-powered captioning modules
   personalise chat output while guarding optional dependencies.
 - Iris scraping and the Curiosity Engine perform asynchronous retrieval with
@@ -27,6 +29,7 @@ and reality.
   endpoints and typed client utilities.
 
 ## Phase 3 – Hardware & Performance Optimisation (In Progress – Target Q3 2025)
+
 - ✅ Worker auto-tuning for Raspberry Pi/Jetson via
   `monGARS.utils.hardware.recommended_worker_count()`.
 - ✅ Multi-architecture build scripts (`build_embedded.sh`, `build_native.sh`) and
@@ -42,6 +45,7 @@ and reality.
   Ray Serve health telemetry to OpenTelemetry exporters.
 
 ## Phase 4 – Collaborative Networking (In Progress – Target Q4 2025)
+
 - Peer registry, encrypted messaging, and admin-guarded endpoints are live.
 - DistributedScheduler and Sommeil Paradoxal coordinate idle-time optimisation
   and background jobs, broadcasting health metrics to peers.
@@ -51,6 +55,7 @@ and reality.
   artefacts across the mesh.
 
 ## Phase 5 – Web Interface & API Refinement (Target Q1 2026)
+
 - FastAPI routes for `/token`, `/api/v1/conversation/chat`,
   `/api/v1/conversation/history`, `/api/v1/review/rag-context`, and peer
   management are implemented with Pydantic validation.
@@ -61,6 +66,7 @@ and reality.
   database-backed auth flow, and publish polished client SDKs.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
+
 - ✅ Personality profiles persist via SQLModel and reload into memory-backed
   caches on demand.
 - ✅ SelfTrainingEngine batches curated records, persists anonymised datasets, and
@@ -74,12 +80,16 @@ and reality.
   rollouts before declaring the phase complete.
 
 ## Phase 7 – Sustainability & Longevity (Future)
+
 - Evolution Engine orchestrates diagnostics and safe optimisation cycles, now
   backed by tangible adapter artefacts.
 - Energy-usage reporting, advanced hardware-aware scaling, and cross-node sharing
   of optimisation artefacts remain open research topics.
 
 ## Key Contradictions & Actions
+
+- ✅ **JWT alignment**: configuration and security manager now enforce HS256,
+  deferring asymmetric keys until managed storage is available.
 - **Schema evolution**: add Alembic migrations for new persistence tables so
   deployments avoid relying on `init_db.py` bootstrap runs.
 - **Telemetry**: emit Ray Serve success/failure counters through OpenTelemetry to

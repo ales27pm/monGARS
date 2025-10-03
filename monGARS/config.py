@@ -112,13 +112,13 @@ class Settings(BaseSettings):
     JWT_PRIVATE_KEY: str | None = Field(
         default=None,
         description=(
-            "PEM-encoded RSA private key used for JWT signing when JWT_ALGORITHM is set to RS256."
+            "Deprecated placeholder for RSA support. Ignored while JWT_ALGORITHM is locked to HS256."
         ),
     )
     JWT_PUBLIC_KEY: str | None = Field(
         default=None,
         description=(
-            "PEM-encoded RSA public key used for JWT verification when JWT_ALGORITHM is set to RS256."
+            "Deprecated placeholder for RSA support. Ignored while JWT_ALGORITHM is locked to HS256."
         ),
     )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
@@ -128,17 +128,15 @@ class Settings(BaseSettings):
         """Ensure the configured JWT algorithm matches the provided key material."""
 
         algorithm = self.JWT_ALGORITHM.upper()
-        if algorithm.startswith("RS"):
-            if not self.JWT_PRIVATE_KEY or not self.JWT_PUBLIC_KEY:
-                raise ValueError(
-                    "RS algorithms require both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY to be set."
-                )
-            if "-----BEGIN" not in self.JWT_PRIVATE_KEY:
-                raise ValueError(
-                    "JWT_PRIVATE_KEY must be a PEM-encoded RSA private key."
-                )
-            if "-----BEGIN" not in self.JWT_PUBLIC_KEY:
-                raise ValueError("JWT_PUBLIC_KEY must be a PEM-encoded RSA public key.")
+        if algorithm != "HS256":
+            raise ValueError(
+                "JWT_ALGORITHM must be set to HS256 until managed key storage is available."
+            )
+        if self.JWT_PRIVATE_KEY or self.JWT_PUBLIC_KEY:
+            raise ValueError(
+                "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported when JWT_ALGORITHM is HS256."
+            )
+        object.__setattr__(self, "JWT_ALGORITHM", "HS256")
         return self
 
     database_url: PostgresDsn = Field(
@@ -391,28 +389,16 @@ def validate_jwt_configuration(settings: Settings) -> None:
     """Validate that JWT settings have consistent key material."""
 
     algorithm = settings.JWT_ALGORITHM.upper()
-    if algorithm.startswith("HS"):
-        if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
-            raise ValueError(
-                "HS algorithms must not define JWT_PRIVATE_KEY or JWT_PUBLIC_KEY; "
-                "remove them or switch JWT_ALGORITHM to an RS variant."
-            )
-        if not settings.SECRET_KEY:
-            raise ValueError("HS algorithms require SECRET_KEY to be configured.")
-    elif algorithm.startswith("RS"):
-        missing = []
-        if not settings.JWT_PRIVATE_KEY:
-            missing.append("JWT_PRIVATE_KEY")
-        if not settings.JWT_PUBLIC_KEY:
-            missing.append("JWT_PUBLIC_KEY")
-        if missing:
-            raise ValueError(
-                "RS algorithms require the following settings: " + ", ".join(missing)
-            )
-    else:
+    if algorithm != "HS256":
         raise ValueError(
-            f"Unsupported JWT_ALGORITHM '{settings.JWT_ALGORITHM}'. Use an HS or RS variant."
+            "JWT_ALGORITHM must be HS256 to match the deployed secret management strategy."
         )
+    if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
+        raise ValueError(
+            "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must not be defined when using HS256."
+        )
+    if not settings.SECRET_KEY:
+        raise ValueError("HS256 requires SECRET_KEY to be configured.")
 
 
 async def fetch_secrets_from_vault(

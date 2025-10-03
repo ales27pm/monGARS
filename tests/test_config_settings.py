@@ -62,16 +62,22 @@ def test_otel_debug_env_parsing(monkeypatch, value):
     assert settings.otel_debug is True
 
 
-def test_validate_jwt_configuration_rejects_rs_keys_with_hs_algorithm(monkeypatch):
+def test_settings_rejects_private_keys_when_hs256_locked(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
-    settings = config.Settings(
-        JWT_ALGORITHM="HS256",
-        JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nfoo\n-----END PRIVATE KEY-----",
-        JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nbar\n-----END PUBLIC KEY-----",
-    )
 
-    with pytest.raises(ValueError, match="HS algorithms must not define"):
-        config.validate_jwt_configuration(settings)
+    with pytest.raises(ValueError, match="not supported when JWT_ALGORITHM is HS256"):
+        config.Settings(
+            JWT_ALGORITHM="HS256",
+            JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nfoo\n-----END PRIVATE KEY-----",
+            JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nbar\n-----END PUBLIC KEY-----",
+        )
+
+
+def test_settings_reject_non_hs256_algorithm(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+
+    with pytest.raises(ValueError, match="must be set to HS256"):
+        config.Settings(JWT_ALGORITHM="RS256")
 
 
 def test_validate_jwt_configuration_allows_hs256_with_secret(monkeypatch):
@@ -80,3 +86,12 @@ def test_validate_jwt_configuration_allows_hs256_with_secret(monkeypatch):
 
     # Should not raise
     config.validate_jwt_configuration(settings)
+
+
+def test_validate_jwt_configuration_requires_secret_key(monkeypatch):
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    settings = config.Settings(JWT_ALGORITHM="HS256")
+
+    with pytest.raises(ValueError, match="requires SECRET_KEY"):
+        config.validate_jwt_configuration(settings)
