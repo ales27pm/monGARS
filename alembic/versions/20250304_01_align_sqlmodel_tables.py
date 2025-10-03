@@ -44,14 +44,19 @@ def _fill_nulls(
     *,
     type_: sa.types.TypeEngine | None = None,
 ) -> None:
-    table_clause = sa.table(table, sa.column(column))
-    bind_param = sa.bindparam("value", value=value, type_=type_)
-    statement = (
-        sa.update(table_clause)
-        .where(table_clause.c[column].is_(None))
-        .values({column: bind_param})
-    )
-    op.execute(statement)
+    from sqlalchemy import column as sql_column, table as sql_table, update
+
+    table_obj = sql_table(table, sql_column(column))
+
+    if type_ is not None:
+        stmt = update(table_obj).where(table_obj.c[column].is_(None)).values(
+            {column: sa.bindparam("value", value=value, type_=type_)}
+        )
+    else:
+        stmt = update(table_obj).where(table_obj.c[column].is_(None)).values(
+            {column: sa.bindparam("value", value=value)}
+        )
+    op.execute(stmt)
 
 
 def _apply_column_alterations(
