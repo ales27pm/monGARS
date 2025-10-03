@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 from unittest.mock import patch
 
 import pytest
@@ -331,3 +331,89 @@ async def test_scheduler_prefers_cached_peer_load(monkeypatch):
     first_route, message = routed[0]
     assert first_route == ("http://peer/api/v1/peer/message",)
     assert message["result"] == "payload"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_registers_load_provider_for_telemetry() -> None:
+    communicator = PeerCommunicator(["http://peer/api/v1/peer/message"])
+    scheduler = DistributedScheduler(communicator, concurrency=3)
+
+    snapshot = await communicator.get_local_load()
+    assert snapshot["scheduler_id"] == scheduler.instance_id
+    assert snapshot["concurrency"] == 3
+    assert snapshot["queue_depth"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dispatch_targets_low_load_peers(monkeypatch):
+    communicator = PeerCommunicator(
+        [
+            "http://peer1/api/v1/peer/message",
+            "http://peer2/api/v1/peer/message",
+            "http://peer3/api/v1/peer/message",
+        ]
+    )
+
+    scheduler = DistributedScheduler(communicator, concurrency=2, metrics_interval=0.1)
+
+    peer_loads = {
+        "http://peer1/api/v1/peer/message": 0.1,
+        "http://peer2/api/v1/peer/message": 0.25,
+        "http://peer3/api/v1/peer/message": 0.4,
+    }
+
+    def fake_get_peer_telemetry_map(
+        _max_age: float = 0.0, _include_self: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            "http://peer1/api/v1/peer/message": {
+                "load_factor": 0.1,
+                "task_failure_rate": 0.0,
+                "queue_depth": 0,
+                "concurrency": 2,
+                "age_seconds": 0.0,
+            },
+            "http://peer2/api/v1/peer/message": {
+                "load_factor": 0.25,
+                "task_failure_rate": 0.05,
+                "queue_depth": 1,
+                "concurrency": 1,
+                "age_seconds": 0.0,
+            },
+            "http://peer3/api/v1/peer/message": {
+                "load_factor": 0.4,
+                "task_failure_rate": 0.95,
+                "queue_depth": 0,
+                "concurrency": 1,
+                "age_seconds": 0.0,
+            },
+        }
+
+    send_calls: list[tuple[tuple[str, ...] | None, dict[str, Any]]] = []
+
+    async def capture_send_to(
+        targets: Iterable[str], payload: dict[str, Any]
+    ) -> list[bool]:
+        send_calls.append((tuple(targets), payload))
+        return [True] * len(tuple(targets))
+
+    async def capture_broadcast(payload: dict[str, Any]) -> list[bool]:
+        send_calls.append((None, payload))
+        return [True] * len(communicator.peers)
+
+    monkeypatch.setattr(communicator, "get_cached_peer_loads", lambda **__: peer_loads)
+    monkeypatch.setattr(
+        communicator, "get_peer_telemetry_map", fake_get_peer_telemetry_map
+    )
+    monkeypatch.setattr(communicator, "send_to", capture_send_to)
+    monkeypatch.setattr(communicator, "send", capture_broadcast)
+
+    await scheduler._dispatch_result("payload", {"load_factor": 2.5})
+
+    assert send_calls, "Scheduler did not dispatch the result"
+    targets, payload = send_calls[0]
+    assert targets == (
+        "http://peer1/api/v1/peer/message",
+        "http://peer2/api/v1/peer/message",
+    )
+    assert payload["origin"] == scheduler.instance_id

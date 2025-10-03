@@ -7,6 +7,7 @@ from uuid import UUID
 
 import pytest
 
+from modules.evolution_engine.energy import EnergyUsageReport
 from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
@@ -24,6 +25,46 @@ def fixed_run_uuid(monkeypatch: pytest.MonkeyPatch) -> UUID:
     value = UUID("00000000-0000-0000-0000-00000000abcd")
     monkeypatch.setattr("modules.evolution_engine.orchestrator.uuid4", lambda: value)
     return value
+
+
+@pytest.fixture()
+def orchestrator_factory(temp_dir: Path):
+    def _build_orchestrator(
+        *, trainer_cls: type, **overrides: Any
+    ) -> EvolutionOrchestrator:
+        return EvolutionOrchestrator(
+            model_registry_path=str(temp_dir), trainer_cls=trainer_cls, **overrides
+        )
+
+    return _build_orchestrator
+
+
+@pytest.fixture()
+def stub_energy_tracker():
+    calls: list[str] = []
+
+    class StubEnergyTracker:
+        def __init__(self) -> None:
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+            calls.append("start")
+
+        def stop(self) -> EnergyUsageReport:
+            assert self.started, "energy tracker must start before stop"
+            calls.append("stop")
+            return EnergyUsageReport(
+                energy_wh=4321.0,
+                duration_seconds=7200.0,
+                cpu_seconds=3600.0,
+                baseline_cpu_power_watts=55.0,
+                backend="stub-energy",
+                emissions_grams=12.5,
+                carbon_intensity_g_co2_per_kwh=420.0,
+            )
+
+    return StubEnergyTracker, calls
 
 
 def _create_trainer_stub(
@@ -362,6 +403,55 @@ def test_mntp_trainer_generates_deterministic_fallback(
 
     repeat_weights = _assert_fallback_artifacts(second_dir)
     assert repeat_weights == weights
+
+
+def test_orchestrator_records_energy_metrics_for_long_running_jobs(
+    temp_dir: Path,
+    fixed_run_uuid: UUID,
+    orchestrator_factory,
+    stub_energy_tracker,
+) -> None:
+    StubEnergyTracker, calls = stub_energy_tracker
+
+    successful_trainer = _create_trainer_stub(
+        training_config=TRAINING_CONFIG_PAYLOAD,
+        setup=_setup_binary_adapter,
+        persist_summary=True,
+        summary_factory=lambda _, ctx: {
+            "status": TrainingStatus.SUCCESS.value,
+            "artifacts": {
+                "adapter": str(ctx["adapter_dir"]),
+                "weights": str(ctx["weights_path"]),
+            },
+            "metrics": {"training_examples": 8, "loss": 0.05},
+        },
+    )
+
+    orchestrator = orchestrator_factory(
+        trainer_cls=successful_trainer, energy_tracker_factory=StubEnergyTracker
+    )
+
+    run_path = Path(orchestrator.trigger_encoder_training_pipeline())
+    assert run_path.name == f"temp-mistral-mntp-step-{fixed_run_uuid}"
+    summary_payload = json.loads((run_path / "training_summary.json").read_text())
+
+    assert calls == ["start", "stop"], "Energy tracker lifecycle was not invoked"
+    assert summary_payload["metrics"]["training_examples"] == 8
+    assert summary_payload["metrics"]["run_duration_seconds"] == pytest.approx(7200.0)
+    assert summary_payload["metrics"]["cpu_seconds"] == pytest.approx(3600.0)
+    assert summary_payload["metrics"]["energy_wh"] == pytest.approx(4321.0)
+    assert summary_payload["metrics"]["energy_backend"] == "stub-energy"
+    assert summary_payload["telemetry"]["energy"]["backend"] == "stub-energy"
+    assert summary_payload["telemetry"]["energy"]["duration_seconds"] == pytest.approx(
+        7200.0
+    )
+
+    energy_report_path = run_path / "energy_report.json"
+    assert energy_report_path.exists()
+    energy_report_payload = json.loads(energy_report_path.read_text())
+    assert energy_report_payload["backend"] == "stub-energy"
+    assert energy_report_payload["duration_seconds"] == pytest.approx(7200.0)
+    assert energy_report_payload["cpu_seconds"] == pytest.approx(3600.0)
 
 
 def test_mntp_trainer_recovers_from_training_failure(
