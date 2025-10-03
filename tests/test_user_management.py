@@ -211,6 +211,19 @@ async def test_authenticate_user_requires_persisted_account() -> None:
         await authenticate_user(repo, "ghost", "pw", sec_manager)
     await reset_database()
 
+@pytest.mark.asyncio
+async def test_authenticate_user_incorrect_password_fails() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    # Create a user
+    username = "testuser"
+    password = "correctpassword"
+    await repo.create_user(username=username, password=password)
+    # Try to authenticate with incorrect password
+    with pytest.raises(HTTPException):
+        await authenticate_user(repo, username, "wrongpassword", sec_manager)
+    await reset_database()
+
 
 @pytest.mark.asyncio
 async def test_authenticate_user_incorrect_password_fails() -> None:
