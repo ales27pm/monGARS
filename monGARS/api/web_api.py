@@ -75,11 +75,18 @@ async def lifespan(app: FastAPI):
 
     override = app.dependency_overrides.get(get_persistence_repository)
     if override is not None:
+        if not callable(override):
+            logger.error("lifespan.invalid_override", extra={"override": override})
+            raise TypeError("Dependency override must be callable")
         candidate = override()
         repo = await candidate if inspect.isawaitable(candidate) else candidate
     else:
         repo = get_persistence_repository()
-    await ensure_bootstrap_users(repo, DEFAULT_USERS)
+    try:
+        await ensure_bootstrap_users(repo, DEFAULT_USERS)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception("lifespan.bootstrap_failed")
+        raise RuntimeError("Failed to bootstrap default users") from exc
     yield
 
 

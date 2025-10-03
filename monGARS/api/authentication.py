@@ -1,8 +1,9 @@
 """Authentication helpers and dependencies for the FastAPI layer."""
 
+import inspect
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -44,46 +45,92 @@ async def ensure_bootstrap_users(
     """Persist default demo users without relying on in-memory fallbacks."""
 
     for username, config in defaults.items():
-        try:
-            existing = await repo.get_user_by_username(username)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning(
-                "auth.bootstrap.lookup_failed",
-                extra={"username": username},
-                exc_info=exc,
+        if await _user_exists(repo, username):
+            continue
+
+        parsed = _parse_config(username, config)
+        if parsed is None:
+            continue
+        password_hash, is_admin = parsed
+
+        await _create_user_safely(repo, username, password_hash, is_admin)
+
+
+async def _user_exists(repo: PersistenceRepository, username: str) -> bool:
+    """Return ``True`` when ``username`` is already present in the repository."""
+
+    try:
+        return await repo.get_user_by_username(username) is not None
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "auth.bootstrap.lookup_failed",
+            extra={"username": username},
+            exc_info=exc,
+        )
+        return False
+
+
+def _parse_config(
+    username: str, config: Mapping[str, Any]
+) -> Optional[Tuple[str, bool]]:
+    """Validate bootstrap configuration for ``username``.
+
+    Returns a tuple of ``(password_hash, is_admin)`` when configuration is valid,
+    otherwise ``None``.
+    """
+
+    password_hash = config.get("password_hash")
+    if not isinstance(password_hash, str) or not password_hash:
+        logger.warning(
+            "auth.bootstrap.invalid_password_hash",
+            extra={"username": username},
+        )
+        return None
+
+    is_admin = config.get("is_admin", False)
+    if not isinstance(is_admin, bool):
+        logger.warning(
+            "auth.bootstrap.invalid_is_admin_type",
+            extra={"username": username, "is_admin": is_admin},
+        )
+        return None
+
+    return password_hash, is_admin
+
+
+async def _create_user_safely(
+    repo: PersistenceRepository,
+    username: str,
+    password_hash: str,
+    is_admin: bool,
+) -> None:
+    """Create ``username`` while tolerating races and transient errors."""
+
+    try:
+        create_sig = inspect.signature(repo.create_user_atomic)
+        if "is_admin" in create_sig.parameters:
+            await repo.create_user_atomic(
+                username,
+                password_hash,
+                is_admin=is_admin,
             )
-            continue
-
-        if existing:
-            continue
-
-        password_hash = config.get("password_hash")
-        if not isinstance(password_hash, str) or not password_hash:
-            logger.warning(
-                "auth.bootstrap.invalid_password_hash",
-                extra={"username": username},
-            )
-            continue
-
-        is_admin = bool(config.get("is_admin", False))
-
-        try:
+        else:
             await repo.create_user(
                 username,
                 password_hash,
                 is_admin=is_admin,
             )
-        except ValueError:
-            logger.debug(
-                "auth.bootstrap.user_exists",
-                extra={"username": username},
-            )
-        except Exception as exc:  # pragma: no cover - unexpected failure
-            logger.warning(
-                "auth.bootstrap.create_failed",
-                extra={"username": username},
-                exc_info=exc,
-            )
+    except ValueError:
+        logger.debug(
+            "auth.bootstrap.user_exists_or_race",
+            extra={"username": username},
+        )
+    except Exception as exc:  # pragma: no cover - unexpected failure
+        logger.warning(
+            "auth.bootstrap.create_failed",
+            extra={"username": username},
+            exc_info=exc,
+        )
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:

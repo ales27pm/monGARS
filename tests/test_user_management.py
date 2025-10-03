@@ -78,12 +78,12 @@ async def test_register_invalid_username(client: AsyncClient) -> None:
     resp = await client.post(
         "/api/v1/user/register", json={"username": "", "password": "password123"}
     )
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     resp = await client.post(
         "/api/v1/user/register",
         json={"username": "invalid user!", "password": "password123"},
     )
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,7 @@ async def test_register_short_password(client: AsyncClient) -> None:
         "/api/v1/user/register",
         json={"username": "shortpwuser", "password": "pw"},
     )
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -209,6 +209,21 @@ async def test_authenticate_user_requires_persisted_account() -> None:
     repo = get_persistence_repository()
     with pytest.raises(HTTPException):
         await authenticate_user(repo, "ghost", "pw", sec_manager)
+    await reset_database()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_incorrect_password_fails() -> None:
+    await reset_database()
+    repo = get_persistence_repository()
+    username = "testuser"
+    password_hash = sec_manager.get_password_hash("correctpassword")
+    await repo.create_user(username=username, password_hash=password_hash)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authenticate_user(repo, username, "wrongpassword", sec_manager)
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+
     await reset_database()
 
 
