@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 from weakref import WeakKeyDictionary
 
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -17,6 +21,7 @@ try:  # pragma: no cover - optional dependency during tests
 except ModuleNotFoundError:  # pragma: no cover - fallback to sync engine
     HAS_AIOSQLITE = False
 
+from monGARS.config import get_settings
 from monGARS.db import (
     Base,
     ConversationHistory,
@@ -26,25 +31,124 @@ from monGARS.db import (
     UserPreferences,
 )
 
-if HAS_AIOSQLITE:
-    DATABASE_URL = "sqlite+aiosqlite:///./mongars_local.db"
-    _async_engine = create_async_engine(DATABASE_URL, future=True, echo=False)
-    _async_session_maker = async_sessionmaker(_async_engine, expire_on_commit=False)
-    _sync_engine = None
-    _sync_session_maker = None
-else:
-    from sqlalchemy import create_engine
+logger = logging.getLogger(__name__)
 
-    DATABASE_URL = "sqlite:///./mongars_local.db"
+_settings = get_settings()
+
+_LOCAL_POSTGRES_HOSTS = {"", None, "localhost", "127.0.0.1", "::1"}
+
+
+def _is_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_sqlite_url(filename: str = "mongars_local.db") -> URL:
+    driver = "sqlite+aiosqlite" if HAS_AIOSQLITE else "sqlite"
+    return make_url(f"{driver}:///./{filename}")
+
+
+def _normalise_driver(url: URL) -> URL:
+    driver = url.drivername
+    if driver in {"postgresql", "postgresql+psycopg2", "postgresql+psycopg"}:
+        return url.set(drivername="postgresql+asyncpg")
+    if driver.startswith("sqlite"):
+        if HAS_AIOSQLITE and driver != "sqlite+aiosqlite":
+            return url.set(drivername="sqlite+aiosqlite")
+        if not HAS_AIOSQLITE and driver != "sqlite":
+            return url.set(drivername="sqlite")
+    return url
+
+
+def _validate_database_target(url: URL, *, source: str) -> URL | None:
+    normalised = _normalise_driver(url)
+    if normalised.drivername.startswith("postgresql"):
+        host = normalised.host or ""
+        if host not in _LOCAL_POSTGRES_HOSTS and not _is_truthy(
+            os.environ.get("MONGARS_ALLOW_REMOTE_DATABASE_BOOTSTRAP")
+        ):
+            logger.error(
+                "Refusing to bootstrap remote PostgreSQL database from %s (host=%s)",
+                source,
+                host,
+            )
+            return None
+    return normalised
+
+
+def _resolve_database_url(raw_url: str | None, *, default_url: URL) -> URL:
+    fallback_url = _validate_database_target(default_url, source="settings")
+    if fallback_url is None:
+        logger.warning(
+            "Configured database URL rejected; using local sqlite fallback",
+        )
+        fallback_url = _safe_sqlite_url()
+
+    if raw_url:
+        try:
+            parsed = make_url(raw_url)
+        except Exception:  # pragma: no cover - invalid URL fallback
+            logger.warning("Invalid DATABASE_URL override; ignoring override")
+        else:
+            validated = _validate_database_target(parsed, source="env")
+            if validated is not None:
+                return validated
+            logger.warning(
+                "DATABASE_URL override rejected; falling back to settings database",
+            )
+
+    return fallback_url
+
+
+try:
+    _default_database_url: URL = make_url(str(_settings.database_url))
+except Exception:  # pragma: no cover - invalid default URL fallback
+    logger.warning(
+        "Invalid configured database URL; using local sqlite fallback",
+    )
+    _default_database_url = _safe_sqlite_url()
+
+_database_url_obj: URL = _resolve_database_url(
+    os.environ.get("DATABASE_URL"), default_url=_default_database_url
+)
+
+_async_engine = None
+_async_session_maker: async_sessionmaker[AsyncSession] | None = None
+_sync_engine = None
+_sync_session_maker: sessionmaker | None = None
+_using_async_engine = False
+
+if _database_url_obj.drivername.startswith("postgresql"):
+    if not _database_url_obj.drivername.startswith("postgresql+"):
+        _database_url_obj = _database_url_obj.set(drivername="postgresql+asyncpg")
+    _async_engine = create_async_engine(
+        str(_database_url_obj),
+        future=True,
+        echo=_settings.debug,
+        pool_size=_settings.db_pool_size,
+        max_overflow=_settings.db_max_overflow,
+        pool_timeout=_settings.db_pool_timeout,
+    )
+    _async_session_maker = async_sessionmaker(_async_engine, expire_on_commit=False)
+    _using_async_engine = True
+elif _database_url_obj.drivername.startswith("sqlite+aiosqlite") and HAS_AIOSQLITE:
+    _async_engine = create_async_engine(str(_database_url_obj), future=True, echo=False)
+    _async_session_maker = async_sessionmaker(_async_engine, expire_on_commit=False)
+    _using_async_engine = True
+else:
+    sqlite_url = (
+        _database_url_obj.set(drivername="sqlite")
+        if _database_url_obj.drivername.startswith("sqlite")
+        else make_url("sqlite:///./mongars_local.db")
+    )
     _sync_engine = create_engine(
-        DATABASE_URL,
+        str(sqlite_url),
         future=True,
         echo=False,
         connect_args={"check_same_thread": False},
     )
     _sync_session_maker = sessionmaker(_sync_engine, expire_on_commit=False)
-    _async_engine = None
-    _async_session_maker = None
 
 _init_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
     WeakKeyDictionary()
@@ -135,9 +239,16 @@ async def _ensure_schema() -> None:
     async with lock:
         if _initialized:
             return
-        if HAS_AIOSQLITE:
+        if _using_async_engine:
             assert _async_engine is not None
             async with _async_engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    try:
+                        await conn.execute(
+                            text("CREATE EXTENSION IF NOT EXISTS vector")
+                        )
+                    except Exception as exc:  # pragma: no cover - extension optional
+                        logger.warning("Unable to ensure pgvector extension: %s", exc)
                 await conn.run_sync(Base.metadata.create_all)
         else:
             assert _sync_engine is not None
@@ -150,7 +261,7 @@ async def async_session_factory() -> AsyncIterator[AsyncSession]:
     """Provide an ``AsyncSession`` with an initialized schema."""
 
     await _ensure_schema()
-    if HAS_AIOSQLITE:
+    if _using_async_engine:
         assert _async_session_maker is not None
         async with _async_session_maker() as session:
             yield session
@@ -170,7 +281,7 @@ async def reset_database() -> None:
     global _initialized
     lock = _get_loop_lock()
     async with lock:
-        if HAS_AIOSQLITE:
+        if _using_async_engine:
             assert _async_engine is not None
             async with _async_engine.begin() as conn:
                 await conn.run_sync(Base.metadata.drop_all)
