@@ -19,6 +19,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 _JSON = JSON().with_variant(JSONB, "postgresql")
 
+try:  # pragma: no cover - optional dependency in lightweight envs
+    from pgvector.sqlalchemy import Vector
+except ModuleNotFoundError:  # pragma: no cover - tests run without pgvector
+    Vector = None  # type: ignore[assignment]
+
+if Vector is not None:  # pragma: no branch - evaluated once at import
+    _VECTOR = JSON().with_variant(Vector(3072), "postgresql")
+else:
+    _VECTOR = _JSON
+
 
 class Base(DeclarativeBase):
     """Base class for ORM models."""
@@ -34,9 +44,27 @@ class ConversationHistory(Base):
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
-    vector: Mapped[list[float] | None] = mapped_column(_JSON, default=list)
+    vector: Mapped[list[float] | None] = mapped_column(_VECTOR, default=list)
 
-    __table_args__ = (Index("idx_user_timestamp", "user_id", "timestamp"),)
+    _vector_index = None
+    if Vector is not None:  # pragma: no branch - evaluated at import
+        _vector_index = Index(
+            "ix_conversation_history_vector_cosine",
+            "vector",
+            postgresql_using="ivfflat",
+            postgresql_with={"lists": "100"},
+            postgresql_ops={"vector": "vector_cosine_ops"},
+        )
+
+    __table_args__ = tuple(
+        filter(
+            None,
+            (
+                Index("idx_user_timestamp", "user_id", "timestamp"),
+                _vector_index,
+            ),
+        )
+    )
 
 
 class Interaction(Base):

@@ -139,7 +139,7 @@ class Settings(BaseSettings):
         object.__setattr__(self, "JWT_ALGORITHM", "HS256")
         return self
 
-    database_url: PostgresDsn = Field(
+    database_url: AnyUrl = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost/mongars_db"
     )
     db_pool_size: int = Field(default=5)
@@ -192,12 +192,65 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the code-focused model.",
     )
+    llm2vec_base_model: str = Field(
+        default="nomic-ai/llm2vec-large",
+        description="Base checkpoint used when instantiating the LLM2Vec encoder.",
+    )
+    llm2vec_encoder: str | None = Field(
+        default=None,
+        description="Optional adapter/peft checkpoint path for LLM2Vec fine-tuning.",
+    )
+    llm2vec_instruction: str = Field(
+        default="Represent this conversation turn for high-precision recall.",
+        description="Instruction prompt applied when generating conversational embeddings.",
+    )
+    llm2vec_max_batch_size: int = Field(
+        default=16,
+        ge=1,
+        le=256,
+        description="Maximum number of payloads encoded per LLM2Vec batch invocation.",
+    )
+    llm2vec_max_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=8,
+        description="Upper bound on concurrent LLM2Vec encode jobs to balance throughput and memory.",
+    )
+    llm2vec_device_map: str = Field(
+        default="auto",
+        description="Device placement strategy passed to LLM2Vec when a GPU is available.",
+    )
+    llm2vec_torch_dtype: str | None = Field(
+        default="bfloat16",
+        description="Torch dtype used when loading LLM2Vec; falls back to library defaults when unset.",
+    )
+    llm2vec_vector_dimensions: int = Field(
+        default=3072,
+        ge=1,
+        description="Embedding dimensionality expected from LLM2Vec fallbacks and pgvector schema.",
+    )
+    llm2vec_fallback_candidate_window: int = Field(
+        default=64,
+        ge=1,
+        le=512,
+        description=(
+            "Number of historical rows inspected when native pgvector search is unavailable."
+        ),
+    )
     curiosity_similarity_threshold: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold used to determine whether prior queries satisfy the current prompt.",
     )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalise_database_url(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return value
+
     curiosity_minimum_similar_history: int = Field(
         default=3,
         ge=0,
@@ -317,8 +370,9 @@ class Settings(BaseSettings):
 
     @field_validator("database_url")
     @classmethod
-    def validate_db(cls, value: PostgresDsn) -> PostgresDsn:
-        if "postgresql+asyncpg" not in str(value):
+    def validate_db(cls, value: AnyUrl) -> AnyUrl:
+        url_str = str(value)
+        if url_str.startswith("postgresql") and "postgresql+asyncpg" not in url_str:
             raise ValueError("Invalid async PostgreSQL URL")
         return value
 
