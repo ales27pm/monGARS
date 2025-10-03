@@ -97,3 +97,12 @@ background workers have the expected persistence schema:
 The conversion away from the `pgvector` column type is backward-compatible; the
 new JSON payloads preserve existing embedding data while avoiding hard
 dependencies on the extension in environments that lack it.
+
+## 7. Observability & Telemetry
+
+- `LLMIntegration` publishes `llm.ray.requests`, `llm.ray.failures`,
+  `llm.ray.scaling_events`, and `llm.ray.latency` metrics via OpenTelemetry.
+- Forward these counters/histograms to your metrics backend (Prometheus, OTLP
+  collector, etc.) and alert when failure ratios or latency percentiles drift.
+- Combine Ray metrics with scheduler gauges to understand whether throttling
+  originates from inference, queuing, or upstream cognition workloads.

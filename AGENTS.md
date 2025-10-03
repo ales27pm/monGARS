@@ -17,20 +17,21 @@ highlights the non-negotiable guardrails and shared context.
 ## Roadmap Alignment
 
 - **Security & Stability Hotlist**
-  - 🔐 Align JWT algorithm with deployed secrets (HS256 today). Implement asymmetric keys only when the infrastructure supports managed key storage.
+  - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
   - 🔒 Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
-  - 🛡️ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
+  - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
   - 👤 Replace demo users in `web_api.py` with the database-backed authentication flow and migrations.
 - **Phase 3 – Hardware & Performance**
   - ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
   - ✅ Multi-architecture build scripts and cache metrics.
   - ✅ Hardened RBAC manifests.
-  - 🔄 Implement real masked next-token training in `MNTPTrainer` and wire Ray Serve HTTP requests in `LLMIntegration`.
-  - 🔄 Pin container image versions in `docker-compose.yml` and extend Alembic migrations.
+  - ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support for LoRA and curated adapters.
+  - 🔄 Extend Alembic migrations for the newest SQLModel tables, including legacy tables created outside the current ORM layer.
+  - ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*` metrics emitted by `LLMIntegration`).
 - **Phase 5 – Web/API Refinement**
   - ✅ FastAPI chat/history/token endpoints with validation.
   - ✅ Django chat UI with progressive enhancement.
-  - 🔄 Implement FastAPI WebSocket handler to match frontend expectations.
+  - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
   - 🔄 Replace hard-coded credential stores with database-backed auth flows.
   - 🚧 Publish polished SDKs and reference clients.
 

@@ -46,6 +46,9 @@ async function run() {
 run().catch((error) => {
   console.error('monGARS client error', error);
 });
+
+// For streaming support, request a signed WebSocket ticket before connecting to
+// /ws/chat/?t=<ticket>. Use the same bearer token you already configured above.
 ```
 
 ## React Native Notes

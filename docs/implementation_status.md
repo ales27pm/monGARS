@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-_Last updated: 2025-05-20_
+_Last updated: 2025-10-20_
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -41,8 +41,12 @@ and reality.
   `monGARS/core/llm_integration.py`.
 - ✅ Docker Compose pins images for Postgres/Redis/MLflow and defaults to a tagged
   application image (`mongars-app:0.1.0`).
-- 🔄 Outstanding: expand Alembic migrations for the latest SQLModel tables and add
-  Ray Serve health telemetry to OpenTelemetry exporters.
+- ✅ `LLMIntegration` now emits `llm.ray.requests`, `llm.ray.failures`,
+  `llm.ray.scaling_events`, and latency histograms via OpenTelemetry, unlocking
+  distributed inference dashboards without parsing logs.
+- 🔄 Outstanding: expand Alembic migrations for the latest SQLModel tables,
+  including legacy `conversation_sessions` and `emotion_trends` artefacts that
+  the ORM no longer materialises.
 
 ## Phase 4 – Collaborative Networking (In Progress – Target Q4 2025)
 
@@ -60,8 +64,9 @@ and reality.
   `/api/v1/conversation/history`, `/api/v1/review/rag-context`, and peer
   management are implemented with Pydantic validation.
 - Django chat UI renders progressive templates, and the FastAPI WebSocket handler
-  (`monGARS/api/ws_manager.py`) now authenticates tickets, replays history, and
-  streams responses when `WS_ENABLE_EVENTS` is true.
+  (`monGARS/api/ws_manager.py`) now authenticates signed tickets issued by
+  `/api/v1/auth/ws/ticket`, replays history, and streams responses when
+  `WS_ENABLE_EVENTS` is true.
 - Planned work: consolidate validation rules, migrate demo credentials to the
   database-backed auth flow, and publish polished client SDKs.
 
@@ -91,9 +96,11 @@ and reality.
 - ✅ **JWT alignment**: configuration and security manager now enforce HS256,
   deferring asymmetric keys until managed storage is available.
 - **Schema evolution**: add Alembic migrations for new persistence tables so
-  deployments avoid relying on `init_db.py` bootstrap runs.
-- **Telemetry**: emit Ray Serve success/failure counters through OpenTelemetry to
-  complement structured logs.
+  deployments avoid relying on `init_db.py` bootstrap runs, and reconcile
+  historical tables (`conversation_sessions`, `emotion_trends`) with the current
+  ORM.
+- **Telemetry integration**: forward the existing `llm.ray.*` metrics to
+  dashboards/alerts so distributed inference regressions surface quickly.
 - **Credential hardening**: replace demo admin bootstrapping with the
   database-backed auth workflow before exposing the stack beyond trusted labs.
 - **RAG operations**: document retention policies for the curated datasets stored

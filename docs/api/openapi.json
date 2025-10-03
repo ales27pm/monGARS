@@ -151,6 +151,53 @@
         ]
       }
     },
+    "/api/v1/review/rag-context": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Fetch Rag Context",
+        "description": "Return contextual code references relevant to the supplied query.",
+        "operationId": "fetch_rag_context_api_v1_review_rag_context_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RagContextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RagContextResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/token": {
       "post": {
         "summary": "Login",
@@ -562,6 +609,76 @@
           }
         ]
       }
+    },
+    "/api/v1/peer/telemetry": {
+      "get": {
+        "summary": "Peer Telemetry Snapshot",
+        "description": "Return cached telemetry for local and remote schedulers.",
+        "operationId": "peer_telemetry_snapshot_api_v1_peer_telemetry_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerTelemetryEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Peer Telemetry Ingest",
+        "description": "Accept telemetry published by peer schedulers.",
+        "operationId": "peer_telemetry_ingest_api_v1_peer_telemetry_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerTelemetryPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Peer Telemetry Ingest Api V1 Peer Telemetry Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -666,13 +783,17 @@
           "processing_time": {
             "type": "number",
             "title": "Processing Time"
+          },
+          "speech_turn": {
+            "$ref": "#/components/schemas/SpeechTurnSchema"
           }
         },
         "type": "object",
         "required": [
           "response",
           "confidence",
-          "processing_time"
+          "processing_time",
+          "speech_turn"
         ],
         "title": "ChatResponse",
         "description": "Canonical response body returned by the chat endpoint."
@@ -967,6 +1088,292 @@
         ],
         "title": "PeerRegistration",
         "description": "Model describing a peer registration request."
+      },
+      "PeerTelemetryEnvelope": {
+        "properties": {
+          "telemetry": {
+            "items": {
+              "$ref": "#/components/schemas/PeerTelemetryPayload"
+            },
+            "type": "array",
+            "title": "Telemetry"
+          }
+        },
+        "type": "object",
+        "title": "PeerTelemetryEnvelope",
+        "description": "Aggregated telemetry view returned by the peer telemetry endpoint."
+      },
+      "PeerTelemetryPayload": {
+        "properties": {
+          "scheduler_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Id"
+          },
+          "queue_depth": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Queue Depth",
+            "default": 0
+          },
+          "active_workers": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Active Workers",
+            "default": 0
+          },
+          "concurrency": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Concurrency",
+            "default": 0
+          },
+          "load_factor": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Load Factor",
+            "default": 0.0
+          },
+          "worker_uptime_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Worker Uptime Seconds",
+            "default": 0.0
+          },
+          "tasks_processed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Tasks Processed",
+            "default": 0
+          },
+          "tasks_failed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Tasks Failed",
+            "default": 0
+          },
+          "task_failure_rate": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Task Failure Rate",
+            "default": 0.0
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "title": "PeerTelemetryPayload",
+        "description": "Detailed telemetry snapshot propagated between schedulers."
+      },
+      "RagContextRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "repositories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repositories"
+          },
+          "max_results": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "RagContextRequest",
+        "description": "Request payload for the RAG context enrichment endpoint."
+      },
+      "RagContextResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "focus_areas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Focus Areas"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/RagReferenceSchema"
+            },
+            "type": "array",
+            "title": "References"
+          }
+        },
+        "type": "object",
+        "title": "RagContextResponse",
+        "description": "Response payload for the RAG context enrichment endpoint."
+      },
+      "RagReferenceSchema": {
+        "properties": {
+          "repository": {
+            "type": "string",
+            "title": "Repository"
+          },
+          "file_path": {
+            "type": "string",
+            "title": "File Path"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository",
+          "file_path",
+          "summary"
+        ],
+        "title": "RagReferenceSchema",
+        "description": "Single reference entry returned by the RAG service."
+      },
+      "SpeechSegmentSchema": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "estimated_duration": {
+            "type": "number",
+            "title": "Estimated Duration"
+          },
+          "pause_after": {
+            "type": "number",
+            "title": "Pause After"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "estimated_duration",
+          "pause_after"
+        ],
+        "title": "SpeechSegmentSchema",
+        "description": "Schema describing a single speech segment."
+      },
+      "SpeechTurnSchema": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SpeechSegmentSchema"
+            },
+            "type": "array",
+            "title": "Segments"
+          },
+          "average_words_per_second": {
+            "type": "number",
+            "title": "Average Words Per Second"
+          },
+          "tempo": {
+            "type": "number",
+            "title": "Tempo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "text",
+          "created_at",
+          "segments",
+          "average_words_per_second",
+          "tempo"
+        ],
+        "title": "SpeechTurnSchema",
+        "description": "Schema describing the structure of a conversational speech turn."
       },
       "SuggestRequest": {
         "properties": {

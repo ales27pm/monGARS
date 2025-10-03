@@ -15,9 +15,9 @@ Defines how retraining orchestration and self-healing pipelines behave under
 
 - **Self-Training Execution**
   - ✅ Personality profiles persisted via SQLModel with live adapter updates.
-  - 🔄 Execute real self-training cycles instead of simulated versioning.
+  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
   - 🚧 Explore reinforcement learning loops and advanced scaling strategies.
-  - 🔄 Expand tests for WebSockets, hardware utilities, and distributed workflows.
+  - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts, and distributed workflows.
 
 ## Pipeline Discipline
 

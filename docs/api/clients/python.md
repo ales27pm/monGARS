@@ -58,6 +58,11 @@ async def main() -> None:
         chat = ChatResponse.model_validate_json(response.text)
         print(chat.response)
 
+        # For WebSocket streaming request a signed ticket first, then connect to
+        # /ws/chat/?t=<ticket> using the same Authorization header if needed:
+        # ticket = await client.post("/api/v1/auth/ws/ticket", headers=headers)
+        # connect using websockets.connect("wss://.../ws/chat/?t=" + ticket.json()["ticket"])
+
 
 if __name__ == "__main__":
     asyncio.run(main())
