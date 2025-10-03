@@ -54,6 +54,9 @@ def _normalise_vector(
         except ValueError:
             # Malformed JSON payloads should be ignored so the migration can continue.
             return None
+        payload = json.loads(candidate)
+        if not isinstance(payload, (list, tuple)):
+        payload = json.loads(candidate)
         if not isinstance(payload, (list, tuple)):
             return None
     if isinstance(payload, (list, tuple)):
