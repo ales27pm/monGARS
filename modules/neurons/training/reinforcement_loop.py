@@ -627,7 +627,7 @@ class ReinforcementLearningLoop:
 
         try:
             state = environment.reset()
-            for steps in range(1, self._max_steps + 1):
+            for step in range(1, self._max_steps + 1):
                 action = policy.select_action(state)
                 next_state, reward, done, info = environment.step(action)
                 reward_value = float(reward)
@@ -643,6 +643,7 @@ class ReinforcementLearningLoop:
                 )
                 total_reward += reward_value
                 state = next_state
+                steps = step
                 if done:
                     break
             duration = time.perf_counter() - episode_start
