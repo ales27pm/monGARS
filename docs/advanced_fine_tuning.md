@@ -6,8 +6,9 @@ curated-dataset pipeline, and Ray Serve deployment from "operational" to
 
 ## Current Capabilities
 - `LLMIntegration` streams responses from local Ollama models and performs real
-  Ray Serve round-trips with endpoint rotation, scaling-aware retries, and
-  adapter manifest tracking (`monGARS/core/llm_integration.py`).
+  Ray Serve round-trips with endpoint rotation, scaling-aware retries, adapter
+  manifest tracking, and OpenTelemetry counters/histograms for `llm.ray.*`
+  metrics (`monGARS/core/llm_integration.py`).
 - `SelfTrainingEngine` batches curated conversation records, persists anonymised
   datasets, and launches `modules.neurons.training.mntp_trainer.MNTPTrainer` to
   train either deterministic linear adapters or LoRA/QLoRA weights depending on
@@ -30,8 +31,8 @@ curated-dataset pipeline, and Ray Serve deployment from "operational" to
    - Parallelise curated linear adapter training to speed up deterministic
      fallbacks on CPU-only hardware.
 3. **Distributed Inference Operations**
-   - Expose Ray Serve health counters (`llm.ray.*`) via OpenTelemetry and
-     integrate them with the existing scheduler telemetry.
+   - Feed the emitted Ray Serve metrics (`llm.ray.requests`, `llm.ray.failures`,
+     etc.) into dashboards and alerting alongside scheduler telemetry.
    - Publish a hardened Helm chart referencing `modules/ray_service.py` so teams
      can deploy inference clusters alongside monGARS core services.
    - Automate adapter rollouts by wiring SelfTrainingEngine summaries to the Ray

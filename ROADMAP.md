@@ -7,7 +7,7 @@ required to reach production readiness.
 
 - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
 - 🔒 Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
-- 🛡️ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude
+- ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude
   secrets and build artefacts.
 - 👤 Replace demo users in `web_api.py` with the database-backed authentication
   flow and migrations.
@@ -31,8 +31,10 @@ required to reach production readiness.
 - ✅ Hardened RBAC manifests.
 - ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support
   for LoRA and curated adapters.
-- 🔄 Extend Alembic migrations for the newest SQLModel tables and expose Ray Serve
-  success/failure counters via OpenTelemetry.
+- 🔄 Extend Alembic migrations for the newest SQLModel tables, including legacy
+  tables created outside the current ORM layer.
+- ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*`
+  metrics emitted by `LLMIntegration`).
 
 ## Phase 4 – Collaborative Networking (🔄 In Progress, Target Q4 2025)
 

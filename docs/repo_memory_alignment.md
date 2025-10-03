@@ -11,7 +11,7 @@ architecture or naming conventions change.
 | Security model | `monGARS/api/authentication.py`, `monGARS/core/security.py` | OAuth2 password flow, JWT issuance, Fernet utilities. |
 | Backend scaffolding | `monGARS/api/dependencies.py` | Dependency injection helpers for FastAPI routes. |
 | Speech/Browser clients | `monGARS/api/ws_manager.py` | WebSocket fan-out with connection bookkeeping. |
-| RAG enrichment API | `monGARS/api/review.py`, `monGARS/core/rag/context_enricher.py` | `/api/v1/review/rag-context` endpoint, typed client, and enrichment fallbacks. |
+| RAG enrichment API | `monGARS/api/rag.py`, `monGARS/core/rag/context_enricher.py` | `/api/v1/review/rag-context` endpoint, typed client, and enrichment fallbacks. |
 
 ## Core Services
 | Memory Term | Repository Target | Notes |
@@ -19,7 +19,7 @@ architecture or naming conventions change.
 | Cortex + Bouche orchestration | `monGARS/core/conversation.py` | ConversationalModule coordinating memory, curiosity, LLM, mimicry. |
 | Hippocampus | `monGARS/core/hippocampus.py` | In-memory, lock-guarded conversation history. |
 | Evolution Engine / Sommeil Paradoxal | `monGARS/core/evolution_engine.py`, `monGARS/core/sommeil.py` | Diagnostics, safe optimisation, idle-time triggers. |
-| Mémoire Autobiographique | `monGARS/core/logging.py`, `monGARS/core/ui_events.py` | Structured logging and typed event bus. |
+| Mémoire Autobiographique | `monGARS/core/monitor.py`, `monGARS/core/ui_events.py` | Structured logging hooks plus the typed event bus powering UI streams. |
 | Tronc (neuro-symbolic reasoning) | `monGARS/core/neuro_symbolic/advanced_reasoner.py` | Heuristic reasoning hints for the LLM pipeline. |
 | Self-training loop | `monGARS/core/self_training.py`, `modules/neurons/training/mntp_trainer.py` | Curated dataset batching plus MNTP/LoRA training with fallbacks. |
 | Distributed inference | `monGARS/core/llm_integration.py`, `modules/ray_service.py` | Ray Serve HTTP client, adapter manifest sync, and Serve deployment. |

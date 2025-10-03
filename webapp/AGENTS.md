@@ -16,7 +16,7 @@ middleware.
 - **Web Interface Goals**
   - ✅ FastAPI chat/history/token endpoints with validation.
   - ✅ Django chat UI with progressive enhancement.
-  - 🔄 Implement FastAPI WebSocket handler to match frontend expectations.
+  - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
   - 🔄 Replace hard-coded credential stores with database-backed auth flows.
   - 🚧 Publish polished SDKs and reference clients.
 

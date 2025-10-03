@@ -1,6 +1,6 @@
 # Incomplete Logic Audit
 
-## Date: 2025-09-30
+## Date: 2025-10-20
 
 This follow-up audit re-runs and expands the repository-wide scan for patterns
 that typically signal unfinished implementations. The review covered the core
@@ -14,7 +14,7 @@ service surface, CLI entry points, and test support utilities.
 | `rg "TODO"` | Track high-level work markers left in code comments. | No matches. |
 | `rg "FIXME"` / `rg "XXX"` | Catch lower-level bug markers or temporary hacks. | No matches. |
 | `rg "NotImplemented"` | Identify deliberate stubs raising `NotImplementedError`. | One test double (documented below). |
-| `rg "\\bpass\\b" monGARS` | Locate `pass` statements inside runtime modules. | Five runtime locations reviewed. |
+| `rg "\\bpass\\b" monGARS` | Locate `pass` statements inside runtime modules. | Four runtime locations reviewed. |
 | Manual inspection | Review each match in surrounding context to confirm intent and downstream behaviour. | Completed. |
 
 The search excludes vendor directories and build artefacts. For each match, the
@@ -36,11 +36,10 @@ No runtime modules raise `NotImplementedError`.
 
 | Location | Scenario | Rationale |
 | --- | --- | --- |
-| `monGARS/api/ws_manager.py:245` | `except WebSocketDisconnect` in the connection loop. | The no-op acknowledges normal client disconnects; cleanup runs in the `finally` block immediately after the exception handler. |
-| `monGARS/core/distributed_scheduler.py:217` | `except asyncio.CancelledError` in worker coroutine. | Cancellation during shutdown is expected; worker finalisation (metrics + deregistration) executes in the enclosing `finally` block. |
-| `monGARS/core/sommeil.py:49` | `except asyncio.CancelledError` in background optimisation loop. | Allows cooperative cancellation when stopping the idle optimisation task. |
-| `monGARS/core/sommeil.py:77` | `except asyncio.CancelledError` while awaiting task cancellation during shutdown. | Mirrors the background loop handling to treat cancellation as non-fatal. |
-| `monGARS/core/security.py:71` | `except ModuleNotFoundError` when probing for `bcrypt`. | Falls back to the pure-Python `pbkdf2_sha256` hashing scheme when the optional `bcrypt` dependency is missing. |
+| `monGARS/core/distributed_scheduler.py:219` | `except asyncio.CancelledError` in worker coroutine. | Cancellation during shutdown is expected; worker finalisation (metrics + deregistration) executes in the enclosing `finally` block. |
+| `monGARS/core/sommeil.py:65` | `except asyncio.CancelledError` in background optimisation loop. | Allows cooperative cancellation when stopping the idle optimisation task. |
+| `monGARS/core/sommeil.py:87` | `except asyncio.CancelledError` while awaiting task cancellation during shutdown. | Mirrors the background loop handling to treat cancellation as non-fatal. |
+| `monGARS/core/security.py:73` | `except ModuleNotFoundError` when probing for `bcrypt`. | Falls back to the pure-Python `pbkdf2_sha256` hashing scheme when the optional `bcrypt` dependency is missing. |
 
 During review, every `pass` lands in expected defensive branches: cancellation,
 resource teardown, or optional dependency probing. No branch was left without a

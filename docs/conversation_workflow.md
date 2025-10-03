@@ -20,11 +20,13 @@ or onboarding new contributors.
    length bounds, and rejecting empty messages.
 2. Inputs are sanitised with `validate_user_input`, stripping HTML and missing
    fields before the data reaches LLM integrations.
-3. WebSocket subscribers connect to `/ws/chat/` with the same JWT. The server
-   replays recent conversation history via Hippocampus and registers the
-   connection with `WebSocketManager` so later responses can broadcast. Origins
-   are validated against `WS_ALLOWED_ORIGINS` and the feature can be disabled via
-   `WS_ENABLE_EVENTS` for hardened deployments.
+3. WebSocket subscribers first call `POST /api/v1/auth/ws/ticket` with their JWT
+   to obtain a short-lived, signed ticket. They then connect to
+   `/ws/chat/?t=<ticket>`; the server verifies the signature with
+   `verify_ws_ticket`, enforces the `WS_ALLOWED_ORIGINS` allow-list, and denies
+   access outright when `WS_ENABLE_EVENTS` is `false`. After acceptance the
+   manager replays recent Hippocampus history and registers the connection for
+   downstream broadcasts.
 
 ## 3. Orchestrate Cognition
 `ConversationalModule.generate_response` coordinates the following stages:
@@ -46,7 +48,7 @@ or onboarding new contributors.
 6. **Persistence** – `PersistenceRepository` writes structured metadata to the
    SQL store while Hippocampus caches the latest exchange for rapid replay.
 7. **Delivery** – The adapted response is returned via HTTP and broadcast to all
-   active WebSocket subscribers.
+   active WebSocket subscribers via `WebSocketManager`'s per-connection queues.
 
 ## 4. Cross-Cutting Concerns
 - **Security** – Peer messaging and chat routes reuse the same cryptographic
@@ -61,8 +63,11 @@ The UI and background services consume a typed event bus defined in
 `core/ui_events.py`.
 - `chat.message` events mirror HTTP responses and power live updates in the
   Django interface.
-- `ai_model.response_chunk` / `ai_model.response_complete` events support streaming
-  LLM output without polling.
+- `ai_model.response_chunk` / `ai_model.response_complete` events stream LLM
+  output without polling.
+- `ws.connected`, `history.snapshot`, and `performance.alert` events surface
+  connection state, history snapshots, and scheduler warnings for operator
+  dashboards.
 - `evolution_engine.*` and `sleep_time_compute.*` events keep dashboards informed
   about background optimisation and maintenance cycles.
 

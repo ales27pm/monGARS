@@ -16,8 +16,9 @@ Covers the primary FastAPI app, cognition services, persistence layer, and share
   - ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
   - ✅ Multi-architecture build scripts and cache metrics.
   - ✅ Hardened RBAC manifests.
-  - 🔄 Implement real masked next-token training in `MNTPTrainer` and wire Ray Serve HTTP requests in `LLMIntegration`.
-  - 🔄 Pin container image versions in `docker-compose.yml` and extend Alembic migrations.
+  - ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support for LoRA and curated adapters.
+  - 🔄 Extend Alembic migrations for the newest SQLModel tables, including legacy tables created outside the current ORM layer.
+  - ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*` metrics emitted by `LLMIntegration`).
 - **Networking & Collaboration**
   - ✅ Encrypted peer registry, admin-guarded endpoints, and distributed scheduler.
   - ✅ Sommeil Paradoxal idle-time optimisation and safe apply pipeline.
