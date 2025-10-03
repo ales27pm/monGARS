@@ -89,7 +89,7 @@ def _resolve_database_url(raw_url: str | None, *, default_url: URL) -> URL:
         try:
             parsed = make_url(raw_url)
         except Exception:  # pragma: no cover - invalid URL fallback
-            logger.warning("Invalid DATABASE_URL '%s'; ignoring override", raw_url)
+            logger.warning("Invalid DATABASE_URL override; ignoring override")
         else:
             validated = _validate_database_target(parsed, source="env")
             if validated is not None:
