@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 import pytest
@@ -14,11 +15,20 @@ from monGARS.core.rag.context_enricher import (
 
 
 class FakeResponse:
-    def __init__(self, payload: dict, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: Any,
+        status_code: int = 200,
+        *,
+        json_exception: Exception | None = None,
+    ) -> None:
         self._payload = payload
         self.status_code = status_code
+        self._json_exception = json_exception
 
-    def json(self) -> dict:
+    def json(self) -> Any:
+        if self._json_exception is not None:
+            raise self._json_exception
         return self._payload
 
     def raise_for_status(self) -> None:
@@ -130,6 +140,27 @@ async def test_enrich_raises_service_error_on_http_failure(monkeypatch):
 
     with pytest.raises(RagServiceError):
         await enricher.enrich("Investigate crash")
+
+
+@pytest.mark.asyncio
+async def test_enrich_returns_empty_on_invalid_json(monkeypatch):
+    settings = Settings(
+        rag_enabled=True,
+        DOC_RETRIEVAL_URL="http://documents.local",
+    )
+    monkeypatch.setattr(
+        "monGARS.core.rag.context_enricher.get_settings", lambda: settings
+    )
+    response = FakeResponse(
+        "",
+        json_exception=ValueError("no json"),
+    )
+    enricher = RagContextEnricher(http_client_factory=make_client_factory(response, []))
+
+    result = await enricher.enrich("Investigate crash")
+
+    assert result.focus_areas == []
+    assert result.references == []
 
 
 @pytest.mark.asyncio

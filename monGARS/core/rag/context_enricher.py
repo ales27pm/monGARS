@@ -121,7 +121,14 @@ class RagContextEnricher:
             )
             raise RagServiceError("Failed to contact RAG service.") from exc
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            log.debug(
+                "rag.context_enrichment.invalid_json",
+                extra={"error": str(exc)},
+            )
+            return RagEnrichmentResult(focus_areas=[], references=[])
         if not isinstance(data, Mapping):
             log.debug(
                 "rag.context_enrichment.invalid_payload",
