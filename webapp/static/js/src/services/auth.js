@@ -1,53 +1,89 @@
-export function createAuthService(config) {
+const DEFAULT_STORAGE_KEY = "mongars_jwt";
+
+function hasLocalStorage() {
+  try {
+    return typeof window !== "undefined" && Boolean(window.localStorage);
+  } catch (err) {
+    console.warn("Accessing localStorage failed", err);
+    return false;
+  }
+}
+
+export function createAuthService(config = {}) {
+  const storageKey = config.storageKey || DEFAULT_STORAGE_KEY;
+  let fallbackToken =
+    typeof config.token === "string" && config.token.trim() !== ""
+      ? config.token.trim()
+      : undefined;
+
   function persistToken(token) {
-    if (!token) return;
-// webapp/static/js/src/services/auth.js
-
-function persistToken(token) {
-  if (!token) return;
-  try {
-    window.localStorage.setItem("mongars_jwt", token);
-  } catch (err) {
-    console.warn("Unable to persist JWT in localStorage", err);
-  }
-}
-
-async function getJwt() {
-  try {
-    const stored = window.localStorage.getItem("mongars_jwt");
-    if (stored) {
-      return stored;
+    if (typeof token === "string") {
+      token = token.trim();
     }
-  } catch (err) {
-    console.warn("Unable to read JWT from localStorage", err);
-  }
-  if (config.token) {
-    return config.token;
-  }
-  throw new Error("Missing JWT (store it in localStorage as 'mongars_jwt').");
-}
+    fallbackToken = token || undefined;
+    if (!token) {
+      clearToken();
+      return;
+    }
 
-  if (config.token) {
-    persistToken(config.token);
+    if (!hasLocalStorage()) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(storageKey, token);
+    } catch (err) {
+      console.warn("Unable to persist JWT in localStorage", err);
+    }
+  }
+
+  function readStoredToken() {
+    if (!hasLocalStorage()) {
+      return undefined;
+    }
+
+    try {
+      const stored = window.localStorage.getItem(storageKey);
+      return stored || undefined;
+    } catch (err) {
+      console.warn("Unable to read JWT from localStorage", err);
+      return undefined;
+    }
+  }
+
+  function clearToken() {
+    fallbackToken = undefined;
+
+    if (!hasLocalStorage()) {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch (err) {
+      console.warn("Unable to clear JWT from localStorage", err);
+    }
+  }
+
+  if (fallbackToken) {
+    persistToken(fallbackToken);
   }
 
   async function getJwt() {
-    try {
-      const stored = window.localStorage.getItem("jwt");
-      if (stored) {
-        return stored;
-      }
-    } catch (err) {
-      console.warn("Unable to read JWT from localStorage", err);
+    const stored = readStoredToken();
+    if (stored) {
+      return stored;
     }
-    if (config.token) {
-      return config.token;
+    if (fallbackToken) {
+      return fallbackToken;
     }
-    throw new Error("Missing JWT (store it in localStorage as 'jwt').");
+    throw new Error("Missing JWT for chat authentication.");
   }
 
   return {
     getJwt,
     persistToken,
+    clearToken,
+    storageKey,
   };
 }

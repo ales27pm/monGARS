@@ -78,3 +78,22 @@ telemetry.
 - When deploying across clusters, synchronise the adapter directory (e.g. via
   object storage) so Ray replicas observe the same manifest versions as the API
   pods.
+
+## 6. Database Preparation
+Apply Alembic migrations before bootstrapping Ray Serve so the API layer and
+background workers have the expected persistence schema:
+
+1. Configure `DATABASE_URL` (and related pool settings) in the environment or
+   `.env` file.
+2. Run `python init_db.py` to apply migrations. The script now drives Alembic
+   directly and converts existing `conversation_history.vector` columns to
+   JSON/JSONB so embeddings remain portable across environments.
+3. Confirm the migration by inspecting the latest revision:
+   ```bash
+   alembic current
+   ```
+   To roll back in staging, execute `alembic downgrade 20250108_03`.
+
+The conversion away from the `pgvector` column type is backward-compatible; the
+new JSON payloads preserve existing embedding data while avoiding hard
+dependencies on the extension in environments that lack it.

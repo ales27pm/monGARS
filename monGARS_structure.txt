@@ -43,6 +43,9 @@ monGARS/
 │           └── mntp_trainer.py
 ├── monGARS/
     ├── __init__.py
+    ├── db/
+    │   ├── __init__.py
+    │   └── models.py
     ├── api/
     │   ├── __init__.py
     │   ├── authentication.py

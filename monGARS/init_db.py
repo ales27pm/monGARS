@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import AsyncIterator
 from weakref import WeakKeyDictionary
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 try:  # pragma: no cover - optional dependency during tests
     import aiosqlite  # noqa: F401
@@ -19,80 +17,14 @@ try:  # pragma: no cover - optional dependency during tests
 except ModuleNotFoundError:  # pragma: no cover - fallback to sync engine
     HAS_AIOSQLITE = False
 
-
-class Base(DeclarativeBase):
-    """Base class for all lightweight ORM models."""
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-class ConversationHistory(Base):
-    __tablename__ = "conversation_history"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String, index=True)
-    query: Mapped[str] = mapped_column(String)
-    response: Mapped[str] = mapped_column(String)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
-    vector: Mapped[list[float] | None] = mapped_column(JSON, default=list)
-
-
-class Interaction(Base):
-    __tablename__ = "interactions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String, index=True)
-    session_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
-    input_data: Mapped[dict] = mapped_column(JSON, default=dict)
-    output_data: Mapped[dict] = mapped_column(JSON, default=dict)
-    message: Mapped[str] = mapped_column(String)
-    response: Mapped[str] = mapped_column(String)
-    personality: Mapped[dict] = mapped_column(JSON, default=dict)
-    context: Mapped[dict] = mapped_column(JSON, default=dict)
-    meta_data: Mapped[str | None] = mapped_column(String, nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    processing_time: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow
-    )
-
-
-class UserPreferences(Base):
-    __tablename__ = "user_preferences"
-
-    user_id: Mapped[str] = mapped_column(String, primary_key=True)
-    interaction_style: Mapped[dict] = mapped_column(JSON, default=dict)
-    preferred_topics: Mapped[dict] = mapped_column(JSON, default=dict)
-
-
-class UserPersonality(Base):
-    __tablename__ = "user_personality"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String, unique=True, index=True)
-    traits: Mapped[dict] = mapped_column(JSON, default=dict)
-    interaction_style: Mapped[dict] = mapped_column(JSON, default=dict)
-    context_preferences: Mapped[dict] = mapped_column(JSON, default=dict)
-    adaptation_rate: Mapped[float] = mapped_column(Float, default=0.1)
-    confidence: Mapped[float] = mapped_column(Float, default=0.5)
-    last_updated: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-
-
-class UserAccount(Base):
-    __tablename__ = "user_accounts"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    username: Mapped[str] = mapped_column(String(150), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow
-    )
-
+from monGARS.db import (
+    Base,
+    ConversationHistory,
+    Interaction,
+    UserAccount,
+    UserPersonality,
+    UserPreferences,
+)
 
 if HAS_AIOSQLITE:
     DATABASE_URL = "sqlite+aiosqlite:///./mongars_local.db"
@@ -101,6 +33,8 @@ if HAS_AIOSQLITE:
     _sync_engine = None
     _sync_session_maker = None
 else:
+    from sqlalchemy import create_engine
+
     DATABASE_URL = "sqlite:///./mongars_local.db"
     _sync_engine = create_engine(
         DATABASE_URL,
@@ -116,6 +50,17 @@ _init_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
     WeakKeyDictionary()
 )
 _initialized = False
+
+__all__ = [
+    "Base",
+    "ConversationHistory",
+    "Interaction",
+    "UserAccount",
+    "UserPersonality",
+    "UserPreferences",
+    "async_session_factory",
+    "reset_database",
+]
 
 
 def _get_loop_lock() -> asyncio.Lock:
