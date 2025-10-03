@@ -17,7 +17,11 @@ depends_on = None
 def _json_type(dialect_name: str) -> sa.types.TypeEngine:
     if dialect_name == "postgresql":
         return sa.dialects.postgresql.JSONB()
-    return sa.JSON()
+    if dialect_name == "sqlite":
+        return sa.JSON()
+    if dialect_name == "mysql":
+        return sa.dialects.mysql.JSON()
+    raise RuntimeError(f"Unsupported dialect: {dialect_name}")
 
 
 def _json_default_clause(
@@ -26,9 +30,11 @@ def _json_default_clause(
     text = json.dumps(payload, separators=(",", ":"))
     if dialect_name == "postgresql":
         return sa.text(f"'{text}'::jsonb")
-    if dialect_name in {"sqlite", "mysql"}:
+    if dialect_name == "sqlite":
         return sa.text(f"'{text}'")
-    return None
+    if dialect_name == "mysql":
+        return None
+    raise RuntimeError(f"Unsupported dialect: {dialect_name}")
 
 
 def _fill_nulls(
@@ -38,14 +44,29 @@ def _fill_nulls(
     *,
     type_: sa.types.TypeEngine | None = None,
 ) -> None:
-    statement = sa.text(f"UPDATE {table} SET {column} = :value WHERE {column} IS NULL")
-    if type_ is not None:
-        statement = statement.bindparams(
-            sa.bindparam("value", value=value, type_=type_)
-        )
-    else:
-        statement = statement.bindparams(sa.bindparam("value", value=value))
+    table_clause = sa.table(table, sa.column(column))
+    bind_param = sa.bindparam("value", value=value, type_=type_)
+    statement = (
+        sa.update(table_clause)
+        .where(table_clause.c[column].is_(None))
+        .values({column: bind_param})
+    )
     op.execute(statement)
+
+
+def _apply_column_alterations(
+    table: str,
+    columns: list[dict[str, object]],
+    *,
+    use_batch: bool,
+) -> None:
+    if use_batch:
+        with op.batch_alter_table(table, recreate="always") as batch:
+            for column in columns:
+                batch.alter_column(column["name"], **column["alter"])  # type: ignore[arg-type]
+    else:
+        for column in columns:
+            op.alter_column(table, column["name"], **column["alter"])  # type: ignore[arg-type]
 
 
 def _ensure_legacy_tables(
@@ -89,44 +110,74 @@ def upgrade() -> None:
     _ensure_legacy_tables(bind, json_type)
 
     empty_object_default = _json_default_clause(dialect_name, {})
+    string_default = sa.text("''")
+    use_batch = dialect_name == "sqlite"
 
-    for column in ("input_data", "output_data", "personality", "context"):
-        _fill_nulls("interactions", column, {}, type_=json_type)
-        op.alter_column(
-            "interactions",
-            column,
-            existing_type=json_type,
-            nullable=False,
-            server_default=empty_object_default,
-        )
+    json_alter_kwargs = {"existing_type": json_type, "nullable": False}
+    if empty_object_default is not None:
+        json_alter_kwargs["server_default"] = empty_object_default
 
-    for column in ("message", "response"):
-        _fill_nulls("interactions", column, "")
-        op.alter_column(
-            "interactions",
-            column,
-            existing_type=sa.String(),
-            nullable=False,
-        )
+    interactions_columns = [
+        {
+            "name": column,
+            "fill": {"value": {}, "type_": json_type},
+            "alter": json_alter_kwargs.copy(),
+        }
+        for column in ("input_data", "output_data", "personality", "context")
+    ]
+    interactions_columns.extend(
+        {
+            "name": column,
+            "fill": {"value": "", "type_": None},
+            "alter": {
+                "existing_type": sa.String(),
+                "nullable": False,
+                "server_default": string_default,
+            },
+        }
+        for column in ("message", "response")
+    )
 
-    for column in ("interaction_style", "preferred_topics"):
-        _fill_nulls("user_preferences", column, {}, type_=json_type)
-        op.alter_column(
-            "user_preferences",
-            column,
-            existing_type=json_type,
-            nullable=False,
-            server_default=empty_object_default,
-        )
+    user_preferences_columns = [
+        {
+            "name": column,
+            "fill": {"value": {}, "type_": json_type},
+            "alter": json_alter_kwargs.copy(),
+        }
+        for column in ("interaction_style", "preferred_topics")
+    ]
 
-    for column in ("traits", "interaction_style", "context_preferences"):
-        _fill_nulls("user_personality", column, {}, type_=json_type)
-        op.alter_column(
-            "user_personality",
-            column,
-            existing_type=json_type,
-            nullable=False,
-            server_default=empty_object_default,
+    user_personality_columns = [
+        {
+            "name": column,
+            "fill": {"value": {}, "type_": json_type},
+            "alter": json_alter_kwargs.copy(),
+        }
+        for column in ("traits", "interaction_style", "context_preferences")
+    ]
+
+    operations = [
+        {"table": "interactions", "columns": interactions_columns},
+        {"table": "user_preferences", "columns": user_preferences_columns},
+        {"table": "user_personality", "columns": user_personality_columns},
+    ]
+
+    for operation in operations:
+        for column in operation["columns"]:
+            fill = column["fill"]  # type: ignore[assignment]
+            _fill_nulls(
+                operation["table"],
+                column["name"],
+                fill["value"],
+                type_=fill["type_"],
+            )
+        _apply_column_alterations(
+            operation["table"],
+            [
+                {"name": column["name"], "alter": column["alter"]}
+                for column in operation["columns"]
+            ],
+            use_batch=use_batch,
         )
 
 
@@ -134,38 +185,75 @@ def downgrade() -> None:
     bind = op.get_bind()
     dialect_name = bind.dialect.name
     json_type = _json_type(dialect_name)
+    use_batch = dialect_name == "sqlite"
 
-    for column in ("traits", "interaction_style", "context_preferences"):
-        op.alter_column(
-            "user_personality",
-            column,
-            existing_type=json_type,
-            nullable=True,
-            server_default=None,
+    downgrade_operations = [
+        {
+            "table": "user_personality",
+            "columns": [
+                {
+                    "name": column,
+                    "alter": {
+                        "existing_type": json_type,
+                        "nullable": True,
+                        "server_default": None,
+                    },
+                }
+                for column in ("traits", "interaction_style", "context_preferences")
+            ],
+        },
+        {
+            "table": "user_preferences",
+            "columns": [
+                {
+                    "name": column,
+                    "alter": {
+                        "existing_type": json_type,
+                        "nullable": True,
+                        "server_default": None,
+                    },
+                }
+                for column in ("interaction_style", "preferred_topics")
+            ],
+        },
+        {
+            "table": "interactions",
+            "columns": [
+                {
+                    "name": column,
+                    "alter": {
+                        "existing_type": sa.String(),
+                        "nullable": True,
+                        "server_default": None,
+                    },
+                }
+                for column in ("message", "response")
+            ],
+        },
+        {
+            "table": "interactions",
+            "columns": [
+                {
+                    "name": column,
+                    "alter": {
+                        "existing_type": json_type,
+                        "nullable": True,
+                        "server_default": None,
+                    },
+                }
+                for column in ("input_data", "output_data", "personality", "context")
+            ],
+        },
+    ]
+
+    for operation in downgrade_operations:
+        _apply_column_alterations(
+            operation["table"],
+            operation["columns"],
+            use_batch=use_batch,
         )
 
-    for column in ("interaction_style", "preferred_topics"):
-        op.alter_column(
-            "user_preferences",
-            column,
-            existing_type=json_type,
-            nullable=True,
-            server_default=None,
-        )
-
-    for column in ("message", "response"):
-        op.alter_column(
-            "interactions",
-            column,
-            existing_type=sa.String(),
-            nullable=True,
-        )
-
-    for column in ("input_data", "output_data", "personality", "context"):
-        op.alter_column(
-            "interactions",
-            column,
-            existing_type=json_type,
-            nullable=True,
-            server_default=None,
-        )
+    inspector = sa.inspect(bind)
+    for table_name in ("emotion_trends", "conversation_sessions"):
+        if inspector.has_table(table_name):
+            op.drop_table(table_name)
