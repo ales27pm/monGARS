@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -121,7 +122,14 @@ class RagContextEnricher:
             )
             raise RagServiceError("Failed to contact RAG service.") from exc
 
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError as exc:
+            log.warning(
+                "rag.context_enrichment.invalid_json",
+                extra={"error": str(exc)},
+            )
+            return RagEnrichmentResult(focus_areas=[], references=[])
         if not isinstance(data, Mapping):
             log.debug(
                 "rag.context_enrichment.invalid_payload",
