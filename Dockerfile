@@ -1,5 +1,6 @@
 # --- Build Stage ---
-FROM nvcr.io/nvidia/pytorch:23.10-py3 AS builder
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime AS builder
+ENV PATH="/opt/conda/bin:${PATH}"
 ARG JOBS=1
 ENV MAKEFLAGS="-j${JOBS}"
 
@@ -38,8 +39,9 @@ RUN python -m venv /opt/venv \
 COPY . /app
 
 # --- Final Stage ---
-FROM nvcr.io/nvidia/pytorch:23.10-py3 AS runtime
-ENV PYTHONDONTWRITEBYTECODE=1 \
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime AS runtime
+ENV PATH="/opt/conda/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 # Runtime dependencies for multimedia processing, SSL/TLS, and Git-based model
