@@ -247,8 +247,13 @@ class Settings(BaseSettings):
     @field_validator("database_url", mode="before")
     @classmethod
     def normalise_database_url(cls, value: Any) -> Any:
-        if isinstance(value, str) and value.startswith("postgresql://"):
-            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if isinstance(value, str):
+            if value.startswith("postgres://"):
+                value = value.replace("postgres://", "postgresql://", 1)
+            if value.startswith("postgresql://") and not value.startswith(
+                "postgresql+"
+            ):
+                return value.replace("postgresql://", "postgresql+asyncpg://", 1)
         return value
 
     curiosity_minimum_similar_history: int = Field(
@@ -372,6 +377,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_db(cls, value: AnyUrl) -> AnyUrl:
         url_str = str(value)
+        if url_str.startswith("postgres://"):
+            raise ValueError("Invalid async PostgreSQL URL")
         if url_str.startswith("postgresql") and "postgresql+asyncpg" not in url_str:
             raise ValueError("Invalid async PostgreSQL URL")
         return value

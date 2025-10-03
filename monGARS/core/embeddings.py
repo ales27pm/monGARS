@@ -64,7 +64,6 @@ class LLM2VecEmbedder:
 
         for start in range(0, len(cleaned), batch_size):
             chunk = cleaned[start : start + batch_size]
-            chunk_vectors: list[list[float]] = []
             chunk_used_fallback = False
 
             try:
@@ -105,7 +104,7 @@ class LLM2VecEmbedder:
         """Return a single embedding vector for ``text``."""
 
         batch = await self.encode_batch([text], instruction=instruction)
-        if not batch.vectors:
+        if not batch.vectors or not batch.vectors[0]:
             return [], batch.used_fallback
         return batch.vectors[0], batch.used_fallback
 
