@@ -29,6 +29,7 @@ import logging
 import statistics
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Protocol, Sequence
@@ -79,6 +80,71 @@ class BatchStatistics:
     completed_episodes: int
     total_episodes: int
     batch_duration: float
+    worker_count: int
+
+    @property
+    def episode_count(self) -> int:
+        """Number of episode results contained in the batch."""
+
+        return len(self.recent_results)
+
+    @property
+    def failure_count(self) -> int:
+        """Count of failed episodes in the batch."""
+
+        return sum(1 for result in self.recent_results if result.failed)
+
+    @property
+    def success_count(self) -> int:
+        """Count of successful episodes in the batch."""
+
+        return self.episode_count - self.failure_count
+
+    @property
+    def success_rate(self) -> float:
+        """Success ratio for the batch."""
+
+        if self.episode_count == 0:
+            return 0.0
+        return self.success_count / self.episode_count
+
+    @property
+    def rewards(self) -> list[float]:
+        """Return the reward values for successful episodes."""
+
+        return [result.reward for result in self.recent_results if not result.failed]
+
+    @property
+    def average_reward(self) -> float | None:
+        """Average reward for successful episodes, if present."""
+
+        rewards = self.rewards
+        if not rewards:
+            return None
+        return statistics.fmean(rewards)
+
+    @property
+    def reward_variance(self) -> float | None:
+        """Population variance of rewards for successful episodes."""
+
+        rewards = self.rewards
+        if len(rewards) <= 1:
+            return 0.0 if rewards else None
+        return statistics.pvariance(rewards)
+
+    @property
+    def average_duration(self) -> float:
+        """Average duration of each episode in the batch."""
+
+        return self.batch_duration / max(1, self.episode_count)
+
+    @property
+    def throughput(self) -> float | None:
+        """Episodes executed per second for the batch."""
+
+        if self.batch_duration <= 0:
+            return None
+        return self.episode_count / self.batch_duration
 
 
 @dataclass(slots=True)
@@ -214,19 +280,16 @@ class AdaptiveScalingStrategy:
         if not stats.recent_results:
             return current_workers, "no-results"
 
-        rewards = [
-            result.reward for result in stats.recent_results if not result.failed
-        ]
-        if not rewards:
+        avg_reward = stats.average_reward
+        if avg_reward is None:
             # If the batch failed entirely, retreat towards the minimum.
             downgraded = max(
                 self.min_workers, int(current_workers * self.decrease_factor)
             )
             return downgraded, "batch-failed"
 
-        avg_reward = statistics.fmean(rewards)
-        variance = statistics.pvariance(rewards) if len(rewards) > 1 else 0.0
-        duration_per_episode = stats.batch_duration / max(1, len(rewards))
+        variance = stats.reward_variance or 0.0
+        duration_per_episode = stats.average_duration
 
         window_mean = (
             statistics.fmean(self._reward_history)
@@ -291,6 +354,99 @@ class AdaptiveScalingStrategy:
         return recommendation, reason
 
 
+class ThroughputAwareScalingStrategy:
+    """Compose reward-aware scaling with throughput monitoring."""
+
+    def __init__(
+        self,
+        *,
+        target_throughput: float,
+        reward_strategy: ScalingStrategy | None = None,
+        throughput_window: int = 5,
+        adjustment_tolerance: float = 0.1,
+        cooldown_batches: int = 1,
+        minimum_success_rate: float = 0.6,
+    ) -> None:
+        if target_throughput <= 0:
+            raise ValueError("target_throughput must be positive")
+        if throughput_window < 1:
+            raise ValueError("throughput_window must be at least 1")
+        if adjustment_tolerance < 0:
+            raise ValueError("adjustment_tolerance must be >= 0")
+        if cooldown_batches < 0:
+            raise ValueError("cooldown_batches must be >= 0")
+        if not (0.0 <= minimum_success_rate <= 1.0):
+            raise ValueError("minimum_success_rate must be between 0 and 1")
+
+        self._reward_strategy = reward_strategy or AdaptiveScalingStrategy()
+        self._target_throughput = target_throughput
+        self._throughput_history: deque[float] = deque(maxlen=throughput_window)
+        self._adjustment_tolerance = adjustment_tolerance
+        self._cooldown_batches = cooldown_batches
+        self._batches_since_change = cooldown_batches
+        self._minimum_success_rate = minimum_success_rate
+        self.max_workers = getattr(self._reward_strategy, "max_workers", 8)
+        self.min_workers = getattr(self._reward_strategy, "min_workers", 1)
+
+    def recommend_worker_count(
+        self,
+        current_workers: int,
+        batch_index: int,
+        stats: BatchStatistics,
+    ) -> tuple[int, str]:
+        base_workers, base_reason = self._reward_strategy.recommend_worker_count(
+            current_workers, batch_index, stats
+        )
+
+        if base_workers != current_workers:
+            self._throughput_history.clear()
+            self._batches_since_change = 0
+            return base_workers, base_reason
+
+        throughput = stats.throughput
+        if throughput is None:
+            return base_workers, base_reason
+
+        self._throughput_history.append(throughput)
+        self._batches_since_change += 1
+
+        if not self._throughput_history:
+            return base_workers, base_reason
+
+        if self._batches_since_change <= self._cooldown_batches:
+            return base_workers, base_reason
+
+        avg_throughput = statistics.fmean(self._throughput_history)
+        if avg_throughput <= 0:
+            return base_workers, base_reason
+
+        gap = (avg_throughput - self._target_throughput) / self._target_throughput
+        recommendation = base_workers
+        reason = base_reason
+
+        min_workers = getattr(self._reward_strategy, "min_workers", self.min_workers)
+        max_workers = getattr(self._reward_strategy, "max_workers", self.max_workers)
+
+        if gap < -self._adjustment_tolerance:
+            if stats.success_rate >= self._minimum_success_rate:
+                desired = min(max_workers, base_workers + 1)
+                if desired != base_workers:
+                    recommendation = desired
+                    reason = "throughput-low"
+        elif gap > self._adjustment_tolerance:
+            desired = max(min_workers, base_workers - 1)
+            if desired != base_workers:
+                recommendation = desired
+                reason = "throughput-high"
+
+        if recommendation != base_workers:
+            self._batches_since_change = 0
+            self._throughput_history.clear()
+            return recommendation, reason
+
+        return base_workers, base_reason
+
+
 class ReinforcementLearningLoop:
     """Coordinate reinforcement-learning rollouts with adaptive scaling."""
 
@@ -303,6 +459,7 @@ class ReinforcementLearningLoop:
         scaling_strategy: ScalingStrategy | None = None,
         initial_workers: int = 1,
         max_workers: int | None = None,
+        batch_callback: Callable[[BatchStatistics], None] | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -319,6 +476,7 @@ class ReinforcementLearningLoop:
         self._max_workers = max_workers or getattr(
             self._scaling_strategy, "max_workers", initial_workers
         )
+        self._batch_callback = batch_callback
         self._policy_lock = threading.Lock()
 
     def run(self, total_episodes: int) -> ReinforcementLearningSummary:
@@ -338,10 +496,11 @@ class ReinforcementLearningLoop:
 
         while completed < total_episodes:
             remaining = total_episodes - completed
-            episodes_this_batch = min(remaining, worker_count)
+            active_workers = worker_count
+            episodes_this_batch = min(remaining, active_workers)
             batch_start = time.perf_counter()
             results = self._execute_batch(
-                batch_index, episodes_this_batch, worker_count
+                batch_index, episodes_this_batch, active_workers
             )
             batch_duration = time.perf_counter() - batch_start
 
@@ -356,10 +515,23 @@ class ReinforcementLearningLoop:
                 completed_episodes=completed,
                 total_episodes=total_episodes,
                 batch_duration=batch_duration,
+                worker_count=active_workers,
             )
 
+            if self._batch_callback is not None:
+                try:
+                    self._batch_callback(stats)
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.exception(
+                        "Batch callback failed",
+                        extra={
+                            "batch_index": batch_index,
+                            "worker_count": active_workers,
+                        },
+                    )
+
             next_workers, reason = self._scaling_strategy.recommend_worker_count(
-                worker_count, batch_index + 1, stats
+                active_workers, batch_index + 1, stats
             )
             next_workers = max(1, min(self._max_workers, next_workers))
             if next_workers != worker_count:

@@ -8,6 +8,7 @@ from modules.neurons.training.reinforcement_loop import (
     BatchStatistics,
     EpisodeResult,
     ReinforcementLearningLoop,
+    ThroughputAwareScalingStrategy,
     Transition,
 )
 
@@ -133,6 +134,7 @@ def test_adaptive_scaling_strategy_reacts_to_rewards() -> None:
         completed_episodes=3,
         total_episodes=30,
         batch_duration=0.6,
+        worker_count=2,
     )
     workers, reason = strategy.recommend_worker_count(2, 0, baseline_stats)
     assert workers == 2
@@ -143,6 +145,7 @@ def test_adaptive_scaling_strategy_reacts_to_rewards() -> None:
         completed_episodes=6,
         total_episodes=30,
         batch_duration=0.6,
+        worker_count=2,
     )
     boosted_workers, reason = strategy.recommend_worker_count(
         workers, 1, improved_stats
@@ -155,9 +158,95 @@ def test_adaptive_scaling_strategy_reacts_to_rewards() -> None:
         completed_episodes=9,
         total_episodes=30,
         batch_duration=0.45,
+        worker_count=4,
     )
     reduced_workers, reason = strategy.recommend_worker_count(
         boosted_workers, 2, regressed_stats
     )
     assert reduced_workers < boosted_workers
     assert reason == "reward-regressed"
+
+
+def test_throughput_scaling_strategy_balances_throughput() -> None:
+    base_strategy = AdaptiveScalingStrategy(
+        min_workers=1,
+        max_workers=6,
+        increase_factor=1.2,
+        decrease_factor=0.8,
+        improvement_threshold=10.0,
+        regression_tolerance=10.0,
+        variance_threshold=1.0,
+        max_duration_per_episode=10.0,
+        min_duration_per_episode=0.0,
+    )
+    strategy = ThroughputAwareScalingStrategy(
+        target_throughput=2.0,
+        reward_strategy=base_strategy,
+        throughput_window=2,
+        adjustment_tolerance=0.05,
+        cooldown_batches=0,
+        minimum_success_rate=0.0,
+    )
+
+    def _stats(
+        rewards: list[float], duration: float, worker_count: int, completed: int
+    ) -> BatchStatistics:
+        return BatchStatistics(
+            recent_results=[
+                EpisodeResult(
+                    index=i,
+                    reward=value,
+                    steps=1,
+                    duration=duration / max(1, len(rewards)),
+                    transitions=[],
+                )
+                for i, value in enumerate(rewards)
+            ],
+            completed_episodes=completed,
+            total_episodes=64,
+            batch_duration=duration,
+            worker_count=worker_count,
+        )
+
+    slow_stats = _stats([0.5, 0.55], duration=4.0, worker_count=2, completed=2)
+    increased_workers, reason = strategy.recommend_worker_count(2, 0, slow_stats)
+    assert increased_workers > 2
+    assert reason == "throughput-low"
+
+    fast_stats = _stats(
+        [0.5 for _ in range(increased_workers)],
+        duration=0.4,
+        worker_count=increased_workers,
+        completed=2 + increased_workers,
+    )
+    reduced_workers, reason = strategy.recommend_worker_count(
+        increased_workers, 1, fast_stats
+    )
+    assert reduced_workers < increased_workers
+    assert reason == "throughput-high"
+
+
+def test_reinforcement_loop_invokes_batch_callback() -> None:
+    rewards = [0.1, 0.5, 0.9]
+    policy = EpsilonGreedyPolicy(action_count=len(rewards), epsilon=0.0, seed=42)
+    observed: list[BatchStatistics] = []
+
+    def _callback(stats: BatchStatistics) -> None:
+        observed.append(stats)
+
+    loop = ReinforcementLearningLoop(
+        environment_factory=lambda: SimpleBanditEnvironment(rewards),
+        policy=policy,
+        max_steps=1,
+        scaling_strategy=FixedScalingStrategy(),
+        initial_workers=1,
+        max_workers=1,
+        batch_callback=_callback,
+    )
+
+    loop.run(total_episodes=5)
+
+    assert observed
+    assert all(isinstance(item, BatchStatistics) for item in observed)
+    assert observed[0].worker_count == 1
+    assert observed[0].episode_count >= 1
