@@ -22,6 +22,10 @@ class EmbeddingBatch:
     used_fallback: bool
 
 
+class EmbeddingBackendError(RuntimeError):
+    """Raised when the embedding backend cannot produce vectors."""
+
+
 class LLM2VecEmbedder:
     """Thin asynchronous wrapper around :class:`modules.neurons.core.NeuronManager`."""
 
@@ -67,9 +71,10 @@ class LLM2VecEmbedder:
                 async with self._semaphore:
                     raw_vectors = await asyncio.to_thread(manager.encode, chunk, prompt)
             except Exception as exc:  # pragma: no cover - unexpected backend errors
-                logger.exception("llm2vec.encode.failed", exc_info=exc)
-                raw_vectors = []
-                chunk_used_fallback = True
+                logger.exception(
+                    "llm2vec.encode.failed", extra={"chunk_size": len(chunk)}
+                )
+                raise EmbeddingBackendError("LLM2Vec encode failed") from exc
 
             # Normalise vectors while preserving ordering and chunk length.
             normalised_vectors: list[list[float]] = []
@@ -157,4 +162,9 @@ def get_llm2vec_embedder() -> LLM2VecEmbedder:
     return LLM2VecEmbedder()
 
 
-__all__ = ["EmbeddingBatch", "LLM2VecEmbedder", "get_llm2vec_embedder"]
+__all__ = [
+    "EmbeddingBackendError",
+    "EmbeddingBatch",
+    "LLM2VecEmbedder",
+    "get_llm2vec_embedder",
+]

@@ -24,7 +24,11 @@ from ..init_db import (
     UserPreferences,
     async_session_factory,
 )
-from .embeddings import LLM2VecEmbedder, get_llm2vec_embedder
+from .embeddings import (
+    EmbeddingBackendError,
+    LLM2VecEmbedder,
+    get_llm2vec_embedder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +125,21 @@ class PersistenceRepository:
         payload = self._compose_history_payload(query, response)
         if not payload.strip():
             return []
-        vector, _ = await self._embedder.embed_text(
-            payload, instruction=self._settings.llm2vec_instruction
-        )
+        try:
+            vector, used_fallback = await self._embedder.embed_text(
+                payload, instruction=self._settings.llm2vec_instruction
+            )
+        except EmbeddingBackendError:
+            logger.error(
+                "persistence.embedding.backend_unavailable",
+                extra={"payload_length": len(payload)},
+            )
+            return None
+        if used_fallback:
+            logger.warning(
+                "persistence.embedding.used_fallback",
+                extra={"payload_length": len(payload)},
+            )
         return vector
 
     @staticmethod

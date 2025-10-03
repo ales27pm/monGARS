@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from monGARS.config import get_settings
+from monGARS.core.embeddings import EmbeddingBackendError
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.init_db import reset_database
 
@@ -34,6 +35,17 @@ class _SequenceEmbedder:
         self.calls.append(text)
         vector = next(self._iter, [0.0, 0.0, 0.0])
         return list(vector), False
+
+
+class _ErroringEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def embed_text(
+        self, text: str, *, instruction: str | None = None
+    ) -> tuple[list[float], bool]:
+        self.calls.append(text)
+        raise EmbeddingBackendError("backend down")
 
 
 class _DummySession:
@@ -133,3 +145,19 @@ async def test_vector_search_history_python_fallback_orders_by_distance() -> Non
     # The first match should correspond to the vector [1, 0, 0] with a cosine distance of 0.
     assert matches[0].record.query == "q1"
     assert pytest.approx(matches[0].distance, abs=1e-6) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_save_history_entry_skips_vector_when_embedding_unavailable() -> None:
+    await reset_database()
+    embedder = _ErroringEmbedder()
+    repo = PersistenceRepository(embedder=embedder)
+
+    await repo.save_history_entry(
+        user_id="error-user", query="trouble", response="still stored"
+    )
+
+    history = await repo.get_history("error-user", limit=1)
+    assert history
+    assert history[0].vector is None
+    assert embedder.calls

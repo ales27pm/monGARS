@@ -3,7 +3,7 @@
 import pytest
 
 from monGARS.config import Settings
-from monGARS.core.embeddings import LLM2VecEmbedder
+from monGARS.core.embeddings import EmbeddingBackendError, LLM2VecEmbedder
 
 
 class _RecordingManager:
@@ -49,7 +49,7 @@ async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embed_text_falls_back_on_failure() -> None:
+async def test_embed_text_raises_on_backend_failure() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
@@ -61,7 +61,5 @@ async def test_embed_text_falls_back_on_failure() -> None:
         settings=settings, neuron_manager_factory=_FailingManager
     )
 
-    vector, used_fallback = await embedder.embed_text("hello world")
-
-    assert vector == []
-    assert used_fallback is True
+    with pytest.raises(EmbeddingBackendError):
+        await embedder.embed_text("hello world")

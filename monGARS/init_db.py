@@ -34,15 +34,84 @@ from monGARS.db import (
 logger = logging.getLogger(__name__)
 
 _settings = get_settings()
-_raw_database_url = os.environ.get("DATABASE_URL") or str(_settings.database_url)
+
+_LOCAL_POSTGRES_HOSTS = {"", None, "localhost", "127.0.0.1", "::1"}
+
+
+def _is_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_sqlite_url(filename: str = "mongars_local.db") -> URL:
+    driver = "sqlite+aiosqlite" if HAS_AIOSQLITE else "sqlite"
+    return make_url(f"{driver}:///./{filename}")
+
+
+def _normalise_driver(url: URL) -> URL:
+    driver = url.drivername
+    if driver in {"postgresql", "postgresql+psycopg2", "postgresql+psycopg"}:
+        return url.set(drivername="postgresql+asyncpg")
+    if driver.startswith("sqlite"):
+        if HAS_AIOSQLITE and driver != "sqlite+aiosqlite":
+            return url.set(drivername="sqlite+aiosqlite")
+        if not HAS_AIOSQLITE and driver != "sqlite":
+            return url.set(drivername="sqlite")
+    return url
+
+
+def _validate_database_target(url: URL, *, source: str) -> URL | None:
+    normalised = _normalise_driver(url)
+    if normalised.drivername.startswith("postgresql"):
+        host = normalised.host or ""
+        if host not in _LOCAL_POSTGRES_HOSTS and not _is_truthy(
+            os.environ.get("MONGARS_ALLOW_REMOTE_DATABASE_BOOTSTRAP")
+        ):
+            logger.error(
+                "Refusing to bootstrap remote PostgreSQL database from %s (host=%s)",
+                source,
+                host,
+            )
+            return None
+    return normalised
+
+
+def _resolve_database_url(raw_url: str | None, *, default_url: URL) -> URL:
+    fallback_url = _validate_database_target(default_url, source="settings")
+    if fallback_url is None:
+        logger.warning(
+            "Configured database URL rejected; using local sqlite fallback",
+        )
+        fallback_url = _safe_sqlite_url()
+
+    if raw_url:
+        try:
+            parsed = make_url(raw_url)
+        except Exception:  # pragma: no cover - invalid URL fallback
+            logger.warning("Invalid DATABASE_URL '%s'; ignoring override", raw_url)
+        else:
+            validated = _validate_database_target(parsed, source="env")
+            if validated is not None:
+                return validated
+            logger.warning(
+                "DATABASE_URL override rejected; falling back to settings database",
+            )
+
+    return fallback_url
+
 
 try:
-    _database_url_obj: URL = make_url(_raw_database_url)
-except Exception:  # pragma: no cover - invalid URL fallback
+    _default_database_url: URL = make_url(str(_settings.database_url))
+except Exception:  # pragma: no cover - invalid default URL fallback
     logger.warning(
-        "Invalid DATABASE_URL '%s'; falling back to sqlite+aiosqlite", _raw_database_url
+        "Invalid configured database URL; using local sqlite fallback",
     )
-    _database_url_obj = make_url("sqlite+aiosqlite:///./mongars_local.db")
+    _default_database_url = _safe_sqlite_url()
+
+_database_url_obj: URL = _resolve_database_url(
+    os.environ.get("DATABASE_URL"), default_url=_default_database_url
+)
 
 _async_engine = None
 _async_session_maker: async_sessionmaker[AsyncSession] | None = None
