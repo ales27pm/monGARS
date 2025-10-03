@@ -5,6 +5,7 @@ bleach>=6.2.0
 django>=5.2
 fastapi>=0.116
 python-multipart>=0.0.20
+python-dotenv>=1.0.1,<2.0
 GPUtil>=1.4.0
 httpx>=0.28.1
 hvac>=2.3.0
