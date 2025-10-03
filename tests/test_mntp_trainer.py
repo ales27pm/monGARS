@@ -27,6 +27,46 @@ def fixed_run_uuid(monkeypatch: pytest.MonkeyPatch) -> UUID:
     return value
 
 
+@pytest.fixture()
+def orchestrator_factory(temp_dir: Path):
+    def _build_orchestrator(
+        *, trainer_cls: type, **overrides: Any
+    ) -> EvolutionOrchestrator:
+        return EvolutionOrchestrator(
+            model_registry_path=str(temp_dir), trainer_cls=trainer_cls, **overrides
+        )
+
+    return _build_orchestrator
+
+
+@pytest.fixture()
+def stub_energy_tracker():
+    calls: list[str] = []
+
+    class StubEnergyTracker:
+        def __init__(self) -> None:
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+            calls.append("start")
+
+        def stop(self) -> EnergyUsageReport:
+            assert self.started, "energy tracker must start before stop"
+            calls.append("stop")
+            return EnergyUsageReport(
+                energy_wh=4321.0,
+                duration_seconds=7200.0,
+                cpu_seconds=3600.0,
+                baseline_cpu_power_watts=55.0,
+                backend="stub-energy",
+                emissions_grams=12.5,
+                carbon_intensity_g_co2_per_kwh=420.0,
+            )
+
+    return StubEnergyTracker, calls
+
+
 def _create_trainer_stub(
     *,
     summary_factory: Callable[[Path, dict[str, object]], dict[str, Any]],
@@ -366,30 +406,12 @@ def test_mntp_trainer_generates_deterministic_fallback(
 
 
 def test_orchestrator_records_energy_metrics_for_long_running_jobs(
-    temp_dir: Path, fixed_run_uuid: UUID
+    temp_dir: Path,
+    fixed_run_uuid: UUID,
+    orchestrator_factory,
+    stub_energy_tracker,
 ) -> None:
-    calls: list[str] = []
-
-    class StubEnergyTracker:
-        def __init__(self) -> None:
-            self.started = False
-
-        def start(self) -> None:
-            self.started = True
-            calls.append("start")
-
-        def stop(self) -> EnergyUsageReport:
-            assert self.started, "energy tracker must start before stop"
-            calls.append("stop")
-            return EnergyUsageReport(
-                energy_wh=4321.0,
-                duration_seconds=7200.0,
-                cpu_seconds=3600.0,
-                baseline_cpu_power_watts=55.0,
-                backend="stub-energy",
-                emissions_grams=12.5,
-                carbon_intensity_g_co2_per_kwh=420.0,
-            )
+    StubEnergyTracker, calls = stub_energy_tracker
 
     successful_trainer = _create_trainer_stub(
         training_config=TRAINING_CONFIG_PAYLOAD,
@@ -405,13 +427,12 @@ def test_orchestrator_records_energy_metrics_for_long_running_jobs(
         },
     )
 
-    orchestrator = EvolutionOrchestrator(
-        model_registry_path=str(temp_dir),
-        trainer_cls=successful_trainer,
-        energy_tracker_factory=StubEnergyTracker,
+    orchestrator = orchestrator_factory(
+        trainer_cls=successful_trainer, energy_tracker_factory=StubEnergyTracker
     )
 
     run_path = Path(orchestrator.trigger_encoder_training_pipeline())
+    assert run_path.name == f"temp-mistral-mntp-step-{fixed_run_uuid}"
     summary_payload = json.loads((run_path / "training_summary.json").read_text())
 
     assert calls == ["start", "stop"], "Energy tracker lifecycle was not invoked"

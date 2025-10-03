@@ -336,11 +336,35 @@ async def test_ray_deployment_accepts_multi_replica_payload_once(
         "version": payload["version"],
     }
 
-    results = await asyncio.gather(
-        deployment._refresh_adapter(replica_payload),
-        deployment._refresh_adapter(replica_payload),
-    )
+    first_switch_started = asyncio.Event()
+    allow_first_switch = asyncio.Event()
 
-    assert all(result == replica_payload for result in results)
+    original_to_thread = ray_service.asyncio.to_thread
+
+    def _is_switch_call(func: Any) -> bool:
+        bound_self = getattr(func, "__self__", None)
+        bound_func = getattr(func, "__func__", None)
+        return bound_self is manager and bound_func is DummyNeuronManager.switch_encoder
+
+    async def deterministic_to_thread(func, /, *args, **kwargs):
+        if _is_switch_call(func) and not first_switch_started.is_set():
+            first_switch_started.set()
+            await allow_first_switch.wait()
+            return func(*args, **kwargs)
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(ray_service.asyncio, "to_thread", deterministic_to_thread)
+
+    first_task = asyncio.create_task(deployment._refresh_adapter(replica_payload))
+    await asyncio.wait_for(first_switch_started.wait(), timeout=1.0)
+    second_task = asyncio.create_task(deployment._refresh_adapter(replica_payload))
+    assert not second_task.done()
+
+    allow_first_switch.set()
+    results = await asyncio.gather(first_task, second_task)
+
+    for result in results:
+        assert result["adapter_path"] == payload["adapter_path"]
+        assert result["version"] == payload["version"]
     assert manager.switch_calls.count(replica_payload["adapter_path"]) == 1
     assert deployment._adapter_version == payload["version"]

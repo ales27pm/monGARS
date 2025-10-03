@@ -356,15 +356,14 @@ async def test_scheduler_dispatch_targets_low_load_peers(monkeypatch):
 
     scheduler = DistributedScheduler(communicator, concurrency=2, metrics_interval=0.1)
 
-    async def fake_get_peer_loads() -> dict[str, float]:
-        return {
-            "http://peer1/api/v1/peer/message": 0.1,
-            "http://peer2/api/v1/peer/message": 0.25,
-            "http://peer3/api/v1/peer/message": 0.4,
-        }
+    peer_loads = {
+        "http://peer1/api/v1/peer/message": 0.1,
+        "http://peer2/api/v1/peer/message": 0.25,
+        "http://peer3/api/v1/peer/message": 0.4,
+    }
 
     def fake_get_peer_telemetry_map(
-        max_age: float = 0.0, include_self: bool = False
+        _max_age: float = 0.0, _include_self: bool = False
     ) -> dict[str, dict[str, Any]]:
         return {
             "http://peer1/api/v1/peer/message": {
@@ -392,16 +391,22 @@ async def test_scheduler_dispatch_targets_low_load_peers(monkeypatch):
 
     send_calls: list[tuple[tuple[str, ...] | None, dict[str, Any]]] = []
 
-    async def capture_send(
-        targets: Iterable[str] | None, payload: dict[str, Any]
-    ) -> None:
-        send_calls.append((tuple(targets) if targets else None, payload))
+    async def capture_send_to(
+        targets: Iterable[str], payload: dict[str, Any]
+    ) -> list[bool]:
+        send_calls.append((tuple(targets), payload))
+        return [True] * len(tuple(targets))
 
-    monkeypatch.setattr(scheduler, "_get_peer_loads", fake_get_peer_loads)
+    async def capture_broadcast(payload: dict[str, Any]) -> list[bool]:
+        send_calls.append((None, payload))
+        return [True] * len(communicator.peers)
+
+    monkeypatch.setattr(communicator, "get_cached_peer_loads", lambda **__: peer_loads)
     monkeypatch.setattr(
         communicator, "get_peer_telemetry_map", fake_get_peer_telemetry_map
     )
-    monkeypatch.setattr(scheduler, "_send_to_targets", capture_send)
+    monkeypatch.setattr(communicator, "send_to", capture_send_to)
+    monkeypatch.setattr(communicator, "send", capture_broadcast)
 
     await scheduler._dispatch_result("payload", {"load_factor": 2.5})
 
