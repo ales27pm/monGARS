@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -123,8 +124,8 @@ class RagContextEnricher:
 
         try:
             data = response.json()
-        except ValueError as exc:
-            log.debug(
+        except json.JSONDecodeError as exc:
+            log.warning(
                 "rag.context_enrichment.invalid_json",
                 extra={"error": str(exc)},
             )

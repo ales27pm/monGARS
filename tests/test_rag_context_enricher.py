@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -143,7 +145,7 @@ async def test_enrich_raises_service_error_on_http_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enrich_returns_empty_on_invalid_json(monkeypatch):
+async def test_enrich_returns_empty_on_invalid_json(monkeypatch, caplog):
     settings = Settings(
         rag_enabled=True,
         DOC_RETRIEVAL_URL="http://documents.local",
@@ -153,14 +155,42 @@ async def test_enrich_returns_empty_on_invalid_json(monkeypatch):
     )
     response = FakeResponse(
         "",
-        json_exception=ValueError("no json"),
+        json_exception=json.JSONDecodeError("invalid json", "", 0),
     )
     enricher = RagContextEnricher(http_client_factory=make_client_factory(response, []))
 
-    result = await enricher.enrich("Investigate crash")
+    with caplog.at_level(logging.WARNING):
+        result = await enricher.enrich("Investigate crash")
 
     assert result.focus_areas == []
     assert result.references == []
+    assert any(
+        record.message == "rag.context_enrichment.invalid_json"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_enrich_returns_empty_on_non_mapping_payload(monkeypatch, caplog):
+    settings = Settings(
+        rag_enabled=True,
+        DOC_RETRIEVAL_URL="http://documents.local",
+    )
+    monkeypatch.setattr(
+        "monGARS.core.rag.context_enricher.get_settings", lambda: settings
+    )
+    response = FakeResponse(["unexpected", "list"])
+    enricher = RagContextEnricher(http_client_factory=make_client_factory(response, []))
+
+    with caplog.at_level(logging.DEBUG):
+        result = await enricher.enrich("Investigate crash")
+
+    assert result.focus_areas == []
+    assert result.references == []
+    assert any(
+        record.message == "rag.context_enrichment.invalid_payload"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
