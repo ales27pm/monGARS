@@ -601,9 +601,7 @@ class ReinforcementLearningLoop:
                     results.append(future.result())
                 except Exception as exc:  # pragma: no cover - unexpected worker error
                     logger.exception("Episode execution failed", exc_info=True)
-                    failed_index = (
-                        batch_index * max(1, self._max_workers) + episode_idx
-                    )
+                    failed_index = batch_index * max(1, self._max_workers) + episode_idx
                     results.append(
                         EpisodeResult(
                             index=failed_index,
