@@ -10,7 +10,8 @@ required to reach production readiness.
 - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude
   secrets and build artefacts.
 - 👤 Replace demo users in `web_api.py` with the database-backed authentication
-  flow and migrations.
+  flow and migrations (default accounts still load at runtime and must be
+  removed).
 
 ## Phase 1 – Core Infrastructure (✅ Completed Q1 2025)
 
@@ -49,7 +50,8 @@ required to reach production readiness.
 - ✅ Django chat UI with progressive enhancement.
 - ✅ FastAPI WebSocket handler with ticket verification, history replay, and
   streaming guarded by `WS_ENABLE_EVENTS`.
-- ✅ Replaced hard-coded credential stores with database-backed auth flows.
+- 🔄 Replaced hard-coded credential stores with database-backed auth flows (demo
+  defaults are promoted but still present until the credential cleanup lands).
 - 🚧 Publish polished SDKs and reference clients.
 
 ## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)

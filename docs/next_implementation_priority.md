@@ -1,18 +1,19 @@
 # Next Implementation Priority
 
 ## Summary
-Now that schema evolution, telemetry, and credential hardening are complete, the
-next high-impact milestone is publishing first-party SDKs and reference clients.
+Now that schema evolution and telemetry upgrades are complete, the next
+high-impact milestone is publishing first-party SDKs and reference clients while
+credential hardening work wraps up.
 Operators and partner teams currently rely on OpenAPI scraping or ad-hoc scripts;
 packaged SDKs will harden integrations and shrink the support surface area as
 the project moves into long-term maintenance.
 
 ## Supporting Signals from Existing Documentation
-- **Roadmap**: Phase 5 now lists SDKs and reference clients as the sole
-  remaining deliverable before the Web/API refinement milestone can close.
+- **Roadmap**: Phase 5 keeps SDKs and reference clients as the final deliverable
+  but still flags the presence of demo credential defaults that must be removed.
 - **Implementation Status Report**: Highlights SDK packaging as the new
-  contradiction to resolve and calls out the need for clear RAG governance to
-  accompany client distribution.
+  contradiction to resolve, notes the outstanding credential cleanup, and calls
+  out the need for clear RAG governance to accompany client distribution.
 - **Roadmap Charter (AGENTS.md)**: Security & Stability items are satisfied,
   shifting attention to sustainable integration stories for external teams.
 
@@ -48,8 +49,8 @@ the project moves into long-term maintenance.
   a fresh deployment without manual token crafting.
 - Streaming chat flows, history pagination, and RAG review helpers function
   end-to-end using the SDK abstractions.
-- CI builds fail if the SDKs fall out of sync with the checked-in OpenAPI
-  specification.
+- SDK documentation and code examples are verified to be accurate and sufficient
+  for a developer to integrate the client successfully.
 
 ## Follow-On Work Once SDKs Ship
 - Finalise RAG dataset retention guidance and automation ahead of wider partner

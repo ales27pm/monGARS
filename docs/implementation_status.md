@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-_Last updated: 2025-12-04_
+Last updated: 2025-12-04
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -71,7 +71,9 @@ and reality.
   `WS_ENABLE_EVENTS` is true.
 - Database-backed authentication is the default: `PersistenceRepository`
   persists user records, and login bootstrap flows promote hashed defaults into
-  durable accounts on first use.
+  durable accounts on first use. **Open issue:** the legacy `DEFAULT_USERS`
+  mapping in `monGARS/api/web_api.py` still seeds demo credentials, so the
+  milestone remains partially complete until those accounts are removed.
 - Planned work: consolidate validation rules and publish polished client SDKs.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
@@ -103,8 +105,9 @@ and reality.
   table, allowing production rollouts without `init_db.py` fallbacks.
 - ✅ **Telemetry integration**: Ray Serve success, failure, and scaling counters
   are exported via OpenTelemetry and wired into peer telemetry broadcasts.
-- ✅ **Credential hardening**: authentication persists user records immediately,
-  eliminating reliance on demo-only credentials.
+- 🔄 **Credential hardening**: database-backed authentication persists user
+  records, but the default demo accounts remain in `web_api.py`. Remove them or
+  disable their bootstrap path before marking this work complete.
 - **SDK story**: prioritise packaging and publishing reference SDKs so partner
   teams can integrate without scraping OpenAPI definitions.
 - **RAG governance**: document retention policies for curated datasets stored
