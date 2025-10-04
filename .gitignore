@@ -9,3 +9,5 @@ __pycache__/
 .env
 inventory.json
 .vscode/
+.venv/
+mongars_local.db
