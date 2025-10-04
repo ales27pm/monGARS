@@ -148,7 +148,7 @@ class Settings(BaseSettings):
     db_user: str | None = Field(default=None)
     db_password: str | None = Field(default=None)
     db_host: str | None = Field(default=None)
-    db_port: int | None = Field(default=None)
+    db_port: int | str | None = Field(default=None)
     db_name: str | None = Field(default=None)
     db_pool_size: int = Field(default=5)
     db_max_overflow: int = Field(default=10)
