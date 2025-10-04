@@ -2,12 +2,33 @@
 
 from __future__ import annotations
 
+import importlib.util
+import logging
 import os
+import sys
+import types
+from pathlib import Path
 
 import pytest
 from sqlalchemy.engine import make_url
 
+os.environ.setdefault("SECRET_KEY", "unit-test-secret")
 from monGARS import init_db
+
+
+def _load_init_db_script(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+    script_path = Path(__file__).resolve().parents[1] / "init_db.py"
+    fake_alembic = types.ModuleType("alembic")
+    fake_alembic.command = types.SimpleNamespace(upgrade=lambda *args, **kwargs: None)
+    fake_config_module = types.ModuleType("alembic.config")
+    fake_config_module.Config = object
+    monkeypatch.setitem(sys.modules, "alembic", fake_alembic)
+    monkeypatch.setitem(sys.modules, "alembic.config", fake_config_module)
+    spec = importlib.util.spec_from_file_location("mongars_init_db_script", script_path)
+    assert spec and spec.loader  # pragma: no cover - sanity check
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.mark.parametrize(
@@ -55,3 +76,47 @@ def test_resolve_database_url_rejects_remote_without_override(monkeypatch):
         None,
         "",
     }
+
+
+def test_build_sync_url_honours_password_override(monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mongars:changeme@postgres:5432/mongars_db",
+    )
+    monkeypatch.setenv("DB_PASSWORD", "override-secret")
+    module = _load_init_db_script(monkeypatch)
+
+    url = module.build_sync_url()
+
+    assert url.password == "override-secret"
+
+
+def test_build_sync_url_password_override_suppresses_logging(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mongars:changeme@postgres:5432/mongars_db",
+    )
+    monkeypatch.setenv("DB_PASSWORD", "override-secret")
+    module = _load_init_db_script(monkeypatch)
+
+    module.build_sync_url()
+
+    assert "database password" not in caplog.text
+    assert "password override" not in caplog.text
+
+
+def test_build_sync_url_invalid_port_logging(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mongars:changeme@postgres:5432/mongars_db",
+    )
+    monkeypatch.setenv("DB_PORT", "6543bad")
+    module = _load_init_db_script(monkeypatch)
+
+    url = module.build_sync_url()
+
+    assert "Invalid database port override provided; ignoring." in caplog.text
+    assert "6543bad" not in caplog.text
+    assert url.port == 5432

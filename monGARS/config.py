@@ -29,7 +29,10 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
 
+from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
 log = logging.getLogger(__name__)
@@ -142,10 +145,50 @@ class Settings(BaseSettings):
     database_url: AnyUrl = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost/mongars_db"
     )
+    db_user: str | None = Field(default=None)
+    db_password: str | None = Field(default=None)
+    db_host: str | None = Field(default=None)
+    db_port: int | str | None = Field(default=None)
+    db_name: str | None = Field(default=None)
     db_pool_size: int = Field(default=5)
     db_max_overflow: int = Field(default=10)
     db_pool_timeout: int = Field(default=30)
     redis_url: RedisDsn = Field(default="redis://localhost:6379/0")
+
+    @model_validator(mode="after")
+    def apply_database_overrides(self) -> "Settings":
+        """Ensure DATABASE_URL honours discrete DB_* overrides."""
+
+        try:
+            url = make_url(str(self.database_url))
+        except ArgumentError as exc:
+            raise ValueError("Invalid DATABASE_URL provided") from exc
+
+        overridden_url = apply_database_url_overrides(
+            url,
+            username=self.db_user,
+            password=self.db_password,
+            host=self.db_host,
+            port=self.db_port,
+            database=self.db_name,
+            logger=log,
+            field_sources={
+                "username": "DB_USER",
+                "password": "DB_PASSWORD",
+                "host": "DB_HOST",
+                "port": "DB_PORT",
+                "database": "DB_NAME",
+            },
+        )
+
+        if overridden_url is not url:
+            object.__setattr__(
+                self,
+                "database_url",
+                AnyUrl(overridden_url.render_as_string(hide_password=False)),
+            )
+
+        return self
 
     IN_MEMORY_CACHE_SIZE: int = Field(default=10000)
     DISK_CACHE_PATH: str = Field(default="/tmp/mongars_cache")

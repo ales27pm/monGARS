@@ -13,6 +13,8 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 
+from monGARS.utils.database import apply_database_url_overrides
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -23,6 +25,22 @@ def build_sync_url() -> URL:
     raw = os.getenv("DATABASE_URL") or os.getenv("DJANGO_DATABASE_URL")
     if raw:
         url = make_url(raw)
+        url = apply_database_url_overrides(
+            url,
+            username=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            database=os.getenv("DB_NAME"),
+            logger=logger,
+            field_sources={
+                "username": "DB_USER",
+                "password": "DB_PASSWORD",
+                "host": "DB_HOST",
+                "port": "DB_PORT",
+                "database": "DB_NAME",
+            },
+        )
         return url.set(drivername="postgresql+psycopg2")
 
     return URL.create(

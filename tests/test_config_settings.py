@@ -95,3 +95,35 @@ def test_validate_jwt_configuration_requires_secret_key(monkeypatch):
 
     with pytest.raises(ValueError, match="requires SECRET_KEY"):
         config.validate_jwt_configuration(settings)
+
+
+def test_database_url_password_override(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mongars:changeme@postgres:5432/mongars_db",
+    )
+    monkeypatch.setenv("DB_PASSWORD", "override-secret")
+
+    settings = config.get_settings()
+
+    assert settings.database_url.password == "override-secret"
+
+
+def test_database_url_component_overrides(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://legacy:changeme@old-host:5432/legacy_db",
+    )
+    monkeypatch.setenv("DB_USER", "mongars")
+    monkeypatch.setenv("DB_HOST", "postgres")
+    monkeypatch.setenv("DB_NAME", "mongars_db")
+    monkeypatch.setenv("DB_PORT", "6543")
+
+    settings = config.get_settings()
+
+    assert settings.database_url.username == "mongars"
+    assert settings.database_url.host == "postgres"
+    assert settings.database_url.port == 6543
+    assert settings.database_url.path.lstrip("/") == "mongars_db"
