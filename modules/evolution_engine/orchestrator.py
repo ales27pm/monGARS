@@ -49,6 +49,7 @@ DEFAULT_REGISTRY_PATH = Path("models/encoders")
 DEFAULT_CONFIG_PATH = Path("configs/training/mntp_mistral_config.json")
 TRAINING_SUMMARY_FILENAME = "training_summary.json"
 ENERGY_REPORT_FILENAME = "energy_report.json"
+TRAINING_SLOT_NAME = "primary"
 MAX_VRAM_GB = 6.0
 CPU_IDLE_THRESHOLD = 20.0
 MEMORY_IDLE_THRESHOLD = 70.0
@@ -345,8 +346,15 @@ class EvolutionOrchestrator:
 
         if self._alignment_loop is None:
             self._alignment_loop = PreferenceAlignmentLoop(
-                slot_manager_cls=self._slot_manager_cls
+                slot_manager_cls=self._slot_manager_cls,
+                slot_name=TRAINING_SLOT_NAME,
+                model_id=self.model_id,
             )
+        else:
+            if hasattr(self._alignment_loop, "_slot_name"):
+                self._alignment_loop._slot_name = TRAINING_SLOT_NAME
+            if hasattr(self._alignment_loop, "_model_id"):
+                self._alignment_loop._model_id = self.model_id
 
         if self._preference_curator is None:
             curiosity = self._curiosity_engine or CuriosityEngine()
@@ -465,7 +473,9 @@ class EvolutionOrchestrator:
             yield None
             return
         try:
-            manager = self._slot_manager_cls("primary", model_id=self.model_id)
+            manager = self._slot_manager_cls(
+                TRAINING_SLOT_NAME, model_id=self.model_id
+            )
         except Exception as exc:  # pragma: no cover - optional dependency failure
             logger.warning(
                 "model.slot.unavailable",

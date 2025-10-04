@@ -365,3 +365,4 @@ def test_preference_alignment_loop_invokes_trainer_with_slot() -> None:
     assert trainer_kwargs["max_prompt_length"] == 512
     assert trainer_kwargs["train_dataset"][0]["prompt"] == "Explain alignment."
     assert _SlotStub.last_slot.kwargs["max_seq_length"] == 1024
+    assert "model_id" in _SlotStub.last_slot.kwargs

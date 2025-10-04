@@ -995,12 +995,14 @@ class PreferenceAlignmentLoop:
         dpo_trainer_cls: type[Any] | None = None,
         dpo_config_cls: type[Any] | None = None,
         slot_name: str = "rl_slot",
+        model_id: str | None = None,
         output_dir: str = "dpo_outputs",
         beta: float = 0.1,
         max_length: int = 1024,
         max_prompt_length: int = 512,
     ) -> None:
         self._slot_name = slot_name
+        self._model_id = model_id
         self._slot_manager_cls = slot_manager_cls or ModelSlotManager
         self._dpo_trainer_cls = dpo_trainer_cls or DPOTrainer
         self._dpo_config_cls = dpo_config_cls or DPOConfig
@@ -1031,7 +1033,9 @@ class PreferenceAlignmentLoop:
             return None
 
         with self._slot_manager_cls(
-            self._slot_name, max_seq_length=self._max_length
+            self._slot_name,
+            model_id=self._model_id,
+            max_seq_length=self._max_length,
         ) as slot:
             model, tokenizer = slot
             if model is None or tokenizer is None:
