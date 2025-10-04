@@ -264,14 +264,18 @@ services:
     ports:
       - "${RAY_DASHBOARD_PORT:-8265}:8265"
       - "${RAY_CLIENT_PORT:-10001}:10001"
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8265 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 30
-    gpus: all
     shm_size: "2g"
     restart: unless-stopped
     networks:
