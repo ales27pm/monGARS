@@ -29,6 +29,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
 
 from monGARS.utils.hardware import recommended_worker_count
 
@@ -142,10 +144,56 @@ class Settings(BaseSettings):
     database_url: AnyUrl = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost/mongars_db"
     )
+    db_user: str | None = Field(default=None)
+    db_password: str | None = Field(default=None)
+    db_host: str | None = Field(default=None)
+    db_port: int | None = Field(default=None)
+    db_name: str | None = Field(default=None)
     db_pool_size: int = Field(default=5)
     db_max_overflow: int = Field(default=10)
     db_pool_timeout: int = Field(default=30)
     redis_url: RedisDsn = Field(default="redis://localhost:6379/0")
+
+    @model_validator(mode="after")
+    def apply_database_overrides(self) -> "Settings":
+        """Ensure DATABASE_URL honours discrete DB_* overrides."""
+
+        try:
+            url = make_url(str(self.database_url))
+        except ArgumentError as exc:
+            raise ValueError("Invalid DATABASE_URL provided") from exc
+
+        overrides: dict[str, object] = {}
+
+        if self.db_user and self.db_user != url.username:
+            overrides["username"] = self.db_user
+            log.debug("Applying DB_USER override to DATABASE_URL username.")
+
+        if self.db_password and self.db_password != url.password:
+            overrides["password"] = self.db_password
+            log.debug("Applying DB_PASSWORD override to DATABASE_URL password.")
+
+        if self.db_host and self.db_host != url.host:
+            overrides["host"] = self.db_host
+            log.debug("Applying DB_HOST override to DATABASE_URL host.")
+
+        if self.db_port is not None and self.db_port != url.port:
+            overrides["port"] = self.db_port
+            log.debug("Applying DB_PORT override to DATABASE_URL port.")
+
+        if self.db_name and self.db_name != url.database:
+            overrides["database"] = self.db_name
+            log.debug("Applying DB_NAME override to DATABASE_URL database.")
+
+        if overrides:
+            url = url.set(**overrides)
+            object.__setattr__(
+                self,
+                "database_url",
+                AnyUrl(url.render_as_string(hide_password=False)),
+            )
+
+        return self
 
     IN_MEMORY_CACHE_SIZE: int = Field(default=10000)
     DISK_CACHE_PATH: str = Field(default="/tmp/mongars_cache")

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
+import types
+from pathlib import Path
 
 import pytest
 from sqlalchemy.engine import make_url
 
+os.environ.setdefault("SECRET_KEY", "unit-test-secret")
 from monGARS import init_db
 
 
@@ -55,3 +60,26 @@ def test_resolve_database_url_rejects_remote_without_override(monkeypatch):
         None,
         "",
     }
+
+
+def test_build_sync_url_honours_password_override(monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mongars:changeme@postgres:5432/mongars_db",
+    )
+    monkeypatch.setenv("DB_PASSWORD", "override-secret")
+    script_path = Path(__file__).resolve().parents[1] / "init_db.py"
+    fake_alembic = types.ModuleType("alembic")
+    fake_alembic.command = types.SimpleNamespace(upgrade=lambda *args, **kwargs: None)
+    fake_config_module = types.ModuleType("alembic.config")
+    fake_config_module.Config = object
+    monkeypatch.setitem(sys.modules, "alembic", fake_alembic)
+    monkeypatch.setitem(sys.modules, "alembic.config", fake_config_module)
+    spec = importlib.util.spec_from_file_location("mongars_init_db_script", script_path)
+    assert spec and spec.loader  # pragma: no cover - sanity check
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    url = module.build_sync_url()
+
+    assert url.password == "override-secret"

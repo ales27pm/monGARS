@@ -13,6 +13,44 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 
+
+def _override_url_components(url: URL) -> URL:
+    """Apply environment overrides from discrete DB_* environment variables."""
+
+    overrides: dict[str, object] = {}
+
+    db_user = os.getenv("DB_USER")
+    if db_user and db_user != url.username:
+        overrides["username"] = db_user
+
+    db_password = os.getenv("DB_PASSWORD")
+    if db_password and db_password != url.password:
+        overrides["password"] = db_password
+
+    db_host = os.getenv("DB_HOST")
+    if db_host and db_host != url.host:
+        overrides["host"] = db_host
+
+    db_port = os.getenv("DB_PORT")
+    if db_port:
+        try:
+            port_int = int(db_port)
+        except ValueError:
+            logger.warning("Invalid DB_PORT value %s; ignoring override", db_port)
+        else:
+            if port_int != (url.port or port_int):
+                overrides["port"] = port_int
+
+    db_name = os.getenv("DB_NAME")
+    if db_name and db_name != url.database:
+        overrides["database"] = db_name
+
+    if overrides:
+        url = url.set(**overrides)
+
+    return url
+
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -23,6 +61,7 @@ def build_sync_url() -> URL:
     raw = os.getenv("DATABASE_URL") or os.getenv("DJANGO_DATABASE_URL")
     if raw:
         url = make_url(raw)
+        url = _override_url_components(url)
         return url.set(drivername="postgresql+psycopg2")
 
     return URL.create(
