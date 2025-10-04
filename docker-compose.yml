@@ -143,14 +143,14 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     environment:
-      POSTGRES_USER: mongars
+      POSTGRES_USER: ${DB_USER:-mongars}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-      POSTGRES_DB: mongars_db
+      POSTGRES_DB: ${DB_NAME:-mongars_db}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mongars -d mongars_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mongars} -d ${DB_NAME:-mongars_db}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -284,7 +284,11 @@ services:
 
 networks:
   mongars:
+    name: mongars-1_mongars
     driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv4: "true"
+      com.docker.network.enable_ipv6: "false"
 
 volumes:
   pgdata:
