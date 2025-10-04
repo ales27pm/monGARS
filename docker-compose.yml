@@ -291,7 +291,6 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - RAY_ADDRESS=ray://ray-head:10001
-      - NVIDIA_VISIBLE_DEVICES=all
     command: >-
       bash -lc "serve start --address=ray://ray-head:10001 --http-host=0.0.0.0 --http-port=8000"
     ports:
@@ -301,8 +300,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 30
-    gpus: all
-    shm_size: "2g"
     restart: unless-stopped
     networks:
       - mongars
