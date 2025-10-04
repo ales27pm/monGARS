@@ -99,32 +99,32 @@ def _mock_torch_vram(
     )
 
 
-def test_orchestrator_registers_interval_schedule(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend = DummyWorkflowBackend()
+ def test_orchestrator_registers_interval_schedule(
+     monkeypatch: pytest.MonkeyPatch,
+ ) -> None:
+     backend = DummyWorkflowBackend()
 
-    class _NoopTrainer:
-        def __init__(
-            self, training_config_path: str, output_dir: str
-        ) -> None:  # noqa: D401
-            self.training_config_path = training_config_path
-            self.output_dir = output_dir
+     class _NoopTrainer:
+         def __init__(
+             self, training_config_path: str, output_dir: str
+         ) -> None:  # noqa: D401
+             self.training_config_path = training_config_path
+             self.output_dir = output_dir
 
-        def fit(self, dataset: Any) -> dict[str, Any]:  # pragma: no cover - unused
-            return {}
+         def fit(self, dataset: Any) -> dict[str, Any]:  # pragma: no cover - unused
+             return {}
 
-    monkeypatch.setenv("USE_RAY_SERVE", "false")
-    orchestrator = EvolutionOrchestrator(
-        workflow_backend=backend,
-        trainer_cls=_NoopTrainer,
-        data_collector=lambda: [],
-        slot_manager_cls=None,
-    )
+     monkeypatch.setenv("USE_RAY_SERVE", "false")
+     orchestrator = EvolutionOrchestrator(
+         workflow_backend=backend,
+         trainer_cls=_NoopTrainer,
+         data_collector=lambda: [],
+         slot_manager_cls=None,
+     )
 
-    assert backend.schedule_parameters == {"force": False}
-    assert backend.flow is not None
-
+     assert backend.schedule_parameters == {"force": False}
+     assert backend.flow is not None
+    assert orchestrator.workflow_backend is backend
 
 def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = DummyWorkflowBackend()
