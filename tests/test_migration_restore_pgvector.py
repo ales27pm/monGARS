@@ -61,6 +61,8 @@ def test_normalise_vector_invalid_payloads(payload: Any) -> None:
 def test_normalise_vector_rejects_non_numeric_values() -> None:
     with pytest.raises(TypeError):
         migration._normalise_vector(["a", "b"], dimensions=2)
+    with pytest.raises(TypeError):
+        migration._normalise_vector([1, "a", 2], dimensions=3)
 
 
 def test_normalise_vector_handles_objects_with_tolist() -> None:
