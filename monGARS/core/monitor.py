@@ -31,8 +31,8 @@ class SystemStats:
     cpu_usage: float
     memory_usage: float
     disk_usage: float
-    gpu_usage: float = None
-    gpu_memory_usage: float = None
+    gpu_usage: float | None = None
+    gpu_memory_usage: float | None = None
 
 
 class SystemMonitor:
@@ -52,7 +52,7 @@ class SystemMonitor:
             gpu_memory_usage=gpu_stats.get("gpu_memory_usage"),
         )
 
-    def _get_gpu_stats(self) -> dict:
+    def _get_gpu_stats(self) -> dict[str, float | None]:
         try:
             gpus = GPUtil.getGPUs()
             if gpus:

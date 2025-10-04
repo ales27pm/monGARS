@@ -130,7 +130,9 @@ class _DummySFTTrainer:
 class _DummySlotManager:
     last_model: _DummyModel | None = None
 
-    def __init__(self, slot_name: str, *, model_id: str | None = None, max_seq_length: int = 0):
+    def __init__(
+        self, slot_name: str, *, model_id: str | None = None, max_seq_length: int = 0
+    ):
         self.slot_name = slot_name
         self.model_id = model_id
         self.max_seq_length = max_seq_length
@@ -180,17 +182,23 @@ def trainer_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
 
     torch_stub = _TorchStub()
-    monkeypatch.setattr("modules.neurons.training.mntp_trainer.torch", torch_stub, raising=False)
+    monkeypatch.setattr(
+        "modules.neurons.training.mntp_trainer.torch", torch_stub, raising=False
+    )
     monkeypatch.setattr(
         "modules.neurons.training.mntp_trainer.ModelSlotManager",
         _DummySlotManager,
         raising=False,
     )
     monkeypatch.setattr(
-        "modules.neurons.training.mntp_trainer.SFTConfig", _DummySFTConfig, raising=False
+        "modules.neurons.training.mntp_trainer.SFTConfig",
+        _DummySFTConfig,
+        raising=False,
     )
     monkeypatch.setattr(
-        "modules.neurons.training.mntp_trainer.SFTTrainer", _DummySFTTrainer, raising=False
+        "modules.neurons.training.mntp_trainer.SFTTrainer",
+        _DummySFTTrainer,
+        raising=False,
     )
     monkeypatch.setattr(
         "modules.neurons.training.mntp_trainer.default_data_collator",
@@ -265,7 +273,9 @@ def test_fit_saves_adapter_and_emits_metrics(trainer_setup: dict[str, Any]):
 
     model = _DummySlotManager.last_model
     assert model is not None
-    frozen_flags = {name: param.requires_grad for name, param in model.named_parameters()}
+    frozen_flags = {
+        name: param.requires_grad for name, param in model.named_parameters()
+    }
     assert frozen_flags["model.layers.0.weight"] is False
     assert frozen_flags["model.layers.5.weight"] is True
 

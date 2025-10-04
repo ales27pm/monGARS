@@ -373,11 +373,11 @@ class MNTPTrainer:
             "dataset_config_name": "wikitext-103-raw-v1",
             "dataset_split": "train[:1%]",
             "model_name_or_path": "sshleifer/tiny-gpt2",
-            "lora_r": 16,
+            "lora_r": 8,
             "torch_dtype": "float32",
             "attn_implementation": None,
-            "per_device_train_batch_size": 16,
-            "gradient_accumulation_steps": 1,
+            "per_device_train_batch_size": 1,
+            "gradient_accumulation_steps": 16,
             "max_seq_length": 512,
             "max_steps": 32,
         }
@@ -626,10 +626,16 @@ class MNTPTrainer:
         training_dataset = self._prepare_mntp_dataset(dataset, tokenizer)
         if len(training_dataset) == 0:
             raise RuntimeError("MNTP dataset preprocessing yielded no examples")
-        if SFTTrainer is not None and SFTConfig is not None and ModelSlotManager is not None:
+        if (
+            SFTTrainer is not None
+            and SFTConfig is not None
+            and ModelSlotManager is not None
+        ):
             summary = self.fit(
                 training_dataset,
-                epochs=int(self.config.get("num_train_epochs", self.config.get("epochs", 1))),
+                epochs=int(
+                    self.config.get("num_train_epochs", self.config.get("epochs", 1))
+                ),
                 batch_size=int(self.config.get("per_device_train_batch_size", 2)),
                 grad_acc=int(self.config.get("gradient_accumulation_steps", 1)),
             )
@@ -711,18 +717,23 @@ class MNTPTrainer:
         max_seq_length = int(self.config.get("max_seq_length", 512))
         adapter_root = self.output_dir / "adapters"
         adapter_root.mkdir(parents=True, exist_ok=True)
-        sft_args = SFTConfig(
-            per_device_train_batch_size=int(max(1, batch_size)),
-            gradient_accumulation_steps=int(max(1, grad_acc)),
-            num_train_epochs=max(1, epochs),
-            optim="adamw_8bit",
-            fp16=True,
-            bf16=False,
-            seed=3407,
-            output_dir=str(self.output_dir / "outputs"),
-            gradient_checkpointing=True,
-            max_seq_length=max_seq_length,
-        )
+        sft_kwargs: dict[str, Any] = {
+            "per_device_train_batch_size": int(max(1, batch_size)),
+            "gradient_accumulation_steps": int(max(1, grad_acc)),
+            "num_train_epochs": max(1, epochs),
+            "optim": "adamw_8bit",
+            "seed": 3407,
+            "output_dir": str(self.output_dir / "outputs"),
+            "gradient_checkpointing": True,
+            "max_seq_length": max_seq_length,
+        }
+        if _callable_accepts_kwarg(SFTConfig, "fp16"):
+            sft_kwargs["fp16"] = False
+        if _callable_accepts_kwarg(SFTConfig, "bf16"):
+            sft_kwargs["bf16"] = False
+        if _callable_accepts_kwarg(SFTConfig, "fp32"):
+            sft_kwargs["fp32"] = True
+        sft_args = SFTConfig(**sft_kwargs)
 
         cycle_tags = {"slot": "training_slot", "cycle": "start"}
         self._add_metric(TRAINING_CYCLE_COUNTER, 1, cycle_tags)
@@ -748,10 +759,10 @@ class MNTPTrainer:
                 )
                 train_output = trainer.train()
                 training_metrics = dict(getattr(train_output, "metrics", {}) or {})
-                _adapter_dir, weights_path = self._persist_model(
-                    trainer.model,
-                    target_dir=adapter_root / "latest",
-                )
+                adapter_dir = adapter_root / "latest"
+                adapter_dir.mkdir(parents=True, exist_ok=True)
+                trainer.model.save_pretrained(str(adapter_dir))
+                weights_path = self._resolve_adapter_weights_path(adapter_dir)
                 checksum = self._compute_file_checksum(weights_path)
                 vram_snapshot = self._capture_vram_snapshot()
         except Exception:
@@ -783,7 +794,9 @@ class MNTPTrainer:
 
         resolved_weights_path = weights_path
         if resolved_weights_path is None:
-            resolved_weights_path = adapter_root / "latest" / "adapter_model.safetensors"
+            resolved_weights_path = (
+                adapter_root / "latest" / "adapter_model.safetensors"
+            )
         if not resolved_weights_path.exists():
             resolved_weights_path = adapter_root / "latest" / "adapter_model.bin"
         artifacts = {
@@ -857,7 +870,9 @@ class MNTPTrainer:
         return {"summary": summary, "max_bytes": max_alloc, "max_gb": max_gb}
 
     @staticmethod
-    def _add_metric(counter: Any, value: int | float, attributes: dict[str, Any]) -> None:
+    def _add_metric(
+        counter: Any, value: int | float, attributes: dict[str, Any]
+    ) -> None:
         if counter is None:
             return
         try:
@@ -961,7 +976,9 @@ class MNTPTrainer:
             return int(tokenizer.mask_token_id)
         return 0
 
-    def _conditionally_freeze_backbone(self, model: Any, keep_last_layers: int = 4) -> None:
+    def _conditionally_freeze_backbone(
+        self, model: Any, keep_last_layers: int = 4
+    ) -> None:
         if torch is None or not hasattr(model, "named_parameters"):
             return
         if not torch.cuda.is_available():
@@ -979,7 +996,7 @@ class MNTPTrainer:
         layers = self._ordered_transformer_layers(model)
         if not layers:
             return
-        keep = set(layers[-max(1, keep_last_layers):])
+        keep = set(layers[-max(1, keep_last_layers) :])
         for name, parameter in model.named_parameters():
             if not hasattr(parameter, "requires_grad"):
                 continue
@@ -1045,13 +1062,14 @@ class MNTPTrainer:
                 "max_seq_length": max_seq_length,
                 "load_in_4bit": True,
             }
-            torch_fp16 = getattr(torch, "float16", None)
-            if torch_fp16 is not None:
-                for kwarg in ("dtype", "compute_dtype"):
-                    if _callable_accepts_kwarg(
-                        FastLanguageModel.from_pretrained, kwarg
-                    ):
-                        fast_kwargs[kwarg] = torch_fp16
+            torch_fp32 = getattr(torch, "float32", None)
+            if torch_fp32 is not None:
+                if _callable_accepts_kwarg(FastLanguageModel.from_pretrained, "dtype"):
+                    fast_kwargs["dtype"] = torch_fp32
+                if _callable_accepts_kwarg(
+                    FastLanguageModel.from_pretrained, "compute_dtype"
+                ):
+                    fast_kwargs["compute_dtype"] = torch_fp32
             if _callable_accepts_kwarg(
                 FastLanguageModel.from_pretrained, "bnb_4bit_quant_type"
             ):
@@ -1076,10 +1094,10 @@ class MNTPTrainer:
             try:
                 peft_model = FastLanguageModel.get_peft_model(  # type: ignore[misc]
                     fast_model,
-                    r=16,
+                    r=int(self.config.get("lora_r", 8)),
                     target_modules=target_modules,
-                    lora_alpha=16,
-                    lora_dropout=0.0,
+                    lora_alpha=int(self.config.get("lora_alpha", 16)),
+                    lora_dropout=float(self.config.get("lora_dropout", 0.0)),
                     bias="none",
                     use_gradient_checkpointing="unsloth",
                 )
@@ -1157,9 +1175,10 @@ class MNTPTrainer:
             fast_value = getattr(fast_tokenizer, attr, None)
             if ref_value is None and fast_value is not None:
                 setattr(reference, attr, fast_value)
-        if getattr(reference, "pad_token_id", None) is None and getattr(
-            fast_tokenizer, "pad_token_id", None
-        ) is not None:
+        if (
+            getattr(reference, "pad_token_id", None) is None
+            and getattr(fast_tokenizer, "pad_token_id", None) is not None
+        ):
             reference.pad_token_id = fast_tokenizer.pad_token_id
 
     def _execute_training(
@@ -1321,19 +1340,23 @@ class MNTPTrainer:
         if not config_path.exists():
             raise RuntimeError("Adapter configuration missing after save_pretrained")
 
+        weights_path = self._resolve_adapter_weights_path(adapter_dir)
+
+        return adapter_dir, weights_path
+
+    def _resolve_adapter_weights_path(self, adapter_dir: Path) -> Path:
         weight_candidates = [
             adapter_dir / "adapter_model.safetensors",
             adapter_dir / "adapter_model.bin",
         ]
-        weights_path = next((path for path in weight_candidates if path.exists()), None)
-        if weights_path is None:
-            logging.error(
-                "Adapter weights missing after save_pretrained. Checked candidate paths",
-                extra={"candidates": [str(path) for path in weight_candidates]},
-            )
-            raise RuntimeError("Adapter weights missing after save_pretrained")
-
-        return adapter_dir, weights_path
+        for path in weight_candidates:
+            if path.exists():
+                return path
+        logger.error(
+            "Adapter weights missing after save_pretrained. Checked candidate paths",
+            extra={"candidates": [str(path) for path in weight_candidates]},
+        )
+        raise RuntimeError("Adapter weights missing after save_pretrained")
 
     def _missing_training_dependencies(self) -> list[str]:
         dependencies: dict[str, Any] = {
