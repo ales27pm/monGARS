@@ -4,10 +4,26 @@ from dataclasses import dataclass
 
 import GPUtil
 import psutil
+from opentelemetry import metrics
 
 from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
+
+meter = metrics.get_meter(__name__)
+TRAINING_CYCLE_COUNTER = meter.create_counter(
+    "llm.training.cycles",
+    description="Number of MNTP training cycles started and completed.",
+)
+TRAINING_FAILURE_COUNTER = meter.create_counter(
+    "llm.training.failures",
+    description="Count of MNTP training cycles that failed.",
+)
+TRAINING_TOKEN_COUNTER = meter.create_counter(
+    "llm.training.tokens",
+    unit="token",
+    description="Approximate number of tokens processed during MNTP fine-tuning.",
+)
 
 
 @dataclass
@@ -65,3 +81,13 @@ async def maybe_alert(
     if not data:
         return
     await event_bus().publish(make_event("performance.alert", user_id, data))
+
+
+__all__ = [
+    "SystemMonitor",
+    "SystemStats",
+    "maybe_alert",
+    "TRAINING_CYCLE_COUNTER",
+    "TRAINING_FAILURE_COUNTER",
+    "TRAINING_TOKEN_COUNTER",
+]

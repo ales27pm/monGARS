@@ -19,6 +19,7 @@ try:  # pragma: no cover - heavy deps not always installed
     from torch.utils.data import DataLoader
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from transformers.optimization import get_linear_schedule_with_warmup
+    from transformers import default_data_collator
 except Exception:  # pragma: no cover - fallback if unavailable
     torch = None
     load_dataset = None
@@ -30,6 +31,25 @@ except Exception:  # pragma: no cover - fallback if unavailable
     AutoModelForCausalLM = None
     AutoTokenizer = None
     get_linear_schedule_with_warmup = None
+    default_data_collator = None
+
+try:  # pragma: no cover - optional dependency
+    from unsloth import FastLanguageModel
+except Exception:  # pragma: no cover - fallback when unsloth missing
+    FastLanguageModel = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from trl import SFTConfig, SFTTrainer
+except Exception:  # pragma: no cover - fallback when TRL missing
+    SFTConfig = None  # type: ignore[assignment]
+    SFTTrainer = None  # type: ignore[assignment]
+
+from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import (
+    TRAINING_CYCLE_COUNTER,
+    TRAINING_FAILURE_COUNTER,
+    TRAINING_TOKEN_COUNTER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +224,7 @@ class MaskedNextTokenDataset:
                         "input_ids": input_ids_with_mask,
                         "attention_mask": attention_mask,
                         "label": label,
+                        "labels": label,
                         "source_index": index,
                     }
                 )
@@ -584,6 +605,24 @@ class MNTPTrainer:
         training_dataset = self._prepare_mntp_dataset(dataset, tokenizer)
         if len(training_dataset) == 0:
             raise RuntimeError("MNTP dataset preprocessing yielded no examples")
+        if SFTTrainer is not None and SFTConfig is not None and ModelSlotManager is not None:
+            summary = self.fit(
+                training_dataset,
+                epochs=int(self.config.get("num_train_epochs", self.config.get("epochs", 1))),
+                batch_size=int(self.config.get("per_device_train_batch_size", 2)),
+                grad_acc=int(self.config.get("gradient_accumulation_steps", 1)),
+            )
+            try:
+                summary.setdefault("metrics", {})["source_records"] = len(dataset)
+            except Exception:  # pragma: no cover - streaming datasets
+                pass
+            summary.setdefault("metrics", {})["max_seq_length"] = int(
+                self.config.get("max_seq_length", 512)
+            )
+            summary.setdefault("model_name", model_name)
+            summary.setdefault("dataset_name", self.config["dataset_name"])
+            return summary
+
         device = self._resolve_device()
         model = self._initialise_model(model_name, tokenizer, device=device)
         pad_token_id = self._resolve_pad_token_id(tokenizer)
@@ -628,6 +667,180 @@ class MNTPTrainer:
             "artifacts": artifacts,
             "metrics": metrics,
         }
+
+    def fit(
+        self,
+        dataset: Any,
+        *,
+        epochs: int = 1,
+        batch_size: int = 2,
+        grad_acc: int = 4,
+    ) -> dict[str, Any]:
+        if SFTTrainer is None or SFTConfig is None:
+            raise RuntimeError("trl.SFTTrainer is not available")
+        if torch is None:
+            raise RuntimeError("PyTorch is required for MNTP fine-tuning")
+        if dataset is None:
+            raise ValueError("dataset must be provided")
+
+        dataset_size = self._safe_len(dataset)
+        estimated_tokens = self._estimate_dataset_tokens(dataset)
+
+        model_name = self._resolve_model_name()
+        max_seq_length = int(self.config.get("max_seq_length", 512))
+        adapter_root = self.output_dir / "adapters"
+        adapter_root.mkdir(parents=True, exist_ok=True)
+        sft_args = SFTConfig(
+            per_device_train_batch_size=int(max(1, batch_size)),
+            gradient_accumulation_steps=int(max(1, grad_acc)),
+            num_train_epochs=max(1, epochs),
+            optim="adamw_8bit",
+            fp32=True,
+            seed=3407,
+            output_dir=str(self.output_dir / "outputs"),
+        )
+
+        cycle_tags = {"slot": "training_slot", "cycle": "start"}
+        self._add_metric(TRAINING_CYCLE_COUNTER, 1, cycle_tags)
+        vram_snapshot: dict[str, Any] = {}
+        training_metrics: dict[str, Any] = {}
+        checksum = ""
+        weights_path: Path | None = None
+        try:
+            with ModelSlotManager(
+                "training_slot",
+                model_id=model_name,
+                max_seq_length=max_seq_length,
+            ) as (model, tokenizer):
+                if model is None or tokenizer is None:
+                    raise RuntimeError("ModelSlotManager returned an empty slot")
+                self._conditionally_freeze_backbone(model)
+                trainer = SFTTrainer(
+                    model=model,
+                    tokenizer=tokenizer,
+                    args=sft_args,
+                    train_dataset=dataset,
+                    data_collator=default_data_collator,
+                )
+                train_output = trainer.train()
+                training_metrics = dict(getattr(train_output, "metrics", {}) or {})
+                _adapter_dir, weights_path = self._persist_model(
+                    trainer.model,
+                    target_dir=adapter_root / "latest",
+                )
+                checksum = self._compute_file_checksum(weights_path)
+                vram_snapshot = self._capture_vram_snapshot()
+        except Exception:
+            failure_tags = {"slot": "training_slot", "stage": "fit"}
+            self._add_metric(TRAINING_FAILURE_COUNTER, 1, failure_tags)
+            raise
+        else:
+            completion_tags = {"slot": "training_slot", "cycle": "complete"}
+            self._add_metric(TRAINING_CYCLE_COUNTER, 1, completion_tags)
+            if estimated_tokens:
+                token_tags = {"slot": "training_slot", "unit": "token"}
+                self._add_metric(
+                    TRAINING_TOKEN_COUNTER,
+                    int(estimated_tokens),
+                    token_tags,
+                )
+
+        metrics: dict[str, Any] = {
+            "training_examples": dataset_size,
+            "per_device_train_batch_size": int(max(1, batch_size)),
+            "gradient_accumulation_steps": int(max(1, grad_acc)),
+            "num_train_epochs": max(1, epochs),
+            "estimated_tokens": estimated_tokens,
+        }
+        metrics.update(training_metrics)
+        if vram_snapshot:
+            metrics["max_cuda_memory_gb"] = vram_snapshot.get("max_gb")
+
+        resolved_weights_path = weights_path
+        if resolved_weights_path is None:
+            resolved_weights_path = adapter_root / "latest" / "adapter_model.safetensors"
+        if not resolved_weights_path.exists():
+            resolved_weights_path = adapter_root / "latest" / "adapter_model.bin"
+        artifacts = {
+            "adapter": str(adapter_root / "latest"),
+            "weights": str(resolved_weights_path),
+            "weights_checksum": checksum,
+        }
+
+        summary = {
+            "status": TrainingStatus.SUCCESS.value,
+            "model_name": model_name,
+            "dataset_name": self.config.get("dataset_name"),
+            "version": checksum,
+            "artifacts": artifacts,
+            "metrics": metrics,
+        }
+        if vram_snapshot:
+            summary["telemetry"] = {
+                "cuda_memory_summary": vram_snapshot.get("summary"),
+            }
+        return summary
+
+    @staticmethod
+    def _safe_len(value: Any) -> int | None:
+        try:
+            return int(len(value))
+        except Exception:
+            return None
+
+    def _estimate_dataset_tokens(self, dataset: Any) -> int:
+        if dataset is None:
+            return 0
+        max_samples = int(self.config.get("token_estimate_limit", 1000))
+        total_tokens = 0
+        counted = 0
+        try:
+            if hasattr(dataset, "__getitem__") and hasattr(dataset, "__len__"):
+                length = len(dataset)  # type: ignore[arg-type]
+                iterable = (dataset[index] for index in range(min(length, max_samples)))
+            else:
+                iterable = iter(dataset)
+        except Exception:
+            return 0
+
+        for item in iterable:
+            if counted >= max_samples:
+                break
+            tokens = 0
+            if isinstance(item, dict):
+                tokens = len(item.get("input_ids", []) or [])
+                if not tokens and "text" in item:
+                    tokens = len(str(item["text"]).split())
+            elif hasattr(item, "get"):
+                try:
+                    tokens = len(item.get("input_ids", []) or [])  # type: ignore[index]
+                except Exception:
+                    tokens = 0
+            total_tokens += tokens
+            counted += 1
+        return total_tokens
+
+    def _capture_vram_snapshot(self) -> dict[str, Any]:
+        if torch is None or not torch.cuda.is_available():
+            return {}
+        try:
+            summary = torch.cuda.memory_summary()
+            max_alloc = torch.cuda.max_memory_allocated()
+        except Exception:  # pragma: no cover - CUDA inspection failure
+            return {}
+        max_gb = round(max_alloc / (1024**3), 4)
+        return {"summary": summary, "max_bytes": max_alloc, "max_gb": max_gb}
+
+    @staticmethod
+    def _add_metric(counter: Any, value: int | float, attributes: dict[str, Any]) -> None:
+        if counter is None:
+            return
+        try:
+            add = getattr(counter, "add", None)
+            if callable(add):
+                add(value, attributes)
+        except Exception:  # pragma: no cover - telemetry failure
+            logger.debug("Failed to emit training metric", exc_info=True)
 
     def _load_dataset(self) -> Sequence[dict[str, Any]]:
         if load_dataset is None:
@@ -723,6 +936,51 @@ class MNTPTrainer:
             return int(tokenizer.mask_token_id)
         return 0
 
+    def _conditionally_freeze_backbone(self, model: Any, keep_last_layers: int = 4) -> None:
+        if torch is None or not hasattr(model, "named_parameters"):
+            return
+        if not torch.cuda.is_available():
+            return
+        try:
+            device_name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - hardware query failure
+            device_name = ""
+        should_freeze = "2070" in device_name.lower() or bool(
+            self.config.get("freeze_backbone", False)
+        )
+        if not should_freeze:
+            return
+
+        layers = self._ordered_transformer_layers(model)
+        if not layers:
+            return
+        keep = set(layers[-max(1, keep_last_layers):])
+        for name, parameter in model.named_parameters():
+            if not hasattr(parameter, "requires_grad"):
+                continue
+            if "lora_" in name or any(layer in name for layer in keep):
+                parameter.requires_grad = True
+            else:
+                parameter.requires_grad = False
+
+    @staticmethod
+    def _ordered_transformer_layers(model: Any) -> list[str]:
+        layers: dict[str, tuple[int, ...]] = {}
+        if not hasattr(model, "named_parameters"):
+            return []
+        for name, _ in model.named_parameters():
+            parts = name.split(".")
+            numeric_path: list[int] = []
+            prefix_parts: list[str] = []
+            for part in parts:
+                prefix_parts.append(part)
+                if part.isdigit():
+                    numeric_path.append(int(part))
+                    prefix = ".".join(prefix_parts)
+                    layers.setdefault(prefix, tuple(numeric_path))
+        ordered = sorted(layers.items(), key=lambda item: item[1])
+        return [name for name, _ in ordered]
+
     def _initialise_model(
         self, model_name: str, tokenizer: Any, *, device: "torch.device"
     ) -> Any:
@@ -755,6 +1013,33 @@ class MNTPTrainer:
         if attn_impl:
             load_kwargs["attn_implementation"] = attn_impl
 
+        if FastLanguageModel is not None and torch is not None:
+            try:
+                fast_model, fast_tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[misc]
+                    model_name,
+                    max_seq_length=int(self.config.get("max_seq_length", 512)),
+                    load_in_4bit=True,
+                    dtype=torch.float32,
+                )
+            except Exception as exc:  # pragma: no cover - optional dependency failure
+                raise RuntimeError("Failed to load base language model") from exc
+
+            target_modules = self._resolve_lora_target_modules()
+            try:
+                peft_model = FastLanguageModel.get_peft_model(  # type: ignore[misc]
+                    fast_model,
+                    r=8,
+                    target_modules=target_modules,
+                    lora_alpha=16,
+                    bias="none",
+                    use_gradient_checkpointing="unsloth",
+                )
+            except Exception as exc:  # pragma: no cover - unsloth misconfiguration
+                raise RuntimeError("Failed to configure LoRA adapters") from exc
+
+            self._align_tokenizers(tokenizer, fast_tokenizer)
+            return peft_model.to(device)
+
         try:
             base_model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         except Exception as exc:  # pragma: no cover - external library errors
@@ -781,6 +1066,18 @@ class MNTPTrainer:
         if LoraConfig is None or TaskType is None:
             raise RuntimeError("peft library unavailable")
 
+        modules = self._resolve_lora_target_modules()
+
+        return LoraConfig(
+            r=int(self.config.get("lora_r", 16)),
+            lora_alpha=int(self.config.get("lora_alpha", 32)),
+            lora_dropout=float(self.config.get("lora_dropout", 0.05)),
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=modules,
+        )
+
+    def _resolve_lora_target_modules(self) -> list[str]:
         target_modules = self.config.get("lora_target_modules")
         if isinstance(target_modules, str):
             modules = [
@@ -799,15 +1096,21 @@ class MNTPTrainer:
                 "c_attn",
                 "c_proj",
             ]
+        return modules
 
-        return LoraConfig(
-            r=int(self.config.get("lora_r", 16)),
-            lora_alpha=int(self.config.get("lora_alpha", 32)),
-            lora_dropout=float(self.config.get("lora_dropout", 0.05)),
-            bias="none",
-            task_type=TaskType.CAUSAL_LM,
-            target_modules=modules,
-        )
+    @staticmethod
+    def _align_tokenizers(reference: Any, fast_tokenizer: Any) -> None:
+        if reference is None or fast_tokenizer is None:
+            return
+        for attr in ("pad_token", "eos_token", "bos_token", "unk_token"):
+            ref_value = getattr(reference, attr, None)
+            fast_value = getattr(fast_tokenizer, attr, None)
+            if ref_value is None and fast_value is not None:
+                setattr(reference, attr, fast_value)
+        if getattr(reference, "pad_token_id", None) is None and getattr(
+            fast_tokenizer, "pad_token_id", None
+        ) is not None:
+            reference.pad_token_id = fast_tokenizer.pad_token_id
 
     def _execute_training(
         self,
@@ -950,8 +1253,10 @@ class MNTPTrainer:
             return torch.device("mps")
         return torch.device("cpu")
 
-    def _persist_model(self, model: Any) -> tuple[Path, Path | None]:
-        adapter_dir = self.output_dir / "adapter"
+    def _persist_model(
+        self, model: Any, *, target_dir: Path | None = None
+    ) -> tuple[Path, Path]:
+        adapter_dir = target_dir or (self.output_dir / "adapter")
         adapter_dir.mkdir(parents=True, exist_ok=True)
 
         if hasattr(model, "save_pretrained"):
