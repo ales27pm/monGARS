@@ -5,9 +5,15 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, List, Set
+from typing import TYPE_CHECKING, Deque, Dict, List, Set
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+try:  # pragma: no cover - optional dependency for scheduled flushes
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+except ModuleNotFoundError:  # pragma: no cover - scheduler is optional during tests
+    AsyncIOScheduler = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:  # pragma: no cover - used only for typing helpers
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler as _AsyncIOScheduler
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -59,9 +65,17 @@ class Hippocampus:
         )
         self._default_ttl = default_ttl
         self._flush_interval_seconds = flush_interval_seconds
-        self._enable_scheduler = enable_scheduler
-        self._scheduler: AsyncIOScheduler | None = (
-            AsyncIOScheduler(timezone=timezone.utc) if enable_scheduler else None
+        scheduler_available = AsyncIOScheduler is not None
+        if enable_scheduler and not scheduler_available:
+            logger.warning(
+                "hippocampus.scheduler_unavailable",
+                extra={"reason": "apscheduler missing"},
+            )
+        self._enable_scheduler = enable_scheduler and scheduler_available
+        self._scheduler: "_AsyncIOScheduler" | None = (
+            AsyncIOScheduler(timezone=timezone.utc)
+            if self._enable_scheduler and AsyncIOScheduler is not None
+            else None
         )
         self._scheduler_started = False
         self._flush_job_id = "hippocampus.flush"
