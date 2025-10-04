@@ -6,6 +6,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "aiocache>=0.12.3",
+        "APScheduler>=3.11.0",
         "asyncpg>=0.30.0",
         "beautifulsoup4>=4.13.4",
         "bleach>=6.2.0",

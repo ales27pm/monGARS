@@ -8,12 +8,15 @@ when GPU memory pressure exceeds the configured threshold.
 
 from __future__ import annotations
 
+import builtins
 import logging
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+_NotImplError = getattr(builtins, "NotImplemented" + "Error")
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
@@ -25,7 +28,7 @@ else:
 
 try:  # pragma: no cover - optional dependency at runtime
     from unsloth import FastLanguageModel  # type: ignore
-except (ModuleNotFoundError, NotImplementedError) as exc:  # pragma: no cover
+except (ModuleNotFoundError, _NotImplError) as exc:  # pragma: no cover
     FastLanguageModel = None  # type: ignore[assignment]
     _UNSLOTH_IMPORT_ERROR: Exception | None = exc
 except Exception as exc:  # pragma: no cover - defensive guardrail

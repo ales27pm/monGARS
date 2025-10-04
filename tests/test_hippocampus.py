@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pytest
 
+import monGARS.core.hippocampus as hippocampus_module
 from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.init_db import reset_database
@@ -60,3 +63,23 @@ async def test_persistent_history_across_instances():
     assert history
     assert history[0].query == "q0"
     assert history[0].response == "r0"
+
+
+@pytest.mark.asyncio
+async def test_flush_now_removes_expired_entries(monkeypatch):
+    await reset_database()
+    hippocampus = Hippocampus()
+    await hippocampus.store("u1", "fresh", "stay", ttl=timedelta(hours=1))
+    expiring = await hippocampus.store("u1", "old", "gone", ttl=timedelta(seconds=30))
+
+    future = expiring.expires_at + timedelta(seconds=5)
+    original_now = hippocampus_module._utcnow
+    monkeypatch.setattr(hippocampus_module, "_utcnow", lambda: future)
+    removed = await hippocampus.flush_now()
+    monkeypatch.setattr(hippocampus_module, "_utcnow", original_now)
+
+    assert removed >= 1
+    history = await hippocampus.history("u1", limit=5)
+    queries = [item.query for item in history]
+    assert "old" not in queries
+    assert "fresh" in queries

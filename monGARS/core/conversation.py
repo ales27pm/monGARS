@@ -147,7 +147,15 @@ class ConversationalModule:
             history_query=augmented_query,
             history_response=final,
         )
-        await self.memory.store(user_id, augmented_query, final)
+        memory_item = await self.memory.store(user_id, augmented_query, final)
+        if memory_item is not None:
+            await self.evolution_engine.record_memory_sample(
+                user_id=memory_item.user_id,
+                query=memory_item.query,
+                response=memory_item.response,
+                timestamp=memory_item.timestamp,
+                expires_at=memory_item.expires_at,
+            )
         return {
             "text": speech_turn.text,
             "confidence": llm_out.get("confidence", 0.0),

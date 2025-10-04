@@ -148,9 +148,9 @@ def test_restores_from_snapshot_when_available(
         model_slot_manager.PersistenceManager,
         "find_latest_snapshot",
         staticmethod(
-            lambda slot_name, base_path=None: fake_snapshot_path
-            if slot_name == "primary"
-            else None
+            lambda slot_name, base_path=None: (
+                fake_snapshot_path if slot_name == "primary" else None
+            )
         ),
     )
 

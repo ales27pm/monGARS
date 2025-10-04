@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
     JSON,
@@ -65,6 +65,29 @@ class ConversationHistory(Base):
             ),
         )
     )
+
+
+def _default_memory_ttl() -> datetime:
+    """Return the default TTL for memory entries."""
+
+    return datetime.now(timezone.utc) + timedelta(hours=24)
+
+
+class MemoryEntry(Base):
+    __tablename__ = "memory_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    query: Mapped[str] = mapped_column(String, nullable=False)
+    response: Mapped[str] = mapped_column(String, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    ttl: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_default_memory_ttl, nullable=False
+    )
+
+    __table_args__ = (Index("ix_memory_entries_user_ttl", "user_id", "ttl"),)
 
 
 class Interaction(Base):

@@ -69,6 +69,70 @@ class EvolutionEngine:
         else:
             self._orchestrator_factory = orchestrator_factory
         self._peer_communicator = peer_communicator or PeerCommunicator()
+        self._memory_lock = asyncio.Lock()
+        self._curated_memory: deque[dict[str, Any]] = deque(maxlen=500)
+
+    def _prune_curated_memory_locked(self, now: datetime) -> None:
+        if not self._curated_memory:
+            return
+
+        filtered = [
+            sample
+            for sample in self._curated_memory
+            if sample.get("expires_at") is None or sample["expires_at"] > now
+        ]
+        if len(filtered) != len(self._curated_memory):
+            self._curated_memory.clear()
+            self._curated_memory.extend(filtered)
+
+    async def record_memory_sample(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        response: str,
+        timestamp: datetime,
+        expires_at: datetime | None,
+    ) -> None:
+        """Capture memory interactions for downstream curation."""
+
+        now = datetime.now(timezone.utc)
+        if expires_at is not None and expires_at <= now:
+            logger.debug(
+                "evolution.memory.skip_expired",
+                extra={"user_id": user_id, "expires_at": expires_at},
+            )
+            return
+
+        sample = {
+            "user_id": user_id,
+            "query": query,
+            "response": response,
+            "timestamp": timestamp,
+            "expires_at": expires_at,
+        }
+        async with self._memory_lock:
+            self._prune_curated_memory_locked(now)
+            self._curated_memory.append(sample)
+        logger.debug(
+            "evolution.memory.record",
+            extra={"user_id": user_id, "expires_at": expires_at},
+        )
+
+    async def get_curated_memory(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the most recent curated memory samples."""
+
+        if limit <= 0:
+            return []
+        async with self._memory_lock:
+            now = datetime.now(timezone.utc)
+            self._prune_curated_memory_locked(now)
+            snapshot = [
+                sample
+                for sample in self._curated_memory
+                if sample.get("expires_at") is None or sample["expires_at"] > now
+            ][-limit:]
+        return list(reversed(snapshot))
 
     async def diagnose_performance(self) -> list[PerformanceIssue]:
         """Analyze system statistics and return actionable performance issues."""
