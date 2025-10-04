@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
+import pickle
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+import torch
 from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
@@ -446,3 +451,60 @@ class PersistenceRepository:
             )
         except IntegrityError as exc:
             raise ValueError("Username already exists") from exc
+
+
+class PersistenceManager:
+    """Utility helpers for persisting heavyweight artefacts to disk."""
+
+    @staticmethod
+    def snapshot_model(
+        model: Any,
+        tokenizer: Any,
+        *,
+        slot_name: str,
+        metadata: dict[str, Any] | None = None,
+        base_path: Path | None = None,
+    ) -> Path:
+        """Persist the model state dict and tokenizer to disk."""
+
+        settings = get_settings()
+        root_dir = (
+            Path(base_path)
+            if base_path is not None
+            else Path(settings.llm_adapter_registry_path).parent / "snapshots"
+        )
+        slot_dir = root_dir / slot_name
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        snapshot_dir = slot_dir / timestamp
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        model_state = getattr(model, "state_dict", None)
+        if not callable(model_state):
+            raise TypeError("model does not expose a callable state_dict")
+        model_path = snapshot_dir / "model.pt"
+        torch.save(model_state(), model_path)
+
+        tokenizer_dir = snapshot_dir / "tokenizer"
+        if hasattr(tokenizer, "save_pretrained"):
+            tokenizer.save_pretrained(tokenizer_dir)
+        else:
+            tokenizer_dir.mkdir(parents=True, exist_ok=True)
+            fallback_path = tokenizer_dir / "tokenizer.pkl"
+            with fallback_path.open("wb") as handle:
+                pickle.dump(tokenizer, handle)
+
+        if metadata:
+            metadata_path = snapshot_dir / "metadata.json"
+            with metadata_path.open("w", encoding="utf-8") as handle:
+                json.dump(metadata, handle, indent=2, sort_keys=True)
+
+        logger.info(
+            "persistence.snapshot.saved",
+            extra={
+                "slot": slot_name,
+                "path": str(snapshot_dir),
+                "metadata_keys": sorted(metadata.keys()) if metadata else [],
+            },
+        )
+
+        return snapshot_dir
