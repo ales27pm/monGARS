@@ -15,12 +15,24 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import torch
+try:  # pragma: no cover - optional dependency at runtime
+    import torch
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 
 try:  # pragma: no cover - optional dependency at runtime
     from unsloth import FastLanguageModel  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - handled gracefully in __enter__
+except (ModuleNotFoundError, NotImplementedError) as exc:  # pragma: no cover
     FastLanguageModel = None  # type: ignore[assignment]
+    _UNSLOTH_IMPORT_ERROR: Exception | None = exc
+except Exception as exc:  # pragma: no cover - defensive guardrail
+    FastLanguageModel = None  # type: ignore[assignment]
+    _UNSLOTH_IMPORT_ERROR = exc
+else:
+    _UNSLOTH_IMPORT_ERROR = None
 
 try:  # pragma: no cover - optional helper for GPU diagnostics
     import GPUtil  # type: ignore
@@ -51,6 +63,7 @@ class _SlotState:
     model: Any | None = None
     tokenizer: Any | None = None
     model_id: str | None = None
+    max_seq_length: int | None = None
     peft_applied: bool = False
     last_usage_fraction: float | None = None
 
@@ -74,6 +87,10 @@ class ModelSlotManager:
         max_seq_length: int = 2048,
         offload_threshold: float = 0.8,
     ) -> None:
+        if torch is None:
+            raise RuntimeError(
+                "ModelSlotManager requires PyTorch. Install torch to enable slot-backed fallback."
+            ) from _TORCH_IMPORT_ERROR
         if not slot_name:
             raise ValueError("slot_name must be provided")
         if not (0.0 < offload_threshold < 1.0):
@@ -90,7 +107,11 @@ class ModelSlotManager:
     def __enter__(self) -> tuple[Any, Any]:
         slot = self._acquire_slot()
         try:
-            if slot.model is None or slot.model_id != self.model_id:
+            if (
+                slot.model is None
+                or slot.model_id != self.model_id
+                or slot.max_seq_length != self.max_seq_length
+            ):
                 restored = self._restore_from_snapshot(slot)
                 if not restored:
                     self._load_into_slot(slot)
@@ -145,6 +166,7 @@ class ModelSlotManager:
         slot.model = model
         slot.tokenizer = tokenizer
         slot.model_id = self.model_id
+        slot.max_seq_length = self.max_seq_length
         slot.peft_applied = True
         logger.info(
             "model.slot.ready",
@@ -152,10 +174,14 @@ class ModelSlotManager:
         )
 
     def _initialise_model_and_tokenizer(self) -> tuple[Any, Any]:
+        if torch is None:
+            raise RuntimeError(
+                "ModelSlotManager requires PyTorch. Install torch to enable slot-backed fallback."
+            ) from _TORCH_IMPORT_ERROR
         if FastLanguageModel is None:
             raise RuntimeError(
                 "Unsloth is not installed. Install the 'unsloth' package to load models."
-            )
+            ) from _UNSLOTH_IMPORT_ERROR
         logger.info(
             "model.slot.loading",
             extra={
@@ -164,6 +190,7 @@ class ModelSlotManager:
                 "max_seq_length": self.max_seq_length,
             },
         )
+        assert torch is not None  # noqa: S101 - guarded above
         model, tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[misc]
             self.model_id,
             max_seq_length=self.max_seq_length,
@@ -238,6 +265,7 @@ class ModelSlotManager:
         slot.model = model
         slot.tokenizer = tokenizer
         slot.model_id = self.model_id
+        slot.max_seq_length = self.max_seq_length
         slot.peft_applied = True
         logger.info(
             "model.slot.restored",
@@ -277,6 +305,7 @@ class ModelSlotManager:
             slot.model = None
             slot.tokenizer = None
             slot.model_id = None
+            slot.max_seq_length = None
             slot.peft_applied = False
 
     @staticmethod
@@ -296,6 +325,8 @@ class ModelSlotManager:
 
     @staticmethod
     def _empty_cuda_cache() -> None:
+        if torch is None:
+            return
         try:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -308,16 +339,17 @@ class ModelSlotManager:
     def _current_memory_usage(self) -> tuple[int | None, int | None]:
         """Return the current GPU memory usage in bytes."""
 
-        try:
-            if torch.cuda.is_available():
-                device = torch.cuda.current_device()
-                allocated = int(torch.cuda.memory_allocated(device))
-                properties = torch.cuda.get_device_properties(device)
-                total = int(getattr(properties, "total_memory", 0))
-                if total:
-                    return allocated, total
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception("model.slot.cuda_stats_failed")
+        if torch is not None:
+            try:
+                if torch.cuda.is_available():
+                    device = torch.cuda.current_device()
+                    allocated = int(torch.cuda.memory_allocated(device))
+                    properties = torch.cuda.get_device_properties(device)
+                    total = int(getattr(properties, "total_memory", 0))
+                    if total:
+                        return allocated, total
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("model.slot.cuda_stats_failed")
 
         if GPUtil is not None:
             try:

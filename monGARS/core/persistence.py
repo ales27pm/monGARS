@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import torch
 from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
@@ -479,6 +477,16 @@ class PersistenceManager:
         return Path(settings.llm_adapter_registry_path).parent / "snapshots"
 
     @staticmethod
+    def _import_torch() -> Any:
+        try:
+            import torch  # type: ignore
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "PyTorch is required to handle model snapshots. Install torch to enable persistence snapshots."
+            ) from exc
+        return torch
+
+    @staticmethod
     def snapshot_model(
         model: Any,
         tokenizer: Any,
@@ -499,6 +507,7 @@ class PersistenceManager:
         if not callable(model_state):
             raise TypeError("model does not expose a callable state_dict")
         model_path = snapshot_dir / "model.pt"
+        torch = PersistenceManager._import_torch()
         torch.save(model_state(), model_path)
 
         tokenizer_dir = snapshot_dir / "tokenizer"
@@ -555,8 +564,9 @@ class PersistenceManager:
         if not model_path.exists():
             raise FileNotFoundError(model_path)
 
+        torch = PersistenceManager._import_torch()
         state_dict = torch.load(model_path, map_location=map_location)
-
+        
         tokenizer_obj: Any | None = None
         metadata: dict[str, Any] | None = None
 

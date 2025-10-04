@@ -13,7 +13,15 @@ from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-import torch
+
+# guard torch as an optional ML dependency that may be absent on CPU-only hosts
+try:  # pragma: no cover - optional dependency for local slot fallback
+    import torch
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 from opentelemetry import metrics
 
 try:  # pragma: no cover - optional dependency during tests
@@ -137,7 +145,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
 
         try:
             unsloth = importlib.import_module("unsloth")
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, NotImplementedError):
             logger.info(
                 "llm.unsloth.unavailable", extra={"patched": False, "available": False}
             )
@@ -588,13 +596,17 @@ class LLMIntegration:
     ) -> dict[str, Any]:
         """Generate a response using the Unsloth-backed model slot."""
 
+        if torch is None:
+            raise self.LocalProviderError(
+                "Local slot fallback requires PyTorch. Install torch to enable this path."
+            ) from _TORCH_IMPORT_ERROR
+
         def _run_generation() -> dict[str, Any]:
+            assert torch is not None  # noqa: S101 - guarded above
             with ModelSlotManager("primary") as (model, tokenizer):
                 if model is None or tokenizer is None:
                     raise RuntimeError("Model slot returned empty artefacts")
                 inputs = tokenizer(prompt, return_tensors="pt")
-                if not isinstance(inputs, dict):
-                    inputs = dict(inputs)
                 device = getattr(model, "device", None)
                 if device is not None:
                     inputs = {k: v.to(device) for k, v in inputs.items()}
