@@ -31,6 +31,31 @@ def _load_init_db_script(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     return module
 
 
+def test_sync_driver_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_init_db_script(monkeypatch)
+
+    if importlib.util.find_spec("psycopg") is not None:
+        expected = "postgresql+psycopg"
+    elif importlib.util.find_spec("psycopg2") is not None:
+        expected = "postgresql+psycopg2"
+    else:
+        expected = "postgresql"
+
+    for key in {
+        "DATABASE_URL",
+        "DJANGO_DATABASE_URL",
+        "DB_USER",
+        "DB_PASSWORD",
+        "DB_HOST",
+        "DB_PORT",
+        "DB_NAME",
+    }:
+        monkeypatch.delenv(key, raising=False)
+
+    assert module.SYNC_DRIVERNAME == expected
+    assert module.build_sync_url().drivername == expected
+
+
 @pytest.mark.parametrize(
     "env_value,allow_remote,expected_driver",
     [
