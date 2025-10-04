@@ -302,7 +302,7 @@ services:
 
 networks:
   mongars:
-    name: mongars-1_mongars
+    name: ${COMPOSE_PROJECT_NAME:-mongars-1}_mongars
     driver: bridge
     driver_opts:
       com.docker.network.enable_ipv4: "true"
