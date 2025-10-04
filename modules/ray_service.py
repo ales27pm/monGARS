@@ -7,7 +7,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from modules.neurons.core import NeuronManager
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
@@ -469,8 +469,41 @@ def deploy_ray_service(
     )
 
 
+def update_ray_deployment(user_config: Mapping[str, Any]) -> None:
+    """Update the active Ray Serve deployment with the provided adapter payload."""
+
+    if serve is None:  # pragma: no cover - environment dependent
+        raise RuntimeError("Ray Serve is not available in this environment")
+
+    try:
+        deployment = serve.get_deployment("LLMServeDeployment")
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError("Failed to resolve Ray Serve deployment") from exc
+
+    if deployment is None:  # pragma: no cover - deployment not registered
+        raise RuntimeError("LLMServeDeployment is not registered")
+
+    payload = {
+        str(key): str(value) for key, value in user_config.items() if value is not None
+    }
+
+    try:
+        deployment.update(user_config=payload)
+    except Exception as exc:  # pragma: no cover - Ray Serve API failure
+        raise RuntimeError("Failed to update Ray Serve deployment") from exc
+
+    logger.info(
+        "llm.ray.deployment.updated",
+        extra={
+            "adapter_path": payload.get("adapter_path"),
+            "version": payload.get("version"),
+        },
+    )
+
+
 __all__ = [
     "LLMServeDeployment",
     "RayLLMDeployment",
     "deploy_ray_service",
+    "update_ray_deployment",
 ]

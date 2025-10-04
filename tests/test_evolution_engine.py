@@ -5,17 +5,206 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from modules.evolution_engine.hardware import HardwareProfile
+from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from monGARS.config import HardwareHeuristics, get_settings
 from monGARS.core.evolution_engine import EvolutionEngine, PerformanceIssue
 from monGARS.core.monitor import SystemStats
 
 settings = get_settings()
+
+
+class DummyScheduler:
+    def __init__(self) -> None:
+        self.jobs: list[dict[str, Any]] = []
+        self.running = False
+
+    def add_job(self, func: Any, trigger: str, **kwargs: Any) -> Any:
+        self.jobs.append({"func": func, "trigger": trigger, "kwargs": kwargs})
+        return SimpleNamespace(id=kwargs.get("id"))
+
+    def start(self) -> None:
+        self.running = True
+
+    def shutdown(self, wait: bool = False) -> None:  # noqa: ARG002 - signature parity
+        self.running = False
+
+
+def _mock_idle(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.cpu_percent",
+        lambda interval=None: 5.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.virtual_memory",
+        lambda: SimpleNamespace(percent=10.0),
+        raising=False,
+    )
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
+    )
+
+
+def test_orchestrator_registers_interval_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    scheduler = DummyScheduler()
+
+    class _NoopTrainer:
+        def __init__(
+            self, training_config_path: str, output_dir: str
+        ) -> None:  # noqa: D401
+            self.training_config_path = training_config_path
+            self.output_dir = output_dir
+
+        def fit(self, dataset: Any) -> dict[str, Any]:  # pragma: no cover - unused
+            return {}
+
+    monkeypatch.setenv("USE_RAY_SERVE", "false")
+    orchestrator = EvolutionOrchestrator(
+        scheduler=scheduler,
+        autostart=False,
+        trainer_cls=_NoopTrainer,
+        data_collector=lambda: [],
+    )
+
+    assert scheduler.jobs, "scheduler should register a recurring training job"
+    job = scheduler.jobs[0]
+    assert job["trigger"] == "interval"
+    assert job["kwargs"]["minutes"] == 20
+    assert job["kwargs"]["jitter"] == 300
+
+
+def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    scheduler = DummyScheduler()
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.cpu_percent",
+        lambda interval=None: 95.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.virtual_memory",
+        lambda: SimpleNamespace(percent=40.0),
+        raising=False,
+    )
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
+    )
+
+    orchestrator = EvolutionOrchestrator(
+        scheduler=scheduler,
+        autostart=False,
+        trainer_cls=lambda *args, **kwargs: None,  # type: ignore[arg-type]
+        slot_manager_cls=None,
+        data_collector=lambda: ["data"],
+    )
+
+    assert orchestrator.run_training_cycle() is None
+
+
+def test_orchestrator_runs_cycle_and_rolls_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scheduler = DummyScheduler()
+    registry_path = tmp_path / "registry"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class DummySlotManager:
+        enter_calls = 0
+
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def __enter__(self) -> tuple[object, object]:
+            DummySlotManager.enter_calls += 1
+            return object(), object()
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            pass
+
+    class RecordingTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            adapter_dir = self.output_dir / "adapter"
+            adapter_dir.mkdir(parents=True, exist_ok=True)
+            weights_path = adapter_dir / "adapter.bin"
+            weights_path.write_text("weights", encoding="utf-8")
+            return {
+                "status": "success",
+                "artifacts": {
+                    "adapter": str(adapter_dir),
+                    "weights": str(weights_path),
+                },
+                "version": "cycle-1",
+                "metrics": {"loss": 0.1},
+            }
+
+    rollout_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_ray_deployment",
+        lambda payload: rollout_calls.append(payload),
+    )
+
+    class _Settings:
+        USE_RAY_SERVE = True
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.get_settings",
+        lambda: _Settings(),
+    )
+
+    manifest_path = registry_path / "adapter_manifest.json"
+
+    def fake_update_manifest(
+        registry: Path, summary: dict[str, Any], history_limit: int = 10
+    ):
+        manifest_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(
+            path=manifest_path,
+            build_payload=lambda: {
+                "adapter_path": summary["artifacts"]["adapter"],
+                "version": summary.get("version", ""),
+            },
+        )
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_manifest",
+        fake_update_manifest,
+    )
+
+    _mock_idle(monkeypatch)
+
+    orchestrator = EvolutionOrchestrator(
+        scheduler=scheduler,
+        autostart=False,
+        model_registry_path=str(registry_path),
+        training_config_path=str(config_path),
+        trainer_cls=RecordingTrainer,
+        slot_manager_cls=DummySlotManager,
+        data_collector=lambda: ["sample"],
+    )
+
+    run_dir = orchestrator.run_training_cycle()
+    assert run_dir is not None
+    summary_path = run_dir / "training_summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["status"] == "success"
+    assert rollout_calls
+    assert rollout_calls[0]["adapter_path"] == summary["artifacts"]["adapter"]
+    assert DummySlotManager.enter_calls == 1
 
 
 @pytest.mark.asyncio
