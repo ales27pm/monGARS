@@ -279,8 +279,29 @@ def test_fit_saves_adapter_and_emits_metrics(trainer_setup: dict[str, Any]):
     assert frozen_flags["model.layers.0.weight"] is False
     assert frozen_flags["model.layers.5.weight"] is True
 
-    assert summary["metrics"]["training_examples"] == len(dataset)
-    assert summary["metrics"]["estimated_tokens"] == 5
-    assert summary["metrics"]["per_device_train_batch_size"] == 1
-    assert summary["metrics"]["gradient_accumulation_steps"] == 16
-    assert summary["metrics"]["max_seq_length"] == trainer.config["max_seq_length"]
+    metrics = summary["metrics"]
+    assert metrics["training_examples"] == len(dataset)
+    assert metrics["estimated_tokens"] == 5
+    assert metrics["projected_token_total"] == 5
+    assert metrics["sample_token_total"] == 5
+    assert metrics["per_device_train_batch_size"] == 1
+    assert metrics["gradient_accumulation_steps"] == 16
+    assert metrics["effective_batch_size"] == 16
+    assert metrics["max_seq_length"] == trainer.config["max_seq_length"]
+    assert metrics["dataset_sample_size"] == len(dataset)
+    assert metrics["tokens_per_micro_batch"] == 3
+    assert metrics["tokens_per_example"] == 3
+    assert metrics["dataset_token_mean"] == pytest.approx(2.5)
+    assert metrics["dataset_token_median"] == pytest.approx(2.5)
+    assert metrics["dataset_token_p95"] == 3
+    assert metrics["dataset_token_max"] == 3
+    assert metrics["tokens_per_second"] > 0
+    assert metrics["wall_time_seconds"] >= 0
+
+    schedule = summary["telemetry"]["schedule"]
+    assert schedule["per_device_batch_size"] == 1
+    assert schedule["gradient_accumulation_steps"] == 16
+    assert schedule["effective_batch_size"] == 16
+    assert schedule["tokens_per_micro_batch"] == 3
+    assert schedule["tokens_per_example"] == 3
+    assert schedule["reason"] is None

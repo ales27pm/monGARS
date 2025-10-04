@@ -6,7 +6,9 @@ import json
 import logging
 import math
 import random
-from dataclasses import dataclass
+import statistics
+import time
+from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -18,9 +20,8 @@ try:  # pragma: no cover - heavy deps not always installed
     from peft import LoraConfig, TaskType, get_peft_model
     from torch.nn.utils import clip_grad_norm_
     from torch.utils.data import DataLoader
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, default_data_collator
     from transformers.optimization import get_linear_schedule_with_warmup
-    from transformers import default_data_collator
 except Exception:  # pragma: no cover - fallback if unavailable
     torch = None
     load_dataset = None
@@ -80,6 +81,28 @@ class CuratedSample:
     embedding: list[float]
     target: float
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DatasetProfile:
+    size: int | None
+    sample_size: int
+    sample_token_total: int
+    projected_token_total: int
+    mean_tokens: float | None
+    median_tokens: float | None
+    p95_tokens: int | None
+    max_tokens: int | None
+
+
+@dataclass(frozen=True)
+class TrainingSchedule:
+    per_device_batch_size: int
+    gradient_accumulation_steps: int
+    effective_batch_size: int
+    tokens_per_micro_batch: int | None
+    tokens_per_example: int | None
+    reason: str | None = None
 
 
 class CuratedDatasetBuilder:
@@ -334,6 +357,181 @@ class MaskedNextTokenCollator:
             "attention_mask": attention_mask,
             "labels": labels,
         }
+
+
+class DatasetTokenProfiler:
+    """Profile dataset token distribution for adaptive scheduling."""
+
+    def __init__(self, sample_limit: int = 1024) -> None:
+        self._sample_limit = max(1, sample_limit)
+
+    def profile(self, dataset: Any) -> DatasetProfile:
+        dataset_size = MNTPTrainer._safe_len(dataset)
+        tokens: list[int] = []
+        sample_token_total = 0
+        projected_token_total = 0
+        sample_count = 0
+        if dataset is None:
+            return DatasetProfile(
+                size=None,
+                sample_size=0,
+                sample_token_total=0,
+                projected_token_total=0,
+                mean_tokens=None,
+                median_tokens=None,
+                p95_tokens=None,
+                max_tokens=None,
+            )
+
+        iterator = self._iterate_dataset(dataset)
+        for sample_count, item in enumerate(iterator, start=1):
+            token_count = self._count_tokens(item)
+            tokens.append(token_count)
+            sample_token_total += token_count
+            if sample_count >= self._sample_limit:
+                break
+
+        if sample_count == 0:
+            return DatasetProfile(
+                size=dataset_size,
+                sample_size=0,
+                sample_token_total=0,
+                projected_token_total=0,
+                mean_tokens=None,
+                median_tokens=None,
+                p95_tokens=None,
+                max_tokens=None,
+            )
+
+        projected_token_total = sample_token_total
+        if dataset_size and dataset_size > sample_count:
+            scale = dataset_size / sample_count
+            projected_token_total = int(round(sample_token_total * scale))
+
+        sorted_tokens = sorted(tokens)
+        mean_tokens = statistics.fmean(sorted_tokens) if sample_count else None
+        median_tokens = statistics.median(sorted_tokens) if sample_count else None
+        p95_tokens = self._percentile(sorted_tokens, 0.95)
+        max_tokens = sorted_tokens[-1] if sorted_tokens else None
+
+        return DatasetProfile(
+            size=dataset_size,
+            sample_size=sample_count,
+            sample_token_total=sample_token_total,
+            projected_token_total=projected_token_total,
+            mean_tokens=mean_tokens,
+            median_tokens=median_tokens,
+            p95_tokens=p95_tokens,
+            max_tokens=max_tokens,
+        )
+
+    def _iterate_dataset(self, dataset: Any) -> Iterable[Any]:
+        try:
+            if hasattr(dataset, "__getitem__") and hasattr(dataset, "__len__"):
+                total = len(dataset)  # type: ignore[arg-type]
+                for index in range(min(total, self._sample_limit)):
+                    yield dataset[index]
+            else:
+                for index, item in enumerate(iter(dataset)):
+                    if index >= self._sample_limit:
+                        break
+                    yield item
+        except Exception:  # pragma: no cover - defensive iteration guard
+            logger.debug("Failed to iterate dataset during profiling", exc_info=True)
+            return
+
+    @staticmethod
+    def _count_tokens(item: Any) -> int:
+        if item is None:
+            return 0
+        if isinstance(item, dict):
+            tokens = item.get("input_ids")
+            if isinstance(tokens, Iterable):
+                return len(list(tokens))
+            text = item.get("text")
+            if isinstance(text, str):
+                return len(text.split())
+        if hasattr(item, "get"):
+            try:
+                tokens = item.get("input_ids")  # type: ignore[call-arg]
+                if isinstance(tokens, Iterable):
+                    return len(list(tokens))
+            except Exception:
+                pass
+        for attr in ("input_ids", "tokens"):
+            value = getattr(item, attr, None)
+            if isinstance(value, Iterable):
+                try:
+                    return len(list(value))
+                except TypeError:
+                    continue
+        if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
+            try:
+                return len(list(item))
+            except TypeError:
+                return 0
+        return 0
+
+    @staticmethod
+    def _percentile(values: Sequence[int], percentile: float) -> int | None:
+        if not values:
+            return None
+        if len(values) == 1:
+            return int(values[0])
+        index = max(0, min(len(values) - 1, math.ceil(percentile * len(values)) - 1))
+        return int(values[index])
+
+
+class AdaptiveBatchPlanner:
+    """Adjust batch and accumulation settings to fit tight VRAM budgets."""
+
+    def __init__(
+        self,
+        *,
+        target_tokens_per_device: int = 4096,
+        min_batch_size: int = 1,
+        max_batch_size: int = 8,
+    ) -> None:
+        self._target_tokens_per_device = max(1, target_tokens_per_device)
+        self._min_batch_size = max(1, min_batch_size)
+        self._max_batch_size = max(self._min_batch_size, max_batch_size)
+
+    def plan(
+        self,
+        base_batch_size: int,
+        base_grad_acc: int,
+        profile: DatasetProfile,
+        *,
+        max_seq_length: int,
+    ) -> TrainingSchedule:
+        per_device = int(
+            min(self._max_batch_size, max(self._min_batch_size, base_batch_size))
+        )
+        grad_acc = max(1, int(base_grad_acc))
+        tokens_per_example = profile.p95_tokens or profile.max_tokens or max_seq_length
+        tokens_per_example = int(min(max_seq_length, max(1, tokens_per_example)))
+        tokens_per_device = tokens_per_example * per_device
+        reason: str | None = None
+
+        while (
+            tokens_per_device > self._target_tokens_per_device
+            and per_device > self._min_batch_size
+        ):
+            per_device = max(self._min_batch_size, per_device // 2)
+            tokens_per_device = tokens_per_example * per_device
+            reason = "reduced_micro_batch_for_vram"
+
+        effective_batch = per_device * grad_acc
+        tokens_per_micro_batch = tokens_per_device
+
+        return TrainingSchedule(
+            per_device_batch_size=per_device,
+            gradient_accumulation_steps=grad_acc,
+            effective_batch_size=effective_batch,
+            tokens_per_micro_batch=tokens_per_micro_batch,
+            tokens_per_example=tokens_per_example,
+            reason=reason,
+        )
 
 
 class TrainingStatus(str, Enum):
@@ -710,16 +908,23 @@ class MNTPTrainer:
         if dataset is None:
             raise ValueError("dataset must be provided")
 
-        dataset_size = self._safe_len(dataset)
-        estimated_tokens = self._estimate_dataset_tokens(dataset)
+        profile = self._profile_dataset(dataset)
+        dataset_size = profile.size
+        estimated_tokens = profile.projected_token_total
 
         model_name = self._resolve_model_name()
         max_seq_length = int(self.config.get("max_seq_length", 512))
         adapter_root = self.output_dir / "adapters"
         adapter_root.mkdir(parents=True, exist_ok=True)
+        schedule = self._plan_schedule(
+            batch_size,
+            grad_acc,
+            profile,
+            max_seq_length=max_seq_length,
+        )
         sft_kwargs: dict[str, Any] = {
-            "per_device_train_batch_size": int(max(1, batch_size)),
-            "gradient_accumulation_steps": int(max(1, grad_acc)),
+            "per_device_train_batch_size": schedule.per_device_batch_size,
+            "gradient_accumulation_steps": schedule.gradient_accumulation_steps,
             "num_train_epochs": max(1, epochs),
             "optim": "adamw_8bit",
             "seed": 3407,
@@ -741,7 +946,9 @@ class MNTPTrainer:
         training_metrics: dict[str, Any] = {}
         checksum = ""
         weights_path: Path | None = None
+        wall_runtime: float | None = None
         try:
+            wall_start = time.perf_counter()
             with ModelSlotManager(
                 "training_slot",
                 model_id=model_name,
@@ -765,6 +972,7 @@ class MNTPTrainer:
                 weights_path = self._resolve_adapter_weights_path(adapter_dir)
                 checksum = self._compute_file_checksum(weights_path)
                 vram_snapshot = self._capture_vram_snapshot()
+            wall_runtime = time.perf_counter() - wall_start
         except Exception:
             failure_tags = {"slot": "training_slot", "stage": "fit"}
             self._add_metric(TRAINING_FAILURE_COUNTER, 1, failure_tags)
@@ -781,16 +989,50 @@ class MNTPTrainer:
                 )
 
         metrics: dict[str, Any] = {
-            "training_examples": dataset_size,
-            "per_device_train_batch_size": int(max(1, batch_size)),
-            "gradient_accumulation_steps": int(max(1, grad_acc)),
+            "training_examples": (
+                dataset_size if dataset_size is not None else profile.sample_size
+            ),
+            "per_device_train_batch_size": schedule.per_device_batch_size,
+            "gradient_accumulation_steps": schedule.gradient_accumulation_steps,
+            "effective_batch_size": schedule.effective_batch_size,
             "num_train_epochs": max(1, epochs),
             "estimated_tokens": estimated_tokens,
             "max_seq_length": max_seq_length,
+            "dataset_sample_size": profile.sample_size,
+            "sample_token_total": profile.sample_token_total,
         }
+        if dataset_size is not None:
+            metrics["dataset_size"] = dataset_size
+        if schedule.tokens_per_micro_batch is not None:
+            metrics["tokens_per_micro_batch"] = schedule.tokens_per_micro_batch
+        if schedule.tokens_per_example is not None:
+            metrics["tokens_per_example"] = schedule.tokens_per_example
+        if schedule.reason:
+            metrics["schedule_reason"] = schedule.reason
+        if profile.mean_tokens is not None:
+            metrics["dataset_token_mean"] = profile.mean_tokens
+        if profile.median_tokens is not None:
+            metrics["dataset_token_median"] = profile.median_tokens
+        if profile.p95_tokens is not None:
+            metrics["dataset_token_p95"] = profile.p95_tokens
+        if profile.max_tokens is not None:
+            metrics["dataset_token_max"] = profile.max_tokens
+        metrics["projected_token_total"] = profile.projected_token_total
         metrics.update(training_metrics)
         if vram_snapshot:
             metrics["max_cuda_memory_gb"] = vram_snapshot.get("max_gb")
+        if wall_runtime is not None:
+            metrics["wall_time_seconds"] = wall_runtime
+        runtime = training_metrics.get("train_runtime") or training_metrics.get(
+            "train_runtime_seconds"
+        )
+        duration = None
+        if runtime and runtime > 0:
+            duration = float(runtime)
+        elif wall_runtime:
+            duration = wall_runtime
+        if duration and duration > 0 and estimated_tokens:
+            metrics["tokens_per_second"] = estimated_tokens / duration
 
         resolved_weights_path = weights_path
         if resolved_weights_path is None:
@@ -813,10 +1055,11 @@ class MNTPTrainer:
             "artifacts": artifacts,
             "metrics": metrics,
         }
+        telemetry: dict[str, Any] = {}
         if vram_snapshot:
-            summary["telemetry"] = {
-                "cuda_memory_summary": vram_snapshot.get("summary"),
-            }
+            telemetry["cuda_memory_summary"] = vram_snapshot.get("summary")
+        telemetry["schedule"] = asdict(schedule)
+        summary["telemetry"] = telemetry
         return summary
 
     @staticmethod
@@ -826,37 +1069,59 @@ class MNTPTrainer:
         except Exception:
             return None
 
-    def _estimate_dataset_tokens(self, dataset: Any) -> int:
-        if dataset is None:
-            return 0
-        max_samples = int(self.config.get("token_estimate_limit", 1000))
-        total_tokens = 0
-        counted = 0
+    def _profile_dataset(self, dataset: Any) -> DatasetProfile:
+        limit = int(self.config.get("token_estimate_limit", 1024))
+        profiler = DatasetTokenProfiler(limit)
         try:
-            if hasattr(dataset, "__getitem__") and hasattr(dataset, "__len__"):
-                length = len(dataset)  # type: ignore[arg-type]
-                iterable = (dataset[index] for index in range(min(length, max_samples)))
-            else:
-                iterable = iter(dataset)
-        except Exception:
-            return 0
+            return profiler.profile(dataset)
+        except Exception:  # pragma: no cover - profiling failure
+            logger.debug("Failed to profile dataset tokens", exc_info=True)
+            dataset_size = self._safe_len(dataset)
+            return DatasetProfile(
+                size=dataset_size,
+                sample_size=0,
+                sample_token_total=0,
+                projected_token_total=0,
+                mean_tokens=None,
+                median_tokens=None,
+                p95_tokens=None,
+                max_tokens=None,
+            )
 
-        for item in iterable:
-            if counted >= max_samples:
-                break
-            tokens = 0
-            if isinstance(item, dict):
-                tokens = len(item.get("input_ids", []) or [])
-                if not tokens and "text" in item:
-                    tokens = len(str(item["text"]).split())
-            elif hasattr(item, "get"):
-                try:
-                    tokens = len(item.get("input_ids", []) or [])  # type: ignore[index]
-                except Exception:
-                    tokens = 0
-            total_tokens += tokens
-            counted += 1
-        return total_tokens
+    def _plan_schedule(
+        self,
+        batch_size: int,
+        grad_acc: int,
+        profile: DatasetProfile,
+        *,
+        max_seq_length: int,
+    ) -> TrainingSchedule:
+        planner = AdaptiveBatchPlanner(
+            target_tokens_per_device=int(
+                self.config.get("target_tokens_per_device", 4096)
+            ),
+            min_batch_size=int(self.config.get("min_batch_size", 1)),
+            max_batch_size=int(self.config.get("max_batch_size", batch_size)),
+        )
+        try:
+            return planner.plan(
+                batch_size,
+                grad_acc,
+                profile,
+                max_seq_length=max_seq_length,
+            )
+        except Exception:  # pragma: no cover - scheduling failure
+            logger.debug("Falling back to static schedule", exc_info=True)
+            per_device = max(1, int(batch_size))
+            grad_steps = max(1, int(grad_acc))
+            return TrainingSchedule(
+                per_device_batch_size=per_device,
+                gradient_accumulation_steps=grad_steps,
+                effective_batch_size=per_device * grad_steps,
+                tokens_per_micro_batch=None,
+                tokens_per_example=None,
+                reason="static_schedule_fallback",
+            )
 
     def _capture_vram_snapshot(self) -> dict[str, Any]:
         if torch is None or not torch.cuda.is_available():
