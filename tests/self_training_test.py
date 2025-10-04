@@ -1,5 +1,7 @@
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -211,3 +213,43 @@ async def test_dataset_catalog_and_pii_scrubbing(
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     assert catalog["latest_version"] == 1
     assert catalog["versions"][0]["run_id"] == dataset_meta["run_id"]
+
+
+def test_collect_internal_reasoning_records_handles_running_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DummyHippo:
+        MAX_HISTORY = 5
+
+        def __init__(self, enable_scheduler: bool = False) -> None:
+            self.enable_scheduler = enable_scheduler
+            self.calls: list[tuple[str, int]] = []
+
+        async def history(self, user_id: str, limit: int):  # type: ignore[override]
+            self.calls.append((user_id, limit))
+            return [
+                SimpleNamespace(
+                    query="Please calculate 2 + 2",  # matches reasoning keywords
+                    response="<reasoning>2+2=4</reasoning><answer>4</answer>",
+                )
+            ]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "monGARS.core.hippocampus",
+        SimpleNamespace(Hippocampus=DummyHippo),
+    )
+
+    def fake_get_running_loop():
+        return object()
+
+    monkeypatch.setattr(
+        "monGARS.core.self_training.asyncio.get_running_loop", fake_get_running_loop
+    )
+
+    engine = SelfTrainingEngine()
+    records = engine._collect_internal_reasoning_records(limit=1)
+
+    assert records
+    assert records[0]["answer"] == "4"
+    assert records[0]["metadata"]["source"] == "hippocampus"

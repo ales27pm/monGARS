@@ -34,6 +34,7 @@ from modules.neurons.registry import update_manifest
 from modules.neurons.training import (
     PreferenceAlignmentLoop,
     PreferenceDatasetCurator,
+    ReinforcementLoop,
 )
 from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
 from modules.ray_service import update_ray_deployment
@@ -41,6 +42,7 @@ from monGARS.config import get_settings
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +191,7 @@ class EvolutionOrchestrator:
         self._flow_name = flow_name
         self._deployment_name = deployment_name
         self._reinforcement_limit = 128
+        self._reasoning_loop: ReinforcementLoop | None = None
 
         self._workflow_backend = (
             workflow_backend
@@ -332,6 +335,11 @@ class EvolutionOrchestrator:
         except Exception:  # pragma: no cover - reinforcement must not block
             logger.exception("Reinforcement alignment loop failed")
 
+        try:
+            self._run_reasoning_alignment()
+        except Exception:  # pragma: no cover - reasoning loop must not block
+            logger.exception("Reasoning GRPO loop failed")
+
         return run_dir
 
     def _ensure_alignment_components(
@@ -395,6 +403,44 @@ class EvolutionOrchestrator:
             aligner.reinforcement_loop(preference_samples)
         except Exception:
             logger.exception("reinforcement.alignment.execution_failed")
+
+    def _run_reasoning_alignment(self) -> None:
+        if self._slot_manager_cls is None:
+            logger.info(
+                "reinforcement.reasoning.slot_unavailable",
+                extra={"model_id": self.model_id},
+            )
+            return
+
+        if self._reasoning_loop is None:
+            self._reasoning_loop = ReinforcementLoop(
+                model_id=self.model_id,
+                slot_name=TRAINING_SLOT_NAME,
+                max_seq_length=2048,
+                output_dir=self.registry_path / "reasoning_grpo",
+                registry_path=self.registry_path,
+                slot_manager_cls=self._slot_manager_cls,
+                self_training_engine=SelfTrainingEngine(),
+            )
+
+        try:
+            summary = self._reasoning_loop.train_reasoning_grpo(num_samples=100)
+        except RuntimeError as exc:
+            logger.info(
+                "reinforcement.reasoning.skipped",
+                extra={"reason": str(exc)},
+            )
+        except Exception:
+            logger.exception("reinforcement.reasoning.unexpected_error")
+        else:
+            logger.info(
+                "reinforcement.reasoning.completed",
+                extra={
+                    "accuracy": summary.accuracy,
+                    "steps": summary.steps,
+                    "eval_samples": summary.eval_samples,
+                },
+            )
 
     def _persist_run_artifacts(
         self,

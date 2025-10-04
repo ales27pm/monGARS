@@ -1,10 +1,11 @@
 import asyncio
+import asyncio
 import logging
 from dataclasses import dataclass
 
 import GPUtil
 import psutil
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
 
 from .ui_events import event_bus, make_event
 
@@ -24,6 +25,12 @@ TRAINING_TOKEN_COUNTER = meter.create_counter(
     unit="token",
     description="Approximate number of tokens processed during MNTP fine-tuning.",
 )
+
+
+def get_tracer(name: str) -> "trace.Tracer":
+    """Return an OpenTelemetry tracer configured for ``name``."""
+
+    return trace.get_tracer(name)
 
 
 @dataclass
@@ -90,4 +97,5 @@ __all__ = [
     "TRAINING_CYCLE_COUNTER",
     "TRAINING_FAILURE_COUNTER",
     "TRAINING_TOKEN_COUNTER",
+    "get_tracer",
 ]

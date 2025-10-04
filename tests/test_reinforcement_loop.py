@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,10 +14,13 @@ from modules.neurons.training.reinforcement_loop import (
     PreferenceAlignmentLoop,
     PreferenceDatasetCurator,
     PreferenceSample,
+    ReasoningRunSummary,
     ReinforcementLearningLoop,
+    ReinforcementLoop,
     ThroughputAwareScalingStrategy,
     Transition,
 )
+from monGARS.core.self_training import SelfTrainingEngine
 
 
 class FixedScalingStrategy:
@@ -366,3 +371,111 @@ def test_preference_alignment_loop_invokes_trainer_with_slot() -> None:
     assert trainer_kwargs["train_dataset"][0]["prompt"] == "Explain alignment."
     assert _SlotStub.last_slot.kwargs["max_seq_length"] == 1024
     assert "model_id" in _SlotStub.last_slot.kwargs
+
+
+def test_reasoning_reward_function_awards_bonus() -> None:
+    loop = ReinforcementLoop(
+        model_id="test-model",
+        slot_manager_cls=_SlotStub,
+        self_training_engine=SelfTrainingEngine(),
+        trainer_cls=None,
+        trainer_config_cls=None,
+        fast_model_cls=None,
+        torch_module=None,
+    )
+    dataset = [{"answer": "42"}]
+    reward_fn = loop._build_reward_function(dataset)
+    completion = (
+        "<reasoning>" + " ".join(["step"] * 60) + "</reasoning><answer>42</answer>"
+    )
+    rewards = reward_fn(completions=[completion], completion_ids=[0])
+    assert rewards == [1.5]
+
+
+def test_train_reasoning_grpo_invokes_injected_dependencies(monkeypatch, tmp_path) -> None:
+    prompt = [
+        {"role": "system", "content": SelfTrainingEngine.SYSTEM_PROMPT.strip()},
+        {"role": "user", "content": "2 + 2"},
+    ]
+    dataset_entry = {"prompt": prompt, "answer": "4"}
+
+    class StubSelfTraining(SelfTrainingEngine):
+        def curate_reasoning_dataset(self, num_samples: int = 200, internal_ratio: float = 0.5):
+            return [dataset_entry], [dataset_entry]
+
+    class DummyTokenizer:
+        def apply_chat_template(self, *_: Any, **__: Any) -> str:
+            return "prompt"
+
+        def __call__(self, *_: Any, **__: Any) -> SimpleNamespace:
+            return SimpleNamespace(to=lambda _device: None)
+
+        def decode(self, *_: Any, **__: Any) -> str:
+            return "<answer>4</answer>"
+
+        def save_pretrained(self, directory: str) -> None:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+    class DummyModel:
+        device = "cpu"
+
+        def generate(self, **_: Any) -> list[str]:
+            return ["ignored"]
+
+        def save_pretrained(self, directory: str) -> None:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+    class DummySlotManager:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def __enter__(self) -> tuple[DummyModel, DummyTokenizer]:
+            return DummyModel(), DummyTokenizer()
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class DummyTrainer:
+        def __init__(self, **_: Any) -> None:
+            self.model = DummyModel()
+            self.state = SimpleNamespace(global_step=9)
+
+        def train(self) -> None:
+            return None
+
+    def fake_config(**kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(**kwargs)
+
+    def fake_save(trainer: Any, tokenizer: Any) -> tuple[Path, Path | None]:
+        adapter_dir = tmp_path / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        return adapter_dir, None
+
+    loop = ReinforcementLoop(
+        model_id="test-model",
+        slot_name="test",
+        output_dir=tmp_path / "output",
+        registry_path=tmp_path / "registry",
+        self_training_engine=StubSelfTraining(),
+        slot_manager_cls=DummySlotManager,
+        trainer_cls=DummyTrainer,
+        trainer_config_cls=fake_config,
+        fast_model_cls=SimpleNamespace(get_peft_model=lambda model, **_: model),
+        torch_module=SimpleNamespace(no_grad=lambda: contextlib.nullcontext()),
+    )
+
+    monkeypatch.setattr(
+        loop,
+        "_evaluate_reasoning",
+        lambda model, dataset, tokenizer: {"accuracy": 1.0, "evaluated": 1.0},
+    )
+    monkeypatch.setattr(loop, "_save_artifacts", fake_save)
+    monkeypatch.setattr(loop, "_rollout_to_manifest", lambda *args, **kwargs: None)
+
+    summary = loop.train_reasoning_grpo(num_samples=1)
+
+    assert isinstance(summary, ReasoningRunSummary)
+    assert summary.accuracy == 1.0
+    assert summary.steps == 9
+    assert summary.adapter_dir is not None
