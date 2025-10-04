@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -19,8 +20,35 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+def _determine_sync_driver(
+    candidates: tuple[str, ...] = ("postgresql+psycopg", "postgresql+psycopg2"),
+    *,
+    logger: logging.Logger | None = None,
+) -> str:
+    """Return the first available synchronous PostgreSQL driver."""
+
+    for driver in candidates:
+        try:
+            backend = driver.split("+", 1)[1]
+        except IndexError:  # pragma: no cover - defensive guard
+            backend = driver
+        if importlib.util.find_spec(backend) is not None:
+            if logger:
+                logger.debug("Using PostgreSQL driver %s", driver)
+            return driver
+
+    if logger:
+        logger.warning(
+            "Falling back to generic 'postgresql' driver; install psycopg for optimal support.",
+        )
+    return "postgresql"
+
+
+SYNC_DRIVERNAME = _determine_sync_driver(logger=logger)
+
+
 def build_sync_url() -> URL:
-    """Build a psycopg2 SQLAlchemy URL from environment configuration."""
+    """Build a PostgreSQL SQLAlchemy URL using the available psycopg driver."""
 
     raw = os.getenv("DATABASE_URL") or os.getenv("DJANGO_DATABASE_URL")
     if raw:
@@ -41,10 +69,10 @@ def build_sync_url() -> URL:
                 "database": "DB_NAME",
             },
         )
-        return url.set(drivername="postgresql+psycopg2")
+        return url.set(drivername=SYNC_DRIVERNAME)
 
     return URL.create(
-        drivername="postgresql+psycopg2",
+        drivername=SYNC_DRIVERNAME,
         username=os.getenv("DB_USER", "mongars"),
         password=os.getenv("DB_PASSWORD", "changeme"),
         host=os.getenv("DB_HOST", "postgres"),
