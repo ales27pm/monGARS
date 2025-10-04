@@ -14,7 +14,11 @@ fi
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.yml"
 ENV_FILE="${PROJECT_ROOT}/.env"
-PROJECT_NAME=${COMPOSE_PROJECT_NAME:-mongars}
+# Keep the default project name aligned with the docker-compose network alias
+# so that the generated network name matches the expectation inside
+# docker-compose.yml. Users can still override COMPOSE_PROJECT_NAME in their
+# environment.
+PROJECT_NAME=${COMPOSE_PROJECT_NAME:-mongars-1}
 
 # Colors (only if stdout is a TTY)
 if [[ -t 1 ]]; then
