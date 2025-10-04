@@ -1,4 +1,4 @@
-FROM rayproject/ray:2.48.0-py311
+FROM rayproject/ray:2.9.3-py311
 
 # Elevate to root to install system level dependencies, then drop back to the
 # default non-root user for runtime execution.
@@ -22,7 +22,7 @@ RUN git lfs install --system
 
 # Python dependencies required for LLM inference within Ray Serve deployments.
 RUN pip install --no-cache-dir \
-        "ray[serve]==2.48.0" \
+        "ray[serve]==2.9.3" \
         "accelerate>=0.33.0" \
         "llm2vec>=0.2.3" \
         "peft>=0.13.2" \
@@ -35,4 +35,4 @@ USER ray
 ENV PYTHONUNBUFFERED=1 \
     RAY_DASHBOARD_ADDRESS=http://0.0.0.0:8265
 
-CMD ["python","-m","ray.serve.scripts","start","--http-host","0.0.0.0","--http-port","8002","--include-dashboard","true"]
+CMD ["serve","start","--http-host","0.0.0.0","--http-port","8000"]

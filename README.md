@@ -156,8 +156,10 @@ development secrets, and keeps your Compose project name consistent. Optional
 profiles:
 
 - `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
-- `--with-ray` provisions a Ray Serve control plane listening on
-  `${RAY_HTTP_PORT:-8002}`; toggle `USE_RAY_SERVE=true` and update
+- `--with-ray` provisions a Ray head node and Serve deployment. The Serve HTTP
+  endpoint binds to `${RAY_HTTP_PORT:-8000}`, the dashboard is exposed via
+  `${RAY_DASHBOARD_PORT:-8265}`, and the Ray Client API is forwarded to
+  `${RAY_CLIENT_PORT:-10001}`. Toggle `USE_RAY_SERVE=true` and update
   `RAY_SERVE_URL` in `.env` if you expose a different port.
 - Base images (now built from the public
   `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image—no NVIDIA Container
@@ -187,9 +189,9 @@ user/token.
 | --- | --- |
 | `SECRET_KEY` | Required for JWT signing and Fernet encryption. Never leave empty. |
 | `API_PORT` / `WEBAPP_PORT` | Host ports exposed for the FastAPI service and Django operator console. |
-| `POSTGRES_PORT`, `REDIS_PORT`, `MLFLOW_PORT`, `VAULT_PORT`, `OLLAMA_PORT`, `RAY_HTTP_PORT`, `RAY_DASHBOARD_PORT` | Host bindings for stateful and optional services managed by Compose. |
+| `POSTGRES_PORT`, `REDIS_PORT`, `MLFLOW_PORT`, `VAULT_PORT`, `OLLAMA_PORT`, `RAY_HTTP_PORT`, `RAY_DASHBOARD_PORT`, `RAY_CLIENT_PORT` | Host bindings for stateful and optional services managed by Compose. |
 | `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
-| `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8002/generate`). |
+| `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8000/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. When `DJANGO_ALLOWED_HOSTS` is unset the console now trusts `localhost`, loopback addresses, `0.0.0.0`, and Compose provided `WEBAPP_HOST`/`HOST` values automatically. `DJANGO_DEBUG_HOSTS` appends comma-separated hostnames/IPs that should be trusted automatically when `DJANGO_DEBUG=true`. |
 | `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). |
 | `LLM_MODELS_CONFIG_PATH` | Path to the JSON manifest listing model profiles and download preferences. |
