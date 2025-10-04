@@ -30,8 +30,8 @@ def apply_database_url_overrides(
 
     Parameters mirror PostgreSQL connection attributes. Values that are ``None`` or empty
     strings are ignored. When ``logger`` is provided, debug statements indicate which
-    components were overridden and invalid port inputs are reported at warning level
-    without echoing the original value.
+    non-sensitive components were overridden and invalid port inputs are reported at
+    warning level without echoing the original value.
     """
 
     field_sources = field_sources or {}
@@ -50,11 +50,6 @@ def apply_database_url_overrides(
     norm_password = _normalize_text(password)
     if norm_password and norm_password != url.password:
         overrides["password"] = norm_password
-        if logger:
-            logger.debug(
-                "Applying %s override to database password.",
-                field_sources.get("password", "password"),
-            )
 
     norm_host = _normalize_text(host)
     if norm_host and norm_host != url.host:

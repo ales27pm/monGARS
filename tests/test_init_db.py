@@ -91,6 +91,21 @@ def test_build_sync_url_honours_password_override(monkeypatch):
     assert url.password == "override-secret"
 
 
+def test_build_sync_url_password_override_suppresses_logging(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mongars:changeme@postgres:5432/mongars_db",
+    )
+    monkeypatch.setenv("DB_PASSWORD", "override-secret")
+    module = _load_init_db_script(monkeypatch)
+
+    module.build_sync_url()
+
+    assert "database password" not in caplog.text
+    assert "password override" not in caplog.text
+
+
 def test_build_sync_url_invalid_port_logging(monkeypatch, caplog):
     caplog.set_level(logging.WARNING)
     monkeypatch.setenv(
