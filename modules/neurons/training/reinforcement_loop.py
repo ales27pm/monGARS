@@ -24,6 +24,7 @@ observability pipelines.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import statistics
@@ -32,7 +33,20 @@ import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Protocol, Sequence
+from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
+
+try:  # pragma: no cover - optional dependency at runtime
+    from trl import DPOConfig, DPOTrainer  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - trl is optional in tests
+    DPOConfig = None  # type: ignore[assignment]
+    DPOTrainer = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency at runtime
+    from datasets import Dataset  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - datasets optional
+    Dataset = None  # type: ignore[assignment]
+
+from monGARS.core.model_slot_manager import ModelSlotManager
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +172,28 @@ class ReinforcementLearningSummary:
     failures: int
     wall_clock_seconds: float
     worker_history: list[WorkerAdjustment]
+
+
+@dataclass(slots=True)
+class PreferenceSample:
+    """Single prompt-preference pair for DPO alignment."""
+
+    prompt: str
+    chosen: str
+    rejected: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_record(self) -> dict[str, Any]:
+        """Return a mapping compatible with :class:`~trl.DPOTrainer`."""
+
+        record = {
+            "prompt": self.prompt,
+            "chosen": self.chosen,
+            "rejected": self.rejected,
+        }
+        if self.metadata:
+            record["metadata"] = dict(self.metadata)
+        return record
 
     def successful_episodes(self) -> Iterable[EpisodeResult]:
         """Return an iterator over the successful episode results."""
@@ -695,3 +731,410 @@ class ReinforcementLearningLoop:
                 "Falling back to shared policy instance; concurrency may degrade"
             )
             return self._policy
+
+
+class PreferenceDatasetCurator:
+    """Build DPO preference datasets from curated memory and curiosity signals."""
+
+    def __init__(
+        self,
+        *,
+        curiosity_engine: Any | None = None,
+        hippocampus: Any | None = None,
+    ) -> None:
+        self._curiosity = curiosity_engine
+        self._hippocampus = hippocampus
+
+    async def build_async(
+        self,
+        dataset: Iterable[Any] | Dataset | None,
+        *,
+        limit: int | None = None,
+    ) -> list[PreferenceSample]:
+        """Asynchronously transform ``dataset`` into preference samples."""
+
+        if dataset is None:
+            return []
+
+        samples: list[PreferenceSample] = []
+        for idx, record in enumerate(self._iter_dataset(dataset)):
+            if limit is not None and idx >= limit:
+                break
+            sample = await self._record_to_sample(record)
+            if sample is None:
+                continue
+            samples.append(sample)
+        return samples
+
+    def build(
+        self,
+        dataset: Iterable[Any] | Dataset | None,
+        *,
+        limit: int | None = None,
+    ) -> list[PreferenceSample]:
+        """Synchronously construct preference samples from ``dataset``.
+
+        ``CuriosityEngine`` and ``Hippocampus`` integrations are optional; when
+        provided they enrich prompts with recent context to stabilise DPO
+        alignment.
+        """
+
+        async def _inner() -> list[PreferenceSample]:
+            return await self.build_async(dataset, limit=limit)
+
+        try:
+            return asyncio.run(_inner())
+        except RuntimeError as exc:  # pragma: no cover - running loop guard
+            if "asyncio.run() cannot be called" in str(exc):
+                raise RuntimeError(
+                    "PreferenceDatasetCurator.build() cannot run inside an active "
+                    "event loop; use build_async() instead."
+                ) from exc
+            raise
+
+    def _iter_dataset(self, dataset: Iterable[Any] | Dataset) -> Iterable[Any]:
+        if isinstance(dataset, PreferenceSample):
+            return [dataset]
+        if Dataset is not None and isinstance(dataset, Dataset):  # pragma: no cover
+            return dataset  # type: ignore[return-value]
+        if isinstance(dataset, Iterable):
+            return dataset
+        return [dataset]
+
+    async def _record_to_sample(self, record: Any) -> PreferenceSample | None:
+        if isinstance(record, PreferenceSample):
+            return record
+        if not isinstance(record, Mapping):
+            return None
+
+        metadata = self._extract_metadata(record)
+        prompt = self._extract_prompt(record, metadata)
+        chosen = self._extract_response(record, metadata)
+        if not prompt or not chosen:
+            return None
+
+        contexts = await self._gather_context(prompt, metadata)
+        prompt_with_context = self._apply_context(prompt, contexts)
+        rejected = self._select_rejected(record, metadata, chosen)
+
+        return PreferenceSample(
+            prompt=prompt_with_context,
+            chosen=chosen,
+            rejected=rejected,
+            metadata=metadata,
+        )
+
+    def _extract_metadata(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        metadata = record.get("metadata")
+        if isinstance(metadata, Mapping):
+            return {str(key): value for key, value in metadata.items()}
+
+        skip_keys = {
+            "prompt",
+            "chosen",
+            "rejected",
+            "text",
+            "response",
+            "answer",
+            "completion",
+            "output",
+        }
+        collected = {
+            str(key): value for key, value in record.items() if key not in skip_keys
+        }
+        return collected
+
+    def _extract_prompt(
+        self, record: Mapping[str, Any], metadata: Mapping[str, Any]
+    ) -> str | None:
+        prompt = self._first_string(
+            record,
+            ("prompt", "query", "input", "question"),
+        )
+        if prompt:
+            return prompt
+
+        prompt = self._first_string(
+            metadata,
+            ("prompt", "query", "input", "question", "user_query"),
+        )
+        if prompt:
+            return prompt
+
+        text_value = record.get("text")
+        if isinstance(text_value, str) and text_value.strip():
+            return text_value.strip()
+
+        return None
+
+    def _extract_response(
+        self, record: Mapping[str, Any], metadata: Mapping[str, Any]
+    ) -> str | None:
+        chosen = self._first_string(
+            record,
+            ("chosen", "answer", "response", "output", "completion", "text"),
+        )
+        if chosen:
+            return chosen
+
+        chosen = self._first_string(
+            metadata,
+            ("chosen", "answer", "response", "output", "completion", "text"),
+        )
+        return chosen
+
+    def _select_rejected(
+        self,
+        record: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+        chosen: str,
+    ) -> str:
+        rejected = self._first_string(
+            record,
+            ("rejected", "baseline_response", "negative", "worst"),
+        )
+        if not rejected:
+            rejected = self._first_string(
+                metadata,
+                ("rejected", "baseline_response", "negative", "fallback"),
+            )
+        if not rejected or rejected.strip() == chosen.strip():
+            topic = self._first_string(
+                metadata, ("topic", "subject", "intent", "query")
+            )
+            if topic:
+                rejected = f"I do not have enough trusted information about {topic}."
+            else:
+                rejected = (
+                    "I'm unsure about that request right now, but I'll keep learning."
+                )
+        return rejected
+
+    async def _gather_context(
+        self, prompt: str, metadata: Mapping[str, Any]
+    ) -> list[str]:
+        contexts: list[str] = []
+
+        meta_context = self._first_string(
+            metadata, ("additional_context", "context", "background")
+        )
+        if meta_context:
+            contexts.append(meta_context)
+
+        if self._curiosity is not None:
+            try:
+                gap = await self._curiosity.detect_gaps(
+                    {
+                        "last_query": prompt,
+                        "history": metadata.get("history"),
+                    }
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("reinforcement.curator.curiosity_failed")
+            else:
+                additional = (
+                    gap.get("additional_context") if isinstance(gap, Mapping) else None
+                )
+                if isinstance(additional, str) and additional.strip():
+                    contexts.append(additional.strip())
+
+        if self._hippocampus is not None:
+            user_id = metadata.get("user_id")
+            if isinstance(user_id, str) and user_id:
+                try:
+                    history_items = await self._hippocampus.history(user_id, limit=1)
+                except Exception:  # pragma: no cover - hippocampus optional
+                    logger.exception("reinforcement.curator.hippocampus_failed")
+                else:
+                    for item in history_items:
+                        response = getattr(item, "response", None)
+                        if isinstance(response, str) and response.strip():
+                            contexts.append(response.strip())
+                            break
+
+        return contexts
+
+    def _apply_context(self, prompt: str, contexts: list[str]) -> str:
+        if not contexts:
+            return prompt
+        unique: list[str] = []
+        seen: set[str] = set()
+        for context in contexts:
+            cleaned = context.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            unique.append(cleaned)
+        if not unique:
+            return prompt
+        context_block = "\n\n".join(unique)
+        return f"{prompt}\n\nContext:\n{context_block}"
+
+    @staticmethod
+    def _first_string(
+        source: Mapping[str, Any] | None, keys: Sequence[str]
+    ) -> str | None:
+        if source is None:
+            return None
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    return stripped
+        return None
+
+
+class PreferenceAlignmentLoop:
+    """Execute a DPO-based reinforcement loop using Unsloth-backed models."""
+
+    def __init__(
+        self,
+        *,
+        slot_manager_cls: type[ModelSlotManager] | None = None,
+        dpo_trainer_cls: type[Any] | None = None,
+        dpo_config_cls: type[Any] | None = None,
+        slot_name: str = "rl_slot",
+        model_id: str | None = None,
+        output_dir: str = "dpo_outputs",
+        beta: float = 0.1,
+        max_length: int = 1024,
+        max_prompt_length: int = 512,
+    ) -> None:
+        self._slot_name = slot_name
+        self._model_id = model_id
+        self._slot_manager_cls = slot_manager_cls or ModelSlotManager
+        self._dpo_trainer_cls = dpo_trainer_cls or DPOTrainer
+        self._dpo_config_cls = dpo_config_cls or DPOConfig
+        self._output_dir = output_dir
+        self._beta = float(beta)
+        self._max_length = max(1, int(max_length))
+        self._max_prompt_length = max(1, int(max_prompt_length))
+        self._last_training_metrics: dict[str, Any] | None = None
+
+    def reinforcement_loop(
+        self, dataset: Sequence[PreferenceSample | Mapping[str, Any]] | Dataset
+    ) -> Any:
+        """Fine-tune the active model on ``dataset`` using DPO."""
+
+        if self._slot_manager_cls is None:
+            raise RuntimeError(
+                "ModelSlotManager is unavailable for reinforcement training"
+            )
+
+        if self._dpo_trainer_cls is None or self._dpo_config_cls is None:
+            raise RuntimeError(
+                "trl.DPOTrainer is unavailable. Install the 'trl' package to enable reinforcement alignment."
+            )
+
+        prepared_dataset = self._prepare_dataset(dataset)
+        if prepared_dataset is None:
+            logger.info("reinforcement.alignment.dataset_empty")
+            return None
+
+        with self._slot_manager_cls(
+            self._slot_name,
+            model_id=self._model_id,
+            max_seq_length=self._max_length,
+        ) as slot:
+            model, tokenizer = slot
+            if model is None or tokenizer is None:
+                raise RuntimeError("ModelSlotManager returned an empty slot")
+
+            config = self._dpo_config_cls(
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=4,
+                warmup_ratio=0.1,
+                num_train_epochs=1,
+                optim="adamw_8bit",
+                beta=self._beta,
+                output_dir=self._output_dir,
+                fp16=False,
+                bf16=False,
+                remove_unused_columns=False,
+                report_to=[],
+                logging_steps=1,
+                save_strategy="no",
+            )
+
+            trainer = self._dpo_trainer_cls(
+                model=model,
+                ref_model=None,
+                train_dataset=prepared_dataset,
+                tokenizer=tokenizer,
+                args=config,
+                beta=self._beta,
+                max_length=self._max_length,
+                max_prompt_length=self._max_prompt_length,
+            )
+
+            train_output = trainer.train()
+            metrics = getattr(train_output, "metrics", None)
+            if isinstance(metrics, Mapping):
+                self._last_training_metrics = dict(metrics)
+            else:
+                self._last_training_metrics = {"status": "completed"}
+            logger.info(
+                "reinforcement.alignment.completed",
+                extra={
+                    "samples": len(prepared_dataset),
+                    "max_length": self._max_length,
+                    "max_prompt_length": self._max_prompt_length,
+                },
+            )
+            return train_output
+
+    def _prepare_dataset(
+        self, dataset: Sequence[PreferenceSample | Mapping[str, Any]] | Dataset
+    ) -> Any:
+        if Dataset is not None and isinstance(dataset, Dataset):  # pragma: no cover
+            if len(dataset) == 0:
+                return None
+            return dataset
+
+        records: list[dict[str, Any]] = []
+        for item in dataset:
+            if isinstance(item, PreferenceSample):
+                records.append(item.to_record())
+            elif isinstance(item, Mapping):
+                prompt = item.get("prompt")
+                chosen = item.get("chosen")
+                rejected = item.get("rejected")
+                if not all(
+                    isinstance(value, str) and value.strip()
+                    for value in (prompt, chosen, rejected)
+                ):
+                    continue
+                record: dict[str, Any] = {
+                    "prompt": str(prompt),
+                    "chosen": str(chosen),
+                    "rejected": str(rejected),
+                }
+                metadata = item.get("metadata")
+                if isinstance(metadata, Mapping):
+                    record["metadata"] = dict(metadata)
+                records.append(record)
+
+        if not records:
+            return None
+
+        if Dataset is not None:  # pragma: no cover - optional dependency branch
+            try:
+                return Dataset.from_list(records)
+            except Exception:
+                logger.exception("reinforcement.alignment.dataset_conversion_failed")
+
+        return records
+
+
+__all__ = [
+    "AdaptiveScalingStrategy",
+    "BatchStatistics",
+    "PreferenceAlignmentLoop",
+    "PreferenceDatasetCurator",
+    "PreferenceSample",
+    "ReinforcementLearningLoop",
+    "ReinforcementLearningSummary",
+    "ThroughputAwareScalingStrategy",
+    "Transition",
+]

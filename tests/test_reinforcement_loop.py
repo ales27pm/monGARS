@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any
 
 from modules.neurons.training.reinforcement_loop import (
     AdaptiveScalingStrategy,
     BatchStatistics,
     EpisodeResult,
+    PreferenceAlignmentLoop,
+    PreferenceDatasetCurator,
+    PreferenceSample,
     ReinforcementLearningLoop,
     ThroughputAwareScalingStrategy,
     Transition,
@@ -250,3 +255,114 @@ def test_reinforcement_loop_invokes_batch_callback() -> None:
     assert all(isinstance(item, BatchStatistics) for item in observed)
     assert observed[0].worker_count == 1
     assert observed[0].episode_count >= 1
+
+
+class _CuriosityStub:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def detect_gaps(self, conversation_context: dict) -> dict:
+        self.calls.append(conversation_context)
+        return {
+            "status": "insufficient_knowledge",
+            "additional_context": "cached knowledge base insight",
+        }
+
+
+class _MemoryItem:
+    def __init__(self, response: str) -> None:
+        self.response = response
+
+
+class _HippocampusStub:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, int]] = []
+
+    async def history(self, user_id: str, limit: int = 10) -> list[_MemoryItem]:
+        self.requests.append((user_id, limit))
+        return [_MemoryItem("prior contextual response")] if user_id else []
+
+
+def test_preference_dataset_curator_builds_samples_with_context() -> None:
+    curiosity = _CuriosityStub()
+    hippocampus = _HippocampusStub()
+    curator = PreferenceDatasetCurator(
+        curiosity_engine=curiosity,
+        hippocampus=hippocampus,
+    )
+
+    dataset = [
+        {
+            "metadata": {
+                "user_id": "user-123",
+                "query": "Summarise the monGARS roadmap",
+            },
+            "response": "The roadmap focuses on cognition and reinforcement.",
+        }
+    ]
+
+    samples = curator.build(dataset, limit=5)
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert isinstance(sample, PreferenceSample)
+    assert "Context:" in sample.prompt
+    assert sample.chosen == "The roadmap focuses on cognition and reinforcement."
+    assert sample.rejected != sample.chosen
+    assert sample.metadata["user_id"] == "user-123"
+    assert curiosity.calls and curiosity.calls[0]["last_query"]
+    assert hippocampus.requests == [("user-123", 1)]
+
+
+class _SlotStub:
+    def __init__(self, slot_name: str, **kwargs: Any) -> None:
+        self.slot_name = slot_name
+        self.kwargs = kwargs
+        self.closed = False
+
+    def __enter__(self) -> tuple[object, object]:
+        _SlotStub.last_slot = self
+        return object(), object()
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.closed = True
+
+
+class _TrainerStub:
+    created: list[dict[str, Any]] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        _TrainerStub.created.append(kwargs)
+
+    def train(self) -> SimpleNamespace:
+        return SimpleNamespace(metrics={"preference_accuracy": 1.0})
+
+
+def test_preference_alignment_loop_invokes_trainer_with_slot() -> None:
+    loop = PreferenceAlignmentLoop(
+        slot_manager_cls=_SlotStub,
+        dpo_trainer_cls=_TrainerStub,
+        dpo_config_cls=lambda **kwargs: SimpleNamespace(**kwargs),
+        output_dir="unit-test",
+    )
+
+    dataset = [
+        {
+            "prompt": "Explain alignment.",
+            "chosen": "Alignment ensures consistent assistant behaviour.",
+            "rejected": "I cannot help with that.",
+        }
+    ]
+
+    result = loop.reinforcement_loop(dataset)
+
+    assert isinstance(result, SimpleNamespace)
+    assert result.metrics["preference_accuracy"] == 1.0
+    assert _TrainerStub.created
+    trainer_kwargs = _TrainerStub.created[-1]
+    assert trainer_kwargs["max_length"] == 1024
+    assert trainer_kwargs["max_prompt_length"] == 512
+    assert trainer_kwargs["train_dataset"][0]["prompt"] == "Explain alignment."
+    assert _SlotStub.last_slot.kwargs["max_seq_length"] == 1024
+    assert "model_id" in _SlotStub.last_slot.kwargs
