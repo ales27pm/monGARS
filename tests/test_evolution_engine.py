@@ -4,18 +4,312 @@ os.environ.setdefault("DEBUG", "1")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Callable
 from unittest.mock import AsyncMock
 
 import pytest
 
 from modules.evolution_engine.hardware import HardwareProfile
+from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from monGARS.config import HardwareHeuristics, get_settings
 from monGARS.core.evolution_engine import EvolutionEngine, PerformanceIssue
 from monGARS.core.monitor import SystemStats
 
 settings = get_settings()
+
+
+class DummyWorkflowBackend:
+    def __init__(self) -> None:
+        self.flow: Callable[..., Any] | None = None
+        self.schedule_parameters: dict[str, Any] | None = None
+        self.run_parameters: list[dict[str, Any]] = []
+
+    def build_flow(
+        self, func: Callable[..., Any], *, name: str
+    ) -> Callable[..., Any]:  # noqa: D401 - signature parity
+        self.flow = func
+        return func
+
+    def ensure_schedule(
+        self, flow: Callable[..., Any], *, parameters: dict[str, Any]
+    ) -> None:
+        self.schedule_parameters = dict(parameters)
+
+    def run(
+        self, flow: Callable[..., Any], *, parameters: dict[str, Any]
+    ) -> Any:
+        self.run_parameters.append(dict(parameters))
+        return flow(**parameters)
+
+
+def _mock_idle(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.cpu_percent",
+        lambda interval=None: 5.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.virtual_memory",
+        lambda: SimpleNamespace(percent=10.0),
+        raising=False,
+    )
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
+    )
+
+
+def _mock_torch_vram(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    allocated_gb: float,
+    fail_stage: str | None = None,
+) -> None:
+    allocated_bytes = allocated_gb * (1024**3)
+
+    class _FakeCuda:
+        def is_available(self) -> bool:
+            return True
+
+        def device_count(self) -> int:
+            return 1
+
+        def get_device_properties(self, index: int) -> SimpleNamespace:
+            if fail_stage == "properties":
+                raise RuntimeError("properties unavailable")
+            return SimpleNamespace(name=f"cuda:{index}")
+
+        @contextmanager
+        def device(self, index: int):  # type: ignore[override]
+            if fail_stage == "device":
+                raise RuntimeError("device not accessible")
+            yield None
+
+        def memory_allocated(self) -> float:
+            if fail_stage == "memory":
+                raise RuntimeError("memory query failed")
+            return allocated_bytes
+
+    fake_torch = SimpleNamespace(cuda=_FakeCuda())
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
+    )
+
+
+ def test_orchestrator_registers_interval_schedule(
+     monkeypatch: pytest.MonkeyPatch,
+ ) -> None:
+     backend = DummyWorkflowBackend()
+
+     class _NoopTrainer:
+         def __init__(
+             self, training_config_path: str, output_dir: str
+         ) -> None:  # noqa: D401
+             self.training_config_path = training_config_path
+             self.output_dir = output_dir
+
+         def fit(self, dataset: Any) -> dict[str, Any]:  # pragma: no cover - unused
+             return {}
+
+     monkeypatch.setenv("USE_RAY_SERVE", "false")
+     orchestrator = EvolutionOrchestrator(
+         workflow_backend=backend,
+         trainer_cls=_NoopTrainer,
+         data_collector=lambda: [],
+         slot_manager_cls=None,
+     )
+
+     assert backend.schedule_parameters == {"force": False}
+     assert backend.flow is not None
+    assert orchestrator.workflow_backend is backend
+
+def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = DummyWorkflowBackend()
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.cpu_percent",
+        lambda interval=None: 95.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.psutil.virtual_memory",
+        lambda: SimpleNamespace(percent=40.0),
+        raising=False,
+    )
+    fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
+    )
+
+    orchestrator = EvolutionOrchestrator(
+        workflow_backend=backend,
+        trainer_cls=lambda *args, **kwargs: None,  # type: ignore[arg-type]
+        slot_manager_cls=None,
+        data_collector=lambda: ["data"],
+    )
+
+    assert orchestrator.run_training_cycle() is None
+
+
+def test_orchestrator_skips_when_vram_pressure(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = DummyWorkflowBackend()
+    _mock_idle(monkeypatch)
+    _mock_torch_vram(monkeypatch, allocated_gb=8.5)
+
+    orchestrator = EvolutionOrchestrator(
+        workflow_backend=backend,
+        trainer_cls=lambda *args, **kwargs: None,  # type: ignore[arg-type]
+        slot_manager_cls=None,
+        data_collector=lambda: ["sample"],
+    )
+
+    assert orchestrator.run_training_cycle() is None
+
+
+def test_orchestrator_trains_when_vram_query_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = DummyWorkflowBackend()
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class RecordingTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            return {"status": "success", "artifacts": {"adapter": "stub"}}
+
+    _mock_idle(monkeypatch)
+    _mock_torch_vram(monkeypatch, allocated_gb=1.0, fail_stage="properties")
+
+    manifest_path = tmp_path / "manifest.json"
+
+    def fake_update_manifest(
+        registry: Path, summary: dict[str, Any], history_limit: int = 10
+    ):
+        manifest_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(path=manifest_path, build_payload=lambda: summary)
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_manifest",
+        fake_update_manifest,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_ray_deployment",
+        lambda payload: None,
+    )
+
+    orchestrator = EvolutionOrchestrator(
+        workflow_backend=backend,
+        training_config_path=str(config_path),
+        trainer_cls=RecordingTrainer,
+        slot_manager_cls=None,
+        data_collector=lambda: ["data"],
+    )
+
+    run_dir = orchestrator.run_training_cycle(force=True)
+    assert run_dir is not None
+
+
+def test_orchestrator_runs_cycle_and_rolls_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = DummyWorkflowBackend()
+    registry_path = tmp_path / "registry"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class DummySlotManager:
+        enter_calls = 0
+
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def __enter__(self) -> tuple[object, object]:
+            DummySlotManager.enter_calls += 1
+            return object(), object()
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            pass
+
+    class RecordingTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            adapter_dir = self.output_dir / "adapter"
+            adapter_dir.mkdir(parents=True, exist_ok=True)
+            weights_path = adapter_dir / "adapter.bin"
+            weights_path.write_text("weights", encoding="utf-8")
+            return {
+                "status": "success",
+                "artifacts": {
+                    "adapter": str(adapter_dir),
+                    "weights": str(weights_path),
+                },
+                "version": "cycle-1",
+                "metrics": {"loss": 0.1},
+            }
+
+    rollout_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_ray_deployment",
+        lambda payload: rollout_calls.append(payload),
+    )
+
+    class _Settings:
+        USE_RAY_SERVE = True
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.get_settings",
+        lambda: _Settings(),
+    )
+
+    manifest_path = registry_path / "adapter_manifest.json"
+
+    def fake_update_manifest(
+        registry: Path, summary: dict[str, Any], history_limit: int = 10
+    ):
+        manifest_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(
+            path=manifest_path,
+            build_payload=lambda: {
+                "adapter_path": summary["artifacts"]["adapter"],
+                "version": summary.get("version", ""),
+            },
+        )
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_manifest",
+        fake_update_manifest,
+    )
+
+    _mock_idle(monkeypatch)
+
+    orchestrator = EvolutionOrchestrator(
+        workflow_backend=backend,
+        model_registry_path=str(registry_path),
+        training_config_path=str(config_path),
+        trainer_cls=RecordingTrainer,
+        slot_manager_cls=DummySlotManager,
+        data_collector=lambda: ["sample"],
+    )
+
+    run_dir = orchestrator.run_training_cycle()
+    assert run_dir is not None
+    summary_path = run_dir / "training_summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["status"] == "success"
+    assert rollout_calls
+    assert rollout_calls[0]["adapter_path"] == summary["artifacts"]["adapter"]
+    assert DummySlotManager.enter_calls == 1
 
 
 @pytest.mark.asyncio
