@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import hashlib
+import importlib
 import logging
 import os
 import threading
@@ -13,6 +13,15 @@ from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import httpx
+
+# guard torch as an optional ML dependency that may be absent on CPU-only hosts
+try:  # pragma: no cover - optional dependency for local slot fallback
+    import torch
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 from opentelemetry import metrics
 
 try:  # pragma: no cover - optional dependency during tests
@@ -32,6 +41,7 @@ from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
 from monGARS.config import get_settings
 
 from .model_manager import LLMModelManager, ModelDefinition
+from .model_slot_manager import ModelSlotManager
 from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
@@ -135,7 +145,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
 
         try:
             unsloth = importlib.import_module("unsloth")
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, NotImplementedError):
             logger.info(
                 "llm.unsloth.unavailable", extra={"patched": False, "available": False}
             )
@@ -491,7 +501,7 @@ class LLMIntegration:
         return await self._ollama_cb.call(call_api)
 
     async def _call_local_provider(self, prompt: str, task_type: str) -> dict[str, Any]:
-        """Invoke the local Ollama provider and return its response."""
+        """Invoke the local provider and return its response."""
 
         await self._ensure_local_models()
         model_definition = self._model_manager.get_model_definition(task_type)
@@ -513,33 +523,116 @@ class LLMIntegration:
 
         if not ollama:
             logger.error("llm.ollama.unavailable")
+            fallback = await self._slot_model_fallback(
+                prompt, task_type, reason="ollama_missing"
+            )
+            if fallback is not None:
+                return fallback
             raise self.LocalProviderError("Ollama client is not available.")
 
         try:
             return await self._ollama_call(model_definition, prompt)
         except OllamaNotAvailableError:
             logger.exception("llm.ollama.unavailable")
+            fallback = await self._slot_model_fallback(
+                prompt, task_type, reason="ollama_not_available"
+            )
+            if fallback is not None:
+                return fallback
             raise self.LocalProviderError("Ollama client is not available.")
         except RetryError:
             logger.exception(
                 "llm.ollama.retry_exhausted",
                 extra={"model_name": model_name, "task_type": task_type},
             )
+            fallback = await self._slot_model_fallback(
+                prompt, task_type, reason="retry_exhausted"
+            )
+            if fallback is not None:
+                return fallback
             raise self.LocalProviderError("Unable to generate response at this time.")
         except CircuitBreakerOpenError:
             logger.error(
                 "llm.ollama.circuit_open",
                 extra={"model_name": model_name, "task_type": task_type},
             )
+            fallback = await self._slot_model_fallback(
+                prompt, task_type, reason="circuit_open"
+            )
+            if fallback is not None:
+                return fallback
             raise self.LocalProviderError("Ollama circuit is temporarily open.")
         except Exception as exc:
             logger.exception(
                 "llm.ollama.error",
                 extra={"model_name": model_name, "task_type": task_type},
             )
+            fallback = await self._slot_model_fallback(
+                prompt, task_type, reason="exception"
+            )
+            if fallback is not None:
+                return fallback
             raise self.LocalProviderError(
                 "An error occurred while generating the response."
             ) from exc
+
+    async def _slot_model_fallback(
+        self, prompt: str, task_type: str, *, reason: str
+    ) -> dict[str, Any] | None:
+        """Attempt to satisfy a request using the slot-managed local model."""
+
+        try:
+            response = await self._generate_with_model_slot(prompt, task_type)
+        except self.LocalProviderError:
+            return None
+        logger.info(
+            "llm.slot.fallback_success",
+            extra={"task_type": task_type, "reason": reason},
+        )
+        return response
+
+    async def _generate_with_model_slot(
+        self, prompt: str, task_type: str
+    ) -> dict[str, Any]:
+        """Generate a response using the Unsloth-backed model slot."""
+
+        if torch is None:
+            raise self.LocalProviderError(
+                "Local slot fallback requires PyTorch. Install torch to enable this path."
+            ) from _TORCH_IMPORT_ERROR
+
+        def _run_generation() -> dict[str, Any]:
+            assert torch is not None  # noqa: S101 - guarded above
+            with ModelSlotManager("primary") as (model, tokenizer):
+                if model is None or tokenizer is None:
+                    raise RuntimeError("Model slot returned empty artefacts")
+                inputs = tokenizer(prompt, return_tensors="pt")
+                device = getattr(model, "device", None)
+                if device is not None:
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                generation_kwargs = {
+                    "max_new_tokens": 512,
+                    "temperature": float(self._settings.AI_MODEL_TEMPERATURE),
+                    "top_p": 0.9,
+                    "do_sample": True,
+                }
+                with torch.inference_mode():
+                    output = model.generate(**inputs, **generation_kwargs)
+                if hasattr(output, "sequences"):
+                    output_ids = output.sequences[0]
+                else:
+                    output_ids = output[0]
+                text = tokenizer.decode(output_ids, skip_special_tokens=True)
+                return {"message": {"content": text}}
+
+        try:
+            return await asyncio.to_thread(_run_generation)
+        except Exception as exc:  # pragma: no cover - safety net for inference
+            logger.exception(
+                "llm.slot.generate_failed",
+                extra={"task_type": task_type},
+            )
+            raise self.LocalProviderError("Local model generation failed.") from exc
 
     async def generate_response(
         self, prompt: str, task_type: str = "general"
