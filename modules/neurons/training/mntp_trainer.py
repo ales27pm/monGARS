@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -52,6 +53,26 @@ from monGARS.core.monitor import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _callable_accepts_kwarg(callable_obj: Any, name: str) -> bool:
+    """Best-effort detection for optional keyword arguments.
+
+    The Unsloth helpers evolve quickly; this guard prevents ``TypeError``
+    explosions when newer/older versions expose different kwargs.
+    """
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):  # pragma: no cover - C extensions
+        return False
+    parameter = signature.parameters.get(name)
+    if parameter is None:
+        return False
+    return parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
 
 
 @dataclass(frozen=True)
@@ -673,8 +694,8 @@ class MNTPTrainer:
         dataset: Any,
         *,
         epochs: int = 1,
-        batch_size: int = 2,
-        grad_acc: int = 4,
+        batch_size: int = 1,
+        grad_acc: int = 16,
     ) -> dict[str, Any]:
         if SFTTrainer is None or SFTConfig is None:
             raise RuntimeError("trl.SFTTrainer is not available")
@@ -695,9 +716,12 @@ class MNTPTrainer:
             gradient_accumulation_steps=int(max(1, grad_acc)),
             num_train_epochs=max(1, epochs),
             optim="adamw_8bit",
-            fp32=True,
+            fp16=True,
+            bf16=False,
             seed=3407,
             output_dir=str(self.output_dir / "outputs"),
+            gradient_checkpointing=True,
+            max_seq_length=max_seq_length,
         )
 
         cycle_tags = {"slot": "training_slot", "cycle": "start"}
@@ -751,6 +775,7 @@ class MNTPTrainer:
             "gradient_accumulation_steps": int(max(1, grad_acc)),
             "num_train_epochs": max(1, epochs),
             "estimated_tokens": estimated_tokens,
+            "max_seq_length": max_seq_length,
         }
         metrics.update(training_metrics)
         if vram_snapshot:
@@ -1014,12 +1039,35 @@ class MNTPTrainer:
             load_kwargs["attn_implementation"] = attn_impl
 
         if FastLanguageModel is not None and torch is not None:
+            max_seq_length = int(self.config.get("max_seq_length", 512))
+            fast_kwargs: dict[str, Any] = {
+                "model_name": model_name,
+                "max_seq_length": max_seq_length,
+                "load_in_4bit": True,
+            }
+            torch_fp16 = getattr(torch, "float16", None)
+            if torch_fp16 is not None:
+                for kwarg in ("dtype", "compute_dtype"):
+                    if _callable_accepts_kwarg(
+                        FastLanguageModel.from_pretrained, kwarg
+                    ):
+                        fast_kwargs[kwarg] = torch_fp16
+            if _callable_accepts_kwarg(
+                FastLanguageModel.from_pretrained, "bnb_4bit_quant_type"
+            ):
+                fast_kwargs["bnb_4bit_quant_type"] = "nf4"
+            elif _callable_accepts_kwarg(
+                FastLanguageModel.from_pretrained, "load_in_4bit_quant_type"
+            ):
+                fast_kwargs["load_in_4bit_quant_type"] = "nf4"
+            elif _callable_accepts_kwarg(
+                FastLanguageModel.from_pretrained, "quantization_config"
+            ):
+                fast_kwargs["quantization_config"] = {"bnb_4bit_quant_type": "nf4"}
+
             try:
                 fast_model, fast_tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[misc]
-                    model_name,
-                    max_seq_length=int(self.config.get("max_seq_length", 512)),
-                    load_in_4bit=True,
-                    dtype=torch.float32,
+                    **fast_kwargs,
                 )
             except Exception as exc:  # pragma: no cover - optional dependency failure
                 raise RuntimeError("Failed to load base language model") from exc
@@ -1028,9 +1076,10 @@ class MNTPTrainer:
             try:
                 peft_model = FastLanguageModel.get_peft_model(  # type: ignore[misc]
                     fast_model,
-                    r=8,
+                    r=16,
                     target_modules=target_modules,
                     lora_alpha=16,
+                    lora_dropout=0.0,
                     bias="none",
                     use_gradient_checkpointing="unsloth",
                 )
@@ -1070,8 +1119,8 @@ class MNTPTrainer:
 
         return LoraConfig(
             r=int(self.config.get("lora_r", 16)),
-            lora_alpha=int(self.config.get("lora_alpha", 32)),
-            lora_dropout=float(self.config.get("lora_dropout", 0.05)),
+            lora_alpha=int(self.config.get("lora_alpha", 16)),
+            lora_dropout=float(self.config.get("lora_dropout", 0.0)),
             bias="none",
             task_type=TaskType.CAUSAL_LM,
             target_modules=modules,
@@ -1093,8 +1142,9 @@ class MNTPTrainer:
                 "k_proj",
                 "v_proj",
                 "o_proj",
-                "c_attn",
-                "c_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
             ]
         return modules
 

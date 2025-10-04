@@ -44,6 +44,7 @@ class _FakeCuda:
 class _TorchStub:
     def __init__(self) -> None:
         self.float32 = "float32"
+        self.float16 = "float16"
         self.cuda = _FakeCuda()
 
 
@@ -85,17 +86,24 @@ class _DummySFTConfig:
         gradient_accumulation_steps: int,
         num_train_epochs: int,
         optim: str,
-        fp32: bool,
+        fp16: bool,
+        bf16: bool,
         seed: int,
         output_dir: str,
+        gradient_checkpointing: bool,
+        max_seq_length: int,
+        **_: Any,
     ) -> None:
         self.per_device_train_batch_size = per_device_train_batch_size
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.num_train_epochs = num_train_epochs
         self.optim = optim
-        self.fp32 = fp32
+        self.fp16 = fp16
+        self.bf16 = bf16
         self.seed = seed
         self.output_dir = output_dir
+        self.gradient_checkpointing = gradient_checkpointing
+        self.max_seq_length = max_seq_length
 
 
 class _DummySFTTrainer:
@@ -235,7 +243,7 @@ def test_fit_saves_adapter_and_emits_metrics(trainer_setup: dict[str, Any]):
     trainer = trainer_setup["trainer"]
     dataset = _FakeDataset()
 
-    summary = trainer.fit(dataset, epochs=2, batch_size=2, grad_acc=1)
+    summary = trainer.fit(dataset, epochs=2)
 
     adapter_dir = Path(summary["artifacts"]["adapter"])
     assert adapter_dir.exists()
@@ -263,3 +271,6 @@ def test_fit_saves_adapter_and_emits_metrics(trainer_setup: dict[str, Any]):
 
     assert summary["metrics"]["training_examples"] == len(dataset)
     assert summary["metrics"]["estimated_tokens"] == 5
+    assert summary["metrics"]["per_device_train_batch_size"] == 1
+    assert summary["metrics"]["gradient_accumulation_steps"] == 16
+    assert summary["metrics"]["max_seq_length"] == trainer.config["max_seq_length"]
