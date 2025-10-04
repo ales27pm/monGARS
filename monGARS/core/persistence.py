@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
 from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
@@ -566,7 +567,7 @@ class PersistenceManager:
 
         torch = PersistenceManager._import_torch()
         state_dict = torch.load(model_path, map_location=map_location)
-        
+
         tokenizer_obj: Any | None = None
         metadata: dict[str, Any] | None = None
 

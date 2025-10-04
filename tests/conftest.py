@@ -7,4 +7,4 @@ import os
 # unit tests through mocks. ``setdefault`` is intentionally avoided so the
 # test suite always overrides CI-provided connection strings.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./mongars_test.db"
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ["SECRET_KEY"] = "test-secret-key"

@@ -19,8 +19,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.db import MemoryEntry
-from monGARS.init_db import async_session_factory
 from monGARS.utils.database import AsyncSessionFactory, session_scope
+
+try:  # pragma: no cover - optional fallback during tests
+    from monGARS.init_db import async_session_factory as _default_async_session_factory
+except Exception:  # pragma: no cover - init_db may be unavailable in some contexts
+    _default_async_session_factory = None
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +64,9 @@ class Hippocampus:
         self._hydrated_users: Set[str] = set()
         self._persistence = persistence or PersistenceRepository()
         self._persist_on_store = persist_on_store and self._persistence is not None
-        self._session_factory: AsyncSessionFactory | None = (
-            session_factory or async_session_factory
+        self._session_factory: AsyncSessionFactory | None = session_factory
+        self._session_factory_fallback: AsyncSessionFactory | None = (
+            _default_async_session_factory
         )
         self._default_ttl = default_ttl
         self._flush_interval_seconds = flush_interval_seconds
@@ -77,6 +82,7 @@ class Hippocampus:
             if self._enable_scheduler and AsyncIOScheduler is not None
             else None
         )
+        self._scheduler_lock = asyncio.Lock()
         self._scheduler_started = False
         self._flush_job_id = "hippocampus.flush"
 
@@ -84,6 +90,14 @@ class Hippocampus:
         if user_id not in self._locks:
             self._locks[user_id] = asyncio.Lock()
         return self._locks[user_id]
+
+    def _resolve_session_factory(self) -> AsyncSessionFactory | None:
+        if self._session_factory is not None:
+            return self._session_factory
+        if self._session_factory_fallback is None:
+            return None
+        self._session_factory = self._session_factory_fallback
+        return self._session_factory
 
     @staticmethod
     def _normalise_timestamp(value: datetime) -> datetime:
@@ -112,30 +126,31 @@ class Hippocampus:
             history.extend(filtered)
         return removed
 
-    def _start_scheduler_if_needed(self) -> None:
-        if (
-            not self._enable_scheduler
-            or self._scheduler is None
-            or self._scheduler_started
-        ):
+    async def _start_scheduler_if_needed(self) -> None:
+        if not self._enable_scheduler or self._scheduler is None:
             return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
+        if self._scheduler_started:
             return
-        self._scheduler.configure(event_loop=loop)
-        if self._scheduler.get_job(self._flush_job_id) is None:
-            self._scheduler.add_job(
-                self.flush_now,
-                trigger="interval",
-                seconds=self._flush_interval_seconds,
-                id=self._flush_job_id,
-                coalesce=True,
-                max_instances=1,
-            )
-        if not self._scheduler.running:
-            self._scheduler.start()
-        self._scheduler_started = True
+        async with self._scheduler_lock:
+            if self._scheduler_started:
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._scheduler.configure(event_loop=loop)
+            if self._scheduler.get_job(self._flush_job_id) is None:
+                self._scheduler.add_job(
+                    self.flush_now,
+                    trigger="interval",
+                    seconds=self._flush_interval_seconds,
+                    id=self._flush_job_id,
+                    coalesce=True,
+                    max_instances=1,
+                )
+            if not self._scheduler.running:
+                self._scheduler.start()
+            self._scheduler_started = True
 
     async def _hydrate_from_persistence(self, user_id: str) -> None:
         if user_id in self._hydrated_users:
@@ -144,9 +159,10 @@ class Hippocampus:
         now = self._now()
         items: list[MemoryItem] = []
 
-        if self._session_factory is not None:
+        session_factory = self._resolve_session_factory()
+        if session_factory is not None:
             try:
-                async with session_scope(self._session_factory) as session:
+                async with session_scope(session_factory) as session:
                     stmt = (
                         select(MemoryEntry)
                         .where(MemoryEntry.user_id == user_id)
@@ -211,17 +227,20 @@ class Hippocampus:
             self._hydrated_users.add(user_id)
 
     async def _persist_memory_entry(self, item: MemoryItem) -> None:
-        if self._session_factory is None:
+        session_factory = self._resolve_session_factory()
+        if session_factory is None:
             return
+        expires_at = item.expires_at or self._compute_expiry(item.timestamp)
         entry = MemoryEntry(
             user_id=item.user_id,
             query=item.query,
             response=item.response,
             timestamp=item.timestamp,
-            ttl=item.expires_at or item.timestamp,
+            # ``ttl`` stores the absolute expiration timestamp for legacy schema compatibility.
+            ttl=expires_at,
         )
         try:
-            async with session_scope(self._session_factory, commit=True) as session:
+            async with session_scope(session_factory, commit=True) as session:
                 session.add(entry)
         except SQLAlchemyError:
             logger.exception(
@@ -239,7 +258,7 @@ class Hippocampus:
     ) -> MemoryItem:
         """Persist a query/response pair for a user."""
 
-        self._start_scheduler_if_needed()
+        await self._start_scheduler_if_needed()
         logger.debug("Storing interaction for %s", user_id)
         timestamp = self._now()
         expires_at = self._compute_expiry(timestamp, ttl)
@@ -276,7 +295,7 @@ class Hippocampus:
         if limit <= 0:
             return []
 
-        self._start_scheduler_if_needed()
+        await self._start_scheduler_if_needed()
         limit = min(limit, self.MAX_HISTORY)
         await self._hydrate_from_persistence(user_id)
         async with self._get_lock(user_id):
@@ -300,21 +319,24 @@ class Hippocampus:
                 if not history:
                     self._memory.pop(user_id, None)
                     self._hydrated_users.discard(user_id)
+                    self._locks.pop(user_id, None)
 
-        if self._session_factory is None:
+        session_factory = self._resolve_session_factory()
+        if session_factory is None:
             return removed
 
         deleted_ids: list[int] = []
         affected_users: Set[str] = set()
         try:
-            async with session_scope(self._session_factory, commit=True) as session:
+            async with session_scope(session_factory, commit=True) as session:
                 stmt = select(MemoryEntry.id, MemoryEntry.user_id).where(
                     MemoryEntry.ttl <= now
                 )
                 result = await session.execute(stmt)
                 rows = result.all()
-                if rows:
-                    deleted_ids = [row.id for row in rows]
+                candidate_ids = [row.id for row in rows]
+                if candidate_ids:
+                    deleted_ids = candidate_ids
                     affected_users = {row.user_id for row in rows}
                     await session.execute(
                         delete(MemoryEntry).where(MemoryEntry.id.in_(deleted_ids))
@@ -330,6 +352,8 @@ class Hippocampus:
             removed += len(deleted_ids)
             for user in affected_users:
                 self._hydrated_users.discard(user)
+                if user not in self._memory:
+                    self._locks.pop(user, None)
 
         logger.debug(
             "hippocampus.flush", extra={"removed": removed, "expired_ids": deleted_ids}

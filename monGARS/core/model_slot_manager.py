@@ -8,9 +8,9 @@ when GPU memory pressure exceeds the configured threshold.
 
 from __future__ import annotations
 
+import builtins
 import logging
 import threading
-import builtins
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone

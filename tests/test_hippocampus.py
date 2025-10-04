@@ -3,7 +3,6 @@ from datetime import timedelta
 import pytest
 
 import monGARS.core.hippocampus as hippocampus_module
-
 from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.init_db import reset_database

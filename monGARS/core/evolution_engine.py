@@ -73,11 +73,17 @@ class EvolutionEngine:
         self._curated_memory: deque[dict[str, Any]] = deque(maxlen=500)
 
     def _prune_curated_memory_locked(self, now: datetime) -> None:
-        while self._curated_memory:
-            expires_at = self._curated_memory[0].get("expires_at")
-            if expires_at is None or expires_at > now:
-                break
-            self._curated_memory.popleft()
+        if not self._curated_memory:
+            return
+
+        filtered = [
+            sample
+            for sample in self._curated_memory
+            if sample.get("expires_at") is None or sample["expires_at"] > now
+        ]
+        if len(filtered) != len(self._curated_memory):
+            self._curated_memory.clear()
+            self._curated_memory.extend(filtered)
 
     async def record_memory_sample(
         self,
@@ -90,6 +96,14 @@ class EvolutionEngine:
     ) -> None:
         """Capture memory interactions for downstream curation."""
 
+        now = datetime.now(timezone.utc)
+        if expires_at is not None and expires_at <= now:
+            logger.debug(
+                "evolution.memory.skip_expired",
+                extra={"user_id": user_id, "expires_at": expires_at},
+            )
+            return
+
         sample = {
             "user_id": user_id,
             "query": query,
@@ -98,7 +112,6 @@ class EvolutionEngine:
             "expires_at": expires_at,
         }
         async with self._memory_lock:
-            now = datetime.now(timezone.utc)
             self._prune_curated_memory_locked(now)
             self._curated_memory.append(sample)
         logger.debug(
@@ -114,7 +127,11 @@ class EvolutionEngine:
         async with self._memory_lock:
             now = datetime.now(timezone.utc)
             self._prune_curated_memory_locked(now)
-            snapshot = list(self._curated_memory)[-limit:]
+            snapshot = [
+                sample
+                for sample in self._curated_memory
+                if sample.get("expires_at") is None or sample["expires_at"] > now
+            ][-limit:]
         return list(reversed(snapshot))
 
     async def diagnose_performance(self) -> list[PerformanceIssue]:
