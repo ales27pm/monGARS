@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
-from pgvector.sqlalchemy import Vector
-
 from alembic import op
+from pgvector.sqlalchemy import Vector
 
 revision = "20250108_01"
 down_revision = None
