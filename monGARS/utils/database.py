@@ -1,11 +1,13 @@
-"""Database URL helpers."""
+"""Database URL helpers and session utilities."""
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import logging
-from typing import Mapping
+from typing import AsyncIterator, Mapping, Protocol
 
 from sqlalchemy.engine import URL
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _normalize_text(value: str | None) -> str | None:
@@ -88,3 +90,29 @@ def apply_database_url_overrides(
         return url
 
     return url.set(**overrides)
+
+
+class AsyncSessionFactory(Protocol):
+    """Protocol describing the async session factory used across the app."""
+
+    def __call__(self) -> AsyncIterator[AsyncSession]:  # pragma: no cover - typing aid
+        ...
+
+
+@asynccontextmanager
+async def session_scope(
+    factory: AsyncSessionFactory, *, commit: bool = False
+) -> AsyncIterator[AsyncSession]:
+    """Yield an :class:`AsyncSession` with optional commit semantics."""
+
+    async with factory() as session:
+        try:
+            yield session
+            if commit:
+                await session.commit()
+        except Exception:
+            try:
+                await session.rollback()
+            except Exception:  # pragma: no cover - defensive rollback
+                pass
+            raise

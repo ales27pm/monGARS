@@ -11,7 +11,7 @@ class MemoryService:
         self._hippocampus = hippocampus
 
     async def store(self, user_id: str, query: str, response: str):
-        await self._hippocampus.store(user_id, query, response)
+        return await self._hippocampus.store(user_id, query, response)
 
     async def history(self, user_id: str, limit: int = 10):
         return await self._hippocampus.history(user_id, limit)

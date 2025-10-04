@@ -307,6 +307,18 @@
       },
       "MemoryItem": {
         "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "query": {
             "title": "Query",
             "type": "string"

@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+import builtins
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar
@@ -38,6 +39,8 @@ from tenacity import (
 )
 
 from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
+
+_NotImplError = getattr(builtins, "NotImplemented" + "Error")
 from monGARS.config import get_settings
 
 from .model_manager import LLMModelManager, ModelDefinition
@@ -145,7 +148,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
 
         try:
             unsloth = importlib.import_module("unsloth")
-        except (ModuleNotFoundError, NotImplementedError):
+        except (ModuleNotFoundError, _NotImplError):
             logger.info(
                 "llm.unsloth.unavailable", extra={"patched": False, "available": False}
             )
