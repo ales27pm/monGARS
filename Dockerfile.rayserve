@@ -1,4 +1,9 @@
-FROM rayproject/ray:2.9.3-py311
+# syntax=docker/dockerfile:1.6
+# Ray image with CUDA 12.1 userland libs
+FROM rayproject/ray:2.9.3-py311-cu121
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=1200
 
 # Elevate to root to install system level dependencies, then drop back to the
 # default non-root user for runtime execution.
@@ -20,8 +25,13 @@ RUN apt-get update \
 
 RUN git lfs install --system
 
-# Python dependencies required for LLM inference within Ray Serve deployments.
-RUN pip install --no-cache-dir \
+# Faster, resilient installs (cache + retries) with CUDA 12.1 wheels bundled
+# directly in the PyTorch wheel to avoid long dependency chains.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U --retries 5 pip \
+    && pip install --retries 5 --extra-index-url https://download.pytorch.org/whl/cu121 \
+        torch==2.1.2+cu121 \
+    && pip install --retries 5 \
         "ray[serve]==2.9.3" \
         "accelerate>=0.33.0" \
         "llm2vec>=0.2.3" \
