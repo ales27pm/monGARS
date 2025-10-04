@@ -403,7 +403,7 @@ class EvolutionOrchestrator:
 
     def _system_is_idle(self) -> bool:
         try:
-            cpu_percent = float(psutil.cpu_percent(interval=1.0))
+            cpu_percent = float(psutil.cpu_percent(interval=1))
         except Exception as exc:
             logger.warning("Failed to measure CPU utilisation", exc_info=exc)
             return False
