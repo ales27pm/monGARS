@@ -382,8 +382,16 @@ def test_update_ray_deployment_validates_payload(monkeypatch):
     updates: dict[str, Any] = {}
 
     class FakeDeployment:
-        def update(self, *, user_config: dict[str, Any]) -> None:
-            updates.update(user_config)
+        def __init__(self) -> None:
+            self._user_config: dict[str, Any] | None = None
+
+        def options(self, *, user_config: dict[str, Any]) -> "FakeDeployment":
+            self._user_config = dict(user_config)
+            return self
+
+        def deploy(self) -> None:
+            if self._user_config is not None:
+                updates.update(self._user_config)
 
     class FakeServe:
         @staticmethod
@@ -412,7 +420,12 @@ def test_update_ray_deployment_rejects_unknown_keys(monkeypatch):
     from modules import ray_service
 
     class FakeDeployment:
-        def update(self, *, user_config: dict[str, Any]) -> None:  # pragma: no cover
+        def options(
+            self, *, user_config: dict[str, Any]
+        ) -> "FakeDeployment":  # pragma: no cover
+            return self
+
+        def deploy(self) -> None:  # pragma: no cover
             pass
 
     class FakeServe:
@@ -434,7 +447,12 @@ def test_update_ray_deployment_rejects_unsupported_types(monkeypatch):
     from modules import ray_service
 
     class FakeDeployment:
-        def update(self, *, user_config: dict[str, Any]) -> None:  # pragma: no cover
+        def options(
+            self, *, user_config: dict[str, Any]
+        ) -> "FakeDeployment":  # pragma: no cover
+            return self
+
+        def deploy(self) -> None:  # pragma: no cover
             pass
 
     class FakeServe:

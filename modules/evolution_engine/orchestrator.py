@@ -56,9 +56,7 @@ EnergyTrackerFactory = Callable[[], EnergyTracker]
 class WorkflowBackend(Protocol):
     """Protocol describing the minimal workflow backend surface area."""
 
-    def build_flow(
-        self, func: Callable[..., Any], *, name: str
-    ) -> Callable[..., Any]:
+    def build_flow(self, func: Callable[..., Any], *, name: str) -> Callable[..., Any]:
         """Return a callable representing the orchestrated flow."""
 
     def ensure_schedule(
@@ -66,9 +64,7 @@ class WorkflowBackend(Protocol):
     ) -> None:
         """Register or update the recurring schedule for ``flow``."""
 
-    def run(
-        self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]
-    ) -> Any:
+    def run(self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]) -> Any:
         """Execute ``flow`` with ``parameters`` and return its result."""
 
 
@@ -88,9 +84,7 @@ class InlineWorkflowBackend:
     ) -> None:
         self.last_schedule = {"flow": flow, "parameters": dict(parameters)}
 
-    def run(
-        self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]
-    ) -> Any:
+    def run(self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]) -> Any:
         return flow(**parameters)
 
 
@@ -106,9 +100,7 @@ class PrefectWorkflowBackend:
         jitter_seconds: float,
     ) -> None:
         if (
-            prefect_flow is None
-            or Deployment is None
-            or IntervalSchedule is None
+            prefect_flow is None or Deployment is None or IntervalSchedule is None
         ):  # pragma: no cover - optional dependency branch
             raise RuntimeError("Prefect is not available in this environment")
 
@@ -120,9 +112,7 @@ class PrefectWorkflowBackend:
         self._interval = timedelta(minutes=max(1, int(interval_minutes)))
         self._anchor_offset = max(0.0, float(jitter_seconds))
 
-    def build_flow(
-        self, func: Callable[..., Any], *, name: str
-    ) -> Callable[..., Any]:
+    def build_flow(self, func: Callable[..., Any], *, name: str) -> Callable[..., Any]:
         return self._flow_decorator(name=name)(func)
 
     def ensure_schedule(
@@ -148,9 +138,7 @@ class PrefectWorkflowBackend:
                 extra={"deployment": self._deployment_name, "error": str(exc)},
             )
 
-    def run(
-        self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]
-    ) -> Any:
+    def run(self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]) -> Any:
         return flow(**parameters)
 
 
@@ -208,9 +196,7 @@ class EvolutionOrchestrator:
 
     def run_training_cycle(self, *, force: bool = False) -> Path | None:
         try:
-            result = self._workflow_backend.run(
-                self._flow, parameters={"force": force}
-            )
+            result = self._workflow_backend.run(self._flow, parameters={"force": force})
         except Exception:
             logger.exception("Workflow execution failed")
             raise
@@ -287,14 +273,14 @@ class EvolutionOrchestrator:
 
         dataset = self._collect_dataset()
         if self._dataset_empty(dataset):
-            logger.info(
-                "Skipping training cycle because no curated data is available"
-            )
+            logger.info("Skipping training cycle because no curated data is available")
             return None
 
         run_dir = self._prepare_run_directory()
         trainer = self._instantiate_trainer(run_dir)
-        tracker = self._energy_tracker_factory() if self._energy_tracker_factory else None
+        tracker = (
+            self._energy_tracker_factory() if self._energy_tracker_factory else None
+        )
         energy_report: EnergyUsageReport | None = None
 
         try:
@@ -393,9 +379,7 @@ class EvolutionOrchestrator:
         path = run_dir / TRAINING_SUMMARY_FILENAME
         path.write_text(json.dumps(summary, indent=2, sort_keys=True))
 
-    def _write_energy_report(
-        self, run_dir: Path, report: EnergyUsageReport
-    ) -> None:
+    def _write_energy_report(self, run_dir: Path, report: EnergyUsageReport) -> None:
         payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
         path = run_dir / ENERGY_REPORT_FILENAME
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))
@@ -419,7 +403,7 @@ class EvolutionOrchestrator:
 
     def _system_is_idle(self) -> bool:
         try:
-            cpu_percent = float(psutil.cpu_percent(interval=None))
+            cpu_percent = float(psutil.cpu_percent(interval=1.0))
         except Exception as exc:
             logger.warning("Failed to measure CPU utilisation", exc_info=exc)
             return False
@@ -471,25 +455,24 @@ class EvolutionOrchestrator:
         allocations: list[float] = []
         for index in range(device_count):
             try:
-                cuda.get_device_properties(index)
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.warning(
-                    "Failed to access CUDA device properties",
-                    extra={"device_index": index},
-                    exc_info=exc,
-                )
-                return None
-
-            try:
-                with cuda.device(index):
+                allocated = float(cuda.memory_allocated(index))
+            except TypeError:
+                try:
                     allocated = float(cuda.memory_allocated())
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    logger.warning(
+                        "Failed to inspect CUDA memory allocation",
+                        extra={"device_index": index},
+                        exc_info=exc,
+                    )
+                    continue
             except Exception as exc:  # pragma: no cover - defensive guard
                 logger.warning(
                     "Failed to inspect CUDA memory allocation",
                     extra={"device_index": index},
                     exc_info=exc,
                 )
-                return None
+                continue
 
             allocations.append(allocated)
 
@@ -519,4 +502,3 @@ class EvolutionOrchestrator:
 
 
 __all__ = ["EvolutionOrchestrator", "InlineWorkflowBackend", "PrefectWorkflowBackend"]
-

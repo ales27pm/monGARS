@@ -517,7 +517,7 @@ def update_ray_deployment(user_config: Mapping[str, Any]) -> None:
     payload = _normalise_ray_update_payload(user_config)
 
     try:
-        deployment.update(user_config=payload)
+        deployment.options(user_config=payload).deploy()
     except Exception as exc:  # pragma: no cover - Ray Serve API failure
         raise RuntimeError("Failed to update Ray Serve deployment") from exc
 
