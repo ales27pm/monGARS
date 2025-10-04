@@ -7,7 +7,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,20 +21,28 @@ from monGARS.core.monitor import SystemStats
 settings = get_settings()
 
 
-class DummyScheduler:
+class DummyWorkflowBackend:
     def __init__(self) -> None:
-        self.jobs: list[dict[str, Any]] = []
-        self.running = False
+        self.flow: Callable[..., Any] | None = None
+        self.schedule_parameters: dict[str, Any] | None = None
+        self.run_parameters: list[dict[str, Any]] = []
 
-    def add_job(self, func: Any, trigger: str, **kwargs: Any) -> Any:
-        self.jobs.append({"func": func, "trigger": trigger, "kwargs": kwargs})
-        return SimpleNamespace(id=kwargs.get("id"))
+    def build_flow(
+        self, func: Callable[..., Any], *, name: str
+    ) -> Callable[..., Any]:  # noqa: D401 - signature parity
+        self.flow = func
+        return func
 
-    def start(self) -> None:
-        self.running = True
+    def ensure_schedule(
+        self, flow: Callable[..., Any], *, parameters: dict[str, Any]
+    ) -> None:
+        self.schedule_parameters = dict(parameters)
 
-    def shutdown(self, wait: bool = False) -> None:  # noqa: ARG002 - signature parity
-        self.running = False
+    def run(
+        self, flow: Callable[..., Any], *, parameters: dict[str, Any]
+    ) -> Any:
+        self.run_parameters.append(dict(parameters))
+        return flow(**parameters)
 
 
 def _mock_idle(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,8 +99,10 @@ def _mock_torch_vram(
     )
 
 
-def test_orchestrator_registers_interval_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    scheduler = DummyScheduler()
+def test_orchestrator_registers_interval_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = DummyWorkflowBackend()
 
     class _NoopTrainer:
         def __init__(
@@ -106,21 +116,18 @@ def test_orchestrator_registers_interval_job(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setenv("USE_RAY_SERVE", "false")
     orchestrator = EvolutionOrchestrator(
-        scheduler=scheduler,
-        autostart=False,
+        workflow_backend=backend,
         trainer_cls=_NoopTrainer,
         data_collector=lambda: [],
+        slot_manager_cls=None,
     )
 
-    assert scheduler.jobs, "scheduler should register a recurring training job"
-    job = scheduler.jobs[0]
-    assert job["trigger"] == "interval"
-    assert job["kwargs"]["minutes"] == 20
-    assert job["kwargs"]["jitter"] == 300
+    assert backend.schedule_parameters == {"force": False}
+    assert backend.flow is not None
 
 
 def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) -> None:
-    scheduler = DummyScheduler()
+    backend = DummyWorkflowBackend()
 
     monkeypatch.setattr(
         "modules.evolution_engine.orchestrator.psutil.cpu_percent",
@@ -138,8 +145,7 @@ def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) 
     )
 
     orchestrator = EvolutionOrchestrator(
-        scheduler=scheduler,
-        autostart=False,
+        workflow_backend=backend,
         trainer_cls=lambda *args, **kwargs: None,  # type: ignore[arg-type]
         slot_manager_cls=None,
         data_collector=lambda: ["data"],
@@ -149,13 +155,12 @@ def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_orchestrator_skips_when_vram_pressure(monkeypatch: pytest.MonkeyPatch) -> None:
-    scheduler = DummyScheduler()
+    backend = DummyWorkflowBackend()
     _mock_idle(monkeypatch)
     _mock_torch_vram(monkeypatch, allocated_gb=8.5)
 
     orchestrator = EvolutionOrchestrator(
-        scheduler=scheduler,
-        autostart=False,
+        workflow_backend=backend,
         trainer_cls=lambda *args, **kwargs: None,  # type: ignore[arg-type]
         slot_manager_cls=None,
         data_collector=lambda: ["sample"],
@@ -167,7 +172,7 @@ def test_orchestrator_skips_when_vram_pressure(monkeypatch: pytest.MonkeyPatch) 
 def test_orchestrator_trains_when_vram_query_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    scheduler = DummyScheduler()
+    backend = DummyWorkflowBackend()
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
 
@@ -200,8 +205,7 @@ def test_orchestrator_trains_when_vram_query_fails(
     )
 
     orchestrator = EvolutionOrchestrator(
-        scheduler=scheduler,
-        autostart=False,
+        workflow_backend=backend,
         training_config_path=str(config_path),
         trainer_cls=RecordingTrainer,
         slot_manager_cls=None,
@@ -215,7 +219,7 @@ def test_orchestrator_trains_when_vram_query_fails(
 def test_orchestrator_runs_cycle_and_rolls_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    scheduler = DummyScheduler()
+    backend = DummyWorkflowBackend()
     registry_path = tmp_path / "registry"
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
@@ -289,8 +293,7 @@ def test_orchestrator_runs_cycle_and_rolls_out(
     _mock_idle(monkeypatch)
 
     orchestrator = EvolutionOrchestrator(
-        scheduler=scheduler,
-        autostart=False,
+        workflow_backend=backend,
         model_registry_path=str(registry_path),
         training_config_path=str(config_path),
         trainer_cls=RecordingTrainer,
