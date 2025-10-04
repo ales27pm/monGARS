@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -7,9 +8,12 @@ import pytest
 
 from monGARS.core import model_slot_manager
 from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.persistence import ModelSnapshot
 
 
 class _DummyModel:
+    load_state_calls: list[dict[str, Any]] = []
+
     def __init__(self) -> None:
         self.device = "cuda:0"
         self.config = SimpleNamespace(use_cache=True)
@@ -19,6 +23,12 @@ class _DummyModel:
 
     def state_dict(self) -> dict[str, Any]:
         return {"weights": 1}
+
+    def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True):
+        self.__class__.load_state_calls.append(
+            {"state_dict": state_dict, "strict": strict}
+        )
+        return SimpleNamespace(missing_keys=[], unexpected_keys=[])
 
     def generate(self, **_: Any) -> list[list[int]]:
         return [[0, 1, 2]]
@@ -55,8 +65,12 @@ class _DummyFastLanguageModel:
 @pytest.fixture(autouse=True)
 def reset_slots() -> None:
     ModelSlotManager._slots.clear()
+    _DummyFastLanguageModel.load_count = 0
+    _DummyModel.load_state_calls.clear()
     yield
     ModelSlotManager._slots.clear()
+    _DummyFastLanguageModel.load_count = 0
+    _DummyModel.load_state_calls.clear()
 
 
 def _apply_patches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,6 +133,66 @@ def test_snapshot_triggered_on_high_vram(monkeypatch: pytest.MonkeyPatch) -> Non
     assert slot_state.model is None
     assert slot_state.tokenizer is None
     assert snapshot_calls, "snapshot should be recorded when VRAM threshold exceeded"
+
+
+def test_restores_from_snapshot_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply_patches(monkeypatch)
+
+    fake_snapshot_path = Path("/fake/snapshot")
+    state_dict = {"weights": 99}
+    restored_tokenizer = _DummyTokenizer()
+
+    monkeypatch.setattr(
+        model_slot_manager.PersistenceManager,
+        "find_latest_snapshot",
+        staticmethod(
+            lambda slot_name, base_path=None: fake_snapshot_path
+            if slot_name == "primary"
+            else None
+        ),
+    )
+
+    def _fake_load_snapshot(
+        snapshot_path: Path,
+        *,
+        map_location: Any | None = None,
+        load_tokenizer: bool = True,
+    ) -> ModelSnapshot:
+        assert snapshot_path == fake_snapshot_path
+        assert map_location == "cpu"
+        assert load_tokenizer
+        return ModelSnapshot(
+            path=snapshot_path,
+            state_dict=state_dict,
+            tokenizer=restored_tokenizer,
+            metadata={"model_id": model_slot_manager._DEFAULT_MODEL_ID},
+        )
+
+    monkeypatch.setattr(
+        model_slot_manager.PersistenceManager,
+        "load_snapshot",
+        staticmethod(_fake_load_snapshot),
+    )
+
+    load_into_slot_calls: list[None] = []
+
+    original_load_into_slot = ModelSlotManager._load_into_slot
+
+    def _spy_load_into_slot(self: ModelSlotManager, slot: Any) -> None:
+        load_into_slot_calls.append(None)
+        original_load_into_slot(self, slot)
+
+    monkeypatch.setattr(ModelSlotManager, "_load_into_slot", _spy_load_into_slot)
+
+    with ModelSlotManager("primary") as (model, tokenizer):
+        assert isinstance(model, _DummyModel)
+        assert tokenizer is restored_tokenizer
+
+    assert not load_into_slot_calls, "expected snapshot restoration to bypass cold load"
+    assert _DummyModel.load_state_calls
+    assert _DummyModel.load_state_calls[-1]["state_dict"] == state_dict
 
 
 def test_gpu_stats_via_gputil(monkeypatch: pytest.MonkeyPatch) -> None:

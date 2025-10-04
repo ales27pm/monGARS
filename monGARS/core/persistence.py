@@ -35,6 +35,11 @@ from .embeddings import (
     get_llm2vec_embedder,
 )
 
+try:  # pragma: no cover - optional dependency
+    from transformers import AutoTokenizer  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    AutoTokenizer = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +52,16 @@ class VectorMatch:
 
     record: ConversationHistory
     distance: float
+
+
+@dataclass(slots=True)
+class ModelSnapshot:
+    """Container for model snapshot artefacts on disk."""
+
+    path: Path
+    state_dict: dict[str, Any]
+    tokenizer: Any | None
+    metadata: dict[str, Any] | None
 
 
 class PersistenceRepository:
@@ -457,6 +472,13 @@ class PersistenceManager:
     """Utility helpers for persisting heavyweight artefacts to disk."""
 
     @staticmethod
+    def _resolve_snapshot_root(base_path: Path | None = None) -> Path:
+        settings = get_settings()
+        if base_path is not None:
+            return Path(base_path)
+        return Path(settings.llm_adapter_registry_path).parent / "snapshots"
+
+    @staticmethod
     def snapshot_model(
         model: Any,
         tokenizer: Any,
@@ -467,12 +489,7 @@ class PersistenceManager:
     ) -> Path:
         """Persist the model state dict and tokenizer to disk."""
 
-        settings = get_settings()
-        root_dir = (
-            Path(base_path)
-            if base_path is not None
-            else Path(settings.llm_adapter_registry_path).parent / "snapshots"
-        )
+        root_dir = PersistenceManager._resolve_snapshot_root(base_path)
         slot_dir = root_dir / slot_name
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         snapshot_dir = slot_dir / timestamp
@@ -508,3 +525,70 @@ class PersistenceManager:
         )
 
         return snapshot_dir
+
+    @staticmethod
+    def find_latest_snapshot(
+        slot_name: str, *, base_path: Path | None = None
+    ) -> Path | None:
+        root_dir = PersistenceManager._resolve_snapshot_root(base_path)
+        slot_dir = root_dir / slot_name
+        if not slot_dir.exists():
+            return None
+        candidates = [path for path in slot_dir.iterdir() if path.is_dir()]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda candidate: candidate.name)
+        return latest
+
+    @staticmethod
+    def load_snapshot(
+        snapshot_path: Path,
+        *,
+        map_location: Any | None = None,
+        load_tokenizer: bool = True,
+    ) -> ModelSnapshot:
+        snapshot_path = Path(snapshot_path)
+        if not snapshot_path.exists():
+            raise FileNotFoundError(snapshot_path)
+
+        model_path = snapshot_path / "model.pt"
+        if not model_path.exists():
+            raise FileNotFoundError(model_path)
+
+        state_dict = torch.load(model_path, map_location=map_location)
+
+        tokenizer_obj: Any | None = None
+        metadata: dict[str, Any] | None = None
+
+        metadata_path = snapshot_path / "metadata.json"
+        if metadata_path.exists():
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+
+        if load_tokenizer:
+            tokenizer_dir = snapshot_path / "tokenizer"
+            fallback_path = tokenizer_dir / "tokenizer.pkl"
+            if fallback_path.exists():
+                with fallback_path.open("rb") as handle:
+                    tokenizer_obj = pickle.load(handle)
+            elif tokenizer_dir.exists():
+                if AutoTokenizer is None:
+                    logger.warning(
+                        "persistence.snapshot.tokenizer_unavailable",
+                        extra={"path": str(tokenizer_dir)},
+                    )
+                else:
+                    try:
+                        tokenizer_obj = AutoTokenizer.from_pretrained(tokenizer_dir)
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.exception(
+                            "persistence.snapshot.tokenizer_load_failed",
+                            extra={"path": str(tokenizer_dir)},
+                        )
+
+        return ModelSnapshot(
+            path=snapshot_path,
+            state_dict=state_dict,
+            tokenizer=tokenizer_obj,
+            metadata=metadata,
+        )

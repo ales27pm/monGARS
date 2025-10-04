@@ -91,7 +91,9 @@ class ModelSlotManager:
         slot = self._acquire_slot()
         try:
             if slot.model is None or slot.model_id != self.model_id:
-                self._load_into_slot(slot)
+                restored = self._restore_from_snapshot(slot)
+                if not restored:
+                    self._load_into_slot(slot)
         except Exception:
             slot.lock.release()
             logger.exception(
@@ -122,11 +124,7 @@ class ModelSlotManager:
                 if slot.last_usage_fraction >= self.offload_threshold:
                     self._snapshot_and_release(slot)
         finally:
-            try:
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:  # pragma: no cover - defensive logging
-                logger.exception("model.slot.empty_cache_failed")
+            self._empty_cuda_cache()
             slot.lock.release()
             self._slot_state = None
 
@@ -143,6 +141,17 @@ class ModelSlotManager:
         return slot
 
     def _load_into_slot(self, slot: _SlotState) -> None:
+        model, tokenizer = self._initialise_model_and_tokenizer()
+        slot.model = model
+        slot.tokenizer = tokenizer
+        slot.model_id = self.model_id
+        slot.peft_applied = True
+        logger.info(
+            "model.slot.ready",
+            extra={"slot": self.slot_name, "model_id": self.model_id},
+        )
+
+    def _initialise_model_and_tokenizer(self) -> tuple[Any, Any]:
         if FastLanguageModel is None:
             raise RuntimeError(
                 "Unsloth is not installed. Install the 'unsloth' package to load models."
@@ -172,14 +181,69 @@ class ModelSlotManager:
             model.eval()
         if hasattr(model, "config") and getattr(model.config, "use_cache", True):
             model.config.use_cache = False
+        return model, tokenizer
+
+    def _restore_from_snapshot(self, slot: _SlotState) -> bool:
+        snapshot_path = PersistenceManager.find_latest_snapshot(self.slot_name)
+        if snapshot_path is None:
+            return False
+
+        try:
+            snapshot = PersistenceManager.load_snapshot(
+                snapshot_path,
+                map_location="cpu",
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "model.slot.snapshot_missing",
+                extra={"slot": self.slot_name, "path": str(snapshot_path)},
+            )
+            return False
+        except Exception:
+            logger.exception(
+                "model.slot.snapshot_load_failed",
+                extra={"slot": self.slot_name, "path": str(snapshot_path)},
+            )
+            return False
+
+        snapshot_model_id = None
+        if snapshot.metadata:
+            snapshot_model_id = snapshot.metadata.get("model_id")
+        if snapshot_model_id and snapshot_model_id != self.model_id:
+            logger.warning(
+                "model.slot.snapshot_mismatch",
+                extra={
+                    "slot": self.slot_name,
+                    "snapshot_model_id": snapshot_model_id,
+                    "requested_model_id": self.model_id,
+                },
+            )
+            return False
+
+        model, base_tokenizer = self._initialise_model_and_tokenizer()
+        try:
+            load_result = model.load_state_dict(snapshot.state_dict, strict=False)
+        except Exception:
+            logger.exception(
+                "model.slot.state_restore_failed",
+                extra={"slot": self.slot_name, "path": str(snapshot_path)},
+            )
+            self._empty_cuda_cache()
+            return False
+
+        self._log_state_dict_diffs(load_result)
+
+        tokenizer = snapshot.tokenizer or base_tokenizer
+
         slot.model = model
         slot.tokenizer = tokenizer
         slot.model_id = self.model_id
         slot.peft_applied = True
         logger.info(
-            "model.slot.ready",
-            extra={"slot": self.slot_name, "model_id": self.model_id},
+            "model.slot.restored",
+            extra={"slot": self.slot_name, "path": str(snapshot_path)},
         )
+        return True
 
     def _snapshot_and_release(self, slot: _SlotState) -> None:
         if slot.model is None or slot.tokenizer is None:
@@ -214,6 +278,29 @@ class ModelSlotManager:
             slot.tokenizer = None
             slot.model_id = None
             slot.peft_applied = False
+
+    @staticmethod
+    def _log_state_dict_diffs(load_result: Any) -> None:
+        missing = getattr(load_result, "missing_keys", None)
+        unexpected = getattr(load_result, "unexpected_keys", None)
+        if missing:
+            logger.warning(
+                "model.slot.state_missing_keys",
+                extra={"missing_keys": sorted(missing)},
+            )
+        if unexpected:
+            logger.warning(
+                "model.slot.state_unexpected_keys",
+                extra={"unexpected_keys": sorted(unexpected)},
+            )
+
+    @staticmethod
+    def _empty_cuda_cache() -> None:
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("model.slot.empty_cache_failed")
 
     # ------------------------------------------------------------------
     # Diagnostics
