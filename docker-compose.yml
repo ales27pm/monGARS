@@ -250,13 +250,13 @@ services:
       - mongars
 
   ray-head:
-    image: rayproject/ray:2.9.3-py311
+    image: rayproject/ray:2.9.3-py311-cu121
     container_name: mongars-ray-head
     profiles:
       - ray
     command: >-
       bash -lc "ray stop --force || true; ray start --head
-        --dashboard-host 0.0.0.0
+        --dashboard-host=0.0.0.0
         --port=7000
         --ray-client-server-port=10001
         --num-cpus=2
@@ -264,11 +264,19 @@ services:
     ports:
       - "${RAY_DASHBOARD_PORT:-8265}:8265"
       - "${RAY_CLIENT_PORT:-10001}:10001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8265 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 30
+    shm_size: "2g"
     restart: unless-stopped
     networks:
       - mongars
@@ -288,7 +296,7 @@ services:
       - PYTHONUNBUFFERED=1
       - RAY_ADDRESS=ray://ray-head:10001
     command: >-
-      bash -lc "serve start --address ray://ray-head:10001 --http-host 0.0.0.0 --http-port 8000"
+      bash -lc "serve start --address=ray://ray-head:10001 --http-host=0.0.0.0 --http-port=8000"
     ports:
       - "${RAY_HTTP_PORT:-8000}:8000"
     healthcheck:
