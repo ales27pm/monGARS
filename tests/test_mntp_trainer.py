@@ -149,8 +149,16 @@ class _DummySlotManager:
 class _FakeDataset:
     def __init__(self) -> None:
         self._items = [
-            {"input_ids": [0, 1, 2], "attention_mask": [1, 1, 1], "labels": 2},
-            {"input_ids": [3, 4], "attention_mask": [1, 1], "labels": 4},
+            {
+                "input_ids": [0, 1, 2],
+                "attention_mask": [1, 1, 1],
+                "labels": [-100, -100, 2],
+            },
+            {
+                "input_ids": [3, 4],
+                "attention_mask": [1, 1],
+                "labels": [-100, 4],
+            },
         ]
 
     def __len__(self) -> int:

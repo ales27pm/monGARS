@@ -263,12 +263,13 @@ class MaskedNextTokenDataset:
                 trimmed_context = self._trim_context(context)
                 input_ids_with_mask = trimmed_context + [mask_token_id]
                 attention_mask = [1] * len(input_ids_with_mask)
+                label_sequence = [-100] * (len(input_ids_with_mask) - 1) + [label]
                 self._examples.append(
                     {
                         "input_ids": input_ids_with_mask,
                         "attention_mask": attention_mask,
                         "label": label,
-                        "labels": label,
+                        "labels": label_sequence,
                         "source_index": index,
                     }
                 )
