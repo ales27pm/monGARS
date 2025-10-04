@@ -32,6 +32,7 @@ RUN pip install --no-cache-dir \
 # Return to the default ray user for runtime safety.
 USER ray
 
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    RAY_DASHBOARD_ADDRESS=http://0.0.0.0:8265
 
-CMD ["python","-m","ray.serve.scripts","start","--http-host","0.0.0.0","--http-port","8002","--dashboard-host","0.0.0.0","--dashboard-port","8265","--include-dashboard","true"]
+CMD ["python","-m","ray.serve.scripts","start","--http-host","0.0.0.0","--http-port","8002","--include-dashboard","true"]
