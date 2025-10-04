@@ -4,6 +4,7 @@ os.environ.setdefault("DEBUG", "1")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -48,6 +49,43 @@ def _mock_idle(monkeypatch: pytest.MonkeyPatch) -> None:
         raising=False,
     )
     fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
+    )
+
+
+def _mock_torch_vram(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    allocated_gb: float,
+    fail_stage: str | None = None,
+) -> None:
+    allocated_bytes = allocated_gb * (1024**3)
+
+    class _FakeCuda:
+        def is_available(self) -> bool:
+            return True
+
+        def device_count(self) -> int:
+            return 1
+
+        def get_device_properties(self, index: int) -> SimpleNamespace:
+            if fail_stage == "properties":
+                raise RuntimeError("properties unavailable")
+            return SimpleNamespace(name=f"cuda:{index}")
+
+        @contextmanager
+        def device(self, index: int):  # type: ignore[override]
+            if fail_stage == "device":
+                raise RuntimeError("device not accessible")
+            yield None
+
+        def memory_allocated(self) -> float:
+            if fail_stage == "memory":
+                raise RuntimeError("memory query failed")
+            return allocated_bytes
+
+    fake_torch = SimpleNamespace(cuda=_FakeCuda())
     monkeypatch.setattr(
         "modules.evolution_engine.orchestrator.torch", fake_torch, raising=False
     )
@@ -108,6 +146,70 @@ def test_orchestrator_skips_training_when_busy(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert orchestrator.run_training_cycle() is None
+
+
+def test_orchestrator_skips_when_vram_pressure(monkeypatch: pytest.MonkeyPatch) -> None:
+    scheduler = DummyScheduler()
+    _mock_idle(monkeypatch)
+    _mock_torch_vram(monkeypatch, allocated_gb=8.5)
+
+    orchestrator = EvolutionOrchestrator(
+        scheduler=scheduler,
+        autostart=False,
+        trainer_cls=lambda *args, **kwargs: None,  # type: ignore[arg-type]
+        slot_manager_cls=None,
+        data_collector=lambda: ["sample"],
+    )
+
+    assert orchestrator.run_training_cycle() is None
+
+
+def test_orchestrator_trains_when_vram_query_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scheduler = DummyScheduler()
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class RecordingTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            return {"status": "success", "artifacts": {"adapter": "stub"}}
+
+    _mock_idle(monkeypatch)
+    _mock_torch_vram(monkeypatch, allocated_gb=1.0, fail_stage="properties")
+
+    manifest_path = tmp_path / "manifest.json"
+
+    def fake_update_manifest(
+        registry: Path, summary: dict[str, Any], history_limit: int = 10
+    ):
+        manifest_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(path=manifest_path, build_payload=lambda: summary)
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_manifest",
+        fake_update_manifest,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_ray_deployment",
+        lambda payload: None,
+    )
+
+    orchestrator = EvolutionOrchestrator(
+        scheduler=scheduler,
+        autostart=False,
+        training_config_path=str(config_path),
+        trainer_cls=RecordingTrainer,
+        slot_manager_cls=None,
+        data_collector=lambda: ["data"],
+    )
+
+    run_dir = orchestrator.run_training_cycle(force=True)
+    assert run_dir is not None
 
 
 def test_orchestrator_runs_cycle_and_rolls_out(

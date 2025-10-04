@@ -16,6 +16,8 @@ from monGARS.core.model_manager import LLMModelManager
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_RAY_UPDATE_KEYS = {"adapter_path", "version", "weights_path"}
+
 try:  # pragma: no cover - ray is optional in tests
     import ray
     from ray import serve
@@ -469,6 +471,35 @@ def deploy_ray_service(
     )
 
 
+def _normalise_ray_update_payload(user_config: Mapping[str, Any]) -> dict[str, Any]:
+    unexpected = set(user_config) - _ALLOWED_RAY_UPDATE_KEYS
+    if unexpected:
+        joined = ", ".join(sorted(unexpected))
+        raise RuntimeError(f"Unsupported Ray Serve user_config keys: {joined}")
+
+    payload: dict[str, Any] = {}
+    for key in _ALLOWED_RAY_UPDATE_KEYS:
+        if key not in user_config:
+            continue
+        value = user_config[key]
+        if value is None:
+            continue
+        if isinstance(value, os.PathLike):
+            payload[key] = os.fspath(value)
+        elif isinstance(value, (str, int, float, bool)):
+            payload[key] = value
+        else:
+            raise RuntimeError(
+                "Unsupported value type for Ray Serve payload key"
+                f" {key!r}: {type(value).__name__}"
+            )
+
+    if not payload:
+        raise RuntimeError("Ray Serve deployment update payload is empty")
+
+    return payload
+
+
 def update_ray_deployment(user_config: Mapping[str, Any]) -> None:
     """Update the active Ray Serve deployment with the provided adapter payload."""
 
@@ -483,9 +514,7 @@ def update_ray_deployment(user_config: Mapping[str, Any]) -> None:
     if deployment is None:  # pragma: no cover - deployment not registered
         raise RuntimeError("LLMServeDeployment is not registered")
 
-    payload = {
-        str(key): str(value) for key, value in user_config.items() if value is not None
-    }
+    payload = _normalise_ray_update_payload(user_config)
 
     try:
         deployment.update(user_config=payload)

@@ -264,28 +264,52 @@ class EvolutionOrchestrator:
     def _current_vram_usage_gb(self) -> float | None:
         if torch is None or not hasattr(torch, "cuda"):
             return None
+
+        cuda = torch.cuda  # type: ignore[union-attr]
         try:
-            if not torch.cuda.is_available():  # type: ignore[union-attr]
+            if not cuda.is_available():
                 return None
-        except Exception:  # pragma: no cover - defensive guard
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("Unable to query CUDA availability", exc_info=exc)
             return None
 
         try:
-            device_count = torch.cuda.device_count()  # type: ignore[union-attr]
-        except Exception:  # pragma: no cover - defensive guard
-            device_count = 1
+            device_count = int(cuda.device_count())
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("Unable to enumerate CUDA devices", exc_info=exc)
+            return None
+
+        if device_count <= 0:
+            return None
 
         allocations: list[float] = []
-        for index in range(max(1, device_count)):
+        for index in range(device_count):
             try:
-                allocated = torch.cuda.memory_allocated(index)  # type: ignore[union-attr]
-            except Exception:  # pragma: no cover - defensive guard
-                continue
+                cuda.get_device_properties(index)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning(
+                    "Failed to access CUDA device properties",  # pragma: no cover
+                    extra={"device_index": index},
+                    exc_info=exc,
+                )
+                return None
+
+            try:
+                with cuda.device(index):
+                    allocated = float(cuda.memory_allocated())
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning(
+                    "Failed to inspect CUDA memory allocation",  # pragma: no cover
+                    extra={"device_index": index},
+                    exc_info=exc,
+                )
+                return None
+
             allocations.append(allocated)
 
         if not allocations:
             return None
-        return max(allocations) / (1024**3)
+        return max(allocations) / float(1024**3)
 
     def _ray_rollout_enabled(self) -> bool:
         try:

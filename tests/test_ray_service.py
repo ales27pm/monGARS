@@ -69,12 +69,18 @@ def _make_success_trainer(*, suffix: str) -> type:
         def train(self) -> dict[str, Any]:
             return self.summary
 
+        def fit(self, dataset: Any) -> dict[str, Any]:  # pragma: no cover - passthrough
+            return self.train()
+
     return SuccessTrainer
 
 
 def _run_orchestrator_pipeline(registry_path: Path, trainer_cls: type) -> Path:
     orchestrator = EvolutionOrchestrator(
-        model_registry_path=str(registry_path), trainer_cls=trainer_cls
+        model_registry_path=str(registry_path),
+        trainer_cls=trainer_cls,
+        slot_manager_cls=None,
+        data_collector=lambda: [{"text": "hello", "metadata": {}}],
     )
     return Path(orchestrator.trigger_encoder_training_pipeline())
 
@@ -368,3 +374,77 @@ async def test_ray_deployment_accepts_multi_replica_payload_once(
         assert result["version"] == payload["version"]
     assert manager.switch_calls.count(replica_payload["adapter_path"]) == 1
     assert deployment._adapter_version == payload["version"]
+
+
+def test_update_ray_deployment_validates_payload(monkeypatch):
+    from modules import ray_service
+
+    updates: dict[str, Any] = {}
+
+    class FakeDeployment:
+        def update(self, *, user_config: dict[str, Any]) -> None:
+            updates.update(user_config)
+
+    class FakeServe:
+        @staticmethod
+        def get_deployment(name: str) -> FakeDeployment:
+            assert name == "LLMServeDeployment"
+            return FakeDeployment()
+
+    monkeypatch.setattr(ray_service, "serve", FakeServe())
+
+    ray_service.update_ray_deployment(
+        {
+            "adapter_path": Path("/models/adapter"),
+            "version": "2024.01",
+            "weights_path": "/models/adapter.bin",
+        }
+    )
+
+    assert updates == {
+        "adapter_path": "/models/adapter",
+        "version": "2024.01",
+        "weights_path": "/models/adapter.bin",
+    }
+
+
+def test_update_ray_deployment_rejects_unknown_keys(monkeypatch):
+    from modules import ray_service
+
+    class FakeDeployment:
+        def update(self, *, user_config: dict[str, Any]) -> None:  # pragma: no cover
+            pass
+
+    class FakeServe:
+        @staticmethod
+        def get_deployment(name: str) -> FakeDeployment:
+            return FakeDeployment()
+
+    monkeypatch.setattr(ray_service, "serve", FakeServe())
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ray_service.update_ray_deployment(
+            {"adapter_path": "/tmp/adapter", "unexpected": "value"}
+        )
+
+    assert "Unsupported Ray Serve user_config keys" in str(excinfo.value)
+
+
+def test_update_ray_deployment_rejects_unsupported_types(monkeypatch):
+    from modules import ray_service
+
+    class FakeDeployment:
+        def update(self, *, user_config: dict[str, Any]) -> None:  # pragma: no cover
+            pass
+
+    class FakeServe:
+        @staticmethod
+        def get_deployment(name: str) -> FakeDeployment:
+            return FakeDeployment()
+
+    monkeypatch.setattr(ray_service, "serve", FakeServe())
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ray_service.update_ray_deployment({"adapter_path": object()})
+
+    assert "Unsupported value type" in str(excinfo.value)
