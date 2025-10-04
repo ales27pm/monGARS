@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import math
 import random
-from dataclasses import dataclass
+import statistics
+import time
+from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -17,7 +20,7 @@ try:  # pragma: no cover - heavy deps not always installed
     from peft import LoraConfig, TaskType, get_peft_model
     from torch.nn.utils import clip_grad_norm_
     from torch.utils.data import DataLoader
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, default_data_collator
     from transformers.optimization import get_linear_schedule_with_warmup
 except Exception:  # pragma: no cover - fallback if unavailable
     torch = None
@@ -30,8 +33,47 @@ except Exception:  # pragma: no cover - fallback if unavailable
     AutoModelForCausalLM = None
     AutoTokenizer = None
     get_linear_schedule_with_warmup = None
+    default_data_collator = None
+
+try:  # pragma: no cover - optional dependency
+    from unsloth import FastLanguageModel
+except Exception:  # pragma: no cover - fallback when unsloth missing
+    FastLanguageModel = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from trl import SFTConfig, SFTTrainer
+except Exception:  # pragma: no cover - fallback when TRL missing
+    SFTConfig = None  # type: ignore[assignment]
+    SFTTrainer = None  # type: ignore[assignment]
+
+from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import (
+    TRAINING_CYCLE_COUNTER,
+    TRAINING_FAILURE_COUNTER,
+    TRAINING_TOKEN_COUNTER,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _callable_accepts_kwarg(callable_obj: Any, name: str) -> bool:
+    """Best-effort detection for optional keyword arguments.
+
+    The Unsloth helpers evolve quickly; this guard prevents ``TypeError``
+    explosions when newer/older versions expose different kwargs.
+    """
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):  # pragma: no cover - C extensions
+        return False
+    parameter = signature.parameters.get(name)
+    if parameter is None:
+        return False
+    return parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
 
 
 @dataclass(frozen=True)
@@ -39,6 +81,28 @@ class CuratedSample:
     embedding: list[float]
     target: float
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DatasetProfile:
+    size: int | None
+    sample_size: int
+    sample_token_total: int
+    projected_token_total: int
+    mean_tokens: float | None
+    median_tokens: float | None
+    p95_tokens: int | None
+    max_tokens: int | None
+
+
+@dataclass(frozen=True)
+class TrainingSchedule:
+    per_device_batch_size: int
+    gradient_accumulation_steps: int
+    effective_batch_size: int
+    tokens_per_micro_batch: int | None
+    tokens_per_example: int | None
+    reason: str | None = None
 
 
 class CuratedDatasetBuilder:
@@ -199,11 +263,13 @@ class MaskedNextTokenDataset:
                 trimmed_context = self._trim_context(context)
                 input_ids_with_mask = trimmed_context + [mask_token_id]
                 attention_mask = [1] * len(input_ids_with_mask)
+                label_sequence = [-100] * (len(input_ids_with_mask) - 1) + [label]
                 self._examples.append(
                     {
                         "input_ids": input_ids_with_mask,
                         "attention_mask": attention_mask,
                         "label": label,
+                        "labels": label_sequence,
                         "source_index": index,
                     }
                 )
@@ -294,6 +360,181 @@ class MaskedNextTokenCollator:
         }
 
 
+class DatasetTokenProfiler:
+    """Profile dataset token distribution for adaptive scheduling."""
+
+    def __init__(self, sample_limit: int = 1024) -> None:
+        self._sample_limit = max(1, sample_limit)
+
+    def profile(self, dataset: Any) -> DatasetProfile:
+        dataset_size = MNTPTrainer._safe_len(dataset)
+        tokens: list[int] = []
+        sample_token_total = 0
+        projected_token_total = 0
+        sample_count = 0
+        if dataset is None:
+            return DatasetProfile(
+                size=None,
+                sample_size=0,
+                sample_token_total=0,
+                projected_token_total=0,
+                mean_tokens=None,
+                median_tokens=None,
+                p95_tokens=None,
+                max_tokens=None,
+            )
+
+        iterator = self._iterate_dataset(dataset)
+        for sample_count, item in enumerate(iterator, start=1):
+            token_count = self._count_tokens(item)
+            tokens.append(token_count)
+            sample_token_total += token_count
+            if sample_count >= self._sample_limit:
+                break
+
+        if sample_count == 0:
+            return DatasetProfile(
+                size=dataset_size,
+                sample_size=0,
+                sample_token_total=0,
+                projected_token_total=0,
+                mean_tokens=None,
+                median_tokens=None,
+                p95_tokens=None,
+                max_tokens=None,
+            )
+
+        projected_token_total = sample_token_total
+        if dataset_size and dataset_size > sample_count:
+            scale = dataset_size / sample_count
+            projected_token_total = int(round(sample_token_total * scale))
+
+        sorted_tokens = sorted(tokens)
+        mean_tokens = statistics.fmean(sorted_tokens) if sample_count else None
+        median_tokens = statistics.median(sorted_tokens) if sample_count else None
+        p95_tokens = self._percentile(sorted_tokens, 0.95)
+        max_tokens = sorted_tokens[-1] if sorted_tokens else None
+
+        return DatasetProfile(
+            size=dataset_size,
+            sample_size=sample_count,
+            sample_token_total=sample_token_total,
+            projected_token_total=projected_token_total,
+            mean_tokens=mean_tokens,
+            median_tokens=median_tokens,
+            p95_tokens=p95_tokens,
+            max_tokens=max_tokens,
+        )
+
+    def _iterate_dataset(self, dataset: Any) -> Iterable[Any]:
+        try:
+            if hasattr(dataset, "__getitem__") and hasattr(dataset, "__len__"):
+                total = len(dataset)  # type: ignore[arg-type]
+                for index in range(min(total, self._sample_limit)):
+                    yield dataset[index]
+            else:
+                for index, item in enumerate(iter(dataset)):
+                    if index >= self._sample_limit:
+                        break
+                    yield item
+        except Exception:  # pragma: no cover - defensive iteration guard
+            logger.debug("Failed to iterate dataset during profiling", exc_info=True)
+            return
+
+    @staticmethod
+    def _count_tokens(item: Any) -> int:
+        if item is None:
+            return 0
+        if isinstance(item, dict):
+            tokens = item.get("input_ids")
+            if isinstance(tokens, Iterable):
+                return len(list(tokens))
+            text = item.get("text")
+            if isinstance(text, str):
+                return len(text.split())
+        if hasattr(item, "get"):
+            try:
+                tokens = item.get("input_ids")  # type: ignore[call-arg]
+                if isinstance(tokens, Iterable):
+                    return len(list(tokens))
+            except Exception:
+                pass
+        for attr in ("input_ids", "tokens"):
+            value = getattr(item, attr, None)
+            if isinstance(value, Iterable):
+                try:
+                    return len(list(value))
+                except TypeError:
+                    continue
+        if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
+            try:
+                return len(list(item))
+            except TypeError:
+                return 0
+        return 0
+
+    @staticmethod
+    def _percentile(values: Sequence[int], percentile: float) -> int | None:
+        if not values:
+            return None
+        if len(values) == 1:
+            return int(values[0])
+        index = max(0, min(len(values) - 1, math.ceil(percentile * len(values)) - 1))
+        return int(values[index])
+
+
+class AdaptiveBatchPlanner:
+    """Adjust batch and accumulation settings to fit tight VRAM budgets."""
+
+    def __init__(
+        self,
+        *,
+        target_tokens_per_device: int = 4096,
+        min_batch_size: int = 1,
+        max_batch_size: int = 8,
+    ) -> None:
+        self._target_tokens_per_device = max(1, target_tokens_per_device)
+        self._min_batch_size = max(1, min_batch_size)
+        self._max_batch_size = max(self._min_batch_size, max_batch_size)
+
+    def plan(
+        self,
+        base_batch_size: int,
+        base_grad_acc: int,
+        profile: DatasetProfile,
+        *,
+        max_seq_length: int,
+    ) -> TrainingSchedule:
+        per_device = int(
+            min(self._max_batch_size, max(self._min_batch_size, base_batch_size))
+        )
+        grad_acc = max(1, int(base_grad_acc))
+        tokens_per_example = profile.p95_tokens or profile.max_tokens or max_seq_length
+        tokens_per_example = int(min(max_seq_length, max(1, tokens_per_example)))
+        tokens_per_device = tokens_per_example * per_device
+        reason: str | None = None
+
+        while (
+            tokens_per_device > self._target_tokens_per_device
+            and per_device > self._min_batch_size
+        ):
+            per_device = max(self._min_batch_size, per_device // 2)
+            tokens_per_device = tokens_per_example * per_device
+            reason = "reduced_micro_batch_for_vram"
+
+        effective_batch = per_device * grad_acc
+        tokens_per_micro_batch = tokens_per_device
+
+        return TrainingSchedule(
+            per_device_batch_size=per_device,
+            gradient_accumulation_steps=grad_acc,
+            effective_batch_size=effective_batch,
+            tokens_per_micro_batch=tokens_per_micro_batch,
+            tokens_per_example=tokens_per_example,
+            reason=reason,
+        )
+
+
 class TrainingStatus(str, Enum):
     """Possible outcomes for a training run."""
 
@@ -331,11 +572,11 @@ class MNTPTrainer:
             "dataset_config_name": "wikitext-103-raw-v1",
             "dataset_split": "train[:1%]",
             "model_name_or_path": "sshleifer/tiny-gpt2",
-            "lora_r": 16,
+            "lora_r": 8,
             "torch_dtype": "float32",
             "attn_implementation": None,
-            "per_device_train_batch_size": 16,
-            "gradient_accumulation_steps": 1,
+            "per_device_train_batch_size": 1,
+            "gradient_accumulation_steps": 16,
             "max_seq_length": 512,
             "max_steps": 32,
         }
@@ -584,6 +825,30 @@ class MNTPTrainer:
         training_dataset = self._prepare_mntp_dataset(dataset, tokenizer)
         if len(training_dataset) == 0:
             raise RuntimeError("MNTP dataset preprocessing yielded no examples")
+        if (
+            SFTTrainer is not None
+            and SFTConfig is not None
+            and ModelSlotManager is not None
+        ):
+            summary = self.fit(
+                training_dataset,
+                epochs=int(
+                    self.config.get("num_train_epochs", self.config.get("epochs", 1))
+                ),
+                batch_size=int(self.config.get("per_device_train_batch_size", 2)),
+                grad_acc=int(self.config.get("gradient_accumulation_steps", 1)),
+            )
+            try:
+                summary.setdefault("metrics", {})["source_records"] = len(dataset)
+            except Exception:  # pragma: no cover - streaming datasets
+                pass
+            summary.setdefault("metrics", {})["max_seq_length"] = int(
+                self.config.get("max_seq_length", 512)
+            )
+            summary.setdefault("model_name", model_name)
+            summary.setdefault("dataset_name", self.config["dataset_name"])
+            return summary
+
         device = self._resolve_device()
         model = self._initialise_model(model_name, tokenizer, device=device)
         pad_token_id = self._resolve_pad_token_id(tokenizer)
@@ -628,6 +893,260 @@ class MNTPTrainer:
             "artifacts": artifacts,
             "metrics": metrics,
         }
+
+    def fit(
+        self,
+        dataset: Any,
+        *,
+        epochs: int = 1,
+        batch_size: int = 1,
+        grad_acc: int = 16,
+    ) -> dict[str, Any]:
+        if SFTTrainer is None or SFTConfig is None:
+            raise RuntimeError("trl.SFTTrainer is not available")
+        if torch is None:
+            raise RuntimeError("PyTorch is required for MNTP fine-tuning")
+        if dataset is None:
+            raise ValueError("dataset must be provided")
+
+        profile = self._profile_dataset(dataset)
+        dataset_size = profile.size
+        estimated_tokens = profile.projected_token_total
+
+        model_name = self._resolve_model_name()
+        max_seq_length = int(self.config.get("max_seq_length", 512))
+        adapter_root = self.output_dir / "adapters"
+        adapter_root.mkdir(parents=True, exist_ok=True)
+        schedule = self._plan_schedule(
+            batch_size,
+            grad_acc,
+            profile,
+            max_seq_length=max_seq_length,
+        )
+        sft_kwargs: dict[str, Any] = {
+            "per_device_train_batch_size": schedule.per_device_batch_size,
+            "gradient_accumulation_steps": schedule.gradient_accumulation_steps,
+            "num_train_epochs": max(1, epochs),
+            "optim": "adamw_8bit",
+            "seed": 3407,
+            "output_dir": str(self.output_dir / "outputs"),
+            "gradient_checkpointing": True,
+            "max_seq_length": max_seq_length,
+        }
+        if _callable_accepts_kwarg(SFTConfig, "fp16"):
+            sft_kwargs["fp16"] = False
+        if _callable_accepts_kwarg(SFTConfig, "bf16"):
+            sft_kwargs["bf16"] = False
+        if _callable_accepts_kwarg(SFTConfig, "fp32"):
+            sft_kwargs["fp32"] = True
+        sft_args = SFTConfig(**sft_kwargs)
+
+        cycle_tags = {"slot": "training_slot", "cycle": "start"}
+        self._add_metric(TRAINING_CYCLE_COUNTER, 1, cycle_tags)
+        vram_snapshot: dict[str, Any] = {}
+        training_metrics: dict[str, Any] = {}
+        checksum = ""
+        weights_path: Path | None = None
+        wall_runtime: float | None = None
+        try:
+            wall_start = time.perf_counter()
+            with ModelSlotManager(
+                "training_slot",
+                model_id=model_name,
+                max_seq_length=max_seq_length,
+            ) as (model, tokenizer):
+                if model is None or tokenizer is None:
+                    raise RuntimeError("ModelSlotManager returned an empty slot")
+                self._conditionally_freeze_backbone(model)
+                trainer = SFTTrainer(
+                    model=model,
+                    tokenizer=tokenizer,
+                    args=sft_args,
+                    train_dataset=dataset,
+                    data_collator=default_data_collator,
+                )
+                train_output = trainer.train()
+                training_metrics = dict(getattr(train_output, "metrics", {}) or {})
+                adapter_dir = adapter_root / "latest"
+                adapter_dir.mkdir(parents=True, exist_ok=True)
+                trainer.model.save_pretrained(str(adapter_dir))
+                weights_path = self._resolve_adapter_weights_path(adapter_dir)
+                checksum = self._compute_file_checksum(weights_path)
+                vram_snapshot = self._capture_vram_snapshot()
+            wall_runtime = time.perf_counter() - wall_start
+        except Exception:
+            failure_tags = {"slot": "training_slot", "stage": "fit"}
+            self._add_metric(TRAINING_FAILURE_COUNTER, 1, failure_tags)
+            raise
+        else:
+            completion_tags = {"slot": "training_slot", "cycle": "complete"}
+            self._add_metric(TRAINING_CYCLE_COUNTER, 1, completion_tags)
+            if estimated_tokens:
+                token_tags = {"slot": "training_slot", "unit": "token"}
+                self._add_metric(
+                    TRAINING_TOKEN_COUNTER,
+                    int(estimated_tokens),
+                    token_tags,
+                )
+
+        metrics: dict[str, Any] = {
+            "training_examples": (
+                dataset_size if dataset_size is not None else profile.sample_size
+            ),
+            "per_device_train_batch_size": schedule.per_device_batch_size,
+            "gradient_accumulation_steps": schedule.gradient_accumulation_steps,
+            "effective_batch_size": schedule.effective_batch_size,
+            "num_train_epochs": max(1, epochs),
+            "estimated_tokens": estimated_tokens,
+            "max_seq_length": max_seq_length,
+            "dataset_sample_size": profile.sample_size,
+            "sample_token_total": profile.sample_token_total,
+        }
+        if dataset_size is not None:
+            metrics["dataset_size"] = dataset_size
+        if schedule.tokens_per_micro_batch is not None:
+            metrics["tokens_per_micro_batch"] = schedule.tokens_per_micro_batch
+        if schedule.tokens_per_example is not None:
+            metrics["tokens_per_example"] = schedule.tokens_per_example
+        if schedule.reason:
+            metrics["schedule_reason"] = schedule.reason
+        if profile.mean_tokens is not None:
+            metrics["dataset_token_mean"] = profile.mean_tokens
+        if profile.median_tokens is not None:
+            metrics["dataset_token_median"] = profile.median_tokens
+        if profile.p95_tokens is not None:
+            metrics["dataset_token_p95"] = profile.p95_tokens
+        if profile.max_tokens is not None:
+            metrics["dataset_token_max"] = profile.max_tokens
+        metrics["projected_token_total"] = profile.projected_token_total
+        metrics.update(training_metrics)
+        if vram_snapshot:
+            metrics["max_cuda_memory_gb"] = vram_snapshot.get("max_gb")
+        if wall_runtime is not None:
+            metrics["wall_time_seconds"] = wall_runtime
+        runtime = training_metrics.get("train_runtime") or training_metrics.get(
+            "train_runtime_seconds"
+        )
+        duration = None
+        if runtime and runtime > 0:
+            duration = float(runtime)
+        elif wall_runtime:
+            duration = wall_runtime
+        if duration and duration > 0 and estimated_tokens:
+            metrics["tokens_per_second"] = estimated_tokens / duration
+
+        resolved_weights_path = weights_path
+        if resolved_weights_path is None:
+            resolved_weights_path = (
+                adapter_root / "latest" / "adapter_model.safetensors"
+            )
+        if not resolved_weights_path.exists():
+            resolved_weights_path = adapter_root / "latest" / "adapter_model.bin"
+        artifacts = {
+            "adapter": str(adapter_root / "latest"),
+            "weights": str(resolved_weights_path),
+            "weights_checksum": checksum,
+        }
+
+        summary = {
+            "status": TrainingStatus.SUCCESS.value,
+            "model_name": model_name,
+            "dataset_name": self.config.get("dataset_name"),
+            "version": checksum,
+            "artifacts": artifacts,
+            "metrics": metrics,
+        }
+        telemetry: dict[str, Any] = {}
+        if vram_snapshot:
+            telemetry["cuda_memory_summary"] = vram_snapshot.get("summary")
+        telemetry["schedule"] = asdict(schedule)
+        summary["telemetry"] = telemetry
+        return summary
+
+    @staticmethod
+    def _safe_len(value: Any) -> int | None:
+        try:
+            return int(len(value))
+        except Exception:
+            return None
+
+    def _profile_dataset(self, dataset: Any) -> DatasetProfile:
+        limit = int(self.config.get("token_estimate_limit", 1024))
+        profiler = DatasetTokenProfiler(limit)
+        try:
+            return profiler.profile(dataset)
+        except Exception:  # pragma: no cover - profiling failure
+            logger.debug("Failed to profile dataset tokens", exc_info=True)
+            dataset_size = self._safe_len(dataset)
+            return DatasetProfile(
+                size=dataset_size,
+                sample_size=0,
+                sample_token_total=0,
+                projected_token_total=0,
+                mean_tokens=None,
+                median_tokens=None,
+                p95_tokens=None,
+                max_tokens=None,
+            )
+
+    def _plan_schedule(
+        self,
+        batch_size: int,
+        grad_acc: int,
+        profile: DatasetProfile,
+        *,
+        max_seq_length: int,
+    ) -> TrainingSchedule:
+        planner = AdaptiveBatchPlanner(
+            target_tokens_per_device=int(
+                self.config.get("target_tokens_per_device", 4096)
+            ),
+            min_batch_size=int(self.config.get("min_batch_size", 1)),
+            max_batch_size=int(self.config.get("max_batch_size", batch_size)),
+        )
+        try:
+            return planner.plan(
+                batch_size,
+                grad_acc,
+                profile,
+                max_seq_length=max_seq_length,
+            )
+        except Exception:  # pragma: no cover - scheduling failure
+            logger.debug("Falling back to static schedule", exc_info=True)
+            per_device = max(1, int(batch_size))
+            grad_steps = max(1, int(grad_acc))
+            return TrainingSchedule(
+                per_device_batch_size=per_device,
+                gradient_accumulation_steps=grad_steps,
+                effective_batch_size=per_device * grad_steps,
+                tokens_per_micro_batch=None,
+                tokens_per_example=None,
+                reason="static_schedule_fallback",
+            )
+
+    def _capture_vram_snapshot(self) -> dict[str, Any]:
+        if torch is None or not torch.cuda.is_available():
+            return {}
+        try:
+            summary = torch.cuda.memory_summary()
+            max_alloc = torch.cuda.max_memory_allocated()
+        except Exception:  # pragma: no cover - CUDA inspection failure
+            return {}
+        max_gb = round(max_alloc / (1024**3), 4)
+        return {"summary": summary, "max_bytes": max_alloc, "max_gb": max_gb}
+
+    @staticmethod
+    def _add_metric(
+        counter: Any, value: int | float, attributes: dict[str, Any]
+    ) -> None:
+        if counter is None:
+            return
+        try:
+            add = getattr(counter, "add", None)
+            if callable(add):
+                add(value, attributes)
+        except Exception:  # pragma: no cover - telemetry failure
+            logger.debug("Failed to emit training metric", exc_info=True)
 
     def _load_dataset(self) -> Sequence[dict[str, Any]]:
         if load_dataset is None:
@@ -723,6 +1242,53 @@ class MNTPTrainer:
             return int(tokenizer.mask_token_id)
         return 0
 
+    def _conditionally_freeze_backbone(
+        self, model: Any, keep_last_layers: int = 4
+    ) -> None:
+        if torch is None or not hasattr(model, "named_parameters"):
+            return
+        if not torch.cuda.is_available():
+            return
+        try:
+            device_name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - hardware query failure
+            device_name = ""
+        should_freeze = "2070" in device_name.lower() or bool(
+            self.config.get("freeze_backbone", False)
+        )
+        if not should_freeze:
+            return
+
+        layers = self._ordered_transformer_layers(model)
+        if not layers:
+            return
+        keep = set(layers[-max(1, keep_last_layers) :])
+        for name, parameter in model.named_parameters():
+            if not hasattr(parameter, "requires_grad"):
+                continue
+            if "lora_" in name or any(layer in name for layer in keep):
+                parameter.requires_grad = True
+            else:
+                parameter.requires_grad = False
+
+    @staticmethod
+    def _ordered_transformer_layers(model: Any) -> list[str]:
+        layers: dict[str, tuple[int, ...]] = {}
+        if not hasattr(model, "named_parameters"):
+            return []
+        for name, _ in model.named_parameters():
+            parts = name.split(".")
+            numeric_path: list[int] = []
+            prefix_parts: list[str] = []
+            for part in parts:
+                prefix_parts.append(part)
+                if part.isdigit():
+                    numeric_path.append(int(part))
+                    prefix = ".".join(prefix_parts)
+                    layers.setdefault(prefix, tuple(numeric_path))
+        ordered = sorted(layers.items(), key=lambda item: item[1])
+        return [name for name, _ in ordered]
+
     def _initialise_model(
         self, model_name: str, tokenizer: Any, *, device: "torch.device"
     ) -> Any:
@@ -755,6 +1321,58 @@ class MNTPTrainer:
         if attn_impl:
             load_kwargs["attn_implementation"] = attn_impl
 
+        if FastLanguageModel is not None and torch is not None:
+            max_seq_length = int(self.config.get("max_seq_length", 512))
+            fast_kwargs: dict[str, Any] = {
+                "model_name": model_name,
+                "max_seq_length": max_seq_length,
+                "load_in_4bit": True,
+            }
+            torch_fp32 = getattr(torch, "float32", None)
+            if torch_fp32 is not None:
+                if _callable_accepts_kwarg(FastLanguageModel.from_pretrained, "dtype"):
+                    fast_kwargs["dtype"] = torch_fp32
+                if _callable_accepts_kwarg(
+                    FastLanguageModel.from_pretrained, "compute_dtype"
+                ):
+                    fast_kwargs["compute_dtype"] = torch_fp32
+            if _callable_accepts_kwarg(
+                FastLanguageModel.from_pretrained, "bnb_4bit_quant_type"
+            ):
+                fast_kwargs["bnb_4bit_quant_type"] = "nf4"
+            elif _callable_accepts_kwarg(
+                FastLanguageModel.from_pretrained, "load_in_4bit_quant_type"
+            ):
+                fast_kwargs["load_in_4bit_quant_type"] = "nf4"
+            elif _callable_accepts_kwarg(
+                FastLanguageModel.from_pretrained, "quantization_config"
+            ):
+                fast_kwargs["quantization_config"] = {"bnb_4bit_quant_type": "nf4"}
+
+            try:
+                fast_model, fast_tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[misc]
+                    **fast_kwargs,
+                )
+            except Exception as exc:  # pragma: no cover - optional dependency failure
+                raise RuntimeError("Failed to load base language model") from exc
+
+            target_modules = self._resolve_lora_target_modules()
+            try:
+                peft_model = FastLanguageModel.get_peft_model(  # type: ignore[misc]
+                    fast_model,
+                    r=int(self.config.get("lora_r", 8)),
+                    target_modules=target_modules,
+                    lora_alpha=int(self.config.get("lora_alpha", 16)),
+                    lora_dropout=float(self.config.get("lora_dropout", 0.0)),
+                    bias="none",
+                    use_gradient_checkpointing="unsloth",
+                )
+            except Exception as exc:  # pragma: no cover - unsloth misconfiguration
+                raise RuntimeError("Failed to configure LoRA adapters") from exc
+
+            self._align_tokenizers(tokenizer, fast_tokenizer)
+            return peft_model.to(device)
+
         try:
             base_model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         except Exception as exc:  # pragma: no cover - external library errors
@@ -781,6 +1399,18 @@ class MNTPTrainer:
         if LoraConfig is None or TaskType is None:
             raise RuntimeError("peft library unavailable")
 
+        modules = self._resolve_lora_target_modules()
+
+        return LoraConfig(
+            r=int(self.config.get("lora_r", 16)),
+            lora_alpha=int(self.config.get("lora_alpha", 16)),
+            lora_dropout=float(self.config.get("lora_dropout", 0.0)),
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=modules,
+        )
+
+    def _resolve_lora_target_modules(self) -> list[str]:
         target_modules = self.config.get("lora_target_modules")
         if isinstance(target_modules, str):
             modules = [
@@ -796,18 +1426,26 @@ class MNTPTrainer:
                 "k_proj",
                 "v_proj",
                 "o_proj",
-                "c_attn",
-                "c_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
             ]
+        return modules
 
-        return LoraConfig(
-            r=int(self.config.get("lora_r", 16)),
-            lora_alpha=int(self.config.get("lora_alpha", 32)),
-            lora_dropout=float(self.config.get("lora_dropout", 0.05)),
-            bias="none",
-            task_type=TaskType.CAUSAL_LM,
-            target_modules=modules,
-        )
+    @staticmethod
+    def _align_tokenizers(reference: Any, fast_tokenizer: Any) -> None:
+        if reference is None or fast_tokenizer is None:
+            return
+        for attr in ("pad_token", "eos_token", "bos_token", "unk_token"):
+            ref_value = getattr(reference, attr, None)
+            fast_value = getattr(fast_tokenizer, attr, None)
+            if ref_value is None and fast_value is not None:
+                setattr(reference, attr, fast_value)
+        if (
+            getattr(reference, "pad_token_id", None) is None
+            and getattr(fast_tokenizer, "pad_token_id", None) is not None
+        ):
+            reference.pad_token_id = fast_tokenizer.pad_token_id
 
     def _execute_training(
         self,
@@ -950,8 +1588,10 @@ class MNTPTrainer:
             return torch.device("mps")
         return torch.device("cpu")
 
-    def _persist_model(self, model: Any) -> tuple[Path, Path | None]:
-        adapter_dir = self.output_dir / "adapter"
+    def _persist_model(
+        self, model: Any, *, target_dir: Path | None = None
+    ) -> tuple[Path, Path]:
+        adapter_dir = target_dir or (self.output_dir / "adapter")
         adapter_dir.mkdir(parents=True, exist_ok=True)
 
         if hasattr(model, "save_pretrained"):
@@ -966,19 +1606,23 @@ class MNTPTrainer:
         if not config_path.exists():
             raise RuntimeError("Adapter configuration missing after save_pretrained")
 
+        weights_path = self._resolve_adapter_weights_path(adapter_dir)
+
+        return adapter_dir, weights_path
+
+    def _resolve_adapter_weights_path(self, adapter_dir: Path) -> Path:
         weight_candidates = [
             adapter_dir / "adapter_model.safetensors",
             adapter_dir / "adapter_model.bin",
         ]
-        weights_path = next((path for path in weight_candidates if path.exists()), None)
-        if weights_path is None:
-            logging.error(
-                "Adapter weights missing after save_pretrained. Checked candidate paths",
-                extra={"candidates": [str(path) for path in weight_candidates]},
-            )
-            raise RuntimeError("Adapter weights missing after save_pretrained")
-
-        return adapter_dir, weights_path
+        for path in weight_candidates:
+            if path.exists():
+                return path
+        logger.error(
+            "Adapter weights missing after save_pretrained. Checked candidate paths",
+            extra={"candidates": [str(path) for path in weight_candidates]},
+        )
+        raise RuntimeError("Adapter weights missing after save_pretrained")
 
     def _missing_training_dependencies(self) -> list[str]:
         dependencies: dict[str, Any] = {
