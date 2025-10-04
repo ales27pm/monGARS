@@ -6,7 +6,6 @@ import json
 from typing import Any, Iterable, Sequence
 
 import sqlalchemy as sa
-
 from alembic import op
 
 try:  # pragma: no cover - optional dependency for downgrade

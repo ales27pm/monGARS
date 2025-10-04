@@ -23,7 +23,7 @@ if alembic_module is None or not hasattr(alembic_module, "op"):
 spec = importlib.util.spec_from_file_location(
     "restore_pgvector_migration",
     Path(__file__).resolve().parents[1]
-    / "alembic"
+    / "alembic_migrations"
     / "versions"
     / "20250308_01_restore_pgvector.py",
 )

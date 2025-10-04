@@ -7,18 +7,17 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
-from alembic import context
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from init_db import Base  # noqa: E402
 from monGARS.config import get_settings  # noqa: E402
+from monGARS.db import Base  # noqa: E402
 
 config = context.config
 

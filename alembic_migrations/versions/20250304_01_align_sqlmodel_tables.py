@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import sqlalchemy as sa
-
 from alembic import op
 
 revision = "20250304_01"
