@@ -32,6 +32,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
+from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
 log = logging.getLogger(__name__)
@@ -163,34 +164,28 @@ class Settings(BaseSettings):
         except ArgumentError as exc:
             raise ValueError("Invalid DATABASE_URL provided") from exc
 
-        overrides: dict[str, object] = {}
+        overridden_url = apply_database_url_overrides(
+            url,
+            username=self.db_user,
+            password=self.db_password,
+            host=self.db_host,
+            port=self.db_port,
+            database=self.db_name,
+            logger=log,
+            field_sources={
+                "username": "DB_USER",
+                "password": "DB_PASSWORD",
+                "host": "DB_HOST",
+                "port": "DB_PORT",
+                "database": "DB_NAME",
+            },
+        )
 
-        if self.db_user and self.db_user != url.username:
-            overrides["username"] = self.db_user
-            log.debug("Applying DB_USER override to DATABASE_URL username.")
-
-        if self.db_password and self.db_password != url.password:
-            overrides["password"] = self.db_password
-            log.debug("Applying DB_PASSWORD override to DATABASE_URL password.")
-
-        if self.db_host and self.db_host != url.host:
-            overrides["host"] = self.db_host
-            log.debug("Applying DB_HOST override to DATABASE_URL host.")
-
-        if self.db_port is not None and self.db_port != url.port:
-            overrides["port"] = self.db_port
-            log.debug("Applying DB_PORT override to DATABASE_URL port.")
-
-        if self.db_name and self.db_name != url.database:
-            overrides["database"] = self.db_name
-            log.debug("Applying DB_NAME override to DATABASE_URL database.")
-
-        if overrides:
-            url = url.set(**overrides)
+        if overridden_url is not url:
             object.__setattr__(
                 self,
                 "database_url",
-                AnyUrl(url.render_as_string(hide_password=False)),
+                AnyUrl(overridden_url.render_as_string(hide_password=False)),
             )
 
         return self
