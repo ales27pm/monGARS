@@ -1,66 +1,74 @@
 #!/usr/bin/env python3
-"""
-Programmatic Alembic runner that:
-- Avoids import shadowing by local 'alembic_migrations' folder.
-- Converts async DATABASE_URL (asyncpg) to sync (psycopg2) for Alembic.
-- Upgrades schema to head.
-"""
+"""Programmatic Alembic runner."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
 import os
-import sys
 from pathlib import Path
+from typing import Union
 
-# --- Safety: ensure we import the real Alembic package, not the local migrations dir
-REPO_ROOT = Path(__file__).resolve().parent
-local_shadow = REPO_ROOT / "alembic"
-if local_shadow.exists():
-    # Shouldn’t happen after renaming, but just in case:
-    # Move cwd to end of sys.path so site-packages wins.
+from alembic import command
+from alembic.config import Config
+from sqlalchemy.engine import URL, make_url
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+
+def _coerce_port(value: str) -> Union[int, str]:
     try:
-        sys.path.remove(str(REPO_ROOT))
-    except ValueError:
-        pass
-    sys.path.append(str(REPO_ROOT))
+        return int(value)
+    except (TypeError, ValueError):
+        return value
 
-# --- Build a sync URL for Alembic
-db_url = (
-    os.environ.get("DATABASE_URL") or os.environ.get("DJANGO_DATABASE_URL") or ""
-).strip()
 
-if not db_url:
-    # Fallback from discrete parts (Compose env)
-    user = os.environ.get("DB_USER", "mongars")
-    pwd = os.environ.get("DB_PASSWORD", "changeme")
-    host = os.environ.get("DB_HOST", "postgres")
-    port = os.environ.get("DB_PORT", "5432")
-    name = os.environ.get("DB_NAME", "mongars_db")
-    db_url = f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{name}"
+def make_sync_url() -> str:
+    """Build a psycopg2 SQLAlchemy URL from env configuration."""
 
-# Convert asyncpg → psycopg2 for Alembic if needed
-if db_url.startswith("postgresql+asyncpg://"):
-    sync_url = db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
-else:
-    sync_url = db_url
+    raw = os.getenv("DATABASE_URL") or os.getenv("DJANGO_DATABASE_URL")
+    if raw:
+        url = make_url(raw)
+        # Force psycopg2 driver while retaining the original database settings.
+        return url.set(drivername="postgresql+psycopg2").render_as_string(
+            hide_password=False
+        )
 
-# --- Run Alembic
-try:
-    from alembic import command
-    from alembic.config import Config
-except Exception as e:
-    print(
-        "Failed to import alembic package. Is it installed in the image?",
-        file=sys.stderr,
-    )
-    raise
+    return URL.create(
+        drivername="postgresql+psycopg2",
+        username=os.getenv("DB_USER", "mongars"),
+        password=os.getenv("DB_PASSWORD", "changeme"),
+        host=os.getenv("DB_HOST", "postgres"),
+        port=_coerce_port(os.getenv("DB_PORT", "5432")),
+        database=os.getenv("DB_NAME", "mongars_db"),
+    ).render_as_string(hide_password=False)
 
-alembic_ini = REPO_ROOT / "alembic.ini"
-if not alembic_ini.exists():
-    print(f"alembic.ini not found at {alembic_ini}", file=sys.stderr)
-    sys.exit(2)
 
-cfg = Config(str(alembic_ini))
-# Force URL from env to avoid desync with alembic.ini
-cfg.set_main_option("sqlalchemy.url", sync_url)
+def redact_url(url: str) -> str:
+    try:
+        return make_url(url).render_as_string(hide_password=True)
+    except Exception:  # pragma: no cover - defensive logging helper
+        return "***"
 
-print(f"[init_db] Using SQLAlchemy URL: {sync_url}")
-command.upgrade(cfg, "head")
-print("[init_db] Alembic upgrade to head completed.")
+
+async def init_db() -> None:
+    repo_root = Path(__file__).resolve().parent
+    cfg = Config(str(repo_root / "alembic.ini"))
+    sync_url = make_sync_url()
+    cfg.set_main_option("sqlalchemy.url", sync_url)
+    logger.info("Running alembic upgrade head using %s", redact_url(sync_url))
+    await asyncio.to_thread(command.upgrade, cfg, "head")
+    logger.info("Alembic upgrade to head completed")
+
+
+def main() -> None:
+    try:
+        asyncio.run(init_db())
+    except Exception:  # pragma: no cover - surface failure details to logs
+        logger.exception("DB init failed")
+        raise
+
+
+if __name__ == "__main__":
+    main()
