@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from init_db import Base  # noqa: E402
 from monGARS.config import get_settings  # noqa: E402
+from monGARS.db import Base  # noqa: E402
 
 config = context.config
 

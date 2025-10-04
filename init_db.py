@@ -10,6 +10,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 
 logger = logging.getLogger(__name__)
@@ -38,11 +39,28 @@ def render_url(url: URL, *, hide_password: bool) -> str:
     return url.render_as_string(hide_password=hide_password)
 
 
+def ensure_extensions(url: URL) -> None:
+    """Create required PostgreSQL extensions prior to migrations."""
+
+    if not url.drivername.startswith("postgresql"):
+        return
+
+    engine = create_engine(render_url(url, hide_password=False))
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+    finally:
+        engine.dispose()
+
+
 async def init_db() -> None:
     repo_root = Path(__file__).resolve().parent
     cfg = Config(str(repo_root / "alembic.ini"))
     sync_url = build_sync_url()
-    cfg.set_main_option("sqlalchemy.url", render_url(sync_url, hide_password=False))
+    sync_url_str = render_url(sync_url, hide_password=False)
+    cfg.set_main_option("sqlalchemy.url", sync_url_str)
+    ensure_extensions(sync_url)
     logger.info(
         "Running alembic upgrade head using %s",
         render_url(sync_url, hide_password=True),
