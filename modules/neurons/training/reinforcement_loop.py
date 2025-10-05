@@ -1174,13 +1174,18 @@ class ReasoningRunSummary:
 class ReinforcementLoop:
     """Execute Unsloth-backed GRPO cycles focused on reasoning prompts."""
 
-    _GENERATION_KWARGS = {
+from typing import ClassVar
+
+class ReinforcementLoop:
+    """Execute Unsloth-backed GRPO cycles focused on reasoning prompts."""
+
+    _GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
         "max_new_tokens": 512,
         "do_sample": True,
         "temperature": 0.7,
         "top_p": 0.9,
     }
-    _LORA_TARGET_MODULES = (
+    _LORA_TARGET_MODULES: ClassVar[tuple[str, ...]] = (
         "q_proj",
         "k_proj",
         "v_proj",
