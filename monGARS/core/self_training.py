@@ -50,6 +50,19 @@ class SelfTrainingEngine:
         model_registry_path: str | None = None,
         curated_feature_limit: int = 128,
     ) -> None:
+        """
+        Initialize the SelfTrainingEngine and configure runtime resources for batching, embedding, dataset management, and training orchestration.
+        
+        Parameters:
+        	training_threshold (float): Minimum confidence required for a record to be accepted into a training batch.
+        	retrain_interval (int): Interval in seconds between automatic training cycles.
+        	batch_limit (int): Maximum number of records to consume from the queue per training cycle.
+        	trainer_cls (type | None): Optional trainer class to use for training runs; defaults to the module's MNTPTrainer when None.
+        	training_config_path (str | None): Path to the trainer configuration file; defaults to the module's standard config when None.
+        	dataset_root (str | None): Root directory where curated datasets will be stored; defaults to the module's curated dataset path when None.
+        	model_registry_path (str | None): Directory for trainer outputs and model artifacts; defaults to the module's encoder registry path when None.
+        	curated_feature_limit (int): Maximum number of features to keep from embeddings when building curated records; clamped to at least 1.
+        """
         self.training_threshold = training_threshold
         self.retrain_interval = retrain_interval
         self.batch_limit = batch_limit
@@ -268,6 +281,16 @@ class SelfTrainingEngine:
         curated_batch: Sequence[dict[str, Any]],
         dataset_metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Run the configured trainer on the provided curated records and ensure training artifacts and dataset metadata are recorded.
+        
+        Parameters:
+            curated_batch (Sequence[dict[str, Any]]): Curated training records to pass to the trainer.
+            dataset_metadata (Dict[str, Any]): Metadata for the curated dataset; must include a `run_id` used to create the trainer output directory.
+        
+        Returns:
+            Dict[str, Any]: Trainer-produced summary augmented with a `dataset` entry set to `dataset_metadata` and an `artifacts.training_output` entry pointing to the trainer output directory.
+        """
         output_dir = self.model_registry_path / dataset_metadata["run_id"]
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -287,7 +310,22 @@ class SelfTrainingEngine:
     def curate_reasoning_dataset(
         self, num_samples: int = 200, internal_ratio: float = 0.5
     ) -> tuple[Any, Any]:
-        """Curate a mixed dataset of internal and external reasoning prompts."""
+        """
+        Builds a mixed reasoning dataset from internal history and GSM8K, then returns train/test splits.
+        
+        Collects up to `num_samples` examples, sourcing approximately `internal_ratio` fraction from internal reasoning records and the remainder from the GSM8K dataset when available. If multiple source datasets are present they are concatenated and then split into train and test partitions (uses a small fixed seed for reproducibility).
+        
+        Parameters:
+            num_samples (int): Maximum number of examples to include; must be greater than zero.
+            internal_ratio (float): Fraction in [0.0, 1.0] of samples to attempt to source from internal records (the rest are drawn from GSM8K).
+        
+        Returns:
+            tuple[Any, Any]: A (train_dataset, test_dataset) pair containing the curated examples.
+        
+        Raises:
+            ValueError: If `num_samples` is not positive.
+            RuntimeError: If the `datasets` library is unavailable or if no qualifying samples could be collected.
+        """
 
         if num_samples <= 0:
             raise ValueError("num_samples must be positive")
@@ -339,6 +377,20 @@ class SelfTrainingEngine:
         return split["train"], split["test"]
 
     def _collect_internal_reasoning_records(self, limit: int) -> list[dict[str, Any]]:
+        """
+        Collect up to `limit` internal reasoning examples from the local Hippocampus history and format them for dataset curation.
+        
+        This attempts to import and query the Hippocampus history and returns curated samples that look like reasoning prompts with extracted final answers. Each returned item is a dict with keys:
+        - `prompt`: a list of messages suitable for chat-style models (system message using the engine's SYSTEM_PROMPT, then the user query),
+        - `answer`: the extracted final answer string,
+        - `metadata`: a dict containing at least `source: "hippocampus"`.
+        
+        Parameters:
+            limit (int): Maximum number of curated samples to return. Non-positive values yield an empty list.
+        
+        Returns:
+            list[dict[str, Any]]: A list of curated sample dictionaries (possibly empty). The function returns an empty list if Hippocampus is unavailable, history cannot be retrieved, or no suitable reasoning records are found.
+        """
         if limit <= 0:
             return []
         try:
@@ -409,12 +461,31 @@ class SelfTrainingEngine:
     def _run_history_with_dedicated_loop(
         self, hippocampus: Any, history_limit: int
     ) -> list[Any]:
-        """Execute ``Hippocampus.history`` when an event loop is already running."""
+        """
+        Run a Hippocampus client's history retrieval in a dedicated background thread when an asyncio event loop is already running.
+        
+        Parameters:
+            hippocampus: Hippocampus client instance providing a `history` coroutine.
+            history_limit (int): Maximum number of history entries to request.
+        
+        Returns:
+            list[Any]: The list of history records returned by `hippocampus.history`, or an empty list if no results were produced.
+        
+        Raises:
+            BaseException: Re-raises any exception raised while executing `hippocampus.history`.
+        """
 
         result_holder: list[list[Any]] = []
         error_holder: list[BaseException] = []
 
         def runner() -> None:
+            """
+            Run hippocampus.history in a standalone event loop and capture its result or any raised exception.
+            
+            This function calls asyncio.run on the coroutine returned by hippocampus.history("global", limit=history_limit),
+            then appends the resulting iterable converted to a list into the outer-scope list `result_holder`. If any exception
+            occurs during execution, the exception is appended to the outer-scope list `error_holder`.
+            """
             try:
                 coro = hippocampus.history("global", limit=history_limit)
                 result = asyncio.run(coro)
@@ -436,6 +507,15 @@ class SelfTrainingEngine:
         return result_holder[0] if result_holder else []
 
     def _load_gsm8k_reasoning_dataset(self, limit: int) -> Any:
+        """
+        Load and format a slice of the GSM8K reasoning dataset into the engine's prompt/answer structure.
+        
+        Parameters:
+            limit (int): Maximum number of GSM8K examples to load and return; values <= 0 cause immediate return of `None`.
+        
+        Returns:
+            datasets.Dataset | None: A datasets.Dataset whose records are dicts with keys `prompt` (a list of system/user message dicts), `answer` (extracted answer string), and `metadata` (`{"source": "gsm8k"}`); returns `None` if the `datasets` library is unavailable or the GSM8K dataset cannot be loaded.
+        """
         if limit <= 0:
             return None
         try:  # pragma: no cover - heavy dependency gated at runtime
@@ -455,6 +535,18 @@ class SelfTrainingEngine:
             return None
 
         def _format_record(example: dict[str, Any]) -> dict[str, Any]:
+            """
+            Format a GSM8K dataset example into the internal reasoning sample structure.
+            
+            Parameters:
+                example (dict[str, Any]): A raw GSM8K example expected to contain "question" and "answer" fields.
+            
+            Returns:
+                dict[str, Any]: A mapping with keys:
+                    - `prompt`: a list of role/content messages including the system prompt and the user question,
+                    - `answer`: the extracted GSM8K answer string,
+                    - `metadata`: a dict with `source` set to `"gsm8k"`.
+            """
             question = (example.get("question") or "").strip()
             answer = self.extract_gsm8k_answer(example.get("answer") or "")
             return {
@@ -475,6 +567,12 @@ class SelfTrainingEngine:
     # ------------------------------------------------------------------
     @staticmethod
     def is_reasoning_query(query: str) -> bool:
+        """
+        Determine whether a user query likely requires step-by-step reasoning or numeric calculation.
+        
+        Returns:
+            True if the query contains common reasoning/math keywords or a numeric expression with an operator, False otherwise.
+        """
         lowered = query.lower()
         keyword_hits = (
             "calculate",
@@ -491,6 +589,17 @@ class SelfTrainingEngine:
 
     @staticmethod
     def extract_final_answer(text: str | None) -> str:
+        """
+        Extract the final answer from a reasoning or explanation text.
+        
+        First looks for an explicit final-answer pattern and returns its captured content; if no pattern is found, returns the last non-empty line of the input. Empty or None input yields an empty string.
+        
+        Parameters:
+            text (str | None): Text containing reasoning, explanation, or an answer.
+        
+        Returns:
+            str: The extracted answer, or an empty string if no answer is found.
+        """
         if not text:
             return ""
         match = SelfTrainingEngine._ANSWER_PATTERN.search(text)
@@ -501,6 +610,15 @@ class SelfTrainingEngine:
 
     @staticmethod
     def extract_reasoning_chain(text: str | None) -> str:
+        """
+        Extracts the reasoning chain from the given text.
+        
+        Parameters:
+            text (str | None): Text to search for a reasoning section.
+        
+        Returns:
+            str: The extracted reasoning content trimmed of surrounding whitespace, or an empty string if no reasoning section is found.
+        """
         if not text:
             return ""
         match = SelfTrainingEngine._REASONING_PATTERN.search(text)
@@ -510,6 +628,15 @@ class SelfTrainingEngine:
 
     @staticmethod
     def extract_gsm8k_answer(text: str | None) -> str:
+        """
+        Extracts the GSM8K-style final answer from a model's solution text.
+        
+        Parameters:
+            text (str | None): Text that may contain a GSM8K formatted solution and final answer.
+        
+        Returns:
+            str: The extracted final answer trimmed of surrounding whitespace, or an empty string if no GSM8K answer is found.
+        """
         if not text:
             return ""
         match = SelfTrainingEngine._GSM_PATTERN.search(text)

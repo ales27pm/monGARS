@@ -351,11 +351,24 @@ class LLMIntegration:
         self._ray_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
+        """
+        Create a stable cache key for a given task and prompt using the integration's current adapter version.
+        
+        Returns:
+            cache_key (str): A string composed of `<task_type>:<adapter_version>:<digest>`, where `<digest>` is the first 16 hex characters of the SHA-256 hash of `prompt`.
+        """
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
         return f"{task_type}:{self._current_adapter_version}:{digest}"
 
     async def _ensure_adapter_metadata(self) -> dict[str, str] | None:
-        """Load manifest metadata if it changed since the last call."""
+        """
+        Ensure the adapter manifest is loaded and cached if it has changed since the last check.
+        
+        Checks the manifest file modification time and, when updated, loads the manifest, builds and caches adapter metadata, and updates the internal adapter version. If Ray is not enabled, or the manifest is missing or invalid, clears cached metadata and adapter version.
+        
+        Returns:
+            dict[str, str] | None: The cached adapter metadata payload when available, otherwise `None`.
+        """
 
         if not self.use_ray:
             return None
@@ -408,6 +421,12 @@ class LLMIntegration:
             return self._adapter_metadata
 
     def _update_adapter_version(self, version: str | None) -> None:
+        """
+        Update the integration's current adapter version and emit a log entry when the logged version changes.
+        
+        Parameters:
+            version (str | None): Adapter version to set. If `None`, the version `"baseline"` is used.
+        """
         resolved_version = version or "baseline"
         if resolved_version != self._current_adapter_version:
             self._current_adapter_version = resolved_version
@@ -428,6 +447,16 @@ class LLMIntegration:
     async def _resolve_adapter_for_task(
         self, task_type: str, response_hints: dict[str, Any] | None
     ) -> dict[str, str] | None:
+        """
+        Selects the adapter payload to use for a given task, optionally preferring a reasoning-specific adapter when requested.
+        
+        Parameters:
+            task_type (str): The task category (e.g., "general" or "coding") used for logging and selection context.
+            response_hints (dict[str, Any] | None): Optional hints influencing adapter selection. If this contains a truthy `"reasoning"` key, the method will attempt to load a reasoning-specific adapter payload.
+        
+        Returns:
+            dict[str, str] | None: The chosen adapter payload or metadata dictionary, or `None` if no adapter metadata is available.
+        """
         metadata = await self._ensure_adapter_metadata()
         reasoning_requested = bool(response_hints and response_hints.get("reasoning"))
         if not reasoning_requested:
@@ -447,6 +476,14 @@ class LLMIntegration:
         return metadata
 
     def _load_reasoning_adapter_payload(self) -> dict[str, str] | None:
+        """
+        Load the most recent reasoning-specific adapter payload from the local adapter manifest.
+        
+        Searches the manifest's current record first, then the manifest history in reverse chronological order, and returns a payload constructed from the first record whose summary labels include "category": "reasoning_grpo".
+        
+        Returns:
+            dict[str, str] | None: A payload dictionary containing adapter metadata (e.g., `adapter_path`, `version`, `updated_at`, `status`, and optionally `weights_path`) if a reasoning adapter record is found, or `None` if the manifest is unavailable or no matching record exists.
+        """
         try:
             manifest = load_manifest(self.adapter_registry_path)
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -473,6 +510,20 @@ class LLMIntegration:
         return None
 
     def _build_payload_from_record(self, record: AdapterRecord) -> dict[str, str]:
+        """
+        Builds a serializable payload dictionary from an AdapterRecord for adapter dispatch.
+        
+        Parameters:
+            record (AdapterRecord): Manifest record containing adapter and optional weights paths, version, creation timestamp, and status.
+        
+        Returns:
+            dict[str, str]: A mapping with keys:
+                - "adapter_path": filesystem path to the adapter (POSIX string),
+                - "version": adapter version string,
+                - "updated_at": record creation timestamp,
+                - "status": adapter status string,
+                - "weights_path" (optional): filesystem path to weights (POSIX string) if present.
+        """
         adapter_path = record.resolve_adapter_path(self.adapter_registry_path)
         weights_path = record.resolve_weights_path(self.adapter_registry_path)
         payload = {
@@ -488,6 +539,17 @@ class LLMIntegration:
     async def _fail(
         self, cache_key: str, message: str, ttl: int = 60
     ) -> dict[str, Any]:
+        """
+        Create and cache a standardized failure payload for the given cache key.
+        
+        Parameters:
+            cache_key (str): Key under which the failure payload will be stored in the response cache.
+            message (str): Human-readable failure message to include in the payload.
+            ttl (int): Time-to-live for the cached payload in seconds.
+        
+        Returns:
+            payload (dict[str, Any]): The stored failure payload containing the message and standard failure fields.
+        """
         payload = self._failure_payload(message)
         await _RESPONSE_CACHE.set(cache_key, payload, ttl=ttl)
         return payload
@@ -657,7 +719,17 @@ class LLMIntegration:
     async def _generate_with_model_slot(
         self, prompt: str, task_type: str
     ) -> dict[str, Any]:
-        """Generate a response using the Unsloth-backed model slot."""
+        """
+        Generate text using the primary model slot.
+        
+        Uses the configured model slot to produce a response for the given prompt.
+        
+        Returns:
+            dict: A dictionary shaped like {'message': {'content': <text>}} where <text> is the generated string.
+        
+        Raises:
+            LocalProviderError: If PyTorch is not available or local model generation fails.
+        """
 
         if torch is None:
             raise self.LocalProviderError(
@@ -704,7 +776,22 @@ class LLMIntegration:
         *,
         response_hints: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Generate a response for ``prompt`` using the configured LLM stack."""
+        """
+        Produce a text response for a prompt using the configured LLM backends.
+        
+        Chooses a Ray Serve adapter when Ray is enabled (and falls back to a local provider on errors or empty Ray responses), caches results, and returns a normalized result with estimated confidence and token usage.
+        
+        Parameters:
+            prompt (str): The user prompt to generate a response for.
+            task_type (str): The task category (e.g., "general" or "coding") that may influence model selection.
+            response_hints (dict[str, Any] | None): Optional hints (for example, requesting reasoning) that can affect adapter selection when Ray is enabled.
+        
+        Returns:
+            dict[str, Any]: A mapping with keys:
+                - "text": The generated response text.
+                - "confidence": A numeric confidence estimate for the response.
+                - "tokens_used": Number of tokens/words used in the returned text.
+        """
 
         adapter_metadata: dict[str, str] | None
         if self.use_ray:

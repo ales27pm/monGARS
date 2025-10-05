@@ -174,6 +174,33 @@ class EvolutionOrchestrator:
         deployment_name: str = WORKFLOW_DEPLOYMENT_NAME,
         energy_tracker_factory: EnergyTrackerFactory | None = None,
     ) -> None:
+        """
+        Initialize an EvolutionOrchestrator and prepare its workflow backend and schedule.
+        
+        Creates the registry directory if missing, stores configuration and component factories, selects or constructs the workflow backend, builds the orchestration flow, and registers the recurring schedule.
+        
+        Parameters:
+            model_registry_path (str | os.PathLike[str]): Filesystem path where run artifacts and manifests are persisted.
+            training_config_path (str | os.PathLike[str]): Path to the trainer configuration used to instantiate trainers.
+            model_id (str): Identifier for the model/adapter being trained and registered.
+            trainer_cls (type[MNTPTrainer]): Trainer class used to perform MNTP training; instantiated per run.
+            slot_manager_cls (type[ModelSlotManager] | None): Optional class responsible for acquiring model slots for rollout; None disables slot management.
+            alignment_loop (PreferenceAlignmentLoop | None): Optional pre-configured reinforcement alignment loop instance; if absent, may be initialized later.
+            preference_curator (PreferenceDatasetCurator | None): Optional curator that produces preference datasets for alignment.
+            curiosity_engine (CuriosityEngine | None): Optional curiosity engine used during training or dataset curation.
+            hippocampus (Hippocampus | None): Optional persistent memory component used by training or alignment steps.
+            data_collector (Callable[[], CuratedDataset]): Callable that returns the curated dataset used for training; default collects from configured sources.
+            workflow_backend (WorkflowBackend | None): Optional orchestration backend; if None the orchestrator will attempt to construct the default backend (Prefect if available, otherwise inline).
+            schedule_interval_minutes (int): Interval, in minutes, used when registering a recurring schedule for the flow.
+            schedule_jitter_seconds (float): Max jitter, in seconds, to apply to the scheduled run anchor.
+            flow_name (str): Logical name used to register or decorate the orchestration flow.
+            deployment_name (str): Deployment name used by the workflow backend when creating a scheduled deployment.
+            energy_tracker_factory (EnergyTrackerFactory | None): Optional factory for an energy tracker to measure energy usage during training.
+        
+        Side effects:
+            - Ensures the registry directory exists on disk.
+            - Builds the workflow flow via the selected backend and registers its schedule.
+        """
         self.registry_path = Path(model_registry_path)
         self.registry_path.mkdir(parents=True, exist_ok=True)
         self.training_config_path = Path(training_config_path)
@@ -286,6 +313,17 @@ class EvolutionOrchestrator:
         return str(run_dir) if run_dir is not None else None
 
     def _execute_training_cycle(self, *, force: bool) -> Path | None:
+        """
+        Orchestrates a single training cycle: collects data, runs MNTP training, persists artifacts, and triggers post-training steps.
+        
+        Performs an idle check (unless forced), collects a curated dataset, prepares a run directory, instantiates and runs the trainer (optionally tracking energy usage), and then persists training summary and energy report, updates the adapter manifest, and attempts rollout, reinforcement alignment, and reasoning alignment without letting those steps block success. Skips the cycle and returns None when the system is busy or no curated data is available.
+        
+        Returns:
+            Path | None: Path to the run directory for a completed training cycle, or `None` if the cycle was skipped.
+        
+        Raises:
+            RuntimeError: If the trainer summary indicates an unsuccessful training status.
+        """
         if not force and not self._system_is_idle():
             logger.info("Skipping training cycle because the host is busy")
             return None
@@ -345,6 +383,15 @@ class EvolutionOrchestrator:
     def _ensure_alignment_components(
         self,
     ) -> tuple[PreferenceDatasetCurator, PreferenceAlignmentLoop] | None:
+        """
+        Ensure preference alignment components are initialized and configured on the orchestrator.
+        
+        Initializes and configures the PreferenceAlignmentLoop and PreferenceDatasetCurator on self if they are not already present, and updates their model and training-slot settings. If no slot manager class is available, no components are created.
+        
+        Returns:
+            tuple (PreferenceDatasetCurator, PreferenceAlignmentLoop): The curator and alignment loop instances when initialized.
+            None: If a model slot manager class is not configured and components cannot be created.
+        """
         if self._slot_manager_cls is None:
             logger.info(
                 "reinforcement.alignment.slot_unavailable",
@@ -377,6 +424,14 @@ class EvolutionOrchestrator:
         return self._preference_curator, self._alignment_loop
 
     def _run_reinforcement_alignment(self, dataset: CuratedDataset) -> None:
+        """
+        Run the reinforcement alignment loop using a curated dataset.
+        
+        Builds preference samples from the provided dataset and executes the aligner's reinforcement loop. If the dataset is None, alignment components cannot be obtained, no preference samples are produced, or an error occurs during sample construction or execution, the function logs the condition and returns without raising.
+        
+        Parameters:
+            dataset (CuratedDataset): Curated dataset used to construct preference samples for reinforcement alignment.
+        """
         if dataset is None:
             logger.info("reinforcement.alignment.no_dataset")
             return
@@ -405,6 +460,11 @@ class EvolutionOrchestrator:
             logger.exception("reinforcement.alignment.execution_failed")
 
     def _run_reasoning_alignment(self) -> None:
+        """
+        Run a reasoning alignment pass using a self-training GRPO loop.
+        
+        Initializes a ReinforcementLoop with a SelfTrainingEngine on first use and executes train_reasoning_grpo to perform reasoning alignment. If no slot manager class is configured, the method returns without action. Exceptions raised by the training are caught: RuntimeError causes a skipped log entry, other exceptions are logged as unexpected errors; successful runs produce a completion log with accuracy, steps, and evaluation sample counts.
+        """
         if self._slot_manager_cls is None:
             logger.info(
                 "reinforcement.reasoning.slot_unavailable",
@@ -448,6 +508,16 @@ class EvolutionOrchestrator:
         summary: dict[str, Any],
         energy_report: EnergyUsageReport | None,
     ) -> None:
+        """
+        Persist the training summary and optional energy report into the provided run directory.
+        
+        Writes the training summary and, if an energy report is provided, the energy report to files under `run_dir`. Failures during persistence are caught and do not propagate (they are logged instead).
+        
+        Parameters:
+        	run_dir (Path): Directory where artifacts should be written.
+        	summary (dict[str, Any]): Training summary payload to persist.
+        	energy_report (EnergyUsageReport | None): Optional energy usage report to persist; if `None`, no energy report is written.
+        """
         try:
             self._write_summary(run_dir, summary)
         except Exception:  # pragma: no cover - defensive persistence guard

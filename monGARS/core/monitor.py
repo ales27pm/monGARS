@@ -27,7 +27,15 @@ TRAINING_TOKEN_COUNTER = meter.create_counter(
 
 
 def get_tracer(name: str) -> trace.Tracer:
-    """Return an OpenTelemetry tracer configured for ``name``."""
+    """
+    Get an OpenTelemetry tracer for the given name.
+    
+    Parameters:
+        name (str): Name used to identify and configure the tracer.
+    
+    Returns:
+        trace.Tracer: The tracer instance associated with `name`.
+    """
 
     return trace.get_tracer(name)
 

@@ -401,53 +401,161 @@ def test_train_reasoning_grpo_invokes_injected_dependencies(monkeypatch, tmp_pat
 
     class StubSelfTraining(SelfTrainingEngine):
         def curate_reasoning_dataset(self, num_samples: int = 200, internal_ratio: float = 0.5):
+            """
+            Curates a reasoning dataset split into external and internal samples.
+            
+            Parameters:
+                num_samples (int): Total number of samples to produce.
+                internal_ratio (float): Fraction of samples to place in the internal set (between 0 and 1).
+            
+            Returns:
+                external_samples (list): List of curated samples intended for external use.
+                internal_samples (list): List of curated samples intended for internal use. The two lists together contain `num_samples` items and the internal list has approximately `round(num_samples * internal_ratio)` items.
+            """
             return [dataset_entry], [dataset_entry]
 
     class DummyTokenizer:
         def apply_chat_template(self, *_: Any, **__: Any) -> str:
+            """
+            Apply a chat formatting template to the provided inputs and return the resulting prompt.
+            
+            Parameters:
+            	*_: Ignored positional arguments.
+            	**__: Ignored keyword arguments.
+            
+            Returns:
+            	A string containing the formatted prompt.
+            """
             return "prompt"
 
         def __call__(self, *_: Any, **__: Any) -> SimpleNamespace:
+            """
+            Provide a no-op object exposing a `to(device)` method.
+            
+            Returns:
+                A `SimpleNamespace` with a `to(device)` callable that accepts a device argument, performs no action, and returns `None`.
+            """
             return SimpleNamespace(to=lambda _device: None)
 
         def decode(self, *_: Any, **__: Any) -> str:
+            """
+            Decode a model output into a formatted answer string.
+            
+            Returns:
+                The decoded string "<answer>4</answer>".
+            """
             return "<answer>4</answer>"
 
         def save_pretrained(self, directory: str) -> None:
+            """
+            Ensure the given directory path exists by creating it and any missing parent directories.
+            
+            Parameters:
+                directory (str): Filesystem path where pretrained artifacts should be saved; the directory and any missing parents will be created if they do not exist.
+            """
             Path(directory).mkdir(parents=True, exist_ok=True)
 
     class DummyModel:
         device = "cpu"
 
         def generate(self, **_: Any) -> list[str]:
+            """
+            Provide a placeholder generation result.
+            
+            Parameters:
+            	**_ (Any): Additional keyword arguments are accepted and ignored.
+            
+            Returns:
+            	generation (list[str]): A single-item list containing the string "ignored".
+            """
             return ["ignored"]
 
         def save_pretrained(self, directory: str) -> None:
+            """
+            Ensure the given directory path exists by creating it and any missing parent directories.
+            
+            Parameters:
+                directory (str): Filesystem path where pretrained artifacts should be saved; the directory and any missing parents will be created if they do not exist.
+            """
             Path(directory).mkdir(parents=True, exist_ok=True)
 
     class DummySlotManager:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            """
+            Store arbitrary positional and keyword arguments on the instance for later access.
+            
+            Parameters:
+                *args: Positional arguments passed to the constructor; stored on `self.args`.
+                **kwargs: Keyword arguments passed to the constructor; stored on `self.kwargs`.
+            """
             self.args = args
             self.kwargs = kwargs
 
         def __enter__(self) -> tuple[DummyModel, DummyTokenizer]:
+            """
+            Enter the slot context and provide placeholder model and tokenizer for testing.
+            
+            Returns:
+                tuple[DummyModel, DummyTokenizer]: A tuple containing a placeholder model instance and a placeholder tokenizer instance.
+            """
             return DummyModel(), DummyTokenizer()
 
         def __exit__(self, exc_type, exc, tb) -> None:
+            """
+            Mark the slot as closed when exiting the context.
+            
+            Parameters:
+                exc_type (Optional[type]): Exception type if raised within the context, otherwise None.
+                exc (Optional[BaseException]): Exception instance if raised within the context, otherwise None.
+                tb (Optional[traceback]): Traceback object for the exception, otherwise None.
+            
+            Notes:
+                This method records that the slot has been closed and does not suppress exceptions raised inside the context.
+            """
             return None
 
     class DummyTrainer:
         def __init__(self, **_: Any) -> None:
+            """
+            Initialize the dummy trainer with a default model and simulated training state.
+            
+            Parameters:
+                **_ (Any): Additional keyword arguments are accepted and ignored.
+            """
             self.model = DummyModel()
             self.state = SimpleNamespace(global_step=9)
 
         def train(self) -> None:
+            """
+            Placeholder training method that performs no action and exists for interface compatibility.
+            """
             return None
 
     def fake_config(**kwargs: Any) -> SimpleNamespace:
+        """
+        Create a SimpleNamespace populated with the given keyword arguments.
+        
+        Parameters:
+            **kwargs: Arbitrary keyword arguments to set as attributes on the returned namespace.
+        
+        Returns:
+            SimpleNamespace: An object whose attributes correspond to the provided keyword arguments.
+        """
         return SimpleNamespace(**kwargs)
 
     def fake_save(trainer: Any, tokenizer: Any) -> tuple[Path, Path | None]:
+        """
+        Create a temporary adapter directory and return its path.
+        
+        Used by tests to simulate saving adapter artifacts.
+        
+        Parameters:
+            trainer (Any): Trainer object (not used by this fake saver).
+            tokenizer (Any): Tokenizer object (not used by this fake saver).
+        
+        Returns:
+            tuple[Path, Path | None]: A tuple where the first element is the created adapter directory Path and the second element is `None` (no adapter state file).
+        """
         adapter_dir = tmp_path / "adapter"
         adapter_dir.mkdir(parents=True, exist_ok=True)
         return adapter_dir, None
