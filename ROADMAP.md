@@ -6,10 +6,10 @@ required to reach production readiness.
 ## Immediate Priorities (Security & Stability)
 
 - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
-- 🔒 Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
+- ✅ Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
 - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude
   secrets and build artefacts.
-- 👤 Replace demo users in `web_api.py` with the database-backed authentication
+- 🔄 Replace demo users in `web_api.py` with the database-backed authentication
   flow and migrations (default accounts still load at runtime and must be
   removed).
 

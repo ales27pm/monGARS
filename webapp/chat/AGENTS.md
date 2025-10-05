@@ -16,7 +16,7 @@ Covers views, services, forms, and templates for `webapp/chat/`.
   - ✅ FastAPI chat/history/token endpoints with validation.
   - ✅ Django chat UI with progressive enhancement.
   - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
-  - 🔄 Replace hard-coded credential stores with database-backed auth flows.
+  - 🔄 Replaced hard-coded credential stores with database-backed auth flows (the `DEFAULT_USERS` bootstrap in `monGARS/api/web_api.py` still provisions demo accounts until the cleanup lands).
   - 🚧 Publish polished SDKs and reference clients.
 
 ## Architecture

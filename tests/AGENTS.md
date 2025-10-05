@@ -15,13 +15,13 @@ suites.
 
 - **Stability Assurance**
   - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
-  - 🔒 Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
+  - ✅ Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
   - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
-  - 👤 Replace demo users in `web_api.py` with the database-backed authentication flow and migrations.
+  - 🔄 Replace demo users in `web_api.py` with the database-backed authentication flow and migrations (default accounts still load at runtime and must be removed).
 - **Research Coverage**
   - ✅ Personality profiles persisted via SQLModel with live adapter updates.
   - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-  - 🚧 Explore reinforcement learning loops and advanced scaling strategies.
+  - 🔄 Reinforcement-learning research loops ship under `modules/neurons/training/reinforcement_loop.py`; integrate telemetry, rollout, and operator controls before calling the milestone complete.
   - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts, and distributed workflows.
 
 ## Structure & Conventions
