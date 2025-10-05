@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-Last updated: 2025-12-11
+Last updated: 2025-10-05
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -105,6 +105,8 @@ and reality.
 
 - ✅ **JWT alignment**: configuration and security manager now enforce HS256,
   deferring asymmetric keys until managed storage is available.
+- ✅ **Secret storage**: Kubernetes manifests source credentials from Vault via
+  an `ExternalSecret`, replacing inline Kubernetes `Secret` manifests.【F:k8s/secrets.yaml†L1-L52】
 - ✅ **Schema evolution**: Alembic migrations cover every ORM model and legacy
   table, allowing production rollouts without `init_db.py` fallbacks.
 - ✅ **Telemetry integration**: Ray Serve success, failure, and scaling counters

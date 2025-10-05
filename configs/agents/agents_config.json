@@ -18,11 +18,11 @@
           "label": "Security & Stability Hotlist"
         },
         {
-          "phase": "Phase 3 – Hardware & Performance (🔄 In Progress, Target Q3 2025)",
+          "phase": "Phase 3 – Hardware & Performance (✅ Completed Q3 2025)",
           "label": "Phase 3 – Hardware & Performance"
         },
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
           "label": "Phase 5 – Web/API Refinement"
         }
       ],
@@ -61,11 +61,11 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 3 – Hardware & Performance (🔄 In Progress, Target Q3 2025)",
+          "phase": "Phase 3 – Hardware & Performance (✅ Completed Q3 2025)",
           "label": "Runtime & Performance"
         },
         {
-          "phase": "Phase 4 – Collaborative Networking (🔄 In Progress, Target Q4 2025)",
+          "phase": "Phase 4 – Collaborative Networking (✅ Completed Q4 2025)",
           "label": "Networking & Collaboration"
         }
       ],
@@ -102,7 +102,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
           "label": "API Refinement"
         }
       ],
@@ -138,7 +138,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 3 – Hardware & Performance (🔄 In Progress, Target Q3 2025)",
+          "phase": "Phase 3 – Hardware & Performance (✅ Completed Q3 2025)",
           "label": "Performance & Resilience"
         },
         {
@@ -279,7 +279,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
           "label": "Web Interface Goals"
         }
       ],
@@ -316,7 +316,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🗓 Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
           "label": "Chat UX Alignment"
         }
       ],

@@ -17,12 +17,12 @@ Guides orchestrators, schedulers, and memory abstractions under `monGARS/core/`.
   - ✅ Multi-architecture build scripts and cache metrics.
   - ✅ Hardened RBAC manifests.
   - ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support for LoRA and curated adapters.
-  - 🔄 Extend Alembic migrations for the newest SQLModel tables, including legacy tables created outside the current ORM layer.
+  - ✅ Extend Alembic migrations for the newest SQLModel tables, including legacy tables created outside the current ORM layer.
   - ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*` metrics emitted by `LLMIntegration`).
 - **Self-Improvement**
   - ✅ Personality profiles persisted via SQLModel with live adapter updates.
   - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-  - 🚧 Explore reinforcement learning loops and advanced scaling strategies.
+  - 🔄 Reinforcement-learning research loops ship under `modules/neurons/training/reinforcement_loop.py`; integrate telemetry, rollout, and operator controls before calling the milestone complete.
   - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts, and distributed workflows.
 
 ## Architectural Principles
