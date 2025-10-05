@@ -435,8 +435,6 @@ class LLMIntegration:
 
         payload = await asyncio.to_thread(self._load_reasoning_adapter_payload)
         if payload:
-            self._adapter_metadata = payload
-            self._update_adapter_version(payload.get("version"))
             logger.info(
                 "llm.adapter.reasoning_selected",
                 extra={
@@ -469,7 +467,7 @@ class LLMIntegration:
 
         for record in candidates:
             summary = record.summary if isinstance(record.summary, dict) else {}
-            labels = summary.get("labels") if isinstance(summary, dict) else None
+            labels = summary.get("labels")
             if isinstance(labels, dict) and labels.get("category") == "reasoning_grpo":
                 return self._build_payload_from_record(record)
         return None

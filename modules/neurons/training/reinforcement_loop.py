@@ -1232,7 +1232,9 @@ class ReinforcementLoop:
         """Run a full GRPO training cycle and return its summary."""
 
         self._ensure_dependencies()
-        tracer = self._tracer_factory("llm.reasoning.grpo") if self._tracer_factory else None
+        tracer = (
+            self._tracer_factory("llm.reasoning.grpo") if self._tracer_factory else None
+        )
         evaluation: dict[str, float] = {"accuracy": 0.0, "evaluated": 0.0}
         steps = 0
         adapter_dir: Path | None = None
@@ -1259,7 +1261,7 @@ class ReinforcementLoop:
                     args=config,
                     train_dataset=train_ds,
                     eval_dataset=eval_ds,
-                    processing_class=tokenizer,
+                    tokenizer=tokenizer,
                 )
                 start_time = time.perf_counter()
                 trainer.train()
@@ -1289,14 +1291,20 @@ class ReinforcementLoop:
                 "GRPOTrainer is unavailable. Install 'trl' with the grpo extra to enable reasoning alignment."
             )
         if self._slot_manager_cls is None:
-            raise RuntimeError("ModelSlotManager is unavailable for reinforcement training")
+            raise RuntimeError(
+                "ModelSlotManager is unavailable for reinforcement training"
+            )
         if self._fast_model_cls is None:
-            raise RuntimeError("Unsloth FastLanguageModel is required to apply LoRA adapters")
+            raise RuntimeError(
+                "Unsloth FastLanguageModel is required to apply LoRA adapters"
+            )
         if self._torch is None:
             raise RuntimeError("PyTorch is required to evaluate reasoning adapters")
 
     @contextlib.contextmanager
-    def _start_span(self, tracer: Any, name: str) -> contextlib.AbstractContextManager[Any]:
+    def _start_span(
+        self, tracer: Any, name: str
+    ) -> contextlib.AbstractContextManager[Any]:
         if tracer is None:
             yield None
             return
@@ -1304,7 +1312,9 @@ class ReinforcementLoop:
             with tracer.start_as_current_span(name) as span:
                 yield span
         except Exception:
-            self._logger.warning("reinforcement.reasoning.tracing_unavailable", exc_info=True)
+            self._logger.warning(
+                "reinforcement.reasoning.tracing_unavailable", exc_info=True
+            )
             yield None
 
     @contextlib.contextmanager
@@ -1365,7 +1375,11 @@ class ReinforcementLoop:
             completion_ids: Iterable[int] | None = None,
             **_: Any,
         ) -> list[float]:
-            ids = list(completion_ids) if completion_ids is not None else list(range(len(completions)))
+            ids = (
+                list(completion_ids)
+                if completion_ids is not None
+                else list(range(len(completions)))
+            )
             rewards: list[float] = []
             for index, completion in zip(ids, completions):
                 idx = int(index) if isinstance(index, (int, float)) else 0
@@ -1373,7 +1387,9 @@ class ReinforcementLoop:
                 gold = gold_answers[idx]
                 answer = SelfTrainingEngine.extract_final_answer(completion)
                 reasoning = SelfTrainingEngine.extract_reasoning_chain(completion)
-                reward = 1.0 if answer and gold and answer.strip() == gold.strip() else 0.0
+                reward = (
+                    1.0 if answer and gold and answer.strip() == gold.strip() else 0.0
+                )
                 if reasoning and len(reasoning.split()) >= 50:
                     reward += 0.5
                 rewards.append(float(reward))
@@ -1381,7 +1397,9 @@ class ReinforcementLoop:
 
         return reward_fn
 
-    def _evaluate_reasoning(self, model: Any, dataset: Any, tokenizer: Any) -> dict[str, float]:
+    def _evaluate_reasoning(
+        self, model: Any, dataset: Any, tokenizer: Any
+    ) -> dict[str, float]:
         assert self._torch is not None
         correct = 0
         total = 0
@@ -1403,7 +1421,9 @@ class ReinforcementLoop:
         accuracy = correct / total if total else 0.0
         return {"accuracy": accuracy, "evaluated": float(total)}
 
-    def _save_artifacts(self, trainer: Any, tokenizer: Any) -> tuple[Path | None, Path | None]:
+    def _save_artifacts(
+        self, trainer: Any, tokenizer: Any
+    ) -> tuple[Path | None, Path | None]:
         adapter_dir = self.output_dir / "adapter"
         adapter_dir.mkdir(parents=True, exist_ok=True)
         if hasattr(trainer.model, "save_pretrained"):
@@ -1426,7 +1446,9 @@ class ReinforcementLoop:
                 )
             except Exception:
                 merged_dir = None
-                self._logger.warning("reinforcement.reasoning.merge_failed", exc_info=True)
+                self._logger.warning(
+                    "reinforcement.reasoning.merge_failed", exc_info=True
+                )
 
         return adapter_dir, merged_dir
 
@@ -1463,7 +1485,9 @@ class ReinforcementLoop:
         try:
             from modules.ray_service import update_ray_deployment
         except Exception:
-            self._logger.warning("reinforcement.reasoning.ray_unavailable", exc_info=True)
+            self._logger.warning(
+                "reinforcement.reasoning.ray_unavailable", exc_info=True
+            )
             return
 
         payload = manifest.build_payload() if manifest else {}
@@ -1472,7 +1496,9 @@ class ReinforcementLoop:
         try:
             update_ray_deployment(payload)
         except Exception:
-            self._logger.warning("reinforcement.reasoning.ray_update_failed", exc_info=True)
+            self._logger.warning(
+                "reinforcement.reasoning.ray_update_failed", exc_info=True
+            )
 
 
 __all__ = [

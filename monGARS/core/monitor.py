@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -27,7 +26,7 @@ TRAINING_TOKEN_COUNTER = meter.create_counter(
 )
 
 
-def get_tracer(name: str) -> "trace.Tracer":
+def get_tracer(name: str) -> trace.Tracer:
     """Return an OpenTelemetry tracer configured for ``name``."""
 
     return trace.get_tracer(name)
