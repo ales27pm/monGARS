@@ -449,7 +449,7 @@ class LLMIntegration:
     def _load_reasoning_adapter_payload(self) -> dict[str, str] | None:
         try:
             manifest = load_manifest(self.adapter_registry_path)
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except (OSError, ValueError) as exc:  # pragma: no cover - defensive logging
             logger.warning(
                 "llm.adapter.reasoning_manifest_unavailable",
                 extra={"manifest_path": str(self.adapter_manifest_path)},
