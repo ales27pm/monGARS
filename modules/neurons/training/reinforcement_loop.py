@@ -25,14 +25,17 @@ observability pipelines.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import logging
+import os
 import statistics
 import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 try:  # pragma: no cover - optional dependency at runtime
@@ -41,12 +44,33 @@ except ModuleNotFoundError:  # pragma: no cover - trl is optional in tests
     DPOConfig = None  # type: ignore[assignment]
     DPOTrainer = None  # type: ignore[assignment]
 
+try:  # pragma: no cover - optional dependency for reasoning loop
+    from trl import GRPOConfig, GRPOTrainer  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
+    GRPOConfig = None  # type: ignore[assignment]
+    GRPOTrainer = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency for reasoning loop
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
+    torch = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency for reasoning loop
+    from unsloth import FastLanguageModel  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
+    FastLanguageModel = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive guard
+    FastLanguageModel = None  # type: ignore[assignment]
+
 try:  # pragma: no cover - optional dependency at runtime
     from datasets import Dataset  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - datasets optional
     Dataset = None  # type: ignore[assignment]
 
+from modules.neurons.registry import update_manifest
 from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import get_tracer
+from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
 
@@ -1127,6 +1151,361 @@ class PreferenceAlignmentLoop:
         return records
 
 
+@dataclass(slots=True)
+class ReasoningRunSummary:
+    """Summary of a GRPO reasoning cycle."""
+
+    accuracy: float
+    eval_samples: int
+    steps: int
+    adapter_dir: Path | None
+    merged_dir: Path | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "accuracy": self.accuracy,
+            "eval_samples": self.eval_samples,
+            "steps": self.steps,
+            "adapter_dir": str(self.adapter_dir) if self.adapter_dir else None,
+            "merged_dir": str(self.merged_dir) if self.merged_dir else None,
+        }
+
+
+class ReinforcementLoop:
+    """Execute Unsloth-backed GRPO cycles focused on reasoning prompts."""
+
+from typing import ClassVar
+
+class ReinforcementLoop:
+    """Execute Unsloth-backed GRPO cycles focused on reasoning prompts."""
+
+    _GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
+        "max_new_tokens": 512,
+        "do_sample": True,
+        "temperature": 0.7,
+        "top_p": 0.9,
+    }
+    _LORA_TARGET_MODULES: ClassVar[tuple[str, ...]] = (
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    )
+
+    def __init__(
+        self,
+        *,
+        model_id: str = "unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+        slot_name: str = "reasoning-grpo",
+        max_seq_length: int = 2048,
+        output_dir: str | os.PathLike[str] = "artifacts/reasoning_grpo",
+        registry_path: str | os.PathLike[str] = "models/encoders",
+        self_training_engine: SelfTrainingEngine | None = None,
+        slot_manager_cls: type[ModelSlotManager] | None = None,
+        tracer_factory: Callable[[str], Any] | None = get_tracer,
+        trainer_cls: type | None = None,
+        trainer_config_cls: type | None = None,
+        fast_model_cls: Any | None = None,
+        torch_module: Any | None = None,
+    ) -> None:
+        self.model_id = model_id
+        self.slot_name = slot_name
+        self.max_seq_length = max_seq_length
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.registry_path = Path(registry_path)
+        self.registry_path.mkdir(parents=True, exist_ok=True)
+        self._self_training_engine = self_training_engine or SelfTrainingEngine()
+        self._slot_manager_cls = slot_manager_cls or ModelSlotManager
+        self._tracer_factory = tracer_factory
+        self._trainer_cls = trainer_cls or GRPOTrainer
+        self._trainer_config_cls = trainer_config_cls or GRPOConfig
+        self._fast_model_cls = fast_model_cls or FastLanguageModel
+        self._torch = torch_module if torch_module is not None else torch
+        self._logger = logging.getLogger(__name__)
+
+    def train_reasoning_grpo(
+        self,
+        num_samples: int = 200,
+        internal_ratio: float = 0.5,
+        *,
+        max_steps: int = 100,
+    ) -> ReasoningRunSummary:
+        """Run a full GRPO training cycle and return its summary."""
+
+        self._ensure_dependencies()
+        tracer = (
+            self._tracer_factory("llm.reasoning.grpo") if self._tracer_factory else None
+        )
+        evaluation: dict[str, float] = {"accuracy": 0.0, "evaluated": 0.0}
+        steps = 0
+        adapter_dir: Path | None = None
+        merged_dir: Path | None = None
+        with self._start_span(tracer, "grpo_reasoning_cycle") as span:
+            train_ds, eval_ds = self._self_training_engine.curate_reasoning_dataset(
+                num_samples=num_samples,
+                internal_ratio=internal_ratio,
+            )
+            if span is not None:
+                try:
+                    span.set_attribute("reasoning.train_samples", len(train_ds))
+                    span.set_attribute("reasoning.eval_samples", len(eval_ds))
+                except Exception:
+                    pass
+
+            reward_fn = self._build_reward_function(train_ds)
+            with self._acquire_slot() as (model, tokenizer):
+                model = self._ensure_peft(model)
+                config = self._build_config(max_steps=max_steps)
+                trainer = self._trainer_cls(
+                    model=model,
+                    reward_funcs=reward_fn,
+                    args=config,
+                    train_dataset=train_ds,
+                    eval_dataset=eval_ds,
+                    tokenizer=tokenizer,
+                )
+                start_time = time.perf_counter()
+                trainer.train()
+                duration = time.perf_counter() - start_time
+                if span is not None:
+                    try:
+                        span.set_attribute("reasoning.train_duration", duration)
+                    except Exception:
+                        pass
+
+                evaluation = self._evaluate_reasoning(trainer.model, eval_ds, tokenizer)
+                steps = getattr(getattr(trainer, "state", None), "global_step", 0) or 0
+                adapter_dir, merged_dir = self._save_artifacts(trainer, tokenizer)
+                self._rollout_to_manifest(evaluation, steps, adapter_dir, merged_dir)
+
+        return ReasoningRunSummary(
+            accuracy=evaluation["accuracy"],
+            eval_samples=int(evaluation["evaluated"]),
+            steps=int(steps),
+            adapter_dir=adapter_dir,
+            merged_dir=merged_dir,
+        )
+
+    def _ensure_dependencies(self) -> None:
+        if self._trainer_cls is None or self._trainer_config_cls is None:
+            raise RuntimeError(
+                "GRPOTrainer is unavailable. Install 'trl' with the grpo extra to enable reasoning alignment."
+            )
+        if self._slot_manager_cls is None:
+            raise RuntimeError(
+                "ModelSlotManager is unavailable for reinforcement training"
+            )
+        if self._fast_model_cls is None:
+            raise RuntimeError(
+                "Unsloth FastLanguageModel is required to apply LoRA adapters"
+            )
+        if self._torch is None:
+            raise RuntimeError("PyTorch is required to evaluate reasoning adapters")
+
+    @contextlib.contextmanager
+    def _start_span(
+        self, tracer: Any, name: str
+    ) -> contextlib.AbstractContextManager[Any]:
+        if tracer is None:
+            yield None
+            return
+        try:  # pragma: no cover - tracing depends on OpenTelemetry instrumentation
+            with tracer.start_as_current_span(name) as span:
+                yield span
+        except Exception:
+            self._logger.warning(
+                "reinforcement.reasoning.tracing_unavailable", exc_info=True
+            )
+            yield None
+
+    @contextlib.contextmanager
+    def _acquire_slot(self) -> Iterable[tuple[Any, Any]]:
+        manager = self._slot_manager_cls(
+            slot_name=self.slot_name,
+            model_id=self.model_id,
+            max_seq_length=self.max_seq_length,
+        )
+        resources = manager.__enter__()
+        try:
+            if not resources:
+                raise RuntimeError("ModelSlotManager returned an empty slot")
+            yield resources
+        finally:
+            manager.__exit__(None, None, None)
+
+    def _ensure_peft(self, model: Any) -> Any:
+        if hasattr(model, "peft_config"):
+            return model
+        return self._fast_model_cls.get_peft_model(  # type: ignore[call-arg]
+            model,
+            r=16,
+            target_modules=list(self._LORA_TARGET_MODULES),
+            lora_alpha=16,
+            lora_dropout=0.0,
+            use_gradient_checkpointing="unsloth",
+        )
+
+    def _build_config(self, *, max_steps: int) -> Any:
+        return self._trainer_config_cls(  # type: ignore[call-arg]
+            output_dir=str(self.output_dir),
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=8,
+            learning_rate=1e-5,
+            logging_steps=10,
+            max_steps=max_steps,
+            num_generations=4,
+            remove_unused_columns=False,
+            max_prompt_length=1024,
+            max_completion_length=512,
+            generation_kwargs=dict(self._GENERATION_KWARGS),
+            temperature=self._GENERATION_KWARGS["temperature"],
+            top_p=self._GENERATION_KWARGS["top_p"],
+            use_vllm=False,
+            save_strategy="no",
+            fp16=False,
+            bf16=False,
+        )
+
+    def _build_reward_function(self, dataset: Any) -> Callable[..., list[float]]:
+        gold_answers = [record.get("answer", "") for record in dataset]
+
+        def reward_fn(
+            *,
+            prompts: list[str] | None = None,
+            completions: list[str],
+            completion_ids: Iterable[int] | None = None,
+            **_: Any,
+        ) -> list[float]:
+            ids = (
+                list(completion_ids)
+                if completion_ids is not None
+                else list(range(len(completions)))
+            )
+            rewards: list[float] = []
+            for index, completion in zip(ids, completions):
+                idx = int(index) if isinstance(index, (int, float)) else 0
+                idx = max(0, min(idx, len(gold_answers) - 1))
+                gold = gold_answers[idx]
+                answer = SelfTrainingEngine.extract_final_answer(completion)
+                reasoning = SelfTrainingEngine.extract_reasoning_chain(completion)
+                reward = (
+                    1.0 if answer and gold and answer.strip() == gold.strip() else 0.0
+                )
+                if reasoning and len(reasoning.split()) >= 50:
+                    reward += 0.5
+                rewards.append(float(reward))
+            return rewards
+
+        return reward_fn
+
+    def _evaluate_reasoning(
+        self, model: Any, dataset: Any, tokenizer: Any
+    ) -> dict[str, float]:
+        assert self._torch is not None
+        correct = 0
+        total = 0
+        device = getattr(model, "device", "cpu")
+        for record in dataset:
+            prompt_text = tokenizer.apply_chat_template(
+                record["prompt"], tokenize=False, add_generation_prompt=True
+            )
+            encoded = tokenizer(prompt_text, return_tensors="pt")
+            if hasattr(encoded, "to"):
+                encoded = encoded.to(device)
+            with self._torch.no_grad():
+                outputs = model.generate(**encoded, max_new_tokens=256, do_sample=False)
+            decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            answer = SelfTrainingEngine.extract_final_answer(decoded)
+            if answer == record.get("answer"):
+                correct += 1
+            total += 1
+        accuracy = correct / total if total else 0.0
+        return {"accuracy": accuracy, "evaluated": float(total)}
+
+    def _save_artifacts(
+        self, trainer: Any, tokenizer: Any
+    ) -> tuple[Path | None, Path | None]:
+        adapter_dir = self.output_dir / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        if hasattr(trainer.model, "save_pretrained"):
+            trainer.model.save_pretrained(adapter_dir)
+        if hasattr(tokenizer, "save_pretrained"):
+            tokenizer.save_pretrained(adapter_dir)
+
+        merged_dir: Path | None = None
+        if self._fast_model_cls is not None and hasattr(
+            self._fast_model_cls, "save_pretrained_merged"
+        ):
+            merged_dir = self.output_dir / "merged"
+            merged_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                self._fast_model_cls.save_pretrained_merged(  # type: ignore[call-arg]
+                    trainer.model,
+                    tokenizer,
+                    save_method="merged_16bit",
+                    output_dir=str(merged_dir),
+                )
+            except Exception:
+                merged_dir = None
+                self._logger.warning(
+                    "reinforcement.reasoning.merge_failed", exc_info=True
+                )
+
+        return adapter_dir, merged_dir
+
+    def _rollout_to_manifest(
+        self,
+        evaluation: Mapping[str, float],
+        steps: int,
+        adapter_dir: Path | None,
+        merged_dir: Path | None,
+    ) -> None:
+        if adapter_dir is None:
+            return
+        summary = {
+            "metrics": {
+                "reasoning_accuracy": evaluation.get("accuracy", 0.0),
+                "reasoning_eval_samples": evaluation.get("evaluated", 0.0),
+                "grpo_steps": steps,
+            },
+            "labels": {"category": "reasoning_grpo"},
+            "artifacts": {
+                "adapter": str(adapter_dir),
+                "weights": str(merged_dir) if merged_dir else None,
+            },
+        }
+        try:
+            manifest = update_manifest(self.registry_path, summary)
+        except Exception:
+            self._logger.exception("reinforcement.reasoning.manifest_failed")
+            return
+
+        use_ray = os.getenv("USE_RAY_SERVE", "").lower() in {"1", "true", "yes"}
+        if not use_ray:
+            return
+        try:
+            from modules.ray_service import update_ray_deployment
+        except Exception:
+            self._logger.warning(
+                "reinforcement.reasoning.ray_unavailable", exc_info=True
+            )
+            return
+
+        payload = manifest.build_payload() if manifest else {}
+        if not payload:
+            return
+        try:
+            update_ray_deployment(payload)
+        except Exception:
+            self._logger.warning(
+                "reinforcement.reasoning.ray_update_failed", exc_info=True
+            )
+
+
 __all__ = [
     "AdaptiveScalingStrategy",
     "BatchStatistics",
@@ -1135,6 +1514,8 @@ __all__ = [
     "PreferenceSample",
     "ReinforcementLearningLoop",
     "ReinforcementLearningSummary",
+    "ReinforcementLoop",
+    "ReasoningRunSummary",
     "ThroughputAwareScalingStrategy",
     "Transition",
 ]

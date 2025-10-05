@@ -38,7 +38,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from modules.neurons.registry import MANIFEST_FILENAME, load_manifest
+from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
 
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
 from monGARS.config import get_settings
@@ -425,6 +425,66 @@ class LLMIntegration:
                 },
             )
 
+    async def _resolve_adapter_for_task(
+        self, task_type: str, response_hints: dict[str, Any] | None
+    ) -> dict[str, str] | None:
+        metadata = await self._ensure_adapter_metadata()
+        reasoning_requested = bool(response_hints and response_hints.get("reasoning"))
+        if not reasoning_requested:
+            return metadata
+
+        payload = await asyncio.to_thread(self._load_reasoning_adapter_payload)
+        if payload:
+            logger.info(
+                "llm.adapter.reasoning_selected",
+                extra={
+                    "adapter_version": payload.get("version"),
+                    "task_type": task_type,
+                },
+            )
+            return payload
+
+        return metadata
+
+    def _load_reasoning_adapter_payload(self) -> dict[str, str] | None:
+        try:
+            manifest = load_manifest(self.adapter_registry_path)
+        except (OSError, ValueError) as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "llm.adapter.reasoning_manifest_unavailable",
+                extra={"manifest_path": str(self.adapter_manifest_path)},
+                exc_info=exc,
+            )
+            return None
+
+        if manifest is None:
+            return None
+
+        candidates: list[AdapterRecord] = []
+        if manifest.current:
+            candidates.append(manifest.current)
+        candidates.extend(reversed(manifest.history))
+
+        for record in candidates:
+            summary = record.summary if isinstance(record.summary, dict) else {}
+            labels = summary.get("labels")
+            if isinstance(labels, dict) and labels.get("category") == "reasoning_grpo":
+                return self._build_payload_from_record(record)
+        return None
+
+    def _build_payload_from_record(self, record: AdapterRecord) -> dict[str, str]:
+        adapter_path = record.resolve_adapter_path(self.adapter_registry_path)
+        weights_path = record.resolve_weights_path(self.adapter_registry_path)
+        payload = {
+            "adapter_path": adapter_path.as_posix(),
+            "version": record.version,
+            "updated_at": record.created_at,
+            "status": record.status,
+        }
+        if weights_path is not None:
+            payload["weights_path"] = weights_path.as_posix()
+        return payload
+
     async def _fail(
         self, cache_key: str, message: str, ttl: int = 60
     ) -> dict[str, Any]:
@@ -638,13 +698,19 @@ class LLMIntegration:
             raise self.LocalProviderError("Local model generation failed.") from exc
 
     async def generate_response(
-        self, prompt: str, task_type: str = "general"
+        self,
+        prompt: str,
+        task_type: str = "general",
+        *,
+        response_hints: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate a response for ``prompt`` using the configured LLM stack."""
 
         adapter_metadata: dict[str, str] | None
         if self.use_ray:
-            adapter_metadata = await self._ensure_adapter_metadata()
+            adapter_metadata = await self._resolve_adapter_for_task(
+                task_type, response_hints
+            )
         else:
             adapter_metadata = None
             if self._current_adapter_version != "baseline":

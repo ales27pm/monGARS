@@ -47,4 +47,10 @@ setup(
         "websocket-client>=1.8.0",
         "websockets>=12.0",
     ],
+    extras_require={
+        "grpo": [
+            "trl>=0.23.1",
+            "vllm>=0.5.0",
+        ],
+    },
 )
