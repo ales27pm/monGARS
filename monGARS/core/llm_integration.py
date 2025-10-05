@@ -38,7 +38,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from modules.neurons.registry import AdapterRecord, MANIFEST_FILENAME, load_manifest
+from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
 
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
 from monGARS.config import get_settings
