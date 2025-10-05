@@ -1111,6 +1111,15 @@ class PreferenceAlignmentLoop:
     def _prepare_dataset(
         self, dataset: Sequence[PreferenceSample | Mapping[str, Any]] | Dataset
     ) -> Any:
+        """
+        Normalize various input representations into a dataset or list of preference records for training.
+        
+        Parameters:
+            dataset: A single or sequence of PreferenceSample or mapping-like records, or an existing Dataset. Accepted mapping records must include non-empty string values for the keys "prompt", "chosen", and "rejected"; an optional "metadata" mapping will be preserved.
+        
+        Returns:
+            A Dataset constructed from validated records if the optional Dataset class is available and conversion succeeds, a list of dict records with keys `prompt`, `chosen`, `rejected` (and optional `metadata`) otherwise, or `None` when no valid records are found.
+        """
         if Dataset is not None and isinstance(dataset, Dataset):  # pragma: no cover
             if len(dataset) == 0:
                 return None
@@ -1162,6 +1171,17 @@ class ReasoningRunSummary:
     merged_dir: Path | None
 
     def to_dict(self) -> dict[str, Any]:
+        """
+        Return a JSON-serializable dictionary representation of the reasoning run summary.
+        
+        Returns:
+            mapping (dict[str, Any]): Dictionary with keys:
+                - "accuracy": float | None — accuracy of evaluated examples (correct / total).
+                - "eval_samples": int — number of evaluation samples used.
+                - "steps": int — training steps executed.
+                - "adapter_dir": str | None — string path to the saved adapter directory, or `None` if not present.
+                - "merged_dir": str | None — string path to the saved merged model directory, or `None` if not present.
+        """
         return {
             "accuracy": self.accuracy,
             "eval_samples": self.eval_samples,
@@ -1206,6 +1226,26 @@ class ReinforcementLoop:
         fast_model_cls: Any | None = None,
         torch_module: Any | None = None,
     ) -> None:
+        """
+        Initialize a ReinforcementLoop configured to run GRPO-based reasoning training and evaluation.
+        
+        Parameters:
+            model_id (str): Model identifier used to acquire model weights for training and evaluation.
+            slot_name (str): Name of the resource slot used to reserve a model execution environment.
+            max_seq_length (int): Maximum tokenizer/model sequence length to configure the slot and tokenizer.
+            output_dir (str | os.PathLike): Directory where training artifacts (adapters, merged weights, logs) will be written; created if missing.
+            registry_path (str | os.PathLike): Directory or registry path used to store model manifests; created if missing.
+            self_training_engine (SelfTrainingEngine | None): Optional engine that curates reasoning datasets; a default engine is constructed if omitted.
+            slot_manager_cls (type[ModelSlotManager] | None): Optional class used to manage model slots; defaults to the module's ModelSlotManager.
+            tracer_factory (Callable[[str], Any] | None): Optional factory that creates tracers for profiling/tracing; if None, tracing is disabled.
+            trainer_cls (type | None): Optional trainer class used to run GRPO training; defaults to the module's GRPOTrainer.
+            trainer_config_cls (type | None): Optional trainer configuration class; defaults to the module's GRPOConfig.
+            fast_model_cls (Any | None): Optional lightweight model helper class for applying PEFT/LoRA; defaults to the module's FastLanguageModel.
+            torch_module (Any | None): Optional torch module to use (for testing or alternative torch builds); defaults to the imported torch.
+        
+        Side effects:
+            Creates `output_dir` and `registry_path` on the filesystem if they do not already exist.
+        """
         self.model_id = model_id
         self.slot_name = slot_name
         self.max_seq_length = max_seq_length
@@ -1229,7 +1269,24 @@ class ReinforcementLoop:
         *,
         max_steps: int = 100,
     ) -> ReasoningRunSummary:
-        """Run a full GRPO training cycle and return its summary."""
+        """
+        Run a GRPO reasoning training cycle using a curated dataset and produce a summary of training and evaluation.
+        
+        This method curates a training and evaluation dataset, trains a GRPO trainer with a PEFT-adapted model, evaluates reasoning accuracy on the evaluation set, saves adapter/merged artifacts, and records rollout metadata.
+        
+        Parameters:
+            num_samples (int): Number of examples to curate for the reasoning dataset (training + evaluation).
+            internal_ratio (float): Fraction of samples reserved for internal (training) use; remaining samples are used for evaluation.
+            max_steps (int): Maximum training steps for the GRPO trainer.
+        
+        Returns:
+            ReasoningRunSummary: Summary containing
+                - accuracy: evaluation accuracy as a float,
+                - eval_samples: number of evaluation samples (int),
+                - steps: number of training steps completed (int),
+                - adapter_dir: path to the saved adapter weights or None,
+                - merged_dir: path to the saved merged model weights or None.
+        """
 
         self._ensure_dependencies()
         tracer = (
@@ -1286,6 +1343,15 @@ class ReinforcementLoop:
         )
 
     def _ensure_dependencies(self) -> None:
+        """
+        Validate that optional runtime dependencies required for GRPO-based reasoning training are available.
+        
+        Raises:
+            RuntimeError: If the TRL GRPO trainer or its config class is unavailable (instructs to install `trl[grpo]`).
+            RuntimeError: If the ModelSlotManager class is unavailable for acquiring model slots.
+            RuntimeError: If the Unsloth FastLanguageModel helper is unavailable (needed for applying LoRA adapters).
+            RuntimeError: If the PyTorch module is unavailable (required for training/evaluation).
+        """
         if self._trainer_cls is None or self._trainer_config_cls is None:
             raise RuntimeError(
                 "GRPOTrainer is unavailable. Install 'trl' with the grpo extra to enable reasoning alignment."
@@ -1305,6 +1371,16 @@ class ReinforcementLoop:
     def _start_span(
         self, tracer: Any, name: str
     ) -> contextlib.AbstractContextManager[Any]:
+        """
+        Provide a context manager that starts a tracing span when a tracer is available, otherwise yields None.
+        
+        Parameters:
+            tracer (Any): Tracing provider with a `start_as_current_span(name)` context manager; may be None.
+            name (str): Name for the tracing span.
+        
+        Returns:
+            context (Any | None): An active tracing span while the context is entered, or `None` if no tracer is provided or tracing fails.
+        """
         if tracer is None:
             yield None
             return
@@ -1319,6 +1395,17 @@ class ReinforcementLoop:
 
     @contextlib.contextmanager
     def _acquire_slot(self) -> Iterable[tuple[Any, Any]]:
+        """
+        Context manager that acquires a model slot and yields (model, tokenizer) for use.
+        
+        Yields the allocated (model, tokenizer) pair from the configured ModelSlotManager and ensures the manager is properly released on exit. Raises a RuntimeError if the manager returns an empty slot.
+         
+        Returns:
+            tuple[Any, Any]: A tuple containing the model and tokenizer obtained from the slot.
+        
+        Raises:
+            RuntimeError: If the ModelSlotManager returns no resources.
+        """
         manager = self._slot_manager_cls(
             slot_name=self.slot_name,
             model_id=self.model_id,
@@ -1333,6 +1420,15 @@ class ReinforcementLoop:
             manager.__exit__(None, None, None)
 
     def _ensure_peft(self, model: Any) -> Any:
+        """
+        Ensure the given model has a LoRA/PEFT adapter applied.
+        
+        Parameters:
+            model (Any): The model instance to inspect or adapt.
+        
+        Returns:
+            Any: The original model if it already has a PEFT configuration (`peft_config`); otherwise a model instance with LoRA/PEFT adapters applied.
+        """
         if hasattr(model, "peft_config"):
             return model
         return self._fast_model_cls.get_peft_model(  # type: ignore[call-arg]
@@ -1345,6 +1441,17 @@ class ReinforcementLoop:
         )
 
     def _build_config(self, *, max_steps: int) -> Any:
+        """
+        Builds a trainer configuration object populated with preset training and generation hyperparameters.
+        
+        Parameters:
+            max_steps (int): Total number of training steps to set on the configuration.
+        
+        Returns:
+            A trainer configuration instance initialized with the module's defaults (batch size, accumulation,
+            learning rate, generation kwargs, prompt/completion lengths, precision and saving behavior) and
+            the provided `max_steps`.
+        """
         return self._trainer_config_cls(  # type: ignore[call-arg]
             output_dir=str(self.output_dir),
             per_device_train_batch_size=1,
@@ -1366,6 +1473,21 @@ class ReinforcementLoop:
         )
 
     def _build_reward_function(self, dataset: Any) -> Callable[..., list[float]]:
+        """
+        Builds a reward function that scores generated completions against gold answers from the provided dataset.
+        
+        The returned callable compares each completion's extracted final answer to the corresponding gold answer (from each record's "answer" field) and assigns a base reward of 1.0 for an exact match (after trimming whitespace) or 0.0 otherwise. Completions that include an extracted reasoning chain of at least 50 words receive an additional 0.5 bonus.
+        
+        Parameters:
+            dataset: An iterable of mapping-like records where each record's "answer" key contains the gold/factual final answer for that example.
+        
+        Returns:
+            reward_fn (callable): A function with signature
+                reward_fn(*, prompts: list[str] | None = None, completions: list[str], completion_ids: Iterable[int] | None = None, **_) -> list[float]
+            - `completions`: list of generated texts to score.
+            - `completion_ids`: optional iterable mapping each completion to an index in `dataset`; if omitted, completions are mapped to dataset indices sequentially.
+            The callable returns a list of floats where each value is the reward for the corresponding completion (`1.0` for exact final-answer match, `+0.5` if the reasoning chain is present and contains at least 50 words; `0.0` otherwise). Index values are clamped to valid dataset indices when out of range.
+        """
         gold_answers = [record.get("answer", "") for record in dataset]
 
         def reward_fn(
@@ -1375,6 +1497,18 @@ class ReinforcementLoop:
             completion_ids: Iterable[int] | None = None,
             **_: Any,
         ) -> list[float]:
+            """
+            Compute scalar rewards for generated completions by comparing extracted final answers to reference gold answers and optionally rewarding long reasoning.
+            
+            Parameters:
+                prompts (list[str] | None): Optional list of prompts corresponding to completions (ignored by this function).
+                completions (list[str]): Generated completion strings to score.
+                completion_ids (Iterable[int] | None): Optional mapping of each completion to an index in `gold_answers`; when omitted, indices 0..len(completions)-1 are used.
+                **_ (Any): Additional keyword arguments are accepted and ignored.
+            
+            Returns:
+                list[float]: Reward values for each completion: `1.0` if the extracted final answer exactly matches the corresponding gold answer (after trimming), plus `0.5` bonus if the extracted reasoning chain contains at least 50 words; otherwise `0.0`.
+            """
             ids = (
                 list(completion_ids)
                 if completion_ids is not None
@@ -1400,6 +1534,19 @@ class ReinforcementLoop:
     def _evaluate_reasoning(
         self, model: Any, dataset: Any, tokenizer: Any
     ) -> dict[str, float]:
+        """
+        Compute the proportion of records for which the model's final generated answer matches the gold answer.
+        
+        Parameters:
+            model (Any): A generative model with a `generate(**kwargs)` method; may have a `device` attribute indicating target device.
+            dataset (Iterable[Mapping]): An iterable of records where each record contains at minimum a "prompt" (used to generate) and an "answer" (the reference answer to compare against).
+            tokenizer (Any): Tokenizer-like object that can prepare prompts (via `apply_chat_template`), encode to tensors when called, and decode model outputs back to text.
+        
+        Returns:
+            dict[str, float]: A dictionary with keys:
+                - "accuracy": fraction of evaluated records whose extracted final answer equals the reference (0.0–1.0).
+                - "evaluated": number of records evaluated, returned as a float.
+        """
         assert self._torch is not None
         correct = 0
         total = 0
@@ -1424,6 +1571,18 @@ class ReinforcementLoop:
     def _save_artifacts(
         self, trainer: Any, tokenizer: Any
     ) -> tuple[Path | None, Path | None]:
+        """
+        Save trainer adapter weights and tokenizer to the output directory, and attempt to produce a merged 16-bit model if supported.
+        
+        Saves the trainer's model adapter and the tokenizer under `<output_dir>/adapter`. If a fast-model class with `save_pretrained_merged` is configured, attempts to write a merged model into `<output_dir>/merged`; on failure the merged directory is not returned.
+        
+        Parameters:
+            trainer: Object with a `model` attribute that may implement `save_pretrained`.
+            tokenizer: Tokenizer object that may implement `save_pretrained`.
+        
+        Returns:
+            tuple[Path | None, Path | None]: `(adapter_dir, merged_dir)` where `adapter_dir` is the path to the saved adapter/tokenizer directory and `merged_dir` is the path to the merged model directory, or `None` if no merged model was produced.
+        """
         adapter_dir = self.output_dir / "adapter"
         adapter_dir.mkdir(parents=True, exist_ok=True)
         if hasattr(trainer.model, "save_pretrained"):
@@ -1459,6 +1618,15 @@ class ReinforcementLoop:
         adapter_dir: Path | None,
         merged_dir: Path | None,
     ) -> None:
+        """
+        Publish GRPO reasoning metrics and artifact locations to the registry manifest and, if enabled, attempt to update a Ray deployment.
+        
+        Parameters:
+            evaluation (Mapping[str, float]): Metrics produced by evaluation. Expected keys include `"accuracy"` (final reasoning accuracy) and `"evaluated"` (number of evaluation samples); missing keys default to 0.0.
+            steps (int): Number of GRPO training steps that were executed.
+            adapter_dir (Path | None): Filesystem path to the saved adapter artifacts. If `None`, the function is a no-op.
+            merged_dir (Path | None): Optional filesystem path to merged model weights; included in the manifest when present.
+        """
         if adapter_dir is None:
             return
         summary = {

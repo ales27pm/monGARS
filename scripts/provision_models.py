@@ -18,6 +18,21 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_args() -> argparse.Namespace:
+    """
+    Builds and parses the command-line arguments for the model provisioning script.
+    
+    Returns:
+        args (argparse.Namespace): Parsed CLI arguments with the following attributes:
+            roles (list[str] | None): Specific model roles to provision; None means use all roles in the active profile.
+            force (bool): If true, force re-provisioning even if models are already ensured.
+            as_json (bool): If true, emit provisioning results as JSON.
+            reasoning (bool): If true, curate reasoning datasets and warm the GRPO slot.
+            reasoning_samples (int): Number of reasoning samples to curate when `reasoning` is true (default 200; coerced to at least 1 by callers).
+            reasoning_internal_ratio (float): Fraction of samples drawn from internal history when `reasoning` is true (clamped to [0.0, 1.0]; default 0.5).
+            reasoning_slot (str): Model slot name to warm for reasoning runs (default "reasoning-grpo").
+            reasoning_model_id (str): Model identifier to load when preparing the reasoning slot (default "unsloth/Meta-Llama-3.1-8B-bnb-4bit").
+            reasoning_max_seq (int): Maximum sequence length for the warmed reasoning slot (default 2048).
+    """
     parser = argparse.ArgumentParser(
         description="Ensure configured LLM models are available locally."
     )
@@ -82,6 +97,20 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def _provision_models(args: argparse.Namespace) -> int:
+    """
+    Provision configured LLM models according to CLI arguments and emit a summary.
+    
+    Parameters:
+        args (argparse.Namespace): Parsed CLI arguments. Expected attributes:
+            - roles: Optional[list[str]] of model roles to provision; when empty or None, all configured roles are used.
+            - force: bool indicating whether to forcibly re-provision models.
+            - as_json: bool; when true, emits a JSON payload instead of human-readable lines.
+            - reasoning: bool; when true, prepares reasoning assets and includes a reasoning summary in output.
+            - reasoning_*: additional reasoning-related fields used when `reasoning` is true (e.g., reasoning_samples, reasoning_internal_ratio, reasoning_slot, reasoning_model_id, reasoning_max_seq).
+    
+    Returns:
+        int: Exit code where `0` indicates success and `1` indicates invalid role input was provided.
+    """
     settings = get_settings()
     manager = LLMModelManager(settings)
     try:
@@ -122,6 +151,28 @@ async def _provision_models(args: argparse.Namespace) -> int:
 
 
 async def _prepare_reasoning_assets(args: argparse.Namespace) -> dict[str, Any]:
+    """
+    Prepare an optional reasoning dataset and warm a model slot, returning a summary of dataset and slot statuses.
+    
+    Parameters:
+        args (argparse.Namespace): CLI arguments; recognized attributes:
+            reasoning_samples (int): Number of reasoning samples to curate (coerced to at least 1).
+            reasoning_internal_ratio (float): Fraction of internal reasoning samples, clamped to [0.0, 1.0].
+            reasoning_slot (str): Slot name to warm (default "reasoning-grpo").
+            reasoning_model_id (str): Model identifier to load into the slot.
+            reasoning_max_seq (int): Maximum sequence length for the warmed slot (coerced to at least 1).
+    
+    Returns:
+        summary (dict[str, Any]): A dictionary containing:
+            - "dataset": dict with keys:
+                - "status": one of "ok", "failed", or "unavailable".
+                - On "ok": "train_samples" (int|None) and "eval_samples" (int|None).
+                - On failure/unavailable: "error" (str).
+            - "slot": dict with keys:
+                - "status": one of "ok", "failed", or "unavailable".
+                - On "ok": "slot" (str), "model_id" (str), "max_seq_length" (int).
+                - On failure/unavailable: "error" (str) and, if failed, "slot", "model_id", "max_seq_length".
+    """
     summary: dict[str, Any] = {}
 
     try:  # Import lazily so the script can run without optional dependencies.
@@ -139,6 +190,12 @@ async def _prepare_reasoning_assets(args: argparse.Namespace) -> dict[str, Any]:
         ratio = max(0.0, min(1.0, ratio))
 
         def _curate() -> tuple[Any, Any]:
+            """
+            Invoke the SelfTrainingEngine to curate a reasoning dataset.
+            
+            Returns:
+                train_ds, eval_ds: The curated training and evaluation datasets returned by the engine.
+            """
             return engine.curate_reasoning_dataset(
                 num_samples=num_samples,
                 internal_ratio=ratio,
@@ -187,6 +244,12 @@ async def _prepare_reasoning_assets(args: argparse.Namespace) -> dict[str, Any]:
     max_seq = max(1, int(getattr(args, "reasoning_max_seq", 2048)))
 
     def _warm_slot() -> None:
+        """
+        Warm the configured model slot by instantiating a ModelSlotManager context.
+        
+        This triggers any slot preparation or resource allocation associated with the configured
+        slot_name, model_id, and max_seq_length.
+        """
         with ModelSlotManager(
             slot_name=slot_name,
             model_id=model_id,
@@ -233,6 +296,27 @@ async def _prepare_reasoning_assets(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _emit_reasoning_summary(summary: dict[str, Any]) -> None:
+    """
+    Print a human-readable summary of reasoning dataset curation and slot warming results.
+    
+    Parameters:
+    	summary (dict[str, Any]): A summary map that may contain:
+    		- "dataset": dict with keys:
+    			- "status": either "ok" or an error status.
+    			- "train_samples" (optional): number of training samples or None.
+    			- "eval_samples" (optional): number of evaluation samples or None.
+    			- "error" (optional): error message when status is not "ok".
+    		- "slot": dict with keys:
+    			- "status": either "ok" or an error status.
+    			- "slot" (optional): slot name when status is "ok".
+    			- "model_id" (optional): warmed model identifier when status is "ok".
+    			- "max_seq_length" (optional): max sequence length when status is "ok".
+    			- "error" (optional): error message when status is not "ok".
+    
+    Description:
+    	Prints lines describing the dataset curation results (train/eval counts or an error)
+    	and the slot warming results (slot/model/max sequence length or an error) when present.
+    """
     dataset = summary.get("dataset")
     slot = summary.get("slot")
 
@@ -268,6 +352,17 @@ def _emit_reasoning_summary(summary: dict[str, Any]) -> None:
 
 
 def _safe_length(dataset: Any) -> int | None:
+    """
+    Return the length of a dataset if it can be determined.
+    
+    Attempts to obtain and coerce the dataset's length to an int; if the length cannot be determined or an error occurs, returns `None`.
+    
+    Parameters:
+        dataset (Any): Object whose length is to be measured.
+    
+    Returns:
+        int | None: The length as an `int` if determinable, `None` otherwise.
+    """
     try:
         return int(len(dataset))  # type: ignore[arg-type]
     except Exception:
@@ -275,6 +370,14 @@ def _safe_length(dataset: Any) -> int | None:
 
 
 def main() -> int:
+    """
+    Run the provisioning command-line flow and return a process exit code.
+    
+    Invokes argument parsing, executes the asynchronous provisioning routine, and maps a keyboard interrupt to a standard exit code.
+    
+    Returns:
+        int: Process exit code — `0` on success, `1` for invalid roles (validation failure from provisioning), `130` if interrupted by the user, or other codes returned by the provisioning routine.
+    """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = _parse_args()
     try:
