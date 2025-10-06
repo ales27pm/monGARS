@@ -96,7 +96,10 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
     assert isinstance(model, _DummyModel)
     assert isinstance(tokenizer, _DummyTokenizer)
     assert recorded_kwargs["torch_dtype"] is model_module.torch.float16
-    assert recorded_kwargs["quantization_config"].llm_int8_enable_fp32_cpu_offload is True
+    assert (
+        recorded_kwargs["quantization_config"].llm_int8_enable_fp32_cpu_offload is True
+    )
+    assert recorded_kwargs["max_memory"][0] == "6076MiB"
 
 
 def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
@@ -129,6 +132,47 @@ def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
     assert len(calls) == 2
     assert calls[0]["torch_dtype"] is model_module.torch.float16
     assert calls[1]["dtype"] is model_module.torch.float16
+
+
+def test_load_4bit_causal_lm_reserves_activation_buffer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    recorded: dict[str, Any] = {}
+
+    def _fake_from_pretrained(
+        model_id: str,
+        *,
+        device_map: dict[str, Any],
+        max_memory: dict[Any, str],
+        offload_folder: str,
+        quantization_config: Any,
+        low_cpu_mem_usage: bool,
+        trust_remote_code: bool,
+        torch_dtype,
+    ) -> Any:  # noqa: ARG001
+        recorded.update(
+            {
+                "device_map": device_map,
+                "max_memory": max_memory,
+                "offload_folder": offload_folder,
+                "torch_dtype": torch_dtype,
+                "quantization_config": quantization_config,
+            }
+        )
+        return _DummyModel()
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM, "from_pretrained", _fake_from_pretrained
+    )
+
+    model_module.load_4bit_causal_lm(
+        "meta-llama/Llama-2-7b-hf",
+        vram_budget_mb=5000,
+        activation_buffer_mb=1500,
+        offload_dir=tmp_path,
+    )
+
+    assert recorded["max_memory"][0] == "3500MiB"
 
 
 def test_load_4bit_causal_lm_handles_legacy_bitsandbytes_kwargs(

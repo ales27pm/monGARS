@@ -12,10 +12,33 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 logger = logging.getLogger(__name__)
 
 
+def _compute_weight_budget(vram_budget_mb: int, activation_buffer_mb: int) -> int:
+    """Return the VRAM allocation reserved for model weights."""
+
+    if vram_budget_mb <= 0:
+        raise ValueError("vram_budget_mb must be positive")
+
+    activation_buffer_mb = max(0, activation_buffer_mb)
+    effective_budget = vram_budget_mb - activation_buffer_mb
+
+    if effective_budget < 512:
+        logger.warning(
+            "Activation buffer leaves little room for model weights",
+            extra={
+                "vram_budget_mb": vram_budget_mb,
+                "activation_buffer_mb": activation_buffer_mb,
+            },
+        )
+        effective_budget = max(vram_budget_mb // 2, 512)
+
+    return min(vram_budget_mb, effective_budget)
+
+
 def load_4bit_causal_lm(
     model_id: str,
     *,
     vram_budget_mb: int = 7100,
+    activation_buffer_mb: int = 1024,
     offload_dir: str | Path = "./offload",
     trust_remote_code: bool = True,
 ) -> tuple[Any, Any]:
@@ -43,13 +66,16 @@ def load_4bit_causal_lm(
         "model.norm": 0,
         "lm_head": "cpu",
     }
-    max_memory = {0: f"{vram_budget_mb}MiB", "cpu": "64GiB"}
+    weight_budget_mb = _compute_weight_budget(vram_budget_mb, activation_buffer_mb)
+    max_memory = {0: f"{weight_budget_mb}MiB", "cpu": "64GiB"}
 
     logger.info(
         "Loading base model",
         extra={
             "model": model_id,
             "vram_budget_mb": vram_budget_mb,
+            "activation_buffer_mb": activation_buffer_mb,
+            "weight_budget_mb": weight_budget_mb,
             "offload_dir": str(offload_path),
         },
     )
