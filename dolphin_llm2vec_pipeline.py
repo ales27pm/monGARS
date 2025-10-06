@@ -10,7 +10,11 @@ from pathlib import Path
 from llm2vec import LLM2Vec
 
 from monGARS.mlops.dataset import prepare_instruction_dataset
-from monGARS.mlops.exporters import export_gguf, merge_lora_adapters, run_generation_smoke_test
+from monGARS.mlops.exporters import (
+    export_gguf,
+    merge_lora_adapters,
+    run_generation_smoke_test,
+)
 from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
 from monGARS.mlops.training import (
     LoraHyperParams,
@@ -118,7 +122,9 @@ def main() -> None:
         "max_seq_len": MAX_SEQ_LEN,
         "notes": "Reload base in 4-bit, then load PEFT adapters and wrap with LLM2Vec.",
     }
-    (OUTPUT_DIR / "wrapper_config.json").write_text(json.dumps(wrapper_config, indent=2))
+    (OUTPUT_DIR / "wrapper_config.json").write_text(
+        json.dumps(wrapper_config, indent=2)
+    )
 
     if RUN_TINY_TESTS:
         prompt = (

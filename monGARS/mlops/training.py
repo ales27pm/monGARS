@@ -135,7 +135,9 @@ def disable_training_mode(model: Any) -> None:
         method()
 
 
-def run_embedding_smoke_test(encoder: Any, texts: Iterable[str]) -> tuple[int, int] | None:
+def run_embedding_smoke_test(
+    encoder: Any, texts: Iterable[str]
+) -> tuple[int, int] | None:
     """Execute a small embedding test returning the resulting tensor shape."""
 
     if not texts:
