@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-import yaml
 from pathlib import Path
 
+import yaml
+
 COMPOSE_FILE = Path("docker-compose.yml")
-BACKUP_FILE  = Path("docker-compose.yml.bak")
-SERVICES     = ["rayserve", "api", "embedded", "worker"]
+BACKUP_FILE = Path("docker-compose.yml.bak")
+SERVICES = ["rayserve", "api", "embedded", "worker"]
+
 
 def main():
     text = COMPOSE_FILE.read_text()
@@ -47,6 +49,7 @@ def main():
     COMPOSE_FILE.write_text(yaml.safe_dump(data, sort_keys=False))
     print(f"✅ Fixed {COMPOSE_FILE} (backup at {BACKUP_FILE})")
     print("Next: run `docker compose config` to validate.")
+
 
 if __name__ == "__main__":
     main()
