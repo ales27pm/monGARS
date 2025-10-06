@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Type
 
 import torch
 from transformers import Trainer, TrainingArguments, default_data_collator
@@ -121,45 +121,137 @@ class TrainerConfig:
     max_steps: int
 
 
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """Return ``True`` when ``exc`` represents a CUDA out-of-memory error."""
+
+    if isinstance(exc, torch.cuda.OutOfMemoryError):
+        return True
+    if isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower():
+        return True
+    return False
+
+
+def _maybe_empty_cuda_cache() -> None:
+    """Attempt to release cached CUDA memory."""
+
+    empty_cache = getattr(torch.cuda, "empty_cache", None)
+    if callable(empty_cache):  # pragma: no branch - attribute lookup guard
+        try:
+            empty_cache()
+        except Exception:  # pragma: no cover - defensive guard
+            logger.debug("Unable to empty CUDA cache", exc_info=True)
+
+
 def train_qlora(
     model: Any,
     dataset: Any,
     *,
     config: TrainerConfig,
     extra_args: dict[str, Any] | None = None,
+    trainer_cls: Type[Trainer] = Trainer,
 ) -> Trainer:
-    """Train the provided model using Hugging Face Trainer."""
+    """Train the provided model using Hugging Face Trainer.
 
-    extra_args = extra_args or {}
+    When CUDA reports an out-of-memory error, the function retries the training run with a
+    reduced per-device batch size and, if needed, smaller gradient accumulation settings.
+    This makes the helper resilient on constrained GPUs where the default configuration is
+    too aggressive.
+    """
+
+    extra_args = dict(extra_args or {})
     bf16_ok = getattr(torch.cuda, "is_bf16_supported", lambda: False)()
-    args = TrainingArguments(
-        output_dir=str(config.output_dir),
-        per_device_train_batch_size=config.batch_size,
-        gradient_accumulation_steps=config.grad_accum,
-        learning_rate=config.learning_rate,
-        num_train_epochs=config.epochs,
-        max_steps=config.max_steps if config.max_steps > 0 else -1,
-        logging_steps=extra_args.pop("logging_steps", 25),
-        save_steps=extra_args.pop("save_steps", 250),
-        save_total_limit=extra_args.pop("save_total_limit", 1),
-        report_to=extra_args.pop("report_to", []),
-        bf16=bf16_ok,
-        fp16=not bf16_ok,
-        gradient_checkpointing=True,
-        optim=extra_args.pop("optim", "adamw_bnb_8bit"),
-        torch_empty_cache_steps=extra_args.pop("torch_empty_cache_steps", 50),
-        **extra_args,
-    )
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=dataset,
-        data_collator=default_data_collator,
-    )
-    logger.info("Starting QLoRA fine-tuning")
-    trainer.train()
-    logger.info("Training completed")
-    return trainer
+    logging_steps = extra_args.pop("logging_steps", 25)
+    save_steps = extra_args.pop("save_steps", 250)
+    save_total_limit = extra_args.pop("save_total_limit", 1)
+    report_to = extra_args.pop("report_to", [])
+    optim = extra_args.pop("optim", "adamw_bnb_8bit")
+    torch_empty_cache_steps = extra_args.pop("torch_empty_cache_steps", 50)
+    oom_retries = int(extra_args.pop("oom_retries", 2))
+
+    batch_size = max(1, config.batch_size)
+    grad_accum = max(1, config.grad_accum)
+    attempt = 0
+
+    while True:
+        args = TrainingArguments(
+            output_dir=str(config.output_dir),
+            per_device_train_batch_size=batch_size,
+            gradient_accumulation_steps=grad_accum,
+            learning_rate=config.learning_rate,
+            num_train_epochs=config.epochs,
+            max_steps=config.max_steps if config.max_steps > 0 else -1,
+            logging_steps=logging_steps,
+            save_steps=save_steps,
+            save_total_limit=save_total_limit,
+            report_to=report_to,
+            bf16=bf16_ok,
+            fp16=not bf16_ok,
+            gradient_checkpointing=True,
+            optim=optim,
+            torch_empty_cache_steps=torch_empty_cache_steps,
+            **extra_args,
+        )
+        trainer = trainer_cls(
+            model=model,
+            args=args,
+            train_dataset=dataset,
+            data_collator=default_data_collator,
+        )
+
+        logger.info(
+            "Starting QLoRA fine-tuning",
+            extra={
+                "attempt": attempt + 1,
+                "batch_size": batch_size,
+                "grad_accum": grad_accum,
+            },
+        )
+
+        try:
+            trainer.train()
+        except BaseException as exc:  # pragma: no cover - covered via unit tests
+            if not _is_cuda_oom(exc):
+                raise
+
+            _maybe_empty_cuda_cache()
+
+            if attempt >= oom_retries or (batch_size == 1 and grad_accum == 1):
+                logger.error(
+                    "Training failed due to CUDA OOM",
+                    extra={
+                        "attempt": attempt + 1,
+                        "batch_size": batch_size,
+                        "grad_accum": grad_accum,
+                    },
+                )
+                raise
+
+            previous_batch_size = batch_size
+            previous_grad_accum = grad_accum
+
+            if batch_size > 1:
+                batch_size = max(1, batch_size // 2)
+            elif grad_accum > 1:
+                grad_accum = max(1, grad_accum // 2)
+
+            attempt += 1
+
+            logger.warning(
+                "CUDA OOM encountered during training; retrying with reduced settings",
+                extra={
+                    "attempt": attempt + 1,
+                    "prev_batch_size": previous_batch_size,
+                    "prev_grad_accum": previous_grad_accum,
+                    "batch_size": batch_size,
+                    "grad_accum": grad_accum,
+                },
+            )
+
+            del trainer
+            continue
+
+        logger.info("Training completed")
+        return trainer
 
 
 def save_lora_artifacts(model: Any, tokenizer: Any, output_dir: Path) -> None:
