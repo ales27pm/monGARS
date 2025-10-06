@@ -120,3 +120,12 @@ and reality.
 - **Advanced research loops**: wire the reinforcement-learning utilities into
   production workflows (telemetry, rollback, operator approval) before closing
   the milestone.
+
+## Next Critical Implementation
+
+Publishing the polished SDKs and reference clients called out in Phase 5
+remains the most urgent deliverable. Until those packages are produced and
+documented, partners must continue reverse-engineering the OpenAPI schema to
+integrate with monGARS. Prioritising the SDK release unblocks external
+consumers, aligns with the roadmap's outstanding "SDK story" action item, and
+brings the Web Interface & API Refinement phase to completion.
