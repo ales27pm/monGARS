@@ -36,3 +36,10 @@ and published to the respective package registry.
    suite.
 3. Run the shared formatting and linting commands (`black`, `isort`, `npm run lint`).
 4. Document new capabilities in this file or the language-specific READMEs.
+
+## Release packaging
+
+- Build artefacts with `python -m scripts.sdk_release --output dist/sdk`.
+- Follow the detailed checklist in
+  [`docs/sdk-release-guide.md`](sdk-release-guide.md) before publishing to PyPI
+  and npm.

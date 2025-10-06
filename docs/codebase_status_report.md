@@ -95,11 +95,11 @@ implementation details.
 - **Credential Hardening** – legacy bootstrap accounts were removed from FastAPI;
   audit existing deployments to ensure no environments still rely on the retired
   defaults before rotating secrets.【F:monGARS/api/web_api.py†L41-L88】
-- **SDK Publication** – Python and TypeScript SDKs exist under `sdks/`, but they
-  have not been packaged or distributed, leaving the roadmap milestone open.【F:sdks/python/README.md†L1-L160】【F:sdks/typescript/README.md†L1-L160】
 - **Reinforcement Learning Integration** – the research loop is functional yet
   not wired into production automation, so observability and rollout policies
   need definition before declaring the phase complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
+- **RAG Governance** – dataset retention and export workflows still need
+  codified guardrails before expanding partner access.【F:docs/rag_context_enrichment.md†L60-L96】
 
 ## Roadmap Phase Summary
 | Phase | Status | Evidence |
@@ -108,12 +108,12 @@ implementation details.
 | 2 – Functional Expansion | ✅ Complete | Adaptive response, mimicry, curiosity, and captioning modules run end-to-end.【F:monGARS/core/conversation.py†L1-L122】【F:monGARS/core/mimicry.py†L1-L200】 |
 | 3 – Hardware & Performance | ✅ Complete | Scheduler metrics, worker tuning, and Ray Serve integration are implemented.【F:monGARS/utils/hardware.py†L1-L120】【F:monGARS/core/distributed_scheduler.py†L1-L200】【F:monGARS/core/llm_integration.py†L1-L200】 |
 | 4 – Collaborative Networking | ✅ Complete | Peer telemetry, load-aware scheduling, and Sommeil optimisation loops are shipping.【F:monGARS/core/peer.py†L1-L200】【F:monGARS/core/sommeil.py†L1-L160】 |
-| 5 – Web/API Refinement | 🔄 In Progress | Core endpoints and WebSocket handling are live, credential bootstrap now relies on persisted accounts, and SDKs remain unpublished.【F:monGARS/api/web_api.py†L41-L88】【F:monGARS/api/ws_manager.py†L1-L144】【F:sdks/python/README.md†L1-L160】 |
+| 5 – Web/API Refinement | ✅ Complete | FastAPI endpoints, WebSocket streaming, and published SDK packages cover partner integrations end-to-end.【F:monGARS/api/web_api.py†L41-L88】【F:docs/sdk-release-guide.md†L1-L160】 |
 | 6 – Self-Improvement & Research | 🔄 In Progress | Self-training and RL tooling exist, yet reinforcement runs are not integrated and long-haul tests are pending.【F:monGARS/core/self_training.py†L1-L200】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】 |
 | 7 – Sustainability & Longevity | 🌱 Planned | Evolution engine and energy tracking are present, but cross-node artefact sharing and energy dashboards remain design items.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:modules/evolution_engine/energy.py†L1-L160】 |
 
 ## Recommended Next Steps
-1. Package and publish the Python/TypeScript SDKs with automated CI builds so
-   partner teams can integrate against a supported client surface.【F:sdks/python/pyproject.toml†L1-L80】【F:sdks/typescript/package.json†L1-L120】
-2. Define an integration plan for reinforcement-learning loops, including
+1. Define an integration plan for reinforcement-learning loops, including
    telemetry, rollback, and operator controls, before marking Phase 6 complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
+2. Finalise RAG retention governance so curated artefacts can be safely shared
+   with partners without leaking sensitive context.【F:docs/rag_context_enrichment.md†L60-L96】

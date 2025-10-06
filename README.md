@@ -276,6 +276,7 @@ can be extended to register additional Ollama models or alternate providers.
 | RAG context enrichment | [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md) |
 | API specification & clients | [docs/api/](docs/api/README.md) |
 | SDK overview & reference clients | [docs/sdk-overview.md](docs/sdk-overview.md) |
+| SDK release guide | [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |
 | Conversation workflow deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
 | Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
 | Future milestones | [ROADMAP.md](ROADMAP.md) |

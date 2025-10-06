@@ -7,15 +7,26 @@ API. It runs in both browser and Node.js environments by using
 ## Installation
 
 ```bash
+npm install @mongars/sdk
+```
+
+To build the package locally prior to publishing, use the shared release helper
+from the repository root:
+
+```bash
+python -m scripts.sdk_release --output dist/sdk
+```
+
+The script installs dependencies, compiles the TypeScript sources, and writes an
+npm tarball to `dist/sdk/typescript/`. Publish the artefact with
+`npm publish dist/sdk/typescript/*.tgz`.
+
+For day-to-day development you can still run the package scripts directly:
+
+```bash
 cd sdks/typescript
 npm install
 npm run build
-```
-
-To consume the SDK from another project:
-
-```bash
-npm install @mongars/sdk
 ```
 
 ## Usage
