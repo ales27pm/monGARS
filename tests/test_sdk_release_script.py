@@ -71,3 +71,33 @@ def test_build_typescript_sdk_runs_expected_commands(
         ("npm", "pack", "--pack-destination", str(artefact_dir)),
     ]
     assert all(cwd == sdk_dir for _, cwd in calls)
+
+
+def test_package_all_isolates_language_outputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path
+    output_dir = tmp_path / "dist" / "sdk"
+
+    python_called_with: dict[str, Path | None] = {}
+    typescript_called_with: dict[str, Path | None] = {}
+
+    def fake_python(repo_root: Path, output_dir: Path | None = None) -> Path:
+        python_called_with["output_dir"] = output_dir
+        return Path("/python-output")
+
+    def fake_typescript(repo_root: Path, output_dir: Path | None = None) -> Path:
+        typescript_called_with["output_dir"] = output_dir
+        return Path("/typescript-output")
+
+    monkeypatch.setattr(sdk_release, "build_python_sdk", fake_python)
+    monkeypatch.setattr(sdk_release, "build_typescript_sdk", fake_typescript)
+
+    outputs = sdk_release.package_all(repo_root, output_dir=output_dir)
+
+    assert outputs == {
+        "python": Path("/python-output"),
+        "typescript": Path("/typescript-output"),
+    }
+    assert python_called_with["output_dir"] == output_dir / "python"
+    assert typescript_called_with["output_dir"] == output_dir / "typescript"

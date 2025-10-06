@@ -49,7 +49,7 @@ Run `twine check dist/sdk/python/*` to verify Python metadata before uploading.
 
 ## 4. Smoke test the reference clients
 - Python CLI: `python sdks/python/examples/chat_cli.py`
-- TypeScript example: `node dist/examples/chat.js` (after running `npm run build`)
+- TypeScript example: `node sdks/typescript/dist/examples/chat.js` (after running `npm run build`)
 
 Both should authenticate against a staging environment and complete a chat
 exchange.

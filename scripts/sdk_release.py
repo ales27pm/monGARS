@@ -90,11 +90,18 @@ def build_typescript_sdk(repo_root: Path, *, output_dir: Path | None = None) -> 
 def package_all(repo_root: Path, output_dir: Path | None = None) -> dict[str, Path]:
     """Build both SDKs and return their output directories."""
 
+    if output_dir is not None:
+        python_output_dir = output_dir / "python"
+        typescript_output_dir = output_dir / "typescript"
+    else:
+        python_output_dir = None
+        typescript_output_dir = None
+
     outputs: dict[str, Path] = {}
-    python_output = build_python_sdk(repo_root, output_dir=output_dir)
+    python_output = build_python_sdk(repo_root, output_dir=python_output_dir)
     outputs["python"] = python_output
 
-    ts_output = build_typescript_sdk(repo_root, output_dir=output_dir)
+    ts_output = build_typescript_sdk(repo_root, output_dir=typescript_output_dir)
     outputs["typescript"] = ts_output
 
     return outputs
