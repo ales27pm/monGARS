@@ -37,13 +37,63 @@ def test_evaluate_oom_headroom_handles_cuda_unavailable() -> None:
     analysis = evaluate_oom_headroom(
         torch_module=_TorchStub(available=False),
         gather_metrics=lambda module: {"devices": []},
-        analyse_cuda_state=fake_analyse,
+        analyse_state=fake_analyse,
         fail_on_critical=False,
     )
 
     assert analysis["status"] == "unknown"
     assert captured["payload"] is None
     assert captured["skip_reason"] == "cuda_unavailable"
+
+
+def test_evaluate_oom_headroom_handles_torch_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("build_and_wrap.torch", None)
+    captured = {}
+
+    def fake_analyse(
+        payload, *, min_free_gib: float, min_free_ratio: float, skip_reason: str | None
+    ) -> dict[str, object]:
+        captured["payload"] = payload
+        captured["skip_reason"] = skip_reason
+        return {"status": "unknown", "reason": skip_reason, "thresholds": {}}
+
+    analysis = evaluate_oom_headroom(
+        torch_module=None,
+        gather_metrics=lambda module: {"devices": []},
+        analyse_state=fake_analyse,
+        fail_on_critical=False,
+    )
+
+    assert analysis["status"] == "unknown"
+    assert captured["payload"] is None
+    assert captured["skip_reason"] == "torch_missing"
+
+
+def test_evaluate_oom_headroom_handles_cuda_interface_missing() -> None:
+    class TorchNoCudaStub:
+        pass
+
+    captured = {}
+
+    def fake_analyse(
+        payload, *, min_free_gib: float, min_free_ratio: float, skip_reason: str | None
+    ) -> dict[str, object]:
+        captured["payload"] = payload
+        captured["skip_reason"] = skip_reason
+        return {"status": "unknown", "reason": skip_reason, "thresholds": {}}
+
+    analysis = evaluate_oom_headroom(
+        torch_module=TorchNoCudaStub(),
+        gather_metrics=lambda module: {"devices": []},
+        analyse_state=fake_analyse,
+        fail_on_critical=False,
+    )
+
+    assert analysis["status"] == "unknown"
+    assert captured["payload"] is None
+    assert captured["skip_reason"] == "cuda_interface_missing"
 
 
 def test_evaluate_oom_headroom_raises_on_critical() -> None:
@@ -89,7 +139,7 @@ def test_evaluate_oom_headroom_raises_on_critical() -> None:
         evaluate_oom_headroom(
             torch_module=torch_stub,
             gather_metrics=fake_gather,
-            analyse_cuda_state=fake_analyse,
+            analyse_state=fake_analyse,
             fail_on_critical=True,
             min_free_gib=1.0,
             min_free_ratio=0.1,
