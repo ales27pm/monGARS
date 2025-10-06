@@ -42,17 +42,24 @@
 #       Keep your TRL/Unsloth versions consistent if you use those separately.
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Optional, Iterable, Dict, Any
 
-import os, json
+import json
+import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, Iterable, Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers import TrainingArguments, Trainer, default_data_collator
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    Trainer,
+    TrainingArguments,
+    default_data_collator,
+)
 
 # ---- Public API --------------------------------------------------------------
 
@@ -64,6 +71,7 @@ __all__ = [
 ]
 
 # ---- Loader: 4-bit + CPU offload of lm_head ---------------------------------
+
 
 def load_4bit_causal_lm(
     model_id: str,
@@ -113,7 +121,7 @@ def load_4bit_causal_lm(
         kwargs["llm_int8_enable_fp32_cpu_offload"] = True
 
     model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
-    tok   = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
     if tok.pad_token_id is None and tok.eos_token_id is not None:
         tok.pad_token = tok.eos_token
 
@@ -126,7 +134,9 @@ def load_4bit_causal_lm(
 
     return model, tok
 
+
 # ---- LoRA: "light" prep (no fp32 upcast of head/norms) ----------------------
+
 
 @dataclass
 class LoRAArgs:
@@ -134,22 +144,36 @@ class LoRAArgs:
     alpha: int = 16
     dropout: float = 0.0
     target_modules: Iterable[str] = (
-        "q_proj","k_proj","v_proj","o_proj",
-        "gate_proj","up_proj","down_proj",
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
     )
 
-def prepare_lora_model_light(model, r: int = 16, alpha: int = 16,
-                             dropout: float = 0.0,
-                             target_modules: Optional[Iterable[str]] = None):
+
+def prepare_lora_model_light(
+    model,
+    r: int = 16,
+    alpha: int = 16,
+    dropout: float = 0.0,
+    target_modules: Optional[Iterable[str]] = None,
+):
     """
     Attach LoRA to attention/MLP projections without upcasting lm_head/norms to fp32.
     Enables gradient checkpointing and input requires_grad.
     """
-    target_modules = tuple(target_modules) if target_modules else LoRAArgs.target_modules
+    target_modules = (
+        tuple(target_modules) if target_modules else LoRAArgs.target_modules
+    )
 
     # Gradient checkpointing (prefer non-reentrant variant for modern PyTorch)
     try:
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
     except TypeError:
         model.gradient_checkpointing_enable()
 
@@ -157,28 +181,38 @@ def prepare_lora_model_light(model, r: int = 16, alpha: int = 16,
     if hasattr(model, "enable_input_require_grads"):
         model.enable_input_require_grads()
     else:
+
         def _req_grad_hook(module, inputs, output):
             if isinstance(output, torch.Tensor):
                 output.requires_grad_(True)
+
         try:
             model.get_input_embeddings().register_forward_hook(_req_grad_hook)
         except Exception:
             pass
 
     lcfg = LoraConfig(
-        r=r, lora_alpha=alpha, lora_dropout=dropout, bias="none",
+        r=r,
+        lora_alpha=alpha,
+        lora_dropout=dropout,
+        bias="none",
         target_modules=list(target_modules),
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, lcfg)
     return model
 
+
 # ---- Optional helpers: tiny SFT dataset + sliced CE trainer ------------------
 
-def build_sft_dataset(tokenizer, dataset_name: str,
-                      max_seq_len: int = 384,
-                      label_tokens: int = 48,
-                      fraction: float = 0.06):
+
+def build_sft_dataset(
+    tokenizer,
+    dataset_name: str,
+    max_seq_len: int = 384,
+    label_tokens: int = 48,
+    fraction: float = 0.06,
+):
     """
     Build a minimal supervised dataset with labels restricted to the last N tokens
     of the assistant reply (reduces loss-time memory).
@@ -190,85 +224,114 @@ def build_sft_dataset(tokenizer, dataset_name: str,
         ds = load_dataset(dataset_name, split="train")
     except Exception:
         ds_all = load_dataset(dataset_name)
-        ds     = ds_all["train"] if "train" in ds_all else list(ds_all.values())[0]
+        ds = ds_all["train"] if "train" in ds_all else list(ds_all.values())[0]
 
     if 0 < fraction < 1.0:
-        n = len(ds); take = max(1000, int(n * fraction))
-        ds = ds.select(range(take)); print(f"[data] subset: {take}/{n} examples")
+        n = len(ds)
+        take = max(1000, int(n * fraction))
+        ds = ds.select(range(take))
+        print(f"[data] subset: {take}/{n} examples")
 
     def to_pc(ex):
         instr = ex.get("instruction") or ex.get("prompt") or ex.get("question") or ""
-        inp   = ex.get("input") or ex.get("context") or ""
-        out   = ex.get("output") or ex.get("response") or ex.get("answer") or ""
+        inp = ex.get("input") or ex.get("context") or ""
+        out = ex.get("output") or ex.get("response") or ex.get("answer") or ""
         prompt = f"{instr}\n\n{inp}" if inp and inp.strip() else instr
         return {"prompt": prompt, "completion": out}
+
     ds = ds.map(to_pc, remove_columns=ds.column_names)
 
     def build(ex):
         if hasattr(tokenizer, "apply_chat_template"):
             prompt_only = tokenizer.apply_chat_template(
                 [{"role": "user", "content": ex["prompt"]}],
-                tokenize=False, add_generation_prompt=True
+                tokenize=False,
+                add_generation_prompt=True,
             )
             full_text = tokenizer.apply_chat_template(
-                [{"role": "user", "content": ex["prompt"]},
-                 {"role": "assistant", "content": ex["completion"]}],
-                tokenize=False, add_generation_prompt=False
+                [
+                    {"role": "user", "content": ex["prompt"]},
+                    {"role": "assistant", "content": ex["completion"]},
+                ],
+                tokenize=False,
+                add_generation_prompt=False,
             )
         else:
             prompt_only = f"User: {ex['prompt']}\nAssistant:"
-            full_text   = f"{prompt_only} {ex['completion']}"
+            full_text = f"{prompt_only} {ex['completion']}"
 
-        enc_p   = tokenizer(prompt_only, add_special_tokens=False, truncation=True,
-                            max_length=max_seq_len, return_attention_mask=False)
-        enc_all = tokenizer(full_text,   add_special_tokens=False, truncation=True,
-                            max_length=max_seq_len, padding="max_length", return_attention_mask=True)
+        enc_p = tokenizer(
+            prompt_only,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=max_seq_len,
+            return_attention_mask=False,
+        )
+        enc_all = tokenizer(
+            full_text,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=max_seq_len,
+            padding="max_length",
+            return_attention_mask=True,
+        )
 
         input_ids = enc_all["input_ids"]
-        attn      = enc_all["attention_mask"]
-        labels    = [-100] * len(input_ids)
+        attn = enc_all["attention_mask"]
+        labels = [-100] * len(input_ids)
 
-        L        = sum(attn)
+        L = sum(attn)
         k_prompt = min(len(enc_p["input_ids"]), L)
-        start    = max(k_prompt, L - label_tokens)
+        start = max(k_prompt, L - label_tokens)
         for i in range(start, L):
             labels[i] = input_ids[i]
 
         return {"input_ids": input_ids, "attention_mask": attn, "labels": labels}
 
-    ds_tok = ds.map(build, remove_columns=ds.column_names,
-                    desc=f"[data] tokenize+mask (last {label_tokens} tokens)")
+    ds_tok = ds.map(
+        build,
+        remove_columns=ds.column_names,
+        desc=f"[data] tokenize+mask (last {label_tokens} tokens)",
+    )
     ds_tok.set_format(type="torch")
     print(f"[data] tokenized: {len(ds_tok)} samples (labels on last {label_tokens})")
     return ds_tok
 
-def make_sliced_trainer(model,
-                        train_dataset,
-                        out_dir: str = "./out/chat_lora",
-                        batch_size: int = 1,
-                        grad_accum: int = 8,
-                        lr: float = 2e-4,
-                        epochs: float = 1.0,
-                        max_steps: int = -1,
-                        fp16: bool = True):
+
+def make_sliced_trainer(
+    model,
+    train_dataset,
+    out_dir: str = "./out/chat_lora",
+    batch_size: int = 1,
+    grad_accum: int = 8,
+    lr: float = 2e-4,
+    epochs: float = 1.0,
+    max_steps: int = -1,
+    fp16: bool = True,
+):
     """
     Create a Trainer that computes cross-entropy **only on labeled positions** (labels != -100),
     avoiding building gigantic logits for loss when most tokens are masked. Keeps the
     final cross-entropy on CPU-sized slices and helps 8GB GPUs.
     """
+
     class SliceLossTrainer(Trainer):
-        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        def compute_loss(
+            self, model, inputs, return_outputs=False, num_items_in_batch=None
+        ):
             outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
-            logits  = outputs.logits   # [B, T, V] (lm_head may live on CPU)
-            labels  = inputs["labels"]
+            logits = outputs.logits  # [B, T, V] (lm_head may live on CPU)
+            labels = inputs["labels"]
             with torch.no_grad():
                 mask = labels.ne(-100)
             if mask.sum().item() == 0:
                 loss = torch.zeros((), device=logits.device, dtype=logits.dtype)
                 return (loss, outputs) if return_outputs else loss
-            sel_logits = logits[mask]                  # [N, V], typically CPU
+            sel_logits = logits[mask]  # [N, V], typically CPU
             sel_labels = labels[mask].to(sel_logits.device)
-            loss = torch.nn.functional.cross_entropy(sel_logits.float(), sel_labels, reduction="mean")
+            loss = torch.nn.functional.cross_entropy(
+                sel_logits.float(), sel_labels, reduction="mean"
+            )
             return (loss, outputs) if return_outputs else loss
 
     args = TrainingArguments(
