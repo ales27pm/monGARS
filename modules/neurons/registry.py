@@ -55,6 +55,7 @@ class AdapterRecord:
 
     relative_adapter_path: str
     relative_weights_path: str | None
+    relative_wrapper_path: str | None
     status: str
     summary: dict[str, Any]
     created_at: str
@@ -80,10 +81,19 @@ class AdapterRecord:
             path = registry_path / path
         return path.resolve(strict=False)
 
+    def resolve_wrapper_path(self, registry_path: Path) -> Path | None:
+        if not self.relative_wrapper_path:
+            return None
+        path = Path(self.relative_wrapper_path)
+        if not path.is_absolute():
+            path = registry_path / path
+        return path.resolve(strict=False)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "relative_adapter_path": self.relative_adapter_path,
             "relative_weights_path": self.relative_weights_path,
+            "relative_wrapper_path": self.relative_wrapper_path,
             "status": self.status,
             "summary": self.summary,
             "created_at": self.created_at,
@@ -95,6 +105,7 @@ class AdapterRecord:
         return cls(
             relative_adapter_path=str(data.get("relative_adapter_path")),
             relative_weights_path=data.get("relative_weights_path"),
+            relative_wrapper_path=data.get("relative_wrapper_path"),
             status=str(data.get("status", "")),
             summary=dict(data.get("summary", {})),
             created_at=str(data.get("created_at", "")),
@@ -137,6 +148,7 @@ class AdapterManifest:
             return {}
         adapter_path = self.current.resolve_adapter_path(self.registry_path)
         weights_path = self.current.resolve_weights_path(self.registry_path)
+        wrapper_path = self.current.resolve_wrapper_path(self.registry_path)
         payload = {
             "adapter_path": adapter_path.as_posix(),
             "version": self.current.version,
@@ -145,6 +157,8 @@ class AdapterManifest:
         }
         if weights_path is not None:
             payload["weights_path"] = weights_path.as_posix()
+        if wrapper_path is not None:
+            payload["wrapper_path"] = wrapper_path.as_posix()
         return payload
 
     @classmethod
@@ -196,23 +210,36 @@ def update_manifest(
     adapter_dir = _normalise_path(artifacts.get("adapter"))
     if adapter_dir is None:
         raise ValueError("Training summary missing 'artifacts.adapter' path")
-    weights_value = artifacts.get("weights")
+
     weights_path: Path | None = None
+    weights_value = artifacts.get("weights")
     if weights_value:
         weights_candidate = Path(weights_value)
         if not weights_candidate.is_absolute():
             weights_candidate = Path(adapter_dir) / weights_candidate
         weights_path = _normalise_path(weights_candidate)
 
+    wrapper_path: Path | None = None
+    wrapper_value = artifacts.get("wrapper")
+    if wrapper_value:
+        wrapper_candidate = Path(wrapper_value)
+        if not wrapper_candidate.is_absolute():
+            wrapper_candidate = Path(adapter_dir).parent / wrapper_candidate
+        wrapper_path = _normalise_path(wrapper_candidate)
+
     relative_adapter_path = _ensure_relative(adapter_dir, registry)
     relative_weights_path = (
         _ensure_relative(weights_path, registry) if weights_path is not None else None
+    )
+    relative_wrapper_path = (
+        _ensure_relative(wrapper_path, registry) if wrapper_path is not None else None
     )
     checksum = _compute_checksum(weights_path) if weights_path else None
 
     record = AdapterRecord(
         relative_adapter_path=relative_adapter_path,
         relative_weights_path=relative_weights_path,
+        relative_wrapper_path=relative_wrapper_path,
         status=str(summary.get("status", "")),
         summary=dict(summary),
         created_at=_now_iso(),

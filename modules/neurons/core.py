@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import math
+import os
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -14,6 +17,12 @@ try:  # pragma: no cover - heavy dependency is optional
     from llm2vec import LLM2Vec
 except Exception:  # pragma: no cover - library not available in tests
     LLM2Vec = None  # type: ignore[assignment]
+
+from monGARS.mlops.wrapper_loader import (
+    WrapperBundle,
+    WrapperBundleError,
+    load_wrapper_bundle,
+)
 
 
 def _get_torch_module() -> Any | None:
@@ -24,6 +33,184 @@ def _get_torch_module() -> Any | None:
     except Exception:  # pragma: no cover - torch missing in lightweight envs
         return None
     return torch
+
+
+def _coerce_wrapper_embeddings(value: Any) -> list[list[float]]:
+    """Convert wrapper embedding output into a list of float vectors."""
+
+    tensor_like = value
+    for attr in ("detach", "cpu"):
+        method = getattr(tensor_like, attr, None)
+        if callable(method):
+            with contextlib.suppress(Exception):
+                tensor_like = method()
+    to_numpy = getattr(tensor_like, "numpy", None)
+    if callable(to_numpy):
+        with contextlib.suppress(Exception):
+            tensor_like = to_numpy()
+    if hasattr(tensor_like, "tolist"):
+        with contextlib.suppress(Exception):
+            tensor_like = tensor_like.tolist()
+
+    if tensor_like is None:
+        return []
+    if isinstance(tensor_like, (str, bytes)):
+        raise TypeError("Wrapper embeddings must be numeric sequences")
+    if not isinstance(tensor_like, Sequence):
+        return [[float(tensor_like)]]
+
+    seq = list(tensor_like)
+    if not seq:
+        return []
+    first = seq[0]
+    if isinstance(first, (str, bytes)):
+        raise TypeError("Wrapper embeddings must be numeric sequences")
+    if isinstance(first, Sequence):
+        rows: list[list[float]] = []
+        for item in seq:
+            if isinstance(item, (str, bytes)):
+                raise TypeError("Wrapper embeddings must be numeric sequences")
+            rows.append([float(component) for component in item])
+        return rows
+    return [[float(value) for value in seq]]
+
+
+class _WrapperHarness:
+    """Manage loading of optional ChatAndEmbed wrappers."""
+
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.bundle: WrapperBundle | None = None
+
+    def configure(self, wrapper_dir: str | os.PathLike[str] | None) -> bool:
+        """Update the harness to point at ``wrapper_dir``."""
+
+        resolved = self._resolve(wrapper_dir)
+        if resolved == self.path:
+            return False
+        self.path = resolved
+        self.bundle = self._load()
+        return True
+
+    def _resolve(self, wrapper_dir: str | os.PathLike[str] | None) -> Path | None:
+        if wrapper_dir in (None, ""):
+            return None
+        try:
+            path = Path(wrapper_dir)
+        except TypeError:
+            logger.warning(
+                "Invalid wrapper directory provided",
+                extra={"wrapper_dir": wrapper_dir},
+            )
+            return None
+        try:
+            return path.expanduser().resolve()
+        except OSError as exc:
+            logger.warning(
+                "Unable to resolve wrapper directory: %s",
+                exc,
+                extra={"wrapper_dir": str(path)},
+            )
+            return path.expanduser()
+
+    def _load(self) -> WrapperBundle | None:
+        if self.path is None:
+            return None
+        try:
+            bundle = load_wrapper_bundle(self.path)
+        except WrapperBundleError as exc:
+            logger.warning(
+                "Unable to load ChatAndEmbed wrapper",
+                extra={"wrapper_dir": str(self.path)},
+            )
+            logger.debug("Wrapper load failure", exc_info=exc)
+            return None
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "Unexpected error while loading wrapper: %s",
+                exc,
+                extra={"wrapper_dir": str(self.path)},
+                exc_info=True,
+            )
+            return None
+        return bundle
+
+    @property
+    def lora_dir(self) -> Path | None:
+        if self.bundle is None:
+            return None
+        return self.bundle.config.lora_dir
+
+    def create_encoder(self) -> "_ChatAndEmbedEncoder" | None:
+        if self.bundle is None:
+            return None
+        try:
+            instance = self.bundle.create_instance()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "Failed to instantiate ChatAndEmbed wrapper: %s",
+                exc,
+                extra={"wrapper_dir": str(self.path)},
+                exc_info=True,
+            )
+            return None
+        logger.info(
+            "ChatAndEmbed wrapper ready",
+            extra={"wrapper_dir": str(self.path)},
+        )
+        return _ChatAndEmbedEncoder(instance)
+
+
+class _ChatAndEmbedEncoder:
+    """Adapter that exposes ChatAndEmbed via the LLM2Vec-style interface."""
+
+    def __init__(self, instance: Any) -> None:
+        self._instance = instance
+        self.last_kwargs: dict[str, Any] | None = None
+
+    def encode(
+        self, formatted_texts: Sequence[Sequence[str]], **_: Any
+    ) -> list[list[float]]:
+        self.last_kwargs = dict(_)
+        combined: list[str] = []
+        for entry in formatted_texts:
+            if not entry:
+                combined.append("")
+                continue
+            try:
+                instruction, text = entry
+            except ValueError:
+                instruction = ""
+                text = entry[0] if entry else ""
+            if instruction:
+                combined.append(f"{instruction}\n\n{text}")
+            else:
+                combined.append(text)
+        try:
+            embeddings = self._instance.embed(combined)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning("ChatAndEmbed embed failed: %s", exc, exc_info=True)
+            raise
+        return _coerce_wrapper_embeddings(embeddings)
+
+    @contextlib.contextmanager
+    def disable_gradient(self):  # noqa: D401 - context manager wrapper
+        yield
+
+    def close(self) -> None:
+        closer = getattr(self._instance, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                logger.debug("Error while closing ChatAndEmbed instance", exc_info=True)
+        model = getattr(self._instance, "model", None)
+        mover = getattr(model, "to", None)
+        if callable(mover):
+            try:
+                mover("cpu")
+            except Exception:  # pragma: no cover - cleanup best effort
+                logger.debug("Unable to move ChatAndEmbed model to CPU", exc_info=True)
 
 
 class NeuronManager:
@@ -38,6 +225,7 @@ class NeuronManager:
         fallback_cache_size: int = 256,
         llm2vec_factory: Callable[[str, str | None], Any] | None = None,
         llm2vec_options: dict[str, Any] | None = None,
+        wrapper_dir: str | os.PathLike[str] | None = None,
         encode_options: dict[str, Any] | None = None,
     ) -> None:
         if fallback_dimensions <= 0:
@@ -55,6 +243,8 @@ class NeuronManager:
         self._encode_options = self._normalise_encode_options(encode_options)
         self.model: Any | None = None
         self._load_attempted = False
+        self._wrapper_harness = _WrapperHarness()
+        self._wrapper_harness.configure(wrapper_dir)
 
         self._load_encoder()
 
@@ -73,13 +263,13 @@ class NeuronManager:
     def _load_encoder(self) -> None:
         """Load an encoder, handling optional dependencies gracefully."""
 
-        logger.info(
-            "Loading LLM2Vec encoder",
-            extra={
-                "base_model_path": self.base_model_path,
-                "encoder_path": self.encoder_path,
-            },
-        )
+        extra: dict[str, Any] = {
+            "base_model_path": self.base_model_path,
+            "encoder_path": self.encoder_path,
+        }
+        if self._wrapper_harness.path is not None:
+            extra["wrapper_dir"] = str(self._wrapper_harness.path)
+        logger.info("Loading LLM2Vec encoder", extra=extra)
         self._dispose_model()
         self._load_attempted = True
 
@@ -95,6 +285,11 @@ class NeuronManager:
                 logger.info("LLM2Vec encoder ready")
 
     def _build_model(self) -> Any | None:
+        wrapper_encoder = self._wrapper_harness.create_encoder()
+        if wrapper_encoder is not None:
+            if self.encoder_path is None and self._wrapper_harness.lora_dir is not None:
+                self.encoder_path = self._wrapper_harness.lora_dir.as_posix()
+            return wrapper_encoder
         if self._llm2vec_factory is not None:
             return self._llm2vec_factory(self.base_model_path, self.encoder_path)
         if LLM2Vec is None:
@@ -258,12 +453,27 @@ class NeuronManager:
             )
         return resolved
 
-    def switch_encoder(self, new_encoder_path: str) -> None:
+    def switch_encoder(
+        self,
+        new_encoder_path: str,
+        *,
+        wrapper_dir: str | os.PathLike[str] | None = None,
+    ) -> None:
         """Change the current encoder and reload it."""
 
         self.encoder_path = new_encoder_path
+        if self._wrapper_harness.configure(wrapper_dir):
+            self._load_attempted = False
         self._load_attempted = False
         self._load_encoder()
+
+    def update_wrapper(self, wrapper_dir: str | os.PathLike[str] | None) -> None:
+        """Update the wrapper directory and reload the encoder."""
+
+        changed = self._wrapper_harness.configure(wrapper_dir)
+        if changed:
+            self._load_attempted = False
+            self._load_encoder()
 
     def reload(self) -> None:
         """Force a reload of the current encoder configuration."""

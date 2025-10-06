@@ -1,11 +1,38 @@
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from modules.neurons.core import NeuronManager
+
+
+def _create_wrapper(tmp_path: Path) -> Path:
+    wrapper_dir = tmp_path / "wrapper"
+    wrapper_dir.mkdir(parents=True, exist_ok=True)
+    (wrapper_dir / "project_wrapper.py").write_text(
+        "class ChatAndEmbed:\n"
+        "    def embed(self, texts):\n"
+        "        if isinstance(texts, str):\n"
+        "            texts = [texts]\n"
+        "        return [[float(len(text)), 1.0] for text in texts]\n"
+    )
+    (wrapper_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "base_model_id": "base-model",
+                "lora_dir": (tmp_path / "adapter").as_posix(),
+                "max_seq_len": 256,
+                "quantized_4bit": True,
+                "vram_budget_mb": 4096,
+                "offload_dir": (tmp_path / "offload").as_posix(),
+            }
+        )
+    )
+    return wrapper_dir
 
 
 class _DummyModel:
@@ -102,6 +129,20 @@ def test_neuron_manager_loads_base_model_without_adapter() -> None:
 
     outputs = manager.encode(["hello"], instruction="greet")
     assert outputs == [[5.0, 8.0]]
+
+
+def test_neuron_manager_uses_wrapper_bundle(tmp_path: Path) -> None:
+    wrapper_dir = _create_wrapper(tmp_path)
+    manager = NeuronManager(
+        base_model_path="base-model",
+        default_encoder_path=None,
+        wrapper_dir=str(wrapper_dir),
+        llm2vec_factory=lambda *_: None,
+    )
+
+    vectors = manager.encode(["hello"], instruction="")
+    assert vectors == [[5.0, 1.0]]
+    assert manager.encoder_path == (tmp_path / "adapter").as_posix()
 
 
 def test_fallback_cache_eviction_behavior() -> None:
