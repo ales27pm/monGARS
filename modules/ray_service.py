@@ -154,102 +154,121 @@ class RayLLMDeployment:
     ) -> dict[str, str] | None:
         async with self._lock:
             if incoming and incoming.get("adapter_path"):
-                root = self.registry_path.resolve()
-                try:
-                    requested_path = Path(str(incoming["adapter_path"])).resolve()
-                except (OSError, RuntimeError, ValueError, TypeError):
-                    requested_path = None
+                return await self._handle_requested_adapter(incoming)
+            return await self._refresh_from_manifest()
 
-                is_within_registry = requested_path is not None and (
-                    requested_path == root or root in requested_path.parents
-                )
-
-                try:
-                    manifest = await asyncio.to_thread(
-                        load_manifest, self.registry_path
-                    )
-                except (OSError, ValueError) as exc:
-                    logger.warning(
-                        "llm.ray.manifest_unavailable",
-                        extra={"registry_path": str(self.registry_path)},
-                        exc_info=exc,
-                    )
-                    manifest = None
-
-                manifest_version = (
-                    manifest.current.version if manifest and manifest.current else None
-                )
-                requested_version = str(incoming.get("version") or "")
-
-                if not is_within_registry or (
-                    manifest_version
-                    and requested_version
-                    and requested_version != manifest_version
-                ):
-                    logger.warning(
-                        "llm.ray.adapter.rejected",
-                        extra={
-                            "reason": "invalid_path_or_version",
-                            "requested_path": str(incoming.get("adapter_path")),
-                            "requested_version": requested_version,
-                            "manifest_version": manifest_version,
-                        },
-                    )
-                    return self._adapter_payload
-
-                effective_version = requested_version or manifest_version or "baseline"
-                wrapper_path = incoming.get("wrapper_path") if incoming else None
-                if effective_version != self._adapter_version:
-                    await asyncio.to_thread(
-                        self.neuron_manager.switch_encoder,
-                        str(requested_path),
-                        wrapper_dir=wrapper_path,
-                    )
-                    self._adapter_version = effective_version
-                    logger.info(
-                        "llm.ray.adapter.switched",
-                        extra={
-                            "adapter_version": self._adapter_version,
-                            "adapter_path": str(requested_path),
-                        },
-                    )
-
-                payload_snapshot = {
-                    "adapter_path": str(requested_path),
-                    "version": self._adapter_version,
-                }
-                if wrapper_path:
-                    payload_snapshot["wrapper_path"] = str(wrapper_path)
-                self._adapter_payload = payload_snapshot
-                return self._adapter_payload
-
-            current_mtime = self._stat_manifest()
-            if not current_mtime:
-                return self._adapter_payload
-            if self._manifest_mtime and current_mtime <= self._manifest_mtime:
-                return self._adapter_payload
-            try:
-                manifest = await asyncio.to_thread(load_manifest, self.registry_path)
-            except (OSError, ValueError) as exc:
-                logger.warning(
-                    "llm.ray.manifest_unavailable",
-                    extra={"registry_path": str(self.registry_path)},
-                    exc_info=exc,
-                )
-                return self._adapter_payload
-            self._manifest_mtime = current_mtime
-            if manifest and manifest.current:
-                payload = manifest.build_payload()
-                adapter_path = payload.get("adapter_path")
-                if adapter_path:
-                    await asyncio.to_thread(
-                        self.neuron_manager.switch_encoder,
-                        adapter_path,
-                        wrapper_dir=payload.get("wrapper_path"),
-                    )
-                self._adapter_version = payload.get("version", "baseline")
-                self._adapter_payload = payload if payload else None
+    async def _handle_requested_adapter(
+        self, incoming: dict[str, Any]
+    ) -> dict[str, str] | None:
+        requested_path = self._resolve_requested_path(incoming.get("adapter_path"))
+        if requested_path is None:
             return self._adapter_payload
+
+        manifest = await self._load_manifest()
+        manifest_version = (
+            manifest.current.version if manifest and manifest.current else None
+        )
+        requested_version = str(incoming.get("version") or "")
+        if (
+            manifest_version
+            and requested_version
+            and requested_version != manifest_version
+        ):
+            logger.warning(
+                "llm.ray.adapter.rejected",
+                extra={
+                    "reason": "invalid_path_or_version",
+                    "requested_path": str(incoming.get("adapter_path")),
+                    "requested_version": requested_version,
+                    "manifest_version": manifest_version,
+                },
+            )
+            return self._adapter_payload
+
+        effective_version = requested_version or manifest_version or "baseline"
+        wrapper_path = incoming.get("wrapper_path")
+        if effective_version != self._adapter_version:
+            await asyncio.to_thread(
+                self.neuron_manager.switch_encoder,
+                str(requested_path),
+                wrapper_dir=wrapper_path,
+            )
+            self._adapter_version = effective_version
+            logger.info(
+                "llm.ray.adapter.switched",
+                extra={
+                    "adapter_version": self._adapter_version,
+                    "adapter_path": str(requested_path),
+                },
+            )
+
+        payload_snapshot = {
+            "adapter_path": str(requested_path),
+            "version": self._adapter_version,
+        }
+        if wrapper_path:
+            payload_snapshot["wrapper_path"] = str(wrapper_path)
+        self._adapter_payload = payload_snapshot
+        return self._adapter_payload
+
+    async def _refresh_from_manifest(self) -> dict[str, str] | None:
+        current_mtime = self._stat_manifest()
+        if not current_mtime:
+            return self._adapter_payload
+        if self._manifest_mtime and current_mtime <= self._manifest_mtime:
+            return self._adapter_payload
+
+        manifest = await self._load_manifest()
+        if manifest is None:
+            return self._adapter_payload
+
+        self._manifest_mtime = current_mtime
+        if manifest.current:
+            payload = manifest.build_payload()
+            if adapter_path := payload.get("adapter_path"):
+                await asyncio.to_thread(
+                    self.neuron_manager.switch_encoder,
+                    adapter_path,
+                    wrapper_dir=payload.get("wrapper_path"),
+                )
+            self._adapter_version = payload.get("version", "baseline")
+            self._adapter_payload = payload if payload else None
+        return self._adapter_payload
+
+    async def _load_manifest(self) -> Any | None:
+        try:
+            return await asyncio.to_thread(load_manifest, self.registry_path)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "llm.ray.manifest_unavailable",
+                extra={"registry_path": str(self.registry_path)},
+                exc_info=exc,
+            )
+            return None
+
+    def _resolve_requested_path(
+        self, adapter_path: Any
+    ) -> Path | None:
+        if not adapter_path:
+            return None
+        root = self.registry_path.resolve()
+        try:
+            requested = Path(str(adapter_path)).resolve()
+        except (OSError, RuntimeError, ValueError, TypeError):
+            requested = None
+        if requested is None:
+            return None
+        if requested != root and root not in requested.parents:
+            logger.warning(
+                "llm.ray.adapter.rejected",
+                extra={
+                    "reason": "outside_registry",
+                    "requested_path": str(adapter_path),
+                    "registry_root": str(root),
+                },
+            )
+            return None
+        return requested
 
     def _encode_prompt(self, prompt: str) -> list[list[float]]:
         try:

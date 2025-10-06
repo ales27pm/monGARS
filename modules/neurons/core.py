@@ -42,21 +42,15 @@ def _coerce_wrapper_embeddings(value: Any) -> list[list[float]]:
     for attr in ("detach", "cpu"):
         method = getattr(tensor_like, attr, None)
         if callable(method):
-            try:
+            with contextlib.suppress(Exception):
                 tensor_like = method()
-            except Exception:  # pragma: no cover - defensive guard
-                break
     to_numpy = getattr(tensor_like, "numpy", None)
     if callable(to_numpy):
-        try:
+        with contextlib.suppress(Exception):
             tensor_like = to_numpy()
-        except Exception:  # pragma: no cover - defensive guard
-            pass
     if hasattr(tensor_like, "tolist"):
-        try:
+        with contextlib.suppress(Exception):
             tensor_like = tensor_like.tolist()
-        except Exception:  # pragma: no cover - defensive guard
-            pass
 
     if tensor_like is None:
         return []
@@ -74,6 +68,94 @@ def _coerce_wrapper_embeddings(value: Any) -> list[list[float]]:
         else:
             rows.append([float(item)])
     return rows
+
+
+class _WrapperHarness:
+    """Manage loading of optional ChatAndEmbed wrappers."""
+
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.bundle: WrapperBundle | None = None
+
+    def configure(self, wrapper_dir: str | os.PathLike[str] | None) -> bool:
+        """Update the harness to point at ``wrapper_dir``."""
+
+        resolved = self._resolve(wrapper_dir)
+        if resolved == self.path:
+            return False
+        self.path = resolved
+        self.bundle = self._load()
+        return True
+
+    def _resolve(
+        self, wrapper_dir: str | os.PathLike[str] | None
+    ) -> Path | None:
+        if wrapper_dir in (None, ""):
+            return None
+        try:
+            path = Path(wrapper_dir)
+        except TypeError:
+            logger.warning(
+                "Invalid wrapper directory provided",
+                extra={"wrapper_dir": wrapper_dir},
+            )
+            return None
+        try:
+            return path.expanduser().resolve()
+        except OSError as exc:
+            logger.warning(
+                "Unable to resolve wrapper directory: %s",
+                exc,
+                extra={"wrapper_dir": str(path)},
+            )
+            return path.expanduser()
+
+    def _load(self) -> WrapperBundle | None:
+        if self.path is None:
+            return None
+        try:
+            bundle = load_wrapper_bundle(self.path)
+        except WrapperBundleError as exc:
+            logger.warning(
+                "Unable to load ChatAndEmbed wrapper",
+                extra={"wrapper_dir": str(self.path)},
+            )
+            logger.debug("Wrapper load failure", exc_info=exc)
+            return None
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "Unexpected error while loading wrapper: %s",
+                exc,
+                extra={"wrapper_dir": str(self.path)},
+                exc_info=True,
+            )
+            return None
+        return bundle
+
+    @property
+    def lora_dir(self) -> Path | None:
+        if self.bundle is None:
+            return None
+        return self.bundle.config.lora_dir
+
+    def create_encoder(self) -> "_ChatAndEmbedEncoder" | None:
+        if self.bundle is None:
+            return None
+        try:
+            instance = self.bundle.create_instance()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "Failed to instantiate ChatAndEmbed wrapper: %s",
+                exc,
+                extra={"wrapper_dir": str(self.path)},
+                exc_info=True,
+            )
+            return None
+        logger.info(
+            "ChatAndEmbed wrapper ready",
+            extra={"wrapper_dir": str(self.path)},
+        )
+        return _ChatAndEmbedEncoder(instance)
 
 
 class _ChatAndEmbedEncoder:
@@ -158,10 +240,8 @@ class NeuronManager:
         self._encode_options = self._normalise_encode_options(encode_options)
         self.model: Any | None = None
         self._load_attempted = False
-        self._wrapper_dir: Path | None = None
-        self._wrapper_bundle: WrapperBundle | None = None
-
-        self._set_wrapper_dir(wrapper_dir, reload=False)
+        self._wrapper_harness = _WrapperHarness()
+        self._wrapper_harness.configure(wrapper_dir)
 
         self._load_encoder()
 
@@ -184,8 +264,8 @@ class NeuronManager:
             "base_model_path": self.base_model_path,
             "encoder_path": self.encoder_path,
         }
-        if self._wrapper_dir is not None:
-            extra["wrapper_dir"] = str(self._wrapper_dir)
+        if self._wrapper_harness.path is not None:
+            extra["wrapper_dir"] = str(self._wrapper_harness.path)
         logger.info("Loading LLM2Vec encoder", extra=extra)
         self._dispose_model()
         self._load_attempted = True
@@ -201,88 +281,12 @@ class NeuronManager:
             else:
                 logger.info("LLM2Vec encoder ready")
 
-    def _resolve_wrapper_dir(
-        self, wrapper_dir: str | os.PathLike[str] | None
-    ) -> Path | None:
-        if wrapper_dir in (None, ""):
-            return None
-        try:
-            path = Path(wrapper_dir)
-        except TypeError:
-            logger.warning(
-                "Invalid wrapper directory provided",
-                extra={"wrapper_dir": wrapper_dir},
-            )
-            return None
-        try:
-            return path.expanduser().resolve()
-        except OSError as exc:
-            logger.warning(
-                "Unable to resolve wrapper directory: %s",
-                exc,
-                extra={"wrapper_dir": str(path)},
-            )
-            return path.expanduser()
-
-    def _set_wrapper_dir(
-        self,
-        wrapper_dir: str | os.PathLike[str] | None,
-        *,
-        reload: bool = True,
-    ) -> None:
-        resolved = self._resolve_wrapper_dir(wrapper_dir)
-        if resolved == self._wrapper_dir:
-            return
-        self._wrapper_dir = resolved
-        self._wrapper_bundle = None
-        if reload:
-            self._load_attempted = False
-            self._load_encoder()
-
-    def _load_wrapper_bundle(self) -> WrapperBundle | None:
-        if self._wrapper_dir is None:
-            return None
-        if self._wrapper_bundle is not None:
-            return self._wrapper_bundle
-        try:
-            bundle = load_wrapper_bundle(self._wrapper_dir)
-        except WrapperBundleError as exc:
-            logger.warning(
-                "Unable to load ChatAndEmbed wrapper",
-                extra={"wrapper_dir": str(self._wrapper_dir)},
-            )
-            logger.debug("Wrapper load failure", exc_info=exc)
-            self._wrapper_bundle = None
-            return None
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "Unexpected error while loading wrapper: %s", exc, exc_info=True
-            )
-            self._wrapper_bundle = None
-            return None
-        if self.encoder_path is None:
-            self.encoder_path = bundle.config.lora_dir.as_posix()
-        self._wrapper_bundle = bundle
-        return bundle
-
     def _build_model(self) -> Any | None:
-        wrapper_bundle = self._load_wrapper_bundle()
-        if wrapper_bundle is not None:
-            try:
-                instance = wrapper_bundle.create_instance()
-            except Exception as exc:  # pragma: no cover - defensive guard
-                logger.warning(
-                    "Failed to instantiate ChatAndEmbed wrapper: %s",
-                    exc,
-                    extra={"wrapper_dir": str(self._wrapper_dir)},
-                    exc_info=True,
-                )
-            else:
-                logger.info(
-                    "ChatAndEmbed wrapper ready",
-                    extra={"wrapper_dir": str(self._wrapper_dir)},
-                )
-                return _ChatAndEmbedEncoder(instance)
+        wrapper_encoder = self._wrapper_harness.create_encoder()
+        if wrapper_encoder is not None:
+            if self.encoder_path is None and self._wrapper_harness.lora_dir is not None:
+                self.encoder_path = self._wrapper_harness.lora_dir.as_posix()
+            return wrapper_encoder
         if self._llm2vec_factory is not None:
             return self._llm2vec_factory(self.base_model_path, self.encoder_path)
         if LLM2Vec is None:
@@ -455,14 +459,18 @@ class NeuronManager:
         """Change the current encoder and reload it."""
 
         self.encoder_path = new_encoder_path
-        self._set_wrapper_dir(wrapper_dir, reload=False)
+        if self._wrapper_harness.configure(wrapper_dir):
+            self._load_attempted = False
         self._load_attempted = False
         self._load_encoder()
 
     def update_wrapper(self, wrapper_dir: str | os.PathLike[str] | None) -> None:
         """Update the wrapper directory and reload the encoder."""
 
-        self._set_wrapper_dir(wrapper_dir)
+        changed = self._wrapper_harness.configure(wrapper_dir)
+        if changed:
+            self._load_attempted = False
+            self._load_encoder()
 
     def reload(self) -> None:
         """Force a reload of the current encoder configuration."""

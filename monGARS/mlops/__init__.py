@@ -7,7 +7,29 @@ from .artifacts import (  # noqa: F401
     render_wrapper_readme,
     write_wrapper_bundle,
 )
+from .dataset import prepare_instruction_dataset  # noqa: F401
+from .exporters import export_gguf, merge_lora_adapters, run_generation_smoke_test  # noqa: F401
+from .model import (  # noqa: F401
+    detach_sequences,
+    load_4bit_causal_lm,
+    move_to_cpu,
+    summarise_device_map,
+)
+from .training import (  # noqa: F401
+    LoraHyperParams,
+    TrainerConfig,
+    disable_training_mode,
+    prepare_lora_model,
+    run_embedding_smoke_test,
+    save_lora_artifacts,
+    train_qlora,
+)
 from .training_pipeline import training_workflow
+from .utils import (  # noqa: F401
+    configure_cuda_allocator,
+    describe_environment,
+    ensure_dependencies,
+)
 from .wrapper_loader import WrapperBundle, WrapperBundleError, load_wrapper_bundle
 
 __all__ = [
@@ -17,6 +39,24 @@ __all__ = [
     "render_wrapper_readme",
     "training_workflow",
     "write_wrapper_bundle",
+    "prepare_instruction_dataset",
+    "export_gguf",
+    "merge_lora_adapters",
+    "run_generation_smoke_test",
+    "load_4bit_causal_lm",
+    "summarise_device_map",
+    "move_to_cpu",
+    "detach_sequences",
+    "LoraHyperParams",
+    "TrainerConfig",
+    "prepare_lora_model",
+    "train_qlora",
+    "disable_training_mode",
+    "save_lora_artifacts",
+    "run_embedding_smoke_test",
+    "configure_cuda_allocator",
+    "ensure_dependencies",
+    "describe_environment",
     "WrapperBundle",
     "WrapperBundleError",
     "load_wrapper_bundle",
