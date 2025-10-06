@@ -1,18 +1,19 @@
 # Next Implementation Priority
 
 ## Summary
-Now that schema evolution and telemetry upgrades are complete, the next
-high-impact milestone is publishing first-party SDKs and reference clients while
-credential hardening work wraps up.
+Now that schema evolution, telemetry upgrades, and credential hardening are
+complete, the next high-impact milestone is publishing first-party SDKs and
+reference clients.
 Operators and partner teams currently rely on OpenAPI scraping or ad-hoc scripts;
 packaged SDKs will harden integrations and shrink the support surface area as
 the project moves into long-term maintenance.
 
 ## Supporting Signals from Existing Documentation
 - **Roadmap**: Phase 5 keeps SDKs and reference clients as the final deliverable
-  but still flags the presence of demo credential defaults that must be removed.
+  and now records that demo credential defaults have been removed from FastAPI
+  startup flows.
 - **Implementation Status Report**: Highlights SDK packaging as the new
-  contradiction to resolve, notes the outstanding credential cleanup, and calls
+  contradiction to resolve, confirms the credential cleanup, and calls
   out the need for clear RAG governance to accompany client distribution.
 - **Roadmap Charter (AGENTS.md)**: Security & Stability items are satisfied,
   shifting attention to sustainable integration stories for external teams.
@@ -30,9 +31,8 @@ the project moves into long-term maintenance.
 
 ## Implementation Outline
 1. **Define API Surfaces** – Lock the minimal stable routes (chat, history,
-   review, peer management) and document any feature flags they depend on. Fold
-   the credential cleanup into this pass by removing the `DEFAULT_USERS`
-   bootstrap so SDK consumers cannot rely on demo logins.
+   review, peer management) and document any feature flags they depend on now
+   that credential bootstrap relies solely on persisted accounts.
 2. **Generate Typed Clients** – Use `openapi-python-client` and `openapi-typescript`
    (or equivalent) to scaffold SDKs, layering ergonomic helpers for
    authentication flows, ticket refresh, and streaming responses.

@@ -14,6 +14,8 @@ from monGARS.api.web_api import app
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.security import SecurityManager
 
+pytestmark = pytest.mark.usefixtures("ensure_test_users")
+
 
 def _speech_turn_payload(text: str) -> dict:
     return {

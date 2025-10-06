@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -18,7 +17,6 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from monGARS.api.authentication import (
     authenticate_user,
-    ensure_bootstrap_users,
     get_current_admin_user,
     get_current_user,
 )
@@ -57,36 +55,16 @@ from . import ws_manager
 
 _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
-DEFAULT_USERS: dict[str, dict[str, Any]] = {
-    "u1": {
-        "password_hash": sec_manager.get_password_hash("x"),
-        "is_admin": True,
-    },
-    "u2": {
-        "password_hash": sec_manager.get_password_hash("y"),
-        "is_admin": False,
-    },
-}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Seed demo users when the application starts."""
+    """Validate dependency overrides and prepare application state."""
 
     override = app.dependency_overrides.get(get_persistence_repository)
-    if override is not None:
-        if not callable(override):
-            logger.error("lifespan.invalid_override", extra={"override": override})
-            raise TypeError("Dependency override must be callable")
-        candidate = override()
-        repo = await candidate if inspect.isawaitable(candidate) else candidate
-    else:
-        repo = get_persistence_repository()
-    try:
-        await ensure_bootstrap_users(repo, DEFAULT_USERS)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception("lifespan.bootstrap_failed")
-        raise RuntimeError("Failed to bootstrap default users") from exc
+    if override is not None and not callable(override):
+        logger.error("lifespan.invalid_override", extra={"override": override})
+        raise TypeError("Dependency override must be callable")
     yield
 
 
@@ -158,7 +136,6 @@ async def register_user(
         await repo.create_user_atomic(
             reg.username,
             sec_manager.get_password_hash(reg.password),
-            reserved_usernames=DEFAULT_USERS.keys(),
         )
     except ValueError as exc:
         logger.debug(

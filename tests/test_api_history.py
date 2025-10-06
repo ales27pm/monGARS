@@ -10,6 +10,9 @@ from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app
 
 
+pytestmark = pytest.mark.usefixtures("ensure_test_users")
+
+
 @pytest.fixture
 def client() -> TestClient:
     """Return a test client with isolated hippocampus state."""

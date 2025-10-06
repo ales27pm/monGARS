@@ -129,6 +129,17 @@ def contract_client() -> Iterable[Tuple[TestClient, _FakePersistenceRepository]]
     communicator = _FakePeerCommunicator()
     conversation = _FakeConversationModule()
 
+    repo._users["u1"] = _FakeAccount(
+        username="u1",
+        password_hash=sec_manager.get_password_hash("x"),
+        is_admin=True,
+    )
+    repo._users["u2"] = _FakeAccount(
+        username="u2",
+        password_hash=sec_manager.get_password_hash("y"),
+        is_admin=False,
+    )
+
     app.dependency_overrides[get_persistence_repository] = lambda: repo
     app.dependency_overrides[get_hippocampus] = lambda: hippocampus
     app.dependency_overrides[get_peer_communicator] = lambda: communicator

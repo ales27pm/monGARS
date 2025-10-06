@@ -70,12 +70,9 @@ and reality.
   `/api/v1/auth/ws/ticket`, replays history, and streams responses when
   `WS_ENABLE_EVENTS` is true.
 - Database-backed authentication is the default: `PersistenceRepository`
-  persists user records, and login bootstrap flows promote hashed defaults into
-  durable accounts on first use. **Open issue:** the legacy `DEFAULT_USERS`
-  mapping in `monGARS/api/web_api.py` still seeds demo credentials, so the
-  milestone remains partially complete until those accounts are removed. Until
-  that bootstrap path is excised, anyone aware of the defaults can still mint
-  tokens without provisioning a real account.
+  persists user records, and login bootstrap flows now rely exclusively on
+  persisted accounts after retiring the legacy demo credential mapping in
+  `monGARS/api/web_api.py`.
 - Planned work: consolidate validation rules and publish polished client SDKs.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)

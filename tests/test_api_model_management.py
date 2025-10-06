@@ -21,6 +21,9 @@ os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 
+pytestmark = pytest.mark.usefixtures("ensure_test_users")
+
+
 class FakeModelManager:
     def __init__(self) -> None:
         self._profile = ModelProfile(

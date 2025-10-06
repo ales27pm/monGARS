@@ -19,6 +19,9 @@ from monGARS.core.rag import (
 )
 
 
+pytestmark = pytest.mark.usefixtures("ensure_test_users")
+
+
 class DummyRagEnricher:
     def __init__(self) -> None:
         self.last_call: dict | None = None

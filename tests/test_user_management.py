@@ -7,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
 from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
-from monGARS.api.web_api import DEFAULT_USERS, app, sec_manager
+from monGARS.api.web_api import app, sec_manager
 from monGARS.init_db import reset_database
 
 
@@ -253,10 +253,8 @@ async def test_bootstrap_users_create_demo_accounts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_startup_bootstraps_default_users(client: AsyncClient) -> None:
+async def test_startup_does_not_create_demo_accounts(client: AsyncClient) -> None:
     ready = await client.get("/ready")
     assert ready.status_code == status.HTTP_200_OK
     repo = get_persistence_repository()
-    user = await repo.get_user_by_username("u1")
-    assert user is not None
-    assert user.is_admin == DEFAULT_USERS["u1"]["is_admin"]
+    assert await repo.get_user_by_username("u1") is None

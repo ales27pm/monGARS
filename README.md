@@ -40,14 +40,14 @@ modules so contributors can experiment end-to-end without bespoke tooling.
 
 ## Project Health
 - **Phase 5 – Web/API Refinement**: REST, WebSocket, and Django operator flows
-  are production-ready, but default bootstrap accounts remain (`DEFAULT_USERS`)
-  and the SDK publishing milestone is still open.【F:monGARS/api/web_api.py†L41-L84】【F:docs/codebase_status_report.md†L76-L108】
+  are production-ready, credential bootstrap now relies solely on persisted
+  accounts, and the SDK publishing milestone remains open.【F:monGARS/api/web_api.py†L43-L84】【F:docs/codebase_status_report.md†L76-L108】
 - **Phase 6 – Self-Improvement & Research**: Automated MNTP self-training and
   reinforcement-learning loops exist, yet integration with operational rollout
   controls and long-haul observability keeps the milestone in progress.【F:monGARS/core/self_training.py†L1-L160】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】【F:docs/codebase_status_report.md†L109-L144】
-- **Open Risks**: Prioritise removing bootstrap credentials, packaging the
-  Python/TypeScript SDKs, and defining reinforcement-learning rollout guardrails
-  before closing the remaining roadmap items.【F:docs/codebase_status_report.md†L145-L188】
+- **Open Risks**: Prioritise packaging the Python/TypeScript SDKs and defining
+  reinforcement-learning rollout guardrails before closing the remaining
+  roadmap items.【F:docs/codebase_status_report.md†L145-L188】
 
 See [docs/codebase_status_report.md](docs/codebase_status_report.md) for the full
 audit of runtime modules, tests, and deployment assets.【F:docs/codebase_status_report.md†L1-L188】
