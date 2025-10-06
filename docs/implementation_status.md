@@ -115,16 +115,16 @@ and reality.
   endpoint when no privileged accounts exist.
 - ✅ **SDK story**: Python and TypeScript SDKs ship with documented release
   tooling, allowing partners to integrate without scraping OpenAPI definitions.【F:sdks/python/README.md†L1-L120】【F:docs/sdk-release-guide.md†L1-L160】
-- **RAG governance**: document retention policies for curated datasets stored
-  under `models/datasets/curated/` and ensure operators scrub sensitive context
-  before exporting artefacts.
+- ✅ **RAG governance**: curated datasets carry retention metadata, automated
+  scrubbing checks, and operator playbooks covering exports and takedown flows.【F:docs/rag_dataset_governance.md†L1-L120】
 - **Advanced research loops**: wire the reinforcement-learning utilities into
   production workflows (telemetry, rollback, operator approval) before closing
   the milestone.
 
 ## Next Critical Implementation
 
-With SDK packaging complete, the next critical implementation is codifying RAG
-retention and export governance. Establishing automated scrubbing checks and
-operator playbooks keeps curated datasets compliant as partner access expands
-and unlocks the remaining controls in Phase 5.
+With governance in place for curated RAG datasets, the next critical
+implementation is productionising the reinforcement-learning research loop.
+This requires adding telemetry, rollout safeguards, and operator approvals so
+the experimentation tooling can graduate into the automated self-improvement
+pipeline.

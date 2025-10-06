@@ -23,6 +23,9 @@ class DatasetVersion:
     dataset_dir: Path
     dataset_file: Path
     record_count: int
+    governance: Mapping[str, Any] | None = None
+    compliance: Mapping[str, Any] | None = None
+    quarantined: bool = False
     extra: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -34,6 +37,11 @@ class DatasetVersion:
             "dataset_file": str(self.dataset_file),
             "record_count": self.record_count,
         }
+        if self.governance:
+            payload["governance"] = dict(self.governance)
+        if self.compliance:
+            payload["compliance"] = dict(self.compliance)
+        payload["quarantined"] = bool(self.quarantined)
         if self.extra:
             payload["extra"] = dict(self.extra)
         return payload
@@ -55,17 +63,25 @@ class DatasetCatalog:
         dataset_dir: Path,
         dataset_file: Path,
         record_count: int,
+        created_at: datetime | None = None,
+        governance: Mapping[str, Any] | None = None,
+        compliance: Mapping[str, Any] | None = None,
+        quarantined: bool | None = None,
         extra: Mapping[str, Any] | None = None,
     ) -> DatasetVersion:
         catalog = self._load()
         next_version = int(catalog.get("latest_version", 0)) + 1
+        created = created_at or datetime.now(UTC)
         version = DatasetVersion(
             version=next_version,
             run_id=run_id,
-            created_at=datetime.now(UTC),
+            created_at=created,
             dataset_dir=dataset_dir,
             dataset_file=dataset_file,
             record_count=record_count,
+            governance=governance,
+            compliance=compliance,
+            quarantined=bool(quarantined) if quarantined is not None else False,
             extra=extra,
         )
         catalog.setdefault("versions", []).append(version.as_dict())
@@ -78,6 +94,7 @@ class DatasetCatalog:
                 "run_id": run_id,
                 "version": version.version,
                 "records": record_count,
+                "quarantined": version.quarantined,
             },
         )
         return version
@@ -95,6 +112,9 @@ class DatasetCatalog:
             dataset_dir=Path(payload["dataset_dir"]),
             dataset_file=Path(payload["dataset_file"]),
             record_count=int(payload["record_count"]),
+            governance=payload.get("governance"),
+            compliance=payload.get("compliance"),
+            quarantined=bool(payload.get("quarantined", False)),
             extra=payload.get("extra"),
         )
 

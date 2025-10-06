@@ -1,48 +1,58 @@
 # Next Implementation Priority
 
 ## Summary
-The SDK release closed the final open item for Phase 5, shifting the immediate
-focus to Retrieval-Augmented Generation (RAG) governance. We must codify dataset
-retention policies, automate scrubbing checks, and document operator workflows
-before expanding partner access to curated artefacts.
 
-## Supporting Signals from Existing Documentation
-- **Implementation Status Report** – Calls out RAG governance as the remaining
-  contradiction in Phase 5 now that SDK packaging is complete.【F:docs/implementation_status.md†L96-L140】
-- **Codebase Status Report** – Highlights dataset governance as a key risk and
-  recommends prioritising controls before scaling partner integrations.【F:docs/codebase_status_report.md†L40-L120】
-- **RAG Context Enrichment Guide** – Notes that curated datasets demand explicit
-  retention policies to protect sensitive context.【F:docs/rag_context_enrichment.md†L60-L96】
+With Retrieval-Augmented Generation governance complete, the immediate focus
+shifts to productionising the reinforcement-learning (RL) research loop. The
+loop exists in `modules/neurons/training/reinforcement_loop.py` but still lacks
+telemetry, rollout safeguards, and operator controls required for unattended
+operation.【F:docs/implementation_status.md†L96-L140】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
 
-## Rationale for Prioritising RAG Governance
-1. **Compliance Readiness** – Clearly documented retention windows and scrubbing
-   automation ensure the enrichment datasets align with privacy and contractual
-   requirements.
-2. **Operational Safety** – Guardrails around export workflows prevent the
-   accidental release of sensitive content as more teams rely on RAG-sourced
-   suggestions.
-3. **Ecosystem Trust** – Partners need assurance that enrichment data is curated
-   and auditable before embedding it into their own workflows.
+## Supporting Signals
+
+- **Implementation Status Report** – calls out RL automation as the remaining
+  contradiction after the governance milestone.【F:docs/implementation_status.md†L96-L140】
+- **Codebase Status Report** – recommends prioritising telemetry and operational
+  controls before graduating RL into production workflows.【F:docs/codebase_status_report.md†L96-L140】
+- **Evolution Engine Orchestrator** – already integrates curated datasets,
+  making it the natural landing spot once RL artefacts can be generated and
+  approved safely.【F:modules/evolution_engine/orchestrator.py†L1-L320】
+
+## Rationale for Prioritising RL Operationalisation
+
+1. **Experiment Velocity** – moving RL into the automated cycle reduces the
+   manual work currently required to evaluate policy improvements.
+2. **Safety & Observability** – explicit telemetry and guardrails prevent
+   regressions when exploring novel reward models.
+3. **Partner Readiness** – RL-backed suggestions unlock new product
+   capabilities, but only once the rollout and rollback story matches the rest
+   of the platform.
 
 ## Implementation Outline
-1. Catalogue existing datasets under `models/datasets/curated/` and define
-   metadata fields (provenance, expiry, sensitivity tags).
-2. Extend the enrichment service or background jobs to validate datasets against
-   the new policy (expiry checks, automated redaction, audit trails).
-3. Document operator procedures for onboarding new repositories, handling
-   takedown requests, and exporting artefacts safely.
-4. Integrate reporting into the telemetry pipeline so governance metrics surface
-   alongside existing peer and RAG monitoring.
+
+1. **Instrumentation** – emit structured metrics and events across the RL loop
+   (policy selection, reward aggregation, adapter export) tied into the existing
+   OpenTelemetry pipeline.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
+2. **Safeguards** – add approval hooks to the evolution orchestrator so RL
+   results require an operator sign-off before deployment, mirroring curated
+   dataset governance.【F:modules/evolution_engine/orchestrator.py†L320-L520】
+3. **Runbooks** – document the RL workflow alongside the new governance guide so
+   operators understand how to stage, review, and roll back experiments.【F:docs/rag_dataset_governance.md†L1-L160】
+4. **Testing** – extend the existing unit tests to cover RL edge cases and add a
+   targeted integration scenario verifying telemetry and approval gates.
 
 ## Success Criteria & Validation
-- Every curated dataset includes metadata covering provenance, expiry, and
-  review history.
-- Automated jobs flag or quarantine datasets that fall out of compliance, and
-  alerts surface through existing observability channels.
-- Updated runbooks enable operators and partners to follow the governance flow
-  without relying on ad-hoc institutional knowledge.
 
-## Follow-On Work Once Governance Lands
-- Resume reinforcement-learning integration workstreams for Phase 6.
-- Revisit SDK telemetry to capture partner usage patterns in line with the new
-  governance metrics.
+- RL training cycles emit metrics and logs that surface in the same dashboards
+  as self-training events.
+- Deployment of RL artefacts requires an explicit approval or automated policy
+  pass, with clear rollback instructions.
+- Updated documentation (including runbooks) enables on-call operators to triage
+  RL incidents without specialist knowledge.
+
+## Follow-On Work Once RL Is Operational
+
+- Resume energy-efficiency research outlined for the sustainability phase once
+  RL experiments can run safely in production.
+- Expand partner telemetry to correlate RL-driven responses with engagement and
+  satisfaction metrics.
