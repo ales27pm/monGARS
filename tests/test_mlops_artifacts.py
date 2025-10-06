@@ -9,6 +9,7 @@ import pytest
 
 from monGARS.mlops.artifacts import (
     WrapperConfig,
+    build_adapter_summary,
     render_output_bundle_readme,
     render_project_wrapper,
     write_wrapper_bundle,
@@ -78,3 +79,30 @@ def test_render_output_bundle_readme_flags(
         assert "gguf/" in readme
     else:
         assert "gguf/" not in readme
+
+
+def test_build_adapter_summary_collects_optional_sections(tmp_path: Path) -> None:
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    weights_path = adapter_dir / "adapter_model.safetensors"
+    weights_path.write_text("stub")
+    wrapper_dir = tmp_path / "wrapper"
+    wrapper_dir.mkdir()
+
+    summary = build_adapter_summary(
+        adapter_dir=adapter_dir,
+        weights_path=weights_path,
+        wrapper_dir=wrapper_dir,
+        status="ok",
+        labels={"category": "baseline"},
+        metrics={"train_fraction": 0.5},
+        training={"epochs": 2},
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["artifacts"]["adapter"] == str(adapter_dir)
+    assert summary["artifacts"]["weights"] == str(weights_path)
+    assert summary["artifacts"]["wrapper"] == str(wrapper_dir)
+    assert summary["labels"] == {"category": "baseline"}
+    assert summary["metrics"] == {"train_fraction": 0.5}
+    assert summary["training"] == {"epochs": 2}
