@@ -1170,9 +1170,9 @@ class MNTPTrainer:
     def _resolve_model_name(self) -> str:
         model_name = self.config["model_name_or_path"].strip()
         lower_name = model_name.lower()
-        if lower_name.startswith("cognitivecomputations/dolphin3.0") or lower_name.startswith(
-            "dphn/dolphin3.0"
-        ):
+        if lower_name.startswith(
+            "cognitivecomputations/dolphin3.0"
+        ) or lower_name.startswith("dphn/dolphin3.0"):
             logger.warning(
                 "Large model specified; defaulting to lightweight reference model",
                 extra={"requested_model": model_name},
@@ -1602,6 +1602,16 @@ class MNTPTrainer:
             vram_budget = int(self.config.get("wrapper_vram_budget_mb", 7168))
         except (TypeError, ValueError) as exc:
             raise ValueError("wrapper_vram_budget_mb must be an integer") from exc
+        if vram_budget <= 0:
+            raise ValueError("wrapper_vram_budget_mb must be positive")
+        try:
+            activation_buffer = int(
+                self.config.get("wrapper_activation_buffer_mb", 1024)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("wrapper_activation_buffer_mb must be an integer") from exc
+        if activation_buffer < 0:
+            raise ValueError("wrapper_activation_buffer_mb must be non-negative")
         try:
             max_seq_len = int(self.config.get("max_seq_length", 512))
         except (TypeError, ValueError) as exc:
@@ -1633,6 +1643,7 @@ class MNTPTrainer:
             max_seq_len=max_seq_len,
             vram_budget_mb=vram_budget,
             offload_dir=offload_path,
+            activation_buffer_mb=activation_buffer,
             quantized_4bit=quantized_flag,
         )
 

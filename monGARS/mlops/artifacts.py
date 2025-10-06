@@ -25,6 +25,7 @@ from transformers import (
 BASE_MODEL_ID = {base_model_id!r}
 LORA_DIR = {lora_dir!r}
 VRAM_BUDGET_MB = {vram_budget_mb}
+ACTIVATION_BUFFER_MB = {activation_buffer_mb}
 OFFLOAD_DIR = {offload_dir!r}
 MAX_SEQ_LEN = {max_seq_len}
 
@@ -46,12 +47,24 @@ def _bnb4() -> BitsAndBytesConfig:
     )
 
 
+def _weight_budget_mb() -> int:
+    reserve = max(0, ACTIVATION_BUFFER_MB)
+    weight_budget = VRAM_BUDGET_MB - reserve
+    if weight_budget < 512:
+        weight_budget = max(VRAM_BUDGET_MB // 2, 512)
+    return min(VRAM_BUDGET_MB, weight_budget)
+
+
+def _max_memory() -> dict[int | str, str]:
+    return {{0: f"{{_weight_budget_mb()}}MiB", "cpu": "48GiB"}}
+
+
 class ChatAndEmbed:
     \"\"\"Load one model instance for both chat and embeddings.\"\"\"
 
     def __init__(self) -> None:
         os.makedirs(OFFLOAD_DIR, exist_ok=True)
-        max_memory = {{0: f"{{VRAM_BUDGET_MB}}MiB", "cpu": "48GiB"}}
+        max_memory = _max_memory()
         self.tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, use_fast=True)
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -141,6 +154,7 @@ class WrapperConfig:
     max_seq_len: int
     vram_budget_mb: int
     offload_dir: Path
+    activation_buffer_mb: int = 1024
     quantized_4bit: bool = True
 
     def to_json(self) -> Dict[str, object]:
@@ -153,6 +167,7 @@ class WrapperConfig:
             "quantized_4bit": self.quantized_4bit,
             "vram_budget_mb": self.vram_budget_mb,
             "offload_dir": str(self.offload_dir),
+            "activation_buffer_mb": self.activation_buffer_mb,
         }
 
 
@@ -193,6 +208,7 @@ def render_project_wrapper(config: WrapperConfig) -> str:
         base_model_id=config.base_model_id,
         lora_dir=str(config.lora_dir),
         vram_budget_mb=config.vram_budget_mb,
+        activation_buffer_mb=config.activation_buffer_mb,
         offload_dir=str(config.offload_dir),
         max_seq_len=config.max_seq_len,
     ).strip()
@@ -225,7 +241,8 @@ def render_wrapper_readme(config: WrapperConfig) -> str:
           • LoRA: {config.lora_dir}
 
         Quantization: 4-bit (NF4) w/ BitsAndBytes.
-        VRAM cap: {config.vram_budget_mb} MiB (adjust inside `project_wrapper.py` if needed).
+        VRAM cap: {config.vram_budget_mb} MiB with {config.activation_buffer_mb} MiB reserved for
+        activations (adjust inside `project_wrapper.py` if needed).
         """
     ).strip()
 
@@ -278,8 +295,8 @@ def render_output_bundle_readme(
         print(embeddings.shape)
         ```
 
-        If you change GPUs or memory limits, tweak `VRAM_BUDGET_MB` and `OFFLOAD_DIR`
-        in `wrapper/project_wrapper.py`.
+        If you change GPUs or memory limits, tweak `VRAM_BUDGET_MB`, `ACTIVATION_BUFFER_MB`, and
+        `OFFLOAD_DIR` in `wrapper/project_wrapper.py`.
         """
     ).strip()
 

@@ -37,6 +37,11 @@ DATASET_ID = os.environ.get("DATASET_ID", "yahma/alpaca-cleaned")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "outputs_dolphin8b"))
 OFFLOAD_DIR = Path(os.environ.get("OFFLOAD_DIR", "./offload"))
 VRAM_BUDGET_MB = int(os.environ.get("VRAM_BUDGET_MB", "7300"))
+ACTIVATION_BUFFER_MB = int(
+    os.environ.get(
+        "ACTIVATION_BUFFER_MB", os.environ.get("VRAM_ACTIVATION_BUFFER_MB", "1024")
+    )
+)
 MAX_SEQ_LEN = int(os.environ.get("MAX_SEQ_LEN", "1024"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "1"))
 GRAD_ACCUM = int(os.environ.get("GRAD_ACCUM", "8"))
@@ -75,6 +80,7 @@ def main() -> None:
     model, tokenizer = load_4bit_causal_lm(
         MODEL_ID,
         vram_budget_mb=VRAM_BUDGET_MB,
+        activation_buffer_mb=ACTIVATION_BUFFER_MB,
         offload_dir=OFFLOAD_DIR,
     )
     summarise_device_map(model)
@@ -120,6 +126,7 @@ def main() -> None:
         "adapters_dir": str(OUTPUT_DIR),
         "quantization": "bnb-4bit nf4 double-quant fp16 compute",
         "max_seq_len": MAX_SEQ_LEN,
+        "activation_buffer_mb": ACTIVATION_BUFFER_MB,
         "notes": "Reload base in 4-bit, then load PEFT adapters and wrap with LLM2Vec.",
     }
     (OUTPUT_DIR / "wrapper_config.json").write_text(

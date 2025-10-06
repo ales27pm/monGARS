@@ -24,6 +24,7 @@ def sample_config(tmp_path: Path) -> WrapperConfig:
         max_seq_len=1024,
         vram_budget_mb=7300,
         offload_dir=(tmp_path / "offload").resolve(),
+        activation_buffer_mb=768,
     )
 
 
@@ -50,7 +51,9 @@ def test_write_wrapper_bundle_writes_all_files(
     assert "ChatAndEmbed" in module_text
     assert config_json["base_model_id"] == sample_config.base_model_id
     assert config_json["vram_budget_mb"] == sample_config.vram_budget_mb
+    assert config_json["activation_buffer_mb"] == sample_config.activation_buffer_mb
     assert "Wrapper Integration" in readme_text
+    assert "ACTIVATION_BUFFER_MB" in module_text
 
 
 @pytest.mark.parametrize(

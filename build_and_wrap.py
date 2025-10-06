@@ -43,6 +43,11 @@ LR = float(os.environ.get("LR", "2e-4"))
 EPOCHS = float(os.environ.get("EPOCHS", "1.0"))
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "-1"))
 VRAM_BUDGET_MB = int(os.environ.get("VRAM_BUDGET_MB", "7300"))
+ACTIVATION_BUFFER_MB = int(
+    os.environ.get(
+        "ACTIVATION_BUFFER_MB", os.environ.get("VRAM_ACTIVATION_BUFFER_MB", "1024")
+    )
+)
 OFFLOAD_DIR = Path(os.environ.get("OFFLOAD_DIR", "./offload"))
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "./out"))
 EXPORT_MERGED_FP16 = os.environ.get("EXPORT_MERGED_FP16", "0") == "1"
@@ -111,6 +116,7 @@ def _assemble_training_summary(
             "epochs": EPOCHS,
             "max_steps": MAX_STEPS,
             "vram_budget_mb": VRAM_BUDGET_MB,
+            "activation_buffer_mb": ACTIVATION_BUFFER_MB,
             "quantization_method": "bnb-4bit-nf4",
         },
     )
@@ -153,6 +159,7 @@ def main() -> None:
     model, tokenizer = load_4bit_causal_lm(
         MODEL_ID,
         vram_budget_mb=VRAM_BUDGET_MB,
+        activation_buffer_mb=ACTIVATION_BUFFER_MB,
         offload_dir=OFFLOAD_DIR,
     )
     summarise_device_map(model)
@@ -200,6 +207,7 @@ def main() -> None:
         max_seq_len=MAX_SEQ_LEN,
         vram_budget_mb=VRAM_BUDGET_MB,
         offload_dir=OFFLOAD_DIR.resolve(),
+        activation_buffer_mb=ACTIVATION_BUFFER_MB,
     )
     write_wrapper_bundle(bundle_config, wrapper_dir)
 

@@ -87,6 +87,10 @@ def _load_config(config_path: Path) -> WrapperConfig:
         vram_budget = int(vram_budget_raw)
         if vram_budget <= 0:
             raise ValueError
+        activation_buffer_raw = data.get("activation_buffer_mb", 1024)
+        activation_buffer = int(activation_buffer_raw)
+        if activation_buffer < 0:
+            raise ValueError
         offload_dir = Path(data["offload_dir"])
     except KeyError as exc:
         raise WrapperBundleError(f"Wrapper config missing key: {exc.args[0]}") from exc
@@ -108,6 +112,7 @@ def _load_config(config_path: Path) -> WrapperConfig:
         max_seq_len=max_seq_len,
         vram_budget_mb=vram_budget,
         offload_dir=offload_dir,
+        activation_buffer_mb=activation_buffer,
         quantized_4bit=quantized,
     )
 
