@@ -1,61 +1,48 @@
 # Next Implementation Priority
 
 ## Summary
-Now that schema evolution, telemetry upgrades, and credential hardening are
-complete, the next high-impact milestone is publishing first-party SDKs and
-reference clients.
-Operators and partner teams currently rely on OpenAPI scraping or ad-hoc scripts;
-packaged SDKs will harden integrations and shrink the support surface area as
-the project moves into long-term maintenance.
+The SDK release closed the final open item for Phase 5, shifting the immediate
+focus to Retrieval-Augmented Generation (RAG) governance. We must codify dataset
+retention policies, automate scrubbing checks, and document operator workflows
+before expanding partner access to curated artefacts.
 
 ## Supporting Signals from Existing Documentation
-- **Roadmap**: Phase 5 keeps SDKs and reference clients as the final deliverable
-  and now records that demo credential defaults have been removed from FastAPI
-  startup flows.
-- **Implementation Status Report**: Highlights SDK packaging as the new
-  contradiction to resolve, confirms the credential cleanup, and calls
-  out the need for clear RAG governance to accompany client distribution.
-- **Roadmap Charter (AGENTS.md)**: Security & Stability items are satisfied,
-  shifting attention to sustainable integration stories for external teams.
+- **Implementation Status Report** – Calls out RAG governance as the remaining
+  contradiction in Phase 5 now that SDK packaging is complete.【F:docs/implementation_status.md†L96-L140】
+- **Codebase Status Report** – Highlights dataset governance as a key risk and
+  recommends prioritising controls before scaling partner integrations.【F:docs/codebase_status_report.md†L40-L120】
+- **RAG Context Enrichment Guide** – Notes that curated datasets demand explicit
+  retention policies to protect sensitive context.【F:docs/rag_context_enrichment.md†L60-L96】
 
-## Rationale for Prioritising SDK Publication
-1. **Developer Experience** – Typed clients for Python/TypeScript remove the need
-   for manual request crafting and ensure authentication, retries, and ticket
-   handling remain consistent with production expectations.
-2. **Operational Safety** – Providing vetted tooling reduces the temptation to
-   embed long-lived tokens or bypass telemetry hooks, keeping observability and
-   governance intact.
-3. **Ecosystem Enablement** – Documented SDKs accelerate integrations with peer
-   services, dashboards, and research notebooks without exposing internal
-   modules or requiring Django coupling.
+## Rationale for Prioritising RAG Governance
+1. **Compliance Readiness** – Clearly documented retention windows and scrubbing
+   automation ensure the enrichment datasets align with privacy and contractual
+   requirements.
+2. **Operational Safety** – Guardrails around export workflows prevent the
+   accidental release of sensitive content as more teams rely on RAG-sourced
+   suggestions.
+3. **Ecosystem Trust** – Partners need assurance that enrichment data is curated
+   and auditable before embedding it into their own workflows.
 
 ## Implementation Outline
-1. **Define API Surfaces** – Lock the minimal stable routes (chat, history,
-   review, peer management) and document any feature flags they depend on now
-   that credential bootstrap relies solely on persisted accounts.
-2. **Generate Typed Clients** – Use `openapi-python-client` and `openapi-typescript`
-   (or equivalent) to scaffold SDKs, layering ergonomic helpers for
-   authentication flows, ticket refresh, and streaming responses.
-3. **Harden Tooling** – Add CI jobs that build the SDK packages, run lint/tests,
-   and verify compatibility with the published OpenAPI schema.
-4. **Document Usage** – Provide quick-start guides in `docs/` plus inline docstrings
-   covering auth bootstrapping, WebSocket streaming, and RAG toggles.
-5. **Distribution Plan** – Decide on publication channels (private index, GitHub
-   releases, internal registry) and automate version bumps alongside backend
-   releases.
-6. **Feedback Loop** – Capture telemetry and user feedback from SDK adoption to
-   drive future roadmap refinements.
+1. Catalogue existing datasets under `models/datasets/curated/` and define
+   metadata fields (provenance, expiry, sensitivity tags).
+2. Extend the enrichment service or background jobs to validate datasets against
+   the new policy (expiry checks, automated redaction, audit trails).
+3. Document operator procedures for onboarding new repositories, handling
+   takedown requests, and exporting artefacts safely.
+4. Integrate reporting into the telemetry pipeline so governance metrics surface
+   alongside existing peer and RAG monitoring.
 
 ## Success Criteria & Validation
-- Python and TypeScript SDKs install via package manager and authenticate against
-  a fresh deployment without manual token crafting.
-- Streaming chat flows, history pagination, and RAG review helpers function
-  end-to-end using the SDK abstractions.
-- SDK documentation and code examples are verified to be accurate and sufficient
-  for a developer to integrate the client successfully.
+- Every curated dataset includes metadata covering provenance, expiry, and
+  review history.
+- Automated jobs flag or quarantine datasets that fall out of compliance, and
+  alerts surface through existing observability channels.
+- Updated runbooks enable operators and partners to follow the governance flow
+  without relying on ad-hoc institutional knowledge.
 
-## Follow-On Work Once SDKs Ship
-- Finalise RAG dataset retention guidance and automation ahead of wider partner
-  adoption.
-- Resume experimentation on reinforcement learning loops and sustainability
-  metrics as outlined in Phases 6 and 7 of the roadmap.
+## Follow-On Work Once Governance Lands
+- Resume reinforcement-learning integration workstreams for Phase 6.
+- Revisit SDK telemetry to capture partner usage patterns in line with the new
+  governance metrics.

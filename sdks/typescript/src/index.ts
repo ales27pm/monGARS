@@ -41,7 +41,7 @@ async function parseResponse(response: Response): Promise<any> {
   }
   try {
     return JSON.parse(text);
-  } catch (error) {
+  } catch {
     return text;
   }
 }

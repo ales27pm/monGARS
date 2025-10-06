@@ -52,7 +52,7 @@ required to reach production readiness.
   streaming guarded by `WS_ENABLE_EVENTS`.
 - ✅ Replaced hard-coded credential stores with database-backed auth flows;
   FastAPI no longer seeds demo credentials at startup.
-- 🚧 Publish polished SDKs and reference clients.
+- ✅ Publish polished SDKs and reference clients with documented release flows.【F:docs/sdk-release-guide.md†L1-L160】【F:docs/sdk-overview.md†L1-L120】
 
 ## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)
 

@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint --config eslint.config.js src --ext .ts"
   },
   "keywords": [
     "ai",
@@ -21,6 +21,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.14.0",
+    "eslint-config-prettier": "^9.1.0",
     "typescript": "^5.6.3"
   }
 }

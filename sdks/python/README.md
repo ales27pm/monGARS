@@ -7,15 +7,27 @@ robust error handling.
 
 ## Installation
 
-The SDK is published from this repository. To use it in another project, add
-`sdks/python` to your dependency path or package it via `pip install .` from the
-SDK directory. The package targets Python 3.11 and depends on `httpx` and
-`pydantic` which are already part of the main application requirements.
+Install the published package from your configured Python package index:
 
 ```bash
-cd sdks/python
-pip install .
+pip install monGARS-sdk
 ```
+
+The SDK targets Python 3.11, depends on `httpx` and `pydantic`, and ships with
+`py.typed` for static type checkers.
+
+### Building from source
+
+When preparing a release or testing local changes, build distributable
+artefacts using the shared packaging helper:
+
+```bash
+python -m scripts.sdk_release --output dist/sdk
+```
+
+The command generates source distributions and wheels under
+`dist/sdk/python/`. Upload them with `twine` as part of the release workflow
+documented in [`docs/sdk-release-guide.md`](../../docs/sdk-release-guide.md).
 
 ## Quick start
 

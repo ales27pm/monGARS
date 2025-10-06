@@ -73,7 +73,8 @@ and reality.
   persists user records, and login bootstrap flows now rely exclusively on
   persisted accounts after retiring the legacy demo credential mapping in
   `monGARS/api/web_api.py`.
-- Planned work: consolidate validation rules and publish polished client SDKs.
+- Planned work: consolidate validation rules and formalise RAG dataset
+  governance before widening partner access.
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
 
@@ -112,8 +113,8 @@ and reality.
   login bootstrap now relies exclusively on persisted accounts, with initial
   admin creation handled through the dedicated `/api/v1/user/register/admin`
   endpoint when no privileged accounts exist.
-- **SDK story**: prioritise packaging and publishing reference SDKs so partner
-  teams can integrate without scraping OpenAPI definitions.
+- ✅ **SDK story**: Python and TypeScript SDKs ship with documented release
+  tooling, allowing partners to integrate without scraping OpenAPI definitions.【F:sdks/python/README.md†L1-L120】【F:docs/sdk-release-guide.md†L1-L160】
 - **RAG governance**: document retention policies for curated datasets stored
   under `models/datasets/curated/` and ensure operators scrub sensitive context
   before exporting artefacts.
@@ -123,9 +124,7 @@ and reality.
 
 ## Next Critical Implementation
 
-Publishing the polished SDKs and reference clients called out in Phase 5
-remains the most urgent deliverable. Until those packages are produced and
-documented, partners must continue reverse-engineering the OpenAPI schema to
-integrate with monGARS. Prioritising the SDK release unblocks external
-consumers, aligns with the roadmap's outstanding "SDK story" action item, and
-brings the Web Interface & API Refinement phase to completion.
+With SDK packaging complete, the next critical implementation is codifying RAG
+retention and export governance. Establishing automated scrubbing checks and
+operator playbooks keeps curated datasets compliant as partner access expands
+and unlocks the remaining controls in Phase 5.
