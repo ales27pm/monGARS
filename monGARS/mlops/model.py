@@ -24,13 +24,18 @@ def load_4bit_causal_lm(
     offload_path = Path(offload_dir)
     offload_path.mkdir(parents=True, exist_ok=True)
 
-    bnb_cfg = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
-        llm_int8_enable_fp32_cpu_offload=True,
-    )
+    bnb_common: dict[str, Any] = {
+        "load_in_4bit": True,
+        "bnb_4bit_use_double_quant": True,
+        "bnb_4bit_quant_type": "nf4",
+        "bnb_4bit_compute_dtype": torch.float16,
+    }
+    try:
+        bnb_cfg = BitsAndBytesConfig(
+            **bnb_common, llm_int8_enable_fp32_cpu_offload=True
+        )
+    except TypeError:
+        bnb_cfg = BitsAndBytesConfig(**bnb_common)
 
     device_map = {
         "model.embed_tokens": 0,
@@ -49,17 +54,22 @@ def load_4bit_causal_lm(
         },
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        device_map=device_map,
-        max_memory=max_memory,
-        offload_folder=str(offload_path),
-        quantization_config=bnb_cfg,
-        low_cpu_mem_usage=True,
-        trust_remote_code=trust_remote_code,
-        torch_dtype=torch.float16,
-        llm_int8_enable_fp32_cpu_offload=True,
-    )
+    model_kwargs: dict[str, Any] = {
+        "device_map": device_map,
+        "max_memory": max_memory,
+        "offload_folder": str(offload_path),
+        "quantization_config": bnb_cfg,
+        "low_cpu_mem_usage": True,
+        "trust_remote_code": trust_remote_code,
+    }
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, **model_kwargs, torch_dtype=torch.float16
+        )
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, **model_kwargs, dtype=torch.float16
+        )
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
