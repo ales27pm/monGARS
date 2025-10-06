@@ -7,7 +7,7 @@ import logging
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping
+from typing import Any, Dict, Mapping
 
 PROJECT_WRAPPER_TEMPLATE = """# Auto-generated wrapper: project_wrapper.py
 import os
@@ -156,6 +156,36 @@ class WrapperConfig:
         }
 
 
+def build_adapter_summary(
+    *,
+    adapter_dir: Path,
+    weights_path: Path | None,
+    wrapper_dir: Path | None = None,
+    status: str = "success",
+    labels: Mapping[str, str] | None = None,
+    metrics: Mapping[str, Any] | None = None,
+    training: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble a manifest-friendly summary for freshly trained adapters."""
+
+    artifacts: dict[str, str] = {"adapter": str(adapter_dir)}
+    if weights_path is not None:
+        artifacts["weights"] = str(weights_path)
+    if wrapper_dir is not None:
+        artifacts["wrapper"] = str(wrapper_dir)
+
+    summary: dict[str, Any] = {"status": status, "artifacts": artifacts}
+
+    if labels:
+        summary["labels"] = dict(labels)
+    if metrics:
+        summary["metrics"] = dict(metrics)
+    if training:
+        summary["training"] = dict(training)
+
+    return summary
+
+
 def render_project_wrapper(config: WrapperConfig) -> str:
     """Render the ``project_wrapper.py`` module."""
 
@@ -277,6 +307,7 @@ def write_wrapper_bundle(
 
 __all__ = [
     "WrapperConfig",
+    "build_adapter_summary",
     "render_output_bundle_readme",
     "render_project_wrapper",
     "render_wrapper_readme",

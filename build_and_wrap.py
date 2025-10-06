@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import Any
 
+from modules.neurons.registry import update_manifest
 from monGARS.mlops.artifacts import (
     WrapperConfig,
+    build_adapter_summary,
     render_output_bundle_readme,
     write_wrapper_bundle,
 )
@@ -46,6 +50,10 @@ EXPORT_GGUF = os.environ.get("EXPORT_GGUF", "0") == "1"
 GGUF_DIR = Path(os.environ.get("GGUF_DIR", OUTPUT_DIR / "gguf"))
 GGUF_METHOD = os.environ.get("GGUF_METHOD", "q4_k_m")
 AUTO_INSTALL = os.environ.get("AUTO_INSTALL", "1") == "1"
+REGISTRY_PATH = os.environ.get("LLM_ADAPTER_REGISTRY_PATH") or os.environ.get(
+    "ADAPTER_REGISTRY_PATH"
+)
+SUMMARY_FILENAME = "training_summary.json"
 
 
 REQUIRED_PACKAGES = [
@@ -58,6 +66,81 @@ REQUIRED_PACKAGES = [
     "sentencepiece",
 ]
 OPTIONAL_PACKAGES = ["unsloth"]
+
+
+def _locate_adapter_weights(adapter_dir: Path) -> Path | None:
+    candidates = [
+        adapter_dir / "adapter_model.safetensors",
+        adapter_dir / "adapter_model.bin",
+    ]
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def _assemble_training_summary(
+    *,
+    adapter_dir: Path,
+    weights_path: Path | None,
+    wrapper_dir: Path,
+    merged_dir: Path,
+    merged: bool,
+    gguf_enabled: bool,
+    gguf_method: str,
+    dataset_len: int,
+) -> dict[str, Any]:
+    summary = build_adapter_summary(
+        adapter_dir=adapter_dir,
+        weights_path=weights_path,
+        wrapper_dir=wrapper_dir,
+        status="success",
+        labels={
+            "category": "general_baseline",
+            "quantization": "bnb_nf4",
+            "first_run": "true",
+        },
+        metrics={
+            "dataset_size": dataset_len,
+            "train_fraction": TRAIN_FRACTION,
+        },
+        training={
+            "base_model": MODEL_ID,
+            "dataset": DATASET_NAME,
+            "max_seq_len": MAX_SEQ_LEN,
+            "batch_size": BATCH_SIZE,
+            "grad_accum": GRAD_ACCUM,
+            "learning_rate": LR,
+            "epochs": EPOCHS,
+            "max_steps": MAX_STEPS,
+            "vram_budget_mb": VRAM_BUDGET_MB,
+            "quantization_method": "bnb-4bit-nf4",
+        },
+    )
+
+    artifacts = summary.setdefault("artifacts", {})
+    if merged:
+        artifacts["merged_fp16"] = str(merged_dir)
+    if gguf_enabled and merged:
+        artifacts["gguf"] = str(GGUF_DIR)
+        summary.setdefault("labels", {})["gguf_method"] = gguf_method
+
+    return summary
+
+
+def _save_summary(summary: dict[str, Any], path: Path) -> None:
+    path.write_text(json.dumps(summary, indent=2))
+
+
+def _maybe_update_registry(registry_path: str | None, summary: dict[str, Any]) -> None:
+    if registry_path:
+        try:
+            manifest = update_manifest(registry_path, summary)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"! Failed to update adapter manifest: {exc}")
+        else:
+            print(f"- Adapter manifest updated: {manifest.path}")
+    else:
+        print(
+            "- Adapter manifest not updated (set LLM_ADAPTER_REGISTRY_PATH to register output)"
+        )
 
 
 def main() -> None:
@@ -98,6 +181,7 @@ def main() -> None:
     adapters_dir = OUTPUT_DIR / "chat_lora"
     save_lora_artifacts(trainer.model, tokenizer, adapters_dir)
     disable_training_mode(trainer.model)
+    weights_path = _locate_adapter_weights(adapters_dir)
 
     merged_dir = OUTPUT_DIR / "merged_fp16"
     merged = False
@@ -120,12 +204,25 @@ def main() -> None:
     write_wrapper_bundle(bundle_config, wrapper_dir)
 
     readme = render_output_bundle_readme(
-        adapters_dir=adapters_dir,
-        merged_dir=merged_dir if merged else None,
-        gguf_dir=GGUF_DIR if EXPORT_GGUF and merged else None,
-        wrapper_dir=wrapper_dir,
+        bundle_config,
+        merged_fp16=merged,
+        gguf_enabled=EXPORT_GGUF and merged,
+        gguf_method=GGUF_METHOD,
     )
     (OUTPUT_DIR / "README_outputs.md").write_text(readme)
+
+    summary = _assemble_training_summary(
+        adapter_dir=adapters_dir,
+        weights_path=weights_path,
+        wrapper_dir=wrapper_dir,
+        merged_dir=merged_dir,
+        merged=merged,
+        gguf_enabled=EXPORT_GGUF,
+        gguf_method=GGUF_METHOD,
+        dataset_len=len(dataset),
+    )
+    summary_path = OUTPUT_DIR / SUMMARY_FILENAME
+    _save_summary(summary, summary_path)
 
     print("=== ALL DONE ===")
     print(f"- LoRA adapters: {adapters_dir}")
@@ -134,6 +231,8 @@ def main() -> None:
     if EXPORT_GGUF and merged:
         print(f"- GGUF export: {GGUF_DIR}")
     print(f"- Wrapper module: {wrapper_dir / 'project_wrapper.py'}")
+    print(f"- Training summary: {summary_path}")
+    _maybe_update_registry(REGISTRY_PATH, summary)
 
 
 if __name__ == "__main__":
