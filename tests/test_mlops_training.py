@@ -175,3 +175,32 @@ def test_train_qlora_emits_oom_events(trainer_config):
     assert event.will_retry is True
     assert event.next_batch_size < event.batch_size
     assert event.remaining_retries >= 1
+
+
+def test_train_qlora_falls_back_to_cpu_when_oom_persists(monkeypatch, trainer_config):
+    DummyTrainer.failures_remaining = 1
+    trainer_config.batch_size = 1
+    trainer_config.grad_accum = 1
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda *_: None)
+    monkeypatch.setattr(torch.cuda, "_lazy_init", lambda: None, raising=False)
+    monkeypatch.setattr(torch.cuda, "_initialized", True, raising=False)
+
+    trainer = train_qlora(
+        object(),
+        dataset=[{"input_ids": [1]}],
+        config=trainer_config,
+        trainer_cls=DummyTrainer,
+    )
+
+    assert isinstance(trainer, DummyTrainer)
+    assert len(DummyTrainer.instances) == 2
+    cpu_args = DummyTrainer.instances[-1].args
+    assert cpu_args.no_cuda is True
+    assert cpu_args.fp16 is False
+    assert cpu_args.bf16 is False
+    assert cpu_args.optim == "adamw_torch"

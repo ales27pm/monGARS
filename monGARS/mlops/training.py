@@ -211,8 +211,19 @@ def _build_training_arguments(
     batch_size: int,
     grad_accum: int,
     bf16_ok: bool,
+    use_cuda: bool,
 ) -> TrainingArguments:
     """Create ``TrainingArguments`` with shared defaults."""
+
+    dtype_args: dict[str, Any] = {}
+    if "bf16" not in base_args and "fp16" not in base_args:
+        if use_cuda:
+            dtype_args = {"bf16": bf16_ok, "fp16": not bf16_ok}
+        else:
+            dtype_args = {"bf16": False, "fp16": False}
+
+    if not use_cuda and "no_cuda" not in base_args:
+        dtype_args["no_cuda"] = True
 
     return TrainingArguments(
         output_dir=str(cfg.output_dir),
@@ -221,9 +232,8 @@ def _build_training_arguments(
         learning_rate=cfg.learning_rate,
         num_train_epochs=cfg.epochs,
         max_steps=cfg.max_steps if cfg.max_steps > 0 else -1,
-        bf16=bf16_ok,
-        fp16=not bf16_ok,
         gradient_checkpointing=True,
+        **dtype_args,
         **base_args,
     )
 
@@ -329,6 +339,30 @@ def _handle_cuda_oom(
     return True, next_batch, next_grad
 
 
+def _disable_model_cache(model: Any) -> None:
+    """Ensure ``use_cache`` is disabled during training when present."""
+
+    config = getattr(model, "config", None)
+    if config is None:
+        return
+
+    try:
+        use_cache = getattr(config, "use_cache")
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("Unable to inspect model.use_cache", exc_info=True)
+        return
+
+    if use_cache is False:
+        return
+
+    try:
+        setattr(config, "use_cache", False)
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("Unable to disable model.use_cache", exc_info=True)
+    else:
+        logger.debug("Disabled model cache for training")
+
+
 def train_qlora(
     model: Any,
     dataset: Any,
@@ -346,18 +380,28 @@ def train_qlora(
     """
 
     extra_args = dict(extra_args or {})
-    bf16_ok = getattr(torch.cuda, "is_bf16_supported", lambda: False)()
+
+    force_cpu = bool(extra_args.pop("force_cpu", False))
+    prefer_cuda = torch.cuda.is_available() and not force_cpu
+    allow_cpu_fallback = bool(extra_args.pop("allow_cpu_fallback", True))
+
+    bf16_ok = (
+        bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)())
+        if prefer_cuda
+        else False
+    )
 
     oom_retries = int(extra_args.pop("oom_retries", 2))
     backoff_factor = _sanitize_backoff_factor(extra_args.pop("oom_backoff_factor", 0.5))
     oom_hooks = _coerce_oom_hooks(extra_args.pop("oom_event_hooks", ()))
 
+    default_optim = "adamw_bnb_8bit" if prefer_cuda else "adamw_torch"
     base_args = {
         "logging_steps": extra_args.pop("logging_steps", 25),
         "save_steps": extra_args.pop("save_steps", 250),
         "save_total_limit": extra_args.pop("save_total_limit", 1),
         "report_to": extra_args.pop("report_to", []),
-        "optim": extra_args.pop("optim", "adamw_bnb_8bit"),
+        "optim": extra_args.pop("optim", default_optim),
         "torch_empty_cache_steps": extra_args.pop("torch_empty_cache_steps", 50),
     }
     base_args.update(extra_args)
@@ -365,10 +409,13 @@ def train_qlora(
     batch_size = max(1, config.batch_size)
     grad_accum = max(1, config.grad_accum)
     attempt = 0
+    use_cuda = prefer_cuda
+
+    _disable_model_cache(model)
 
     while True:
         args = _build_training_arguments(
-            config, base_args, batch_size, grad_accum, bf16_ok
+            config, base_args, batch_size, grad_accum, bf16_ok, use_cuda
         )
         trainer = trainer_cls(
             model=model,
@@ -404,6 +451,31 @@ def train_qlora(
             )
 
             if not should_retry:
+                if use_cuda and allow_cpu_fallback and torch.cuda.is_available():
+                    logger.warning(
+                        "CUDA OOM persisted after applying backoff; falling back to CPU training",
+                        extra={
+                            "attempt": attempt + 1,
+                            "batch_size": batch_size,
+                            "grad_accum": grad_accum,
+                        },
+                    )
+                    base_args.setdefault("optim", "adamw_torch")
+                    base_args["optim"] = "adamw_torch"
+                    base_args.pop("no_cuda", None)
+                    use_cuda = False
+                    bf16_ok = False
+                    move_to_cpu = getattr(model, "to", None)
+                    if callable(move_to_cpu):
+                        try:
+                            move_to_cpu("cpu")
+                        except Exception:  # pragma: no cover - defensive guard
+                            logger.debug("Unable to move model to CPU", exc_info=True)
+                    _maybe_empty_cuda_cache()
+                    _reset_cuda_peak_memory_stats()
+                    attempt += 1
+                    del trainer
+                    continue
                 raise
 
             batch_size = next_batch
