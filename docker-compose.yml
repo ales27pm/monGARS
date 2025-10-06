@@ -8,6 +8,8 @@ x-database-environment: &database-environment
   DB_USER: ${DB_USER:-mongars}
   DB_PASSWORD: ${DB_PASSWORD:-changeme}
   DB_NAME: ${DB_NAME:-mongars_db}
+  DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
+  DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
 
 x-app-environment: &app-environment
   <<: *database-environment
@@ -37,8 +39,7 @@ services:
     environment:
       <<: *app-environment
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     networks:
       - mongars
 
@@ -48,13 +49,12 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000"
     depends_on:
-      migrations:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
+      - migrations
+      - redis
+      - postgres
     ports:
       - "${API_PORT:-8000}:8000"
     env_file:
@@ -80,13 +80,12 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    command: ["python", "webapp/manage.py", "migrate", "--noinput"]
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py migrate --noinput"
     restart: "no"
     depends_on:
-      postgres:
-        condition: service_healthy
-      migrations:
-        condition: service_completed_successfully
+      - postgres
+      - migrations
     env_file:
       - .env
     environment:
@@ -106,12 +105,10 @@ services:
       dockerfile: Dockerfile
       target: runtime
     command: >-
-      bash -lc "python webapp/manage.py runserver 0.0.0.0:8001"
+      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py runserver 0.0.0.0:8001"
     depends_on:
-      api:
-        condition: service_started
-      webapp-migrations:
-        condition: service_completed_successfully
+      - api
+      - webapp-migrations
     ports:
       - "${WEBAPP_PORT:-8001}:8001"
     env_file:

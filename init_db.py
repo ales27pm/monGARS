@@ -7,17 +7,23 @@ import asyncio
 import importlib.util
 import logging
 import os
+import time
 from pathlib import Path
+from typing import Final
 
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.utils.database import apply_database_url_overrides
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+DEFAULT_DB_STARTUP_TIMEOUT: Final[float] = 120.0
+DEFAULT_DB_STARTUP_RETRY_INTERVAL: Final[float] = 3.0
 
 
 def _determine_sync_driver(
@@ -100,12 +106,94 @@ def ensure_extensions(url: URL) -> None:
         engine.dispose()
 
 
+def coerce_positive_float(
+    value: str | None, *, default: float, minimum: float
+) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        logger.warning(
+            "Invalid database startup value '%s'; falling back to default %s",
+            value,
+            default,
+        )
+        return default
+    if parsed <= minimum:
+        logger.warning(
+            "Database startup value %s must be greater than %s; using default %s",
+            parsed,
+            minimum,
+            default,
+        )
+        return default
+    return parsed
+
+
+def wait_for_database(url: URL, *, timeout: float, retry_interval: float) -> None:
+    deadline = time.monotonic() + timeout
+    attempt = 1
+    last_error: Exception | None = None
+    rendered_url = render_url(url, hide_password=True)
+    logger.info(
+        "Waiting for database %s (timeout=%ss, interval=%ss)",
+        rendered_url,
+        timeout,
+        retry_interval,
+    )
+    while True:
+        engine = create_engine(
+            render_url(url, hide_password=False),
+            pool_pre_ping=True,
+        )
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                logger.info("Database %s is available", rendered_url)
+                return
+        except SQLAlchemyError as exc:
+            last_error = exc
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            logger.warning(
+                "Database not ready yet (%s). Retrying in %ss (attempt %s)",
+                exc.__class__.__name__,
+                retry_interval,
+                attempt,
+            )
+            logger.debug("Database connection attempt failed", exc_info=exc)
+            attempt += 1
+            time.sleep(retry_interval)
+        finally:
+            engine.dispose()
+
+    assert (
+        last_error is not None
+    )  # for mypy/pylint; loop guarantees assignment on failure
+    raise TimeoutError(  # noqa: TRY003
+        f"Timed out waiting for database {rendered_url} after {timeout}s",
+    ) from last_error
+
+
 async def init_db() -> None:
     repo_root = Path(__file__).resolve().parent
     cfg = Config(str(repo_root / "alembic.ini"))
     sync_url = build_sync_url()
     sync_url_str = render_url(sync_url, hide_password=False)
     cfg.set_main_option("sqlalchemy.url", sync_url_str)
+    timeout = coerce_positive_float(
+        os.getenv("DB_STARTUP_TIMEOUT"),
+        default=DEFAULT_DB_STARTUP_TIMEOUT,
+        minimum=0.0,
+    )
+    retry_interval = coerce_positive_float(
+        os.getenv("DB_STARTUP_RETRY_INTERVAL"),
+        default=DEFAULT_DB_STARTUP_RETRY_INTERVAL,
+        minimum=0.0,
+    )
+    wait_for_database(sync_url, timeout=timeout, retry_interval=retry_interval)
     ensure_extensions(sync_url)
     logger.info(
         "Running alembic upgrade head using %s",
