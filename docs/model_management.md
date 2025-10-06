@@ -69,6 +69,46 @@ pipelines.
 - Provisioning reports are cached per-role during a process lifetime to avoid
   redundant downloads when multiple requests arrive concurrently.
 
+### Unsloth Optimisations & VRAM Troubleshooting
+
+- Local fallback slots rely on Unsloth's `FastLanguageModel` to provide 4-bit
+  loading, quantisation-aware LoRA adapters, and gradient checkpointing. These
+  hooks are applied when `ModelSlotManager` initialises a slot; if Unsloth is
+  missing, slot acquisition fails early with an actionable error.
+- `LLMIntegration.initialize_unsloth()` attempts to patch PyTorch at startup so
+  fused kernels and quantisation paths are ready before any slot is acquired. A
+  structured log (`llm.unsloth.patched`) confirms whether the patch succeeded.
+  The helper reports a 70% VRAM reduction baseline for the reference Dolphin 3
+  adapter.
+- Use `python -m scripts.diagnose_unsloth` to inspect whether the optimisation
+  was applied and to capture current CUDA memory headroom. The command now emits
+  an extended JSON payload that records Python, PyTorch, and Unsloth versions
+  alongside per-device VRAM usage (free, reserved, and allocated bytes plus
+  utilisation ratios). Add `--all-devices` to iterate over every visible GPU,
+  `--force` to re-apply the patch, or `--no-cuda` to skip GPU inspection when
+  debugging on shared hosts. Supply `--min-free-gib` and `--min-free-ratio`
+  thresholds to tune when OOM risk should be flagged; the CLI now summarises the
+  highest observed risk level and surfaces remediation steps (context length
+  tuning, offload thresholds, gradient accumulation, allocator defragmentation)
+  for each device.
+- Review the CLI output when the patch fails: the `environment.unsloth` section
+  surfaces the installed package location and version, while
+  `environment.torch` confirms whether CUDA support is compiled in. Missing or
+  mismatched wheels often explain persistent OOM conditions even after the
+  patch reports success.
+- If you continue to hit OOM conditions even with Unsloth enabled, reduce the
+  `max_seq_length` configured for each slot (defaults to 2048 tokens) or lower
+  the `offload_threshold` so snapshots are taken earlier. Both parameters are
+  accepted by `ModelSlotManager` and can be tuned where slots are instantiated
+  (for example in worker startup code) to keep VRAM usage under the budget of
+  8–12 GB consumer GPUs.
+- When fine-tuning LoRA adapters, prefer gradient accumulation over larger
+  per-device batches so that Unsloth's quantisation savings are not offset by
+  training-time activations. The diagnostics script highlights `allocated` vs
+  `reserved` VRAM; a high reserved fraction with low allocation indicates that
+  fragmentation or peer memory pools are the bottleneck rather than model
+  weights alone.
+
 ## Extending Profiles
 
 1. Add a new profile or role in `configs/llm_models.json`. Use either the

@@ -257,7 +257,9 @@ def _sanitize_backoff_factor(raw_factor: Any) -> float:
         return 0.5
 
     if not 0 < factor < 1:
-        logger.warning("OOM backoff factor %.3f is outside (0, 1); defaulting to 0.5", factor)
+        logger.warning(
+            "OOM backoff factor %.3f is outside (0, 1); defaulting to 0.5", factor
+        )
         return 0.5
     return factor
 
@@ -365,7 +367,9 @@ def train_qlora(
     attempt = 0
 
     while True:
-        args = _build_training_arguments(config, base_args, batch_size, grad_accum, bf16_ok)
+        args = _build_training_arguments(
+            config, base_args, batch_size, grad_accum, bf16_ok
+        )
         trainer = trainer_cls(
             model=model,
             args=args,
