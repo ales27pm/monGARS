@@ -18,7 +18,6 @@ from monGARS.core.rag import (
     RagServiceError,
 )
 
-
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 
 

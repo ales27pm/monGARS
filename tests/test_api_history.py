@@ -9,7 +9,6 @@ os.environ.setdefault("JWT_ALGORITHM", "HS256")
 from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app
 
-
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 
 

@@ -18,7 +18,6 @@ from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.ui_events import make_event
 
-
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 
 
