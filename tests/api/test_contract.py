@@ -50,6 +50,9 @@ class _FakePersistenceRepository:
     async def get_user_by_username(self, username: str) -> _FakeAccount | None:
         return self._users.get(username)
 
+    async def has_admin_user(self) -> bool:
+        return any(user.is_admin for user in self._users.values())
+
     async def create_user(
         self,
         username: str,
@@ -70,12 +73,13 @@ class _FakePersistenceRepository:
         username: str,
         password_hash: str,
         *,
+        is_admin: bool = False,
         reserved_usernames: Iterable[str] = (),
     ) -> None:
         if username in reserved_usernames or username in self._users:
             raise ValueError("username already exists")
         self._users[username] = _FakeAccount(
-            username=username, password_hash=password_hash
+            username=username, password_hash=password_hash, is_admin=is_admin
         )
 
 
@@ -129,6 +133,17 @@ def contract_client() -> Iterable[Tuple[TestClient, _FakePersistenceRepository]]
     communicator = _FakePeerCommunicator()
     conversation = _FakeConversationModule()
 
+    repo._users["u1"] = _FakeAccount(
+        username="u1",
+        password_hash=sec_manager.get_password_hash("x"),
+        is_admin=True,
+    )
+    repo._users["u2"] = _FakeAccount(
+        username="u2",
+        password_hash=sec_manager.get_password_hash("y"),
+        is_admin=False,
+    )
+
     app.dependency_overrides[get_persistence_repository] = lambda: repo
     app.dependency_overrides[get_hippocampus] = lambda: hippocampus
     app.dependency_overrides[get_peer_communicator] = lambda: communicator
@@ -154,6 +169,7 @@ def test_required_routes_registered() -> None:
     expected = {
         ("POST", "/token"),
         ("POST", "/api/v1/user/register"),
+        ("POST", "/api/v1/user/register/admin"),
         ("GET", "/healthz"),
         ("GET", "/ready"),
         ("GET", "/api/v1/conversation/history"),
@@ -227,6 +243,10 @@ def test_user_registration_contract_model() -> None:
     route = _get_route("/api/v1/user/register", "POST")
     assert route.body_field is not None
     assert route.body_field.type_ is UserRegistration
+
+    admin_route = _get_route("/api/v1/user/register/admin", "POST")
+    assert admin_route.body_field is not None
+    assert admin_route.body_field.type_ is UserRegistration
 
 
 @pytest.mark.asyncio

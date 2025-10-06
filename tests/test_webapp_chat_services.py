@@ -12,7 +12,8 @@ os.environ.setdefault("SECRET_KEY", "test")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 from monGARS.api.dependencies import get_persistence_repository, hippocampus
-from monGARS.api.web_api import DEFAULT_USERS, app, get_conversational_module
+from monGARS.api.web_api import app, get_conversational_module
+from monGARS.core.security import SecurityManager
 from webapp.chat import services
 
 
@@ -101,6 +102,9 @@ class _InMemoryRepo:
     async def get_user_by_username(self, username: str) -> _StubUser | None:
         return self._users.get(username)
 
+    async def has_admin_user(self) -> bool:
+        return any(user.is_admin for user in self._users.values())
+
     async def create_user_atomic(
         self,
         username: str,
@@ -174,11 +178,11 @@ async def test_services_roundtrip_against_fastapi(
     hippocampus._hydrated_users.clear()
 
     repo = _InMemoryRepo()
-    defaults = DEFAULT_USERS["u1"]
+    sec_manager = SecurityManager()
     repo._users["u1"] = _StubUser(
         username="u1",
-        password_hash=defaults["password_hash"],
-        is_admin=defaults.get("is_admin", False),
+        password_hash=sec_manager.get_password_hash("x"),
+        is_admin=True,
     )
     convo = _StubConversationalModule()
 

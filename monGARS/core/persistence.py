@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from tenacity import (
@@ -366,6 +366,23 @@ class PersistenceRepository:
 
         return await self._execute_with_retry(
             operation, operation_name="get_user_by_username"
+        )
+
+    async def has_admin_user(self) -> bool:
+        """Return ``True`` when at least one admin account exists."""
+
+        async def operation(session) -> bool:
+            result = await session.execute(
+                select(func.count())
+                .select_from(UserAccount)
+                .where(UserAccount.is_admin.is_(True))
+            )
+            count = result.scalar_one()
+            return bool(count)
+
+        return await self._execute_with_retry(
+            operation,
+            operation_name="has_admin_user",
         )
 
     async def get_user_preferences(self, user_id: str) -> UserPreferences | None:

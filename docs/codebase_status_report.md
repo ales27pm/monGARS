@@ -10,9 +10,9 @@ implementation details.
 - **FastAPI application** – `monGARS/api/web_api.py` exposes authentication,
   chat, conversation history, and peer-management endpoints with typed
   responses and dependency-injected services.【F:monGARS/api/web_api.py†L63-L200】【F:monGARS/api/web_api.py†L203-L331】
-- **Bootstrap users** – demo credentials are still seeded at startup via
-  `DEFAULT_USERS`, which keeps the credential-hardening milestone open until the
-  bootstrap flow is replaced with persisted accounts only.【F:monGARS/api/web_api.py†L41-L62】
+- **Bootstrap users** – demo credentials were removed; the FastAPI lifespan now
+  validates overrides without seeding default accounts so deployments rely on
+  persisted records exclusively.【F:monGARS/api/web_api.py†L41-L88】
 - **WebSocket streaming** – `monGARS/api/ws_manager.py` enforces ticket
   verification, manages per-user rate limiting, and fans out UI events through
   a token-bucket protected broadcaster.【F:monGARS/api/ws_manager.py†L1-L144】【F:monGARS/api/ws_manager.py†L145-L250】
@@ -92,8 +92,9 @@ implementation details.
   container lifecycle management to streamline developer onboarding.【F:scripts/deploy_docker.sh†L1-L200】
 
 ## Known Gaps & Risks
-- **Credential Hardening** – remove the bootstrap accounts and migrate existing
-  installs to database-backed credentials only.【F:monGARS/api/web_api.py†L41-L84】
+- **Credential Hardening** – legacy bootstrap accounts were removed from FastAPI;
+  audit existing deployments to ensure no environments still rely on the retired
+  defaults before rotating secrets.【F:monGARS/api/web_api.py†L41-L88】
 - **SDK Publication** – Python and TypeScript SDKs exist under `sdks/`, but they
   have not been packaged or distributed, leaving the roadmap milestone open.【F:sdks/python/README.md†L1-L160】【F:sdks/typescript/README.md†L1-L160】
 - **Reinforcement Learning Integration** – the research loop is functional yet
@@ -107,14 +108,12 @@ implementation details.
 | 2 – Functional Expansion | ✅ Complete | Adaptive response, mimicry, curiosity, and captioning modules run end-to-end.【F:monGARS/core/conversation.py†L1-L122】【F:monGARS/core/mimicry.py†L1-L200】 |
 | 3 – Hardware & Performance | ✅ Complete | Scheduler metrics, worker tuning, and Ray Serve integration are implemented.【F:monGARS/utils/hardware.py†L1-L120】【F:monGARS/core/distributed_scheduler.py†L1-L200】【F:monGARS/core/llm_integration.py†L1-L200】 |
 | 4 – Collaborative Networking | ✅ Complete | Peer telemetry, load-aware scheduling, and Sommeil optimisation loops are shipping.【F:monGARS/core/peer.py†L1-L200】【F:monGARS/core/sommeil.py†L1-L160】 |
-| 5 – Web/API Refinement | 🔄 In Progress | Core endpoints and WebSocket handling are live, but demo credential bootstrap persists and SDKs remain unpublished.【F:monGARS/api/web_api.py†L41-L84】【F:monGARS/api/ws_manager.py†L1-L144】【F:sdks/python/README.md†L1-L160】 |
+| 5 – Web/API Refinement | 🔄 In Progress | Core endpoints and WebSocket handling are live, credential bootstrap now relies on persisted accounts, and SDKs remain unpublished.【F:monGARS/api/web_api.py†L41-L88】【F:monGARS/api/ws_manager.py†L1-L144】【F:sdks/python/README.md†L1-L160】 |
 | 6 – Self-Improvement & Research | 🔄 In Progress | Self-training and RL tooling exist, yet reinforcement runs are not integrated and long-haul tests are pending.【F:monGARS/core/self_training.py†L1-L200】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】 |
 | 7 – Sustainability & Longevity | 🌱 Planned | Evolution engine and energy tracking are present, but cross-node artefact sharing and energy dashboards remain design items.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:modules/evolution_engine/energy.py†L1-L160】 |
 
 ## Recommended Next Steps
-1. Retire `DEFAULT_USERS` and migrate existing deployments to persisted
-   credentials, closing the last security loophole in Phase 5.【F:monGARS/api/web_api.py†L41-L84】
-2. Package and publish the Python/TypeScript SDKs with automated CI builds so
+1. Package and publish the Python/TypeScript SDKs with automated CI builds so
    partner teams can integrate against a supported client surface.【F:sdks/python/pyproject.toml†L1-L80】【F:sdks/typescript/package.json†L1-L120】
-3. Define an integration plan for reinforcement-learning loops, including
+2. Define an integration plan for reinforcement-learning loops, including
    telemetry, rollback, and operator controls, before marking Phase 6 complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】

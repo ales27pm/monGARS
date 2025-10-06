@@ -7,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
 from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
-from monGARS.api.web_api import DEFAULT_USERS, app, sec_manager
+from monGARS.api.web_api import app, sec_manager
 from monGARS.init_db import reset_database
 
 
@@ -22,6 +22,18 @@ async def client() -> AsyncClient:
         "user", sec_manager.get_password_hash("passphrase"), is_admin=False
     )
 
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as async_client:
+            yield async_client
+    await reset_database()
+
+
+@pytest_asyncio.fixture
+async def empty_client() -> AsyncClient:
+    await reset_database()
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with AsyncClient(
@@ -48,12 +60,48 @@ async def test_register_and_login(client: AsyncClient) -> None:
         json={"username": "newuser", "password": "newpassword"},
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "registered"
+    data = resp.json()
+    assert data["status"] == "registered"
+    assert data["is_admin"] is False
 
     token = await get_token(client, "newuser", "newpassword")
     payload = sec_manager.verify_token(token)
     assert payload["sub"] == "newuser"
     assert payload["admin"] is False
+
+
+@pytest.mark.asyncio
+async def test_register_admin_when_none_exists(
+    empty_client: AsyncClient,
+) -> None:
+    resp = await empty_client.post(
+        "/api/v1/user/register/admin",
+        json={"username": "founder", "password": "founderpw"},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    body = resp.json()
+    assert body == {"status": "registered", "is_admin": True}
+
+    token = await get_token(empty_client, "founder", "founderpw")
+    payload = sec_manager.verify_token(token)
+    assert payload["sub"] == "founder"
+    assert payload["admin"] is True
+
+    resp_conflict = await empty_client.post(
+        "/api/v1/user/register/admin",
+        json={"username": "second", "password": "secondpw"},
+    )
+    assert resp_conflict.status_code == status.HTTP_403_FORBIDDEN
+    assert resp_conflict.json()["detail"] == "Admin already exists"
+
+    resp_user = await empty_client.post(
+        "/api/v1/user/register",
+        json={"username": "member", "password": "memberpw"},
+    )
+    assert resp_user.status_code == status.HTTP_200_OK
+    member_body = resp_user.json()
+    assert member_body["status"] == "registered"
+    assert member_body["is_admin"] is False
 
 
 @pytest.mark.asyncio
@@ -253,10 +301,8 @@ async def test_bootstrap_users_create_demo_accounts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_startup_bootstraps_default_users(client: AsyncClient) -> None:
+async def test_startup_does_not_create_demo_accounts(client: AsyncClient) -> None:
     ready = await client.get("/ready")
     assert ready.status_code == status.HTTP_200_OK
     repo = get_persistence_repository()
-    user = await repo.get_user_by_username("u1")
-    assert user is not None
-    assert user.is_admin == DEFAULT_USERS["u1"]["is_admin"]
+    assert await repo.get_user_by_username("u1") is None
