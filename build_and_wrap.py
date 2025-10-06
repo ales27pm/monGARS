@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from modules.neurons.registry import update_manifest
 from monGARS.mlops.artifacts import (
@@ -49,9 +49,7 @@ ACTIVATION_BUFFER_MB = int(
     )
 )
 RUNTIME_BUFFER_MB = int(
-    os.environ.get(
-        "RUNTIME_BUFFER_MB", os.environ.get("VRAM_RUNTIME_BUFFER_MB", "768")
-    )
+    os.environ.get("RUNTIME_BUFFER_MB", os.environ.get("VRAM_RUNTIME_BUFFER_MB", "768"))
 )
 OFFLOAD_DIR = Path(os.environ.get("OFFLOAD_DIR", "./offload"))
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "./out"))
@@ -60,6 +58,9 @@ EXPORT_GGUF = os.environ.get("EXPORT_GGUF", "0") == "1"
 GGUF_DIR = Path(os.environ.get("GGUF_DIR", OUTPUT_DIR / "gguf"))
 GGUF_METHOD = os.environ.get("GGUF_METHOD", "q4_k_m")
 AUTO_INSTALL = os.environ.get("AUTO_INSTALL", "1") == "1"
+OOM_MIN_FREE_GIB = float(os.environ.get("OOM_MIN_FREE_GIB", "1.0"))
+OOM_MIN_FREE_RATIO = float(os.environ.get("OOM_MIN_FREE_RATIO", "0.1"))
+FAIL_ON_CRITICAL_OOM = os.environ.get("FAIL_ON_CRITICAL_OOM", "1") == "1"
 REGISTRY_PATH = os.environ.get("LLM_ADAPTER_REGISTRY_PATH") or os.environ.get(
     "ADAPTER_REGISTRY_PATH"
 )
@@ -96,6 +97,7 @@ def _assemble_training_summary(
     gguf_enabled: bool,
     gguf_method: str,
     dataset_len: int,
+    oom_analysis: dict[str, Any],
 ) -> dict[str, Any]:
     summary = build_adapter_summary(
         adapter_dir=adapter_dir,
@@ -134,6 +136,8 @@ def _assemble_training_summary(
         artifacts["gguf"] = str(GGUF_DIR)
         summary.setdefault("labels", {})["gguf_method"] = gguf_method
 
+    summary.setdefault("analysis", {})["oom_risk"] = oom_analysis
+
     return summary
 
 
@@ -155,6 +159,93 @@ def _maybe_update_registry(registry_path: str | None, summary: dict[str, Any]) -
         )
 
 
+def evaluate_oom_headroom(
+    *,
+    min_free_gib: float = OOM_MIN_FREE_GIB,
+    min_free_ratio: float = OOM_MIN_FREE_RATIO,
+    fail_on_critical: bool = FAIL_ON_CRITICAL_OOM,
+    torch_module: Any | None = None,
+    gather_metrics: Callable[[Any], dict[str, Any] | None] | None = None,
+    analyse_cuda_state: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Assess CUDA headroom and optionally abort if the risk is critical."""
+
+    skip_reason: str | None = None
+    cuda_payload: dict[str, Any] | None = None
+
+    if analyse_cuda_state is None:
+        from scripts.diagnose_unsloth import _analyse_cuda_state as analyse_cuda_state  # type: ignore
+
+    if torch_module is None:
+        try:
+            import torch as torch_module  # type: ignore
+        except ModuleNotFoundError:
+            torch_module = None
+
+    if torch_module is None:
+        skip_reason = "torch_missing"
+    elif not hasattr(torch_module, "cuda"):
+        skip_reason = "cuda_interface_missing"
+    elif not callable(getattr(torch_module.cuda, "is_available", None)):
+        skip_reason = "cuda_interface_missing"
+    elif not torch_module.cuda.is_available():
+        skip_reason = "cuda_unavailable"
+    else:
+        if gather_metrics is None:
+            from scripts.diagnose_unsloth import _gather_cuda_metrics as _gather_cuda_metrics  # type: ignore
+
+            def gather_metrics(module: Any) -> dict[str, Any] | None:  # type: ignore
+                return _gather_cuda_metrics(
+                    module,
+                    lambda: list(range(module.cuda.device_count())),
+                )
+
+        cuda_payload = gather_metrics(torch_module)
+        if cuda_payload is None:
+            skip_reason = "cuda_metrics_unavailable"
+
+    analysis = analyse_cuda_state(
+        cuda_payload,
+        min_free_gib=min_free_gib,
+        min_free_ratio=min_free_ratio,
+        skip_reason=skip_reason,
+    )
+
+    status = analysis.get("status", "unknown")
+    print(f"OOM risk classification: {status}")
+
+    devices = analysis.get("devices") or []
+    for device in devices:
+        index = device.get("index", "?")
+        free = device.get("free_gib")
+        ratio = device.get("free_ratio")
+        device_status = device.get("status", "unknown")
+        if free is not None and ratio is not None:
+            print(
+                f"  - Device {index}: {free:.2f} GiB free ({ratio:.1%}) -> {device_status}"
+            )
+        else:
+            print(f"  - Device {index}: status {device_status}")
+        for recommendation in device.get("recommendations", []):
+            print(f"      recommendation: {recommendation}")
+
+    if fail_on_critical and status == "critical":
+        recommendations: list[str] = []
+        for device in devices:
+            recommendations.extend(device.get("recommendations", []))
+        guidance = (
+            "\n".join(f"  - {text}" for text in recommendations)
+            or "  - See diagnose_unsloth guidance."
+        )
+        raise RuntimeError(
+            "Insufficient CUDA headroom for QLoRA fine-tuning.\n"
+            "VRAM diagnostics flagged a critical OOM risk.\n"
+            f"Recommended mitigations:\n{guidance}"
+        )
+
+    return analysis
+
+
 def main() -> None:
     configure_cuda_allocator()
     ensure_directory(OFFLOAD_DIR)
@@ -170,6 +261,7 @@ def main() -> None:
         offload_dir=OFFLOAD_DIR,
     )
     summarise_device_map(model)
+    oom_analysis = evaluate_oom_headroom()
     model = prepare_lora_model_light(model, LoraHyperParams())
 
     dataset = prepare_instruction_dataset(
@@ -235,6 +327,7 @@ def main() -> None:
         gguf_enabled=EXPORT_GGUF,
         gguf_method=GGUF_METHOD,
         dataset_len=len(dataset),
+        oom_analysis=oom_analysis,
     )
     summary_path = OUTPUT_DIR / SUMMARY_FILENAME
     _save_summary(summary, summary_path)
