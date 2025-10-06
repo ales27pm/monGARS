@@ -11,9 +11,9 @@ import torch
 from transformers import Trainer, TrainingArguments, default_data_collator
 
 try:  # pragma: no cover - optional dependency under tests
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from peft import LoraConfig, get_peft_model
 except Exception:  # pragma: no cover - tests patch this path
-    LoraConfig = get_peft_model = prepare_model_for_kbit_training = None  # type: ignore
+    LoraConfig = get_peft_model = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 class LoraHyperParams:
     """Configuration for LoRA adapters."""
 
-    r: int = 32
-    alpha: int = 32
+    r: int = 16
+    alpha: int = 16
     dropout: float = 0.0
     target_modules: tuple[str, ...] = (
         "q_proj",
@@ -36,10 +36,44 @@ class LoraHyperParams:
     )
 
 
-def prepare_lora_model(model: Any, params: LoraHyperParams | None = None) -> Any:
-    """Enable gradient checkpointing and attach LoRA adapters."""
+def _enable_input_require_grads(model: Any) -> None:
+    """Ensure model inputs require gradients for LoRA fine-tuning."""
 
-    if prepare_model_for_kbit_training is None or LoraConfig is None:
+    if hasattr(model, "enable_input_require_grads"):
+        try:
+            model.enable_input_require_grads()
+        except Exception:  # pragma: no cover - best effort logging
+            logger.debug("enable_input_require_grads failed", exc_info=True)
+        return
+
+    embeddings = getattr(model, "get_input_embeddings", None)
+    if not callable(embeddings):
+        return
+
+    try:
+        module = embeddings()
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("Unable to access input embeddings", exc_info=True)
+        return
+
+    def _require_grad_hook(_: Any, __: Any, output: Any) -> None:
+        if isinstance(output, torch.Tensor):
+            output.requires_grad_(True)
+        elif isinstance(output, (tuple, list)):
+            for item in output:
+                if isinstance(item, torch.Tensor):
+                    item.requires_grad_(True)
+
+    try:
+        module.register_forward_hook(_require_grad_hook)
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("Unable to register input grad hook", exc_info=True)
+
+
+def prepare_lora_model_light(model: Any, params: LoraHyperParams | None = None) -> Any:
+    """Attach LoRA adapters without upcasting the ``lm_head`` to FP32."""
+
+    if LoraConfig is None or get_peft_model is None:
         raise RuntimeError("PEFT is required to prepare the model for LoRA training")
 
     params = params or LoraHyperParams()
@@ -49,20 +83,30 @@ def prepare_lora_model(model: Any, params: LoraHyperParams | None = None) -> Any
         )
     except TypeError:
         model.gradient_checkpointing_enable()
-    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    except AttributeError:  # pragma: no cover - defensive guard
+        logger.debug("Model does not support gradient checkpointing", exc_info=True)
+
+    _enable_input_require_grads(model)
+
     config = LoraConfig(
         r=params.r,
         lora_alpha=params.alpha,
         lora_dropout=params.dropout,
         bias="none",
-        task_type="CAUSAL_LM",
         target_modules=list(params.target_modules),
+        task_type="CAUSAL_LM",
     )
     logger.info(
         "Attaching LoRA adapters",
         extra={"rank": params.r, "alpha": params.alpha, "dropout": params.dropout},
     )
     return get_peft_model(model, config)
+
+
+def prepare_lora_model(model: Any, params: LoraHyperParams | None = None) -> Any:
+    """Backward-compatible wrapper around :func:`prepare_lora_model_light`."""
+
+    return prepare_lora_model_light(model, params)
 
 
 @dataclass(slots=True)
