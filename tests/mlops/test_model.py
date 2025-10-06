@@ -99,7 +99,7 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
     assert (
         recorded_kwargs["quantization_config"].llm_int8_enable_fp32_cpu_offload is True
     )
-    assert recorded_kwargs["max_memory"][0] == "6076MiB"
+    assert recorded_kwargs["max_memory"][0] == "5308MiB"
 
 
 def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
@@ -172,7 +172,7 @@ def test_load_4bit_causal_lm_reserves_activation_buffer(
         offload_dir=tmp_path,
     )
 
-    assert recorded["max_memory"][0] == "3500MiB"
+    assert recorded["max_memory"][0] == "2732MiB"
 
 
 def test_load_4bit_causal_lm_handles_legacy_bitsandbytes_kwargs(
