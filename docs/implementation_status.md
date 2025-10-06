@@ -108,10 +108,10 @@ and reality.
   table, allowing production rollouts without `init_db.py` fallbacks.
 - ✅ **Telemetry integration**: Ray Serve success, failure, and scaling counters
   are exported via OpenTelemetry and wired into peer telemetry broadcasts.
-- 🔄 **Credential hardening**: database-backed authentication persists user
-  records, but the default demo accounts remain in `web_api.py`. Remove them or
-  disable their bootstrap path before marking this work complete to close the
-  loophole for default logins.
+- ✅ **Credential hardening**: default demo accounts have been removed and the
+  login bootstrap now relies exclusively on persisted accounts, with initial
+  admin creation handled through the dedicated `/api/v1/user/register/admin`
+  endpoint when no privileged accounts exist.
 - **SDK story**: prioritise packaging and publishing reference SDKs so partner
   teams can integrate without scraping OpenAPI definitions.
 - **RAG governance**: document retention policies for curated datasets stored

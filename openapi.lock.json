@@ -1451,6 +1451,46 @@
         "summary": "Register User"
       }
     },
+    "/api/v1/user/register/admin": {
+      "post": {
+        "operationId": "register_admin_user_api_v1_user_register_admin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Admin User Api V1 User Register Admin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Admin User"
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz_healthz_get",

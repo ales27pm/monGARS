@@ -127,15 +127,17 @@ async def login(
     return {"access_token": token, "token_type": "bearer"}
 
 
-@app.post("/api/v1/user/register")
-async def register_user(
+async def _persist_registration(
+    repo: PersistenceRepository,
     reg: UserRegistration,
-    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+    *,
+    is_admin: bool,
 ) -> dict:
     try:
         await repo.create_user_atomic(
             reg.username,
             sec_manager.get_password_hash(reg.password),
+            is_admin=is_admin,
         )
     except ValueError as exc:
         logger.debug(
@@ -146,7 +148,41 @@ async def register_user(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
-    return {"status": "registered"}
+    return {"status": "registered", "is_admin": is_admin}
+
+
+@app.post("/api/v1/user/register")
+async def register_user(
+    reg: UserRegistration,
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+) -> dict:
+    return await _persist_registration(repo, reg, is_admin=False)
+
+
+@app.post("/api/v1/user/register/admin")
+async def register_admin_user(
+    reg: UserRegistration,
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+) -> dict:
+    try:
+        if await repo.has_admin_user():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin already exists",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - unexpected failure
+        logger.error(
+            "auth.register_admin.state_check_failed",
+            extra={"username": reg.username},
+            exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to determine admin availability",
+        ) from exc
+    return await _persist_registration(repo, reg, is_admin=True)
 
 
 @app.get("/healthz")

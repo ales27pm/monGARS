@@ -102,6 +102,9 @@ class _InMemoryRepo:
     async def get_user_by_username(self, username: str) -> _StubUser | None:
         return self._users.get(username)
 
+    async def has_admin_user(self) -> bool:
+        return any(user.is_admin for user in self._users.values())
+
     async def create_user_atomic(
         self,
         username: str,
