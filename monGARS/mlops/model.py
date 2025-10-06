@@ -31,7 +31,8 @@ def load_4bit_causal_lm(
         bnb_4bit_compute_dtype=torch.float16,
     )
     logger.info(
-        "Loading base model", extra={"model": model_id, "vram_budget_mb": vram_budget_mb}
+        "Loading base model",
+        extra={"model": model_id, "vram_budget_mb": vram_budget_mb},
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id,

@@ -22,7 +22,9 @@ def merge_lora_adapters(
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except Exception as exc:  # pragma: no cover - dependency missing
         logger.warning("Unable to import transformers/peft for merge", exc_info=True)
-        raise RuntimeError("transformers and peft are required to merge adapters") from exc
+        raise RuntimeError(
+            "transformers and peft are required to merge adapters"
+        ) from exc
 
     logger.info(
         "Merging adapters into base model",
@@ -57,11 +59,17 @@ def export_gguf(
 
     logger.info(
         "Exporting GGUF",
-        extra={"source_dir": str(source_dir), "gguf_dir": str(gguf_dir), "method": quantization_method},
+        extra={
+            "source_dir": str(source_dir),
+            "gguf_dir": str(gguf_dir),
+            "method": quantization_method,
+        },
     )
     gguf_dir.mkdir(parents=True, exist_ok=True)
     model, tokenizer = FastModel.from_pretrained(str(source_dir))
-    model.save_pretrained_gguf(str(gguf_dir), tokenizer=tokenizer, quantization_method=quantization_method)
+    model.save_pretrained_gguf(
+        str(gguf_dir), tokenizer=tokenizer, quantization_method=quantization_method
+    )
     logger.info("GGUF export complete", extra={"gguf_dir": str(gguf_dir)})
     return True
 
