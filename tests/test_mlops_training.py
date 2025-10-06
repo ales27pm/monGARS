@@ -3,13 +3,14 @@ from __future__ import annotations
 import pytest
 import torch
 
-from monGARS.mlops.training import TrainerConfig, train_qlora
+from monGARS.mlops.training import OOMRetryEvent, TrainerConfig, train_qlora
 
 
 class DummyTrainer:
     """Test double that mimics ``transformers.Trainer``."""
 
     failures_remaining = 0
+    failure_factory = staticmethod(lambda: torch.cuda.OutOfMemoryError("mock OOM"))
     instances: list["DummyTrainer"] = []
 
     def __init__(
@@ -26,15 +27,21 @@ class DummyTrainer:
         self.train_calls += 1
         if DummyTrainer.failures_remaining > 0:
             DummyTrainer.failures_remaining -= 1
-            raise torch.cuda.OutOfMemoryError("mock OOM")
+            raise DummyTrainer.failure_factory()
 
 
 @pytest.fixture(autouse=True)
 def _reset_dummy_trainer():
     DummyTrainer.failures_remaining = 0
+    DummyTrainer.failure_factory = staticmethod(
+        lambda: torch.cuda.OutOfMemoryError("mock OOM")
+    )
     DummyTrainer.instances.clear()
     yield
     DummyTrainer.failures_remaining = 0
+    DummyTrainer.failure_factory = staticmethod(
+        lambda: torch.cuda.OutOfMemoryError("mock OOM")
+    )
     DummyTrainer.instances.clear()
 
 
@@ -100,14 +107,71 @@ def test_train_qlora_reduces_gradient_accumulation_when_batch_is_one(trainer_con
 
 def test_train_qlora_raises_after_exhausting_retries(trainer_config):
     DummyTrainer.failures_remaining = 2
+    captured_events: list[OOMRetryEvent] = []
 
     with pytest.raises(torch.cuda.OutOfMemoryError):
         train_qlora(
             object(),
             dataset=[{"input_ids": [1]}],
             config=trainer_config,
-            extra_args={"oom_retries": 0},
+            extra_args={"oom_retries": 0, "oom_event_hooks": captured_events.append},
             trainer_cls=DummyTrainer,
         )
 
     assert len(DummyTrainer.instances) == 1
+    assert len(captured_events) == 1
+    assert captured_events[0].will_retry is False
+
+
+def test_train_qlora_does_not_retry_on_non_oom(trainer_config):
+    DummyTrainer.failures_remaining = 1
+    DummyTrainer.failure_factory = staticmethod(lambda: RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError):
+        train_qlora(
+            object(),
+            dataset=[{"input_ids": [1]}],
+            config=trainer_config,
+            trainer_cls=DummyTrainer,
+        )
+
+    assert len(DummyTrainer.instances) == 1
+
+
+def test_train_qlora_honours_custom_backoff_factor(trainer_config):
+    DummyTrainer.failures_remaining = 1
+    trainer_config.batch_size = 8
+
+    trainer = train_qlora(
+        object(),
+        dataset=[{"input_ids": [1, 2]}],
+        config=trainer_config,
+        extra_args={"oom_backoff_factor": 0.25},
+        trainer_cls=DummyTrainer,
+    )
+
+    assert len(DummyTrainer.instances) == 2
+    assert DummyTrainer.instances[1].args.per_device_train_batch_size == 2
+    assert trainer.args.per_device_train_batch_size == 2
+
+
+def test_train_qlora_emits_oom_events(trainer_config):
+    DummyTrainer.failures_remaining = 1
+    captured_events: list[OOMRetryEvent] = []
+
+    def _hook(event: OOMRetryEvent) -> None:
+        captured_events.append(event)
+
+    train_qlora(
+        object(),
+        dataset=[{"input_ids": [1, 2]}],
+        config=trainer_config,
+        extra_args={"oom_event_hooks": [_hook]},
+        trainer_cls=DummyTrainer,
+    )
+
+    assert len(captured_events) == 1
+    event = captured_events[0]
+    assert event.will_retry is True
+    assert event.next_batch_size < event.batch_size
+    assert event.remaining_retries >= 1
