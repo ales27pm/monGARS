@@ -160,7 +160,7 @@ def build_adapter_summary(
     *,
     adapter_dir: Path,
     weights_path: Path | None,
-    wrapper_dir: Path | None,
+    wrapper_dir: Path | None = None,
     status: str = "success",
     labels: Mapping[str, str] | None = None,
     metrics: Mapping[str, Any] | None = None,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from modules.neurons.registry import update_manifest
 from monGARS.mlops.artifacts import (
@@ -72,10 +73,74 @@ def _locate_adapter_weights(adapter_dir: Path) -> Path | None:
         adapter_dir / "adapter_model.safetensors",
         adapter_dir / "adapter_model.bin",
     ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def _assemble_training_summary(
+    *,
+    adapter_dir: Path,
+    weights_path: Path | None,
+    wrapper_dir: Path,
+    merged_dir: Path,
+    merged: bool,
+    gguf_enabled: bool,
+    gguf_method: str,
+    dataset_len: int,
+) -> dict[str, Any]:
+    summary = build_adapter_summary(
+        adapter_dir=adapter_dir,
+        weights_path=weights_path,
+        wrapper_dir=wrapper_dir,
+        status="success",
+        labels={
+            "category": "general_baseline",
+            "quantization": "bnb_nf4",
+            "first_run": "true",
+        },
+        metrics={
+            "dataset_size": dataset_len,
+            "train_fraction": TRAIN_FRACTION,
+        },
+        training={
+            "base_model": MODEL_ID,
+            "dataset": DATASET_NAME,
+            "max_seq_len": MAX_SEQ_LEN,
+            "batch_size": BATCH_SIZE,
+            "grad_accum": GRAD_ACCUM,
+            "learning_rate": LR,
+            "epochs": EPOCHS,
+            "max_steps": MAX_STEPS,
+            "vram_budget_mb": VRAM_BUDGET_MB,
+            "quantization_method": "bnb-4bit-nf4",
+        },
+    )
+
+    artifacts = summary.setdefault("artifacts", {})
+    if merged:
+        artifacts["merged_fp16"] = str(merged_dir)
+    if gguf_enabled and merged:
+        artifacts["gguf"] = str(GGUF_DIR)
+        summary.setdefault("labels", {})["gguf_method"] = gguf_method
+
+    return summary
+
+
+def _save_summary(summary: dict[str, Any], path: Path) -> None:
+    path.write_text(json.dumps(summary, indent=2))
+
+
+def _maybe_update_registry(registry_path: str | None, summary: dict[str, Any]) -> None:
+    if registry_path:
+        try:
+            manifest = update_manifest(registry_path, summary)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"! Failed to update adapter manifest: {exc}")
+        else:
+            print(f"- Adapter manifest updated: {manifest.path}")
+    else:
+        print(
+            "- Adapter manifest not updated (set LLM_ADAPTER_REGISTRY_PATH to register output)"
+        )
 
 
 def main() -> None:
@@ -146,41 +211,18 @@ def main() -> None:
     )
     (OUTPUT_DIR / "README_outputs.md").write_text(readme)
 
-    summary = build_adapter_summary(
+    summary = _assemble_training_summary(
         adapter_dir=adapters_dir,
         weights_path=weights_path,
         wrapper_dir=wrapper_dir,
-        status="success",
-        labels={
-            "category": "general_baseline",
-            "quantization": "bnb_nf4",
-            "first_run": "true",
-        },
-        metrics={
-            "dataset_size": len(dataset),
-            "train_fraction": TRAIN_FRACTION,
-        },
-        training={
-            "base_model": MODEL_ID,
-            "dataset": DATASET_NAME,
-            "max_seq_len": MAX_SEQ_LEN,
-            "batch_size": BATCH_SIZE,
-            "grad_accum": GRAD_ACCUM,
-            "learning_rate": LR,
-            "epochs": EPOCHS,
-            "max_steps": MAX_STEPS,
-            "vram_budget_mb": VRAM_BUDGET_MB,
-            "quantization_method": "bnb-4bit-nf4",
-        },
+        merged_dir=merged_dir,
+        merged=merged,
+        gguf_enabled=EXPORT_GGUF,
+        gguf_method=GGUF_METHOD,
+        dataset_len=len(dataset),
     )
-    artifacts = summary.setdefault("artifacts", {})
-    if merged:
-        artifacts["merged_fp16"] = str(merged_dir)
-    if EXPORT_GGUF and merged:
-        artifacts["gguf"] = str(GGUF_DIR)
-        summary.setdefault("labels", {}).update({"gguf_method": GGUF_METHOD})
     summary_path = OUTPUT_DIR / SUMMARY_FILENAME
-    summary_path.write_text(json.dumps(summary, indent=2))
+    _save_summary(summary, summary_path)
 
     print("=== ALL DONE ===")
     print(f"- LoRA adapters: {adapters_dir}")
@@ -190,14 +232,7 @@ def main() -> None:
         print(f"- GGUF export: {GGUF_DIR}")
     print(f"- Wrapper module: {wrapper_dir / 'project_wrapper.py'}")
     print(f"- Training summary: {summary_path}")
-
-    if REGISTRY_PATH:
-        manifest = update_manifest(REGISTRY_PATH, summary)
-        print(f"- Adapter manifest updated: {manifest.path}")
-    else:
-        print(
-            "- Adapter manifest not updated (set LLM_ADAPTER_REGISTRY_PATH to register output)"
-        )
+    _maybe_update_registry(REGISTRY_PATH, summary)
 
 
 if __name__ == "__main__":

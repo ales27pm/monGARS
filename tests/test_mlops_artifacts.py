@@ -106,3 +106,42 @@ def test_build_adapter_summary_collects_optional_sections(tmp_path: Path) -> Non
     assert summary["labels"] == {"category": "baseline"}
     assert summary["metrics"] == {"train_fraction": 0.5}
     assert summary["training"] == {"epochs": 2}
+
+
+def test_build_adapter_summary_minimal_fields(tmp_path: Path) -> None:
+    adapter_dir = tmp_path / "adapter_minimal"
+    adapter_dir.mkdir()
+
+    summary = build_adapter_summary(
+        adapter_dir=adapter_dir,
+        weights_path=None,
+    )
+
+    assert summary["status"] == "success"
+    assert summary["artifacts"] == {"adapter": str(adapter_dir)}
+    assert "labels" not in summary
+    assert "metrics" not in summary
+    assert "training" not in summary
+
+
+def test_build_adapter_summary_ignores_none_values(tmp_path: Path) -> None:
+    adapter_dir = tmp_path / "adapter_none"
+    adapter_dir.mkdir()
+    weights_path = adapter_dir / "adapter_model.safetensors"
+    weights_path.write_text("stub")
+
+    summary = build_adapter_summary(
+        adapter_dir=adapter_dir,
+        weights_path=weights_path,
+        wrapper_dir=None,
+        labels=None,
+        metrics=None,
+        training=None,
+    )
+
+    assert summary["artifacts"]["adapter"] == str(adapter_dir)
+    assert summary["artifacts"]["weights"] == str(weights_path)
+    assert "wrapper" not in summary["artifacts"]
+    assert "labels" not in summary
+    assert "metrics" not in summary
+    assert "training" not in summary
