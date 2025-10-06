@@ -384,7 +384,7 @@ def train_qlora(
 
         try:
             trainer.train()
-        except BaseException as exc:  # pragma: no cover - covered via unit tests
+        except Exception as exc:  # pragma: no cover - covered via unit tests
             if not _is_cuda_oom(exc):
                 raise
 
