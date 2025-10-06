@@ -222,8 +222,11 @@ def _build_training_arguments(
         else:
             dtype_args = {"bf16": False, "fp16": False}
 
-    if not use_cuda and "no_cuda" not in base_args:
-        dtype_args["no_cuda"] = True
+    if not use_cuda:
+        if "no_cuda" not in base_args:
+            dtype_args["no_cuda"] = True
+        if "use_cpu" not in base_args:
+            dtype_args["use_cpu"] = True
 
     return TrainingArguments(
         output_dir=str(cfg.output_dir),

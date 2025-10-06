@@ -201,6 +201,7 @@ def test_train_qlora_falls_back_to_cpu_when_oom_persists(monkeypatch, trainer_co
     assert len(DummyTrainer.instances) == 2
     cpu_args = DummyTrainer.instances[-1].args
     assert cpu_args.no_cuda is True
+    assert cpu_args.use_cpu is True
     assert cpu_args.fp16 is False
     assert cpu_args.bf16 is False
     assert cpu_args.optim == "adamw_torch"
