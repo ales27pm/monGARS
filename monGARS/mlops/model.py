@@ -29,6 +29,7 @@ def load_4bit_causal_lm(
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.float16,
+        llm_int8_enable_fp32_cpu_offload=True,
     )
 
     device_map = {
@@ -37,7 +38,7 @@ def load_4bit_causal_lm(
         "model.norm": 0,
         "lm_head": "cpu",
     }
-    max_memory = {0: f"{int(vram_budget_mb)}MiB", "cpu": "64GiB"}
+    max_memory = {0: f"{vram_budget_mb}MiB", "cpu": "64GiB"}
 
     logger.info(
         "Loading base model",
