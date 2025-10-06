@@ -392,7 +392,9 @@ def test_reasoning_reward_function_awards_bonus() -> None:
     assert rewards == [1.5]
 
 
-def test_train_reasoning_grpo_invokes_injected_dependencies(monkeypatch, tmp_path) -> None:
+def test_train_reasoning_grpo_invokes_injected_dependencies(
+    monkeypatch, tmp_path
+) -> None:
     prompt = [
         {"role": "system", "content": SelfTrainingEngine.SYSTEM_PROMPT.strip()},
         {"role": "user", "content": "2 + 2"},
@@ -400,7 +402,9 @@ def test_train_reasoning_grpo_invokes_injected_dependencies(monkeypatch, tmp_pat
     dataset_entry = {"prompt": prompt, "answer": "4"}
 
     class StubSelfTraining(SelfTrainingEngine):
-        def curate_reasoning_dataset(self, num_samples: int = 200, internal_ratio: float = 0.5):
+        def curate_reasoning_dataset(
+            self, num_samples: int = 200, internal_ratio: float = 0.5
+        ):
             return [dataset_entry], [dataset_entry]
 
     class DummyTokenizer:

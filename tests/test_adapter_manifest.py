@@ -12,11 +12,15 @@ def _create_summary(registry: Path, run_name: str) -> dict[str, object]:
     adapter_dir.mkdir(parents=True)
     weights_path = adapter_dir / "weights.json"
     weights_path.write_text(f'{{"run": "{run_name}"}}')
+    wrapper_dir = registry / run_name / "wrapper"
+    wrapper_dir.mkdir(parents=True)
+    (wrapper_dir / "config.json").write_text("{}")
     return {
         "status": "success",
         "artifacts": {
             "adapter": adapter_dir.as_posix(),
             "weights": weights_path.as_posix(),
+            "wrapper": wrapper_dir.as_posix(),
         },
         "metrics": {"loss": 0.1},
     }
@@ -32,6 +36,7 @@ def test_update_manifest_tracks_current_and_history(tmp_path: Path) -> None:
     first_version = manifest.current.version
     payload = manifest.build_payload()
     assert payload["adapter_path"].endswith("run-1/adapter")
+    assert payload["wrapper_path"].endswith("run-1/wrapper")
 
     manifest_second = update_manifest(registry, _create_summary(registry, "run-2"))
     assert manifest_second.current is not None

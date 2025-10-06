@@ -21,7 +21,9 @@ async def test_prepare_reasoning_assets_curates_and_warms(monkeypatch):
     warmed: dict[str, int | str] = {}
 
     class DummySlotManager:
-        def __init__(self, *, slot_name: str, model_id: str, max_seq_length: int) -> None:
+        def __init__(
+            self, *, slot_name: str, model_id: str, max_seq_length: int
+        ) -> None:
             warmed["slot_name"] = slot_name
             warmed["model_id"] = model_id
             warmed["max_seq_length"] = max_seq_length
@@ -29,7 +31,9 @@ async def test_prepare_reasoning_assets_curates_and_warms(monkeypatch):
         def __enter__(self):
             return object(), object()
 
-        def __exit__(self, exc_type, exc, tb) -> None:  # noqa: D401 - context manager protocol
+        def __exit__(
+            self, exc_type, exc, tb
+        ) -> None:  # noqa: D401 - context manager protocol
             return None
 
     monkeypatch.setitem(

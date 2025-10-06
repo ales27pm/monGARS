@@ -475,6 +475,7 @@ class LLMIntegration:
     def _build_payload_from_record(self, record: AdapterRecord) -> dict[str, str]:
         adapter_path = record.resolve_adapter_path(self.adapter_registry_path)
         weights_path = record.resolve_weights_path(self.adapter_registry_path)
+        wrapper_path = record.resolve_wrapper_path(self.adapter_registry_path)
         payload = {
             "adapter_path": adapter_path.as_posix(),
             "version": record.version,
@@ -483,6 +484,8 @@ class LLMIntegration:
         }
         if weights_path is not None:
             payload["weights_path"] = weights_path.as_posix()
+        if wrapper_path is not None:
+            payload["wrapper_path"] = wrapper_path.as_posix()
         return payload
 
     async def _fail(

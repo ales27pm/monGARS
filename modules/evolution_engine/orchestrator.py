@@ -519,9 +519,7 @@ class EvolutionOrchestrator:
             yield None
             return
         try:
-            manager = self._slot_manager_cls(
-                TRAINING_SLOT_NAME, model_id=self.model_id
-            )
+            manager = self._slot_manager_cls(TRAINING_SLOT_NAME, model_id=self.model_id)
         except Exception as exc:  # pragma: no cover - optional dependency failure
             logger.warning(
                 "model.slot.unavailable",

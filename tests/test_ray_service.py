@@ -27,12 +27,14 @@ class DummyNeuronManager:
     ) -> None:
         self.base_model_path = base_model_path
         self.encoder_path = default_encoder_path
-        self.switch_calls: list[str] = []
+        self.wrapper_dir = _.get("wrapper_dir") if _ else None
+        self.switch_calls: list[tuple[str, str | None]] = []
         DummyNeuronManager.instances.append(self)
 
-    def switch_encoder(self, path: str) -> None:
+    def switch_encoder(self, path: str, *, wrapper_dir: str | None = None) -> None:
         self.encoder_path = path
-        self.switch_calls.append(path)
+        self.wrapper_dir = wrapper_dir
+        self.switch_calls.append((path, wrapper_dir))
 
     def encode(self, prompts: list[str]) -> list[list[float]]:
         return [[0.1, 0.1, 0.1] for _ in prompts]
@@ -57,11 +59,39 @@ def _make_success_trainer(*, suffix: str) -> type:
             weights_path = adapter_dir / f"adapter-{suffix}.bin"
             weights_path.write_bytes(f"weights-{suffix}".encode("utf-8"))
 
+            wrapper_dir = self.output_dir / "wrapper"
+            wrapper_dir.mkdir(parents=True, exist_ok=True)
+            (wrapper_dir / "project_wrapper.py").write_text(
+                "class ChatAndEmbed:\n"
+                "    def __init__(self):\n"
+                "        self.history = []\n"
+                "    def embed(self, texts):\n"
+                "        if isinstance(texts, str):\n"
+                "            texts = [texts]\n"
+                "        self.history.append(list(texts))\n"
+                "        return [[float(len(text)), 0.0] for text in texts]\n"
+            )
+            offload_dir = self.output_dir / "offload"
+            offload_dir.mkdir(parents=True, exist_ok=True)
+            (wrapper_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "base_model_id": "stub-base",
+                        "lora_dir": adapter_dir.as_posix(),
+                        "max_seq_len": 512,
+                        "quantized_4bit": True,
+                        "vram_budget_mb": 4096,
+                        "offload_dir": offload_dir.as_posix(),
+                    }
+                )
+            )
+
             self.summary = {
                 "status": TrainingStatus.SUCCESS.value,
                 "artifacts": {
                     "adapter": str(adapter_dir),
                     "weights": str(weights_path),
+                    "wrapper": str(wrapper_dir),
                 },
                 "metrics": {"training_examples": 1, "run": suffix},
             }
@@ -247,6 +277,7 @@ async def test_ray_deployment_refreshes_after_training_pipeline(
     assert DummyNeuronManager.instances, "NeuronManager was not instantiated"
     manager = DummyNeuronManager.instances[-1]
     assert manager.encoder_path == first_payload["adapter_path"]
+    assert manager.wrapper_dir == first_payload.get("wrapper_path")
     assert deployment._adapter_payload == first_payload
 
     second_trainer = _make_success_trainer(suffix="second")
@@ -262,7 +293,11 @@ async def test_ray_deployment_refreshes_after_training_pipeline(
     refreshed = await deployment._refresh_adapter(None)
 
     assert manager.switch_calls, "Expected adapter switch to be triggered"
-    assert manager.switch_calls[-1] == second_payload["adapter_path"]
+    expected_call = (
+        second_payload["adapter_path"],
+        second_payload.get("wrapper_path"),
+    )
+    assert manager.switch_calls[-1] == expected_call
     assert refreshed == second_payload
     assert deployment._adapter_version == second_payload["version"]
     assert second_payload["adapter_path"] == str(second_run / "adapter")
@@ -340,6 +375,7 @@ async def test_ray_deployment_accepts_multi_replica_payload_once(
     replica_payload = {
         "adapter_path": payload["adapter_path"],
         "version": payload["version"],
+        "wrapper_path": payload.get("wrapper_path"),
     }
 
     first_switch_started = asyncio.Event()
@@ -372,7 +408,13 @@ async def test_ray_deployment_accepts_multi_replica_payload_once(
     for result in results:
         assert result["adapter_path"] == payload["adapter_path"]
         assert result["version"] == payload["version"]
-    assert manager.switch_calls.count(replica_payload["adapter_path"]) == 1
+    matching_calls = [
+        call
+        for call in manager.switch_calls
+        if call[0] == replica_payload["adapter_path"]
+        and call[1] == replica_payload.get("wrapper_path")
+    ]
+    assert len(matching_calls) == 1
     assert deployment._adapter_version == payload["version"]
 
 

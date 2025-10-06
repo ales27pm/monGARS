@@ -52,6 +52,7 @@ from monGARS.core.monitor import (
     TRAINING_FAILURE_COUNTER,
     TRAINING_TOKEN_COUNTER,
 )
+from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -579,6 +580,8 @@ class MNTPTrainer:
             "gradient_accumulation_steps": 16,
             "max_seq_length": 512,
             "max_steps": 32,
+            "wrapper_vram_budget_mb": 7168,
+            "wrapper_offload_dir": "offload",
         }
         merged = {**defaults, **self.config}
 
@@ -868,7 +871,7 @@ class MNTPTrainer:
             source_records = None
         if source_records is not None:
             metrics.setdefault("source_records", source_records)
-        artifact_dir, weights_path = self._persist_model(model)
+        artifact_dir, weights_path, wrapper_dir = self._persist_model(model)
         checksum = self._compute_file_checksum(weights_path)
 
         logger.info(
@@ -885,6 +888,8 @@ class MNTPTrainer:
             "weights": str(weights_path),
             "weights_checksum": checksum,
         }
+        if wrapper_dir is not None:
+            artifacts["wrapper"] = str(wrapper_dir)
         return {
             "status": TrainingStatus.SUCCESS.value,
             "model_name": model_name,
@@ -1588,9 +1593,70 @@ class MNTPTrainer:
             return torch.device("mps")
         return torch.device("cpu")
 
+    def _build_wrapper_config(self, adapter_dir: Path) -> WrapperConfig:
+        base_model = str(self.config["model_name_or_path"])
+        try:
+            vram_budget = int(self.config.get("wrapper_vram_budget_mb", 7168))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("wrapper_vram_budget_mb must be an integer") from exc
+        try:
+            max_seq_len = int(self.config.get("max_seq_length", 512))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("max_seq_length must be an integer") from exc
+
+        offload_value = self.config.get("wrapper_offload_dir") or "offload"
+        offload_path = Path(offload_value).expanduser()
+        if not offload_path.is_absolute():
+            offload_path = (adapter_dir / offload_path).resolve()
+        else:
+            offload_path = offload_path.expanduser().resolve()
+
+        quantized_raw = self.config.get("wrapper_quantized_4bit")
+        if isinstance(quantized_raw, str):
+            quantized_flag = quantized_raw.strip().lower() not in {
+                "false",
+                "0",
+                "no",
+                "off",
+            }
+        elif quantized_raw is None:
+            quantized_flag = True
+        else:
+            quantized_flag = bool(quantized_raw)
+
+        return WrapperConfig(
+            base_model_id=base_model,
+            lora_dir=adapter_dir.resolve(),
+            max_seq_len=max_seq_len,
+            vram_budget_mb=vram_budget,
+            offload_dir=offload_path,
+            quantized_4bit=quantized_flag,
+        )
+
+    def _render_wrapper_bundle(self, adapter_dir: Path) -> Path | None:
+        try:
+            config = self._build_wrapper_config(adapter_dir)
+        except Exception as exc:  # pragma: no cover - configuration guard
+            logger.warning(
+                "Skipping wrapper bundle due to configuration error",
+                extra={"error": str(exc)},
+            )
+            return None
+        output_root = adapter_dir.parent
+        try:
+            write_wrapper_bundle(config, output_root)
+        except Exception as exc:  # pragma: no cover - filesystem or template error
+            logger.warning(
+                "Failed to write wrapper bundle",
+                extra={"adapter_dir": str(adapter_dir), "error": str(exc)},
+                exc_info=True,
+            )
+            return None
+        return output_root / "wrapper"
+
     def _persist_model(
         self, model: Any, *, target_dir: Path | None = None
-    ) -> tuple[Path, Path]:
+    ) -> tuple[Path, Path, Path | None]:
         adapter_dir = target_dir or (self.output_dir / "adapter")
         adapter_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1607,8 +1673,9 @@ class MNTPTrainer:
             raise RuntimeError("Adapter configuration missing after save_pretrained")
 
         weights_path = self._resolve_adapter_weights_path(adapter_dir)
+        wrapper_dir = self._render_wrapper_bundle(adapter_dir)
 
-        return adapter_dir, weights_path
+        return adapter_dir, weights_path, wrapper_dir
 
     def _resolve_adapter_weights_path(self, adapter_dir: Path) -> Path:
         weight_candidates = [

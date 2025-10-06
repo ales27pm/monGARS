@@ -127,10 +127,12 @@ class RayLLMDeployment:
         )
         manifest = load_manifest(self.registry_path)
         default_adapter: Optional[str] = None
+        default_wrapper: Optional[str] = None
         if manifest and manifest.current:
             payload = manifest.build_payload()
             if payload:
                 default_adapter = payload.get("adapter_path")
+                default_wrapper = payload.get("wrapper_path")
                 self._adapter_payload = payload
                 self._adapter_version = payload.get("version", "baseline")
                 self._manifest_mtime = self._stat_manifest()
@@ -138,6 +140,7 @@ class RayLLMDeployment:
             base_model_path=base_model_path,
             default_encoder_path=default_adapter,
             llm2vec_options={"device_map": DEFAULT_DEVICE_MAP},
+            wrapper_dir=default_wrapper,
         )
 
     def _stat_manifest(self) -> float | None:
@@ -195,9 +198,12 @@ class RayLLMDeployment:
                     return self._adapter_payload
 
                 effective_version = requested_version or manifest_version or "baseline"
+                wrapper_path = incoming.get("wrapper_path") if incoming else None
                 if effective_version != self._adapter_version:
                     await asyncio.to_thread(
-                        self.neuron_manager.switch_encoder, str(requested_path)
+                        self.neuron_manager.switch_encoder,
+                        str(requested_path),
+                        wrapper_dir=wrapper_path,
                     )
                     self._adapter_version = effective_version
                     logger.info(
@@ -208,10 +214,13 @@ class RayLLMDeployment:
                         },
                     )
 
-                self._adapter_payload = {
+                payload_snapshot = {
                     "adapter_path": str(requested_path),
                     "version": self._adapter_version,
                 }
+                if wrapper_path:
+                    payload_snapshot["wrapper_path"] = str(wrapper_path)
+                self._adapter_payload = payload_snapshot
                 return self._adapter_payload
 
             current_mtime = self._stat_manifest()
@@ -234,7 +243,9 @@ class RayLLMDeployment:
                 adapter_path = payload.get("adapter_path")
                 if adapter_path:
                     await asyncio.to_thread(
-                        self.neuron_manager.switch_encoder, adapter_path
+                        self.neuron_manager.switch_encoder,
+                        adapter_path,
+                        wrapper_dir=payload.get("wrapper_path"),
                     )
                 self._adapter_version = payload.get("version", "baseline")
                 self._adapter_payload = payload if payload else None
