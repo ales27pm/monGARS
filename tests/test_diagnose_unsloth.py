@@ -7,7 +7,17 @@ import sys
 import types
 from typing import Any
 
-import scripts.diagnose_unsloth as diagnose
+import pytest
+
+from monGARS.mlops.diagnostics import analysis, cli
+
+
+def _bytes_payload(num_bytes: int) -> dict[str, float]:
+    return {
+        "bytes": float(num_bytes),
+        "mib": float(num_bytes) / 1024**2,
+        "gib": float(num_bytes) / 1024**3,
+    }
 
 
 def _install_fake_unsloth(monkeypatch: Any) -> None:
@@ -48,16 +58,14 @@ def test_main_outputs_extended_payload(monkeypatch, capsys):
     )
     _install_fake_unsloth(monkeypatch)
 
-    original_import_optional = diagnose._import_optional
+    original_import_optional = cli.import_optional
+    monkeypatch.setattr(
+        cli,
+        "import_optional",
+        lambda name: None if name == "torch" else original_import_optional(name),
+    )
 
-    def _fake_import_optional(name: str):
-        if name == "torch":
-            return None
-        return original_import_optional(name)
-
-    monkeypatch.setattr(diagnose, "_import_optional", _fake_import_optional)
-
-    exit_code = diagnose.main(["--no-cuda"])
+    exit_code = cli.main(["--no-cuda"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -71,11 +79,19 @@ def test_main_outputs_extended_payload(monkeypatch, capsys):
     assert payload["analysis"]["oom_risk"]["reason"] == "cuda_diagnostics_disabled"
 
 
+def test_cli_rejects_non_positive_thresholds():
+    with pytest.raises(SystemExit):
+        cli._parse_args(["--min-free-gib", "0"])
+
+    with pytest.raises(SystemExit):
+        cli._parse_args(["--min-free-ratio", "0"])
+
+
 def test_force_flag_is_forwarded(monkeypatch, capsys):
     return_state = {"available": True, "patched": False}
     _install_fake_llm_integration(monkeypatch, return_value=return_state)
 
-    exit_code = diagnose.main(["--no-cuda", "--force"])
+    exit_code = cli.main(["--no-cuda", "--force"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
@@ -93,26 +109,108 @@ def test_oom_analysis_classifies_critical():
             {
                 "index": 0,
                 "memory_bytes": {
-                    "free": diagnose._format_bytes(256 * 1024 * 1024),
-                    "total": diagnose._format_bytes(8 * 1024 * 1024 * 1024),
-                    "reserved": diagnose._format_bytes(6 * 1024 * 1024 * 1024),
-                    "allocated": diagnose._format_bytes(5 * 1024 * 1024 * 1024),
+                    "free": _bytes_payload(256 * 1024 * 1024),
+                    "total": _bytes_payload(8 * 1024 * 1024 * 1024),
+                    "reserved": _bytes_payload(6 * 1024 * 1024 * 1024),
+                    "allocated": _bytes_payload(5 * 1024 * 1024 * 1024),
                 },
             }
         ]
     }
 
-    analysis = diagnose._analyse_cuda_state(
+    oom_analysis = analysis.analyse_cuda_state(
         cuda_payload,
         min_free_gib=1.0,
         min_free_ratio=0.1,
         skip_reason=None,
     )
 
-    device_report = analysis["devices"][0]
-    assert analysis["status"] == "critical"
+    device_report = oom_analysis["devices"][0]
+    assert oom_analysis["status"] == "critical"
     assert device_report["status"] == "critical"
     assert any(
         "max_seq_length" in recommendation
         for recommendation in device_report["recommendations"]
     )
+
+
+def test_oom_analysis_classifies_warning():
+    cuda_payload = {
+        "devices": [
+            {
+                "index": 0,
+                "memory_bytes": {
+                    "free": _bytes_payload(int(0.25 * 1024**3)),
+                    "total": _bytes_payload(1 * 1024**3),
+                    "reserved": _bytes_payload(300 * 1024**2),
+                    "allocated": _bytes_payload(200 * 1024**2),
+                },
+            }
+        ]
+    }
+
+    result = analysis.analyse_cuda_state(
+        cuda_payload,
+        min_free_gib=0.2,
+        min_free_ratio=0.2,
+        skip_reason=None,
+    )
+
+    device_report = result["devices"][0]
+    assert result["status"] == "warning"
+    assert device_report["status"] == "warning"
+    assert any("offloading" in rec.lower() for rec in device_report["recommendations"])
+
+
+def test_oom_analysis_classifies_ok():
+    cuda_payload = {
+        "devices": [
+            {
+                "index": 0,
+                "memory_bytes": {
+                    "free": _bytes_payload(2 * 1024**3),
+                    "total": _bytes_payload(4 * 1024**3),
+                    "reserved": _bytes_payload(1 * 1024**3),
+                    "allocated": _bytes_payload(512 * 1024**2),
+                },
+            }
+        ]
+    }
+
+    result = analysis.analyse_cuda_state(
+        cuda_payload,
+        min_free_gib=1.0,
+        min_free_ratio=0.3,
+        skip_reason=None,
+    )
+
+    device_report = result["devices"][0]
+    assert result["status"] == "ok"
+    assert device_report["status"] == "ok"
+    assert not device_report["recommendations"]
+
+
+def test_oom_analysis_surfaces_invalid_indices():
+    cuda_payload = {
+        "devices": [
+            {
+                "index": 0,
+                "memory_bytes": {
+                    "free": _bytes_payload(2 * 1024**3),
+                    "total": _bytes_payload(4 * 1024**3),
+                    "reserved": _bytes_payload(3 * 1024**3),
+                    "allocated": _bytes_payload(2 * 1024**3),
+                },
+            }
+        ],
+        "invalid_indices": [5],
+    }
+
+    result = analysis.analyse_cuda_state(
+        cuda_payload,
+        min_free_gib=0.5,
+        min_free_ratio=0.2,
+        skip_reason=None,
+    )
+
+    assert result["invalid_indices"] == [5]
