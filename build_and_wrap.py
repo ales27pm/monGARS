@@ -22,7 +22,7 @@ from monGARS.mlops.training import (
     LoraHyperParams,
     TrainerConfig,
     disable_training_mode,
-    prepare_lora_model,
+    prepare_lora_model_light,
     save_lora_artifacts,
     train_qlora,
 )
@@ -156,7 +156,7 @@ def main() -> None:
         offload_dir=OFFLOAD_DIR,
     )
     summarise_device_map(model)
-    model = prepare_lora_model(model, LoraHyperParams())
+    model = prepare_lora_model_light(model, LoraHyperParams())
 
     dataset = prepare_instruction_dataset(
         DATASET_NAME,

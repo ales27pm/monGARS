@@ -20,7 +20,7 @@ from monGARS.mlops.training import (
     LoraHyperParams,
     TrainerConfig,
     disable_training_mode,
-    prepare_lora_model,
+    prepare_lora_model_light,
     run_embedding_smoke_test,
     save_lora_artifacts,
     train_qlora,
@@ -78,7 +78,7 @@ def main() -> None:
         offload_dir=OFFLOAD_DIR,
     )
     summarise_device_map(model)
-    model = prepare_lora_model(
+    model = prepare_lora_model_light(
         model,
         LoraHyperParams(r=LORA_RANK, alpha=LORA_ALPHA, dropout=LORA_DROPOUT),
     )
