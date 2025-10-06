@@ -32,7 +32,12 @@ def load_4bit_causal_lm(
         llm_int8_enable_fp32_cpu_offload=True,
     )
 
-    device_map = {"": 0, "lm_head": "cpu"}
+    device_map = {
+        "model.embed_tokens": 0,
+        "model.layers": 0,
+        "model.norm": 0,
+        "lm_head": "cpu",
+    }
     max_memory = {0: f"{int(vram_budget_mb)}MiB", "cpu": "64GiB"}
 
     logger.info(
@@ -52,7 +57,8 @@ def load_4bit_causal_lm(
         quantization_config=bnb_cfg,
         low_cpu_mem_usage=True,
         trust_remote_code=trust_remote_code,
-        dtype=torch.float16,
+        torch_dtype=torch.float16,
+        llm_int8_enable_fp32_cpu_offload=True,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
