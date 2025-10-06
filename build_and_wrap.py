@@ -48,6 +48,11 @@ ACTIVATION_BUFFER_MB = int(
         "ACTIVATION_BUFFER_MB", os.environ.get("VRAM_ACTIVATION_BUFFER_MB", "1024")
     )
 )
+RUNTIME_BUFFER_MB = int(
+    os.environ.get(
+        "RUNTIME_BUFFER_MB", os.environ.get("VRAM_RUNTIME_BUFFER_MB", "768")
+    )
+)
 OFFLOAD_DIR = Path(os.environ.get("OFFLOAD_DIR", "./offload"))
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "./out"))
 EXPORT_MERGED_FP16 = os.environ.get("EXPORT_MERGED_FP16", "0") == "1"
@@ -117,6 +122,7 @@ def _assemble_training_summary(
             "max_steps": MAX_STEPS,
             "vram_budget_mb": VRAM_BUDGET_MB,
             "activation_buffer_mb": ACTIVATION_BUFFER_MB,
+            "runtime_buffer_mb": RUNTIME_BUFFER_MB,
             "quantization_method": "bnb-4bit-nf4",
         },
     )
@@ -160,6 +166,7 @@ def main() -> None:
         MODEL_ID,
         vram_budget_mb=VRAM_BUDGET_MB,
         activation_buffer_mb=ACTIVATION_BUFFER_MB,
+        runtime_buffer_mb=RUNTIME_BUFFER_MB,
         offload_dir=OFFLOAD_DIR,
     )
     summarise_device_map(model)
