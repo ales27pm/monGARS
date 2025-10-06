@@ -20,9 +20,9 @@ def reset_unsloth_state(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate that Unsloth can be loaded and promises expected optimisations.
 
-    The check emulates loading a small Mistral-7B adapter to guarantee a minimum
-    2x throughput boost and a 70% reduction in VRAM usage once the kernels are
-    patched.  Heavy models are not pulled during the test run; instead we assert
+    The check emulates loading a Dolphin 3.0 adapter to guarantee a minimum 2x
+    throughput boost and a 70% reduction in VRAM usage once the kernels are
+    patched. Heavy models are not pulled during the test run; instead we assert
     that the metadata returned by :func:`initialize_unsloth` advertises the
     benchmark guarantees enforced elsewhere in the system.
     """
@@ -45,4 +45,4 @@ def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["speedup_multiplier"] >= 2.0
     assert result["vram_reduction_fraction"] >= 0.70
     assert isinstance(result["reference_model"], str)
-    assert "mistral-7b" in result["reference_model"].lower()
+    assert "dolphin" in result["reference_model"].lower()

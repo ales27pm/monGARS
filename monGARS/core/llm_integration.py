@@ -123,8 +123,8 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
     """Patch PyTorch with Unsloth's optimisations when available.
 
     The project targets consumer GPUs such as the RTX 2070 where VRAM is a
-    limiting factor.  Unsloth ships fused kernels and quantisation utilities
-    that reduce peak memory consumption for popular instruction-tuned models.
+    limiting factor. Unsloth ships fused kernels and quantisation utilities that
+    reduce peak memory consumption for popular instruction-tuned models.
 
     Parameters
     ----------
@@ -136,7 +136,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
     dict[str, Any]
         Metadata describing the patch outcome.  When Unsloth is available we
         promise a minimum 2x throughput increase and at least 70% VRAM savings
-        for the reference ``mistral-7b`` adapter profile used during internal
+        for the reference ``dolphin3`` adapter profile used during internal
         benchmarking.
     """
 
@@ -170,7 +170,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
                 "patched": False,
                 "speedup_multiplier": 1.0,
                 "vram_reduction_fraction": 0.0,
-                "reference_model": "mistral-7b",
+                "reference_model": "dolphin3",
             }
             return _UNSLOTH_STATE
 
@@ -184,7 +184,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
             "patched": patched,
             "speedup_multiplier": 2.0,
             "vram_reduction_fraction": 0.70,
-            "reference_model": "mistral-7b",
+            "reference_model": "dolphin3",
         }
 
         logger.info(

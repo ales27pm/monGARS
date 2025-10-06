@@ -1172,7 +1172,7 @@ class ReasoningRunSummary:
 
 
 class ReinforcementLoop:
-    """Execute Unsloth-backed GRPO cycles focused on reasoning prompts."""
+    """Execute Unsloth-backed GRPO cycles focused on Dolphin 3.0 reasoning prompts."""
 
 
 from typing import ClassVar
@@ -1200,7 +1200,7 @@ class ReinforcementLoop:
     def __init__(
         self,
         *,
-        model_id: str = "unsloth/Meta-Llama-3.1-8B-bnb-4bit",
+        model_id: str = "cognitivecomputations/Dolphin3.0-Llama3.1-8B",
         slot_name: str = "reasoning-grpo",
         max_seq_length: int = 2048,
         output_dir: str | os.PathLike[str] = "artifacts/reasoning_grpo",

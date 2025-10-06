@@ -66,7 +66,7 @@ class SelfTrainingEngine:
         else:
             self._trainer_cls = trainer_cls
         self.training_config_path = Path(
-            training_config_path or "configs/training/mntp_mistral_config.json"
+            training_config_path or "configs/training/mntp_dolphin_config.json"
         )
         self.dataset_root = Path(dataset_root or "models/datasets/curated")
         self.model_registry_path = Path(

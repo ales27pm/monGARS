@@ -28,7 +28,7 @@ Defines how retraining orchestration and self-healing pipelines behave under
 
 ## Configuration
 
-- Default to `configs/training/mntp_mistral_config.json` with constructor overrides for deterministic
+- Default to `configs/training/mntp_dolphin_config.json` with constructor overrides for deterministic
     tests.
 - Document config changes in the README and roadmap when defaults move.
 
