@@ -80,8 +80,8 @@ async def test_llm_integration_ignores_corrupt_manifest_without_ray(
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
             self._models = {
-                "dolphin-mistral:7b-v2.8-q4_K_M",
-                "qwen2.5-coder:7b-instruct-q6_K",
+                "dolphin3",
+                "dolphin3-llm2vec",
             }
 
         def chat(

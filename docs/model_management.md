@@ -12,7 +12,7 @@ optional description.
     "default": {
       "models": {
         "general": {
-          "name": "dolphin-mistral:7b-v2.8-q4_K_M",
+          "name": "dolphin3",
           "provider": "ollama",
           "auto_download": true,
           "parameters": {
@@ -20,7 +20,7 @@ optional description.
             "num_predict": 512
           }
         },
-        "coding": "qwen2.5-coder:7b-instruct-q6_K"
+        "coding": "dolphin3-llm2vec"
       }
     }
   }
