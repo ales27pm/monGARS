@@ -46,9 +46,9 @@ from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "unsloth/mistral-7b-instruct-v0.3-bnb-4bit"
+DEFAULT_MODEL_ID = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
 DEFAULT_REGISTRY_PATH = Path("models/encoders")
-DEFAULT_CONFIG_PATH = Path("configs/training/mntp_mistral_config.json")
+DEFAULT_CONFIG_PATH = Path("configs/training/mntp_dolphin_config.json")
 TRAINING_SUMMARY_FILENAME = "training_summary.json"
 ENERGY_REPORT_FILENAME = "energy_report.json"
 TRAINING_SLOT_NAME = "primary"

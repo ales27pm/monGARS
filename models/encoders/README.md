@@ -5,7 +5,7 @@ This directory stores trained LLM2Vec adapter weights and metadata consumed by
 
 ## Layout
 - `*/` – adapter directories named after the model family and version, e.g.
-  `mistral-7b-v1/`.
+  `dolphin3.0-llama3.1-8b-v1/`.
 - `adapter_manifest.json` – optional manifest produced by the evolution engine to
   advertise the latest adapter revision and checksum to inference services.
 - `README.md` – this document.
