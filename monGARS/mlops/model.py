@@ -38,7 +38,7 @@ def load_4bit_causal_lm(
         "model.norm": 0,
         "lm_head": "cpu",
     }
-    max_memory = {0: f"{int(vram_budget_mb)}MiB", "cpu": "64GiB"}
+    max_memory = {0: f"{vram_budget_mb}MiB", "cpu": "64GiB"}
 
     logger.info(
         "Loading base model",
