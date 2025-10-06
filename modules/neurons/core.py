@@ -59,15 +59,20 @@ def _coerce_wrapper_embeddings(value: Any) -> list[list[float]]:
     if not isinstance(tensor_like, Sequence):
         return [[float(tensor_like)]]
 
-    rows: list[list[float]] = []
-    for item in tensor_like:
-        if isinstance(item, (str, bytes)):
-            raise TypeError("Wrapper embeddings must be numeric sequences")
-        if isinstance(item, Sequence):
+    seq = list(tensor_like)
+    if not seq:
+        return []
+    first = seq[0]
+    if isinstance(first, (str, bytes)):
+        raise TypeError("Wrapper embeddings must be numeric sequences")
+    if isinstance(first, Sequence):
+        rows: list[list[float]] = []
+        for item in seq:
+            if isinstance(item, (str, bytes)):
+                raise TypeError("Wrapper embeddings must be numeric sequences")
             rows.append([float(component) for component in item])
-        else:
-            rows.append([float(item)])
-    return rows
+        return rows
+    return [[float(value) for value in seq]]
 
 
 class _WrapperHarness:
@@ -87,9 +92,7 @@ class _WrapperHarness:
         self.bundle = self._load()
         return True
 
-    def _resolve(
-        self, wrapper_dir: str | os.PathLike[str] | None
-    ) -> Path | None:
+    def _resolve(self, wrapper_dir: str | os.PathLike[str] | None) -> Path | None:
         if wrapper_dir in (None, ""):
             return None
         try:

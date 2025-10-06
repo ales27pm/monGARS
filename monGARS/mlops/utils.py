@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from importlib.util import find_spec
@@ -16,14 +17,19 @@ except Exception:  # pragma: no cover - torch not installed
 
 logger = logging.getLogger(__name__)
 
+_SPEC_PATTERN = re.compile(r"^[A-Za-z0-9._\-\[\],;=<>!~'\"+/:@#]+$")
+
 
 def _validate_spec(spec: str) -> str:
     """Ensure the pip requirement specification is safe to pass to subprocess."""
 
-    if not spec or any(ch.isspace() for ch in spec.strip("\n\r")):
+    spec = spec.strip()
+    if not spec or any(ch.isspace() for ch in spec):
         raise ValueError(f"Invalid requirement specification: {spec!r}")
     if "\x00" in spec:
         raise ValueError("Requirement specification contains NUL byte")
+    if not _SPEC_PATTERN.fullmatch(spec):
+        raise ValueError(f"Unsupported characters in requirement: {spec!r}")
     return spec
 
 
@@ -79,14 +85,19 @@ def ensure_dependencies(
 def _pip_install(spec: str) -> None:
     """Invoke pip in a subprocess with hardened arguments."""
 
-    logger.info("Installing dependency: %s", spec)
+    safe_spec = _validate_spec(spec)
+    logger.info("Installing dependency: %s", safe_spec)
+    command = [sys.executable, "-m", "pip", "install", "-U", safe_spec]
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-U", spec],
+        command,
         check=True,
+        stdin=subprocess.DEVNULL,
     )
 
 
-def configure_cuda_allocator(default: str = "expandable_segments:True,max_split_size_mb:64") -> None:
+def configure_cuda_allocator(
+    default: str = "expandable_segments:True,max_split_size_mb:64",
+) -> None:
     """Set CUDA allocator defaults if they are not already configured."""
 
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", default)

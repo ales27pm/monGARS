@@ -1331,13 +1331,22 @@ class ReinforcementLoop:
             model_id=self.model_id,
             max_seq_length=self.max_seq_length,
         )
-        resources = manager.__enter__()
+        entered = False
+        exc_type: type[BaseException] | None = None
+        exc: BaseException | None = None
+        tb = None
         try:
+            resources = manager.__enter__()
+            entered = True
             if not resources:
                 raise RuntimeError("ModelSlotManager returned an empty slot")
             yield resources
+        except BaseException as err:
+            exc_type, exc, tb = type(err), err, err.__traceback__
+            raise
         finally:
-            manager.__exit__(None, None, None)
+            if entered:
+                manager.__exit__(exc_type, exc, tb)
 
     def _ensure_peft(self, model: Any) -> Any:
         if hasattr(model, "peft_config"):

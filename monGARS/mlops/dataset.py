@@ -95,19 +95,23 @@ def prepare_instruction_dataset(
     """Load and tokenise an instruction dataset for supervised fine-tuning."""
 
     logger.info(
-        "Loading dataset", extra={"dataset": dataset_name, "train_fraction": train_fraction}
+        "Loading dataset",
+        extra={"dataset": dataset_name, "train_fraction": train_fraction},
     )
     dataset: Dataset | DatasetDict = load_dataset(dataset_name)
     if isinstance(dataset, DatasetDict):
         dataset = dataset.get("train") or next(iter(dataset.values()))
     if train_fraction and 0 < train_fraction < 1:
         total = len(dataset)
-        take = max(1, int(total * train_fraction))
+        desired = max(1, int(total * train_fraction))
+        take = min(total, max(1000, desired))
         dataset = dataset.select(range(take))
         logger.info("Dataset subset selected", extra={"take": take, "total": total})
 
     if "prompt" not in dataset.column_names or "completion" not in dataset.column_names:
-        dataset = dataset.map(_format_prompt_completion, remove_columns=dataset.column_names)
+        dataset = dataset.map(
+            _format_prompt_completion, remove_columns=dataset.column_names
+        )
 
     tokenized = dataset.map(
         _tokenize_pair(tokenizer, max_seq_len),

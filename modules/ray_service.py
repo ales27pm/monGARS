@@ -186,7 +186,8 @@ class RayLLMDeployment:
             return self._adapter_payload
 
         effective_version = requested_version or manifest_version or "baseline"
-        wrapper_path = incoming.get("wrapper_path")
+        wrapper_path_obj = self._resolve_wrapper_path(incoming.get("wrapper_path"))
+        wrapper_path = str(wrapper_path_obj) if wrapper_path_obj else None
         if effective_version != self._adapter_version:
             await asyncio.to_thread(
                 self.neuron_manager.switch_encoder,
@@ -225,13 +226,37 @@ class RayLLMDeployment:
         self._manifest_mtime = current_mtime
         if manifest.current:
             payload = manifest.build_payload()
-            if adapter_path := payload.get("adapter_path"):
-                await asyncio.to_thread(
-                    self.neuron_manager.switch_encoder,
-                    adapter_path,
-                    wrapper_dir=payload.get("wrapper_path"),
+            if payload:
+                adapter_candidate = self._resolve_requested_path(
+                    payload.get("adapter_path")
                 )
-            self._adapter_version = payload.get("version", "baseline")
+                wrapper_candidate = self._resolve_wrapper_path(
+                    payload.get("wrapper_path")
+                )
+                if adapter_candidate:
+                    await asyncio.to_thread(
+                        self.neuron_manager.switch_encoder,
+                        str(adapter_candidate),
+                        wrapper_dir=(
+                            str(wrapper_candidate) if wrapper_candidate else None
+                        ),
+                    )
+                    payload["adapter_path"] = str(adapter_candidate)
+                    if wrapper_candidate:
+                        payload["wrapper_path"] = str(wrapper_candidate)
+                    elif "wrapper_path" in payload:
+                        payload.pop("wrapper_path")
+                else:
+                    logger.warning(
+                        "llm.ray.adapter.rejected",
+                        extra={
+                            "reason": "invalid_manifest_path",
+                            "requested_path": payload.get("adapter_path"),
+                        },
+                    )
+            self._adapter_version = (
+                payload.get("version", "baseline") if payload else "baseline"
+            )
             self._adapter_payload = payload if payload else None
         return self._adapter_payload
 
@@ -246,9 +271,7 @@ class RayLLMDeployment:
             )
             return None
 
-    def _resolve_requested_path(
-        self, adapter_path: Any
-    ) -> Path | None:
+    def _resolve_requested_path(self, adapter_path: Any) -> Path | None:
         if not adapter_path:
             return None
         root = self.registry_path.resolve()
@@ -269,6 +292,30 @@ class RayLLMDeployment:
             )
             return None
         return requested
+
+    def _resolve_wrapper_path(self, wrapper_path: Any) -> Path | None:
+        if not wrapper_path:
+            return None
+        root = self.registry_path.resolve()
+        try:
+            resolved = Path(str(wrapper_path)).resolve()
+        except (OSError, RuntimeError, ValueError, TypeError):
+            logger.warning(
+                "llm.ray.wrapper.rejected",
+                extra={"reason": "unresolvable", "wrapper_path": str(wrapper_path)},
+            )
+            return None
+        if resolved != root and root not in resolved.parents:
+            logger.warning(
+                "llm.ray.wrapper.rejected",
+                extra={
+                    "reason": "outside_registry",
+                    "wrapper_path": str(wrapper_path),
+                    "registry_root": str(root),
+                },
+            )
+            return None
+        return resolved
 
     def _encode_prompt(self, prompt: str) -> list[list[float]]:
         try:
