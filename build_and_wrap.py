@@ -174,9 +174,7 @@ def evaluate_oom_headroom(
     cuda_payload: dict[str, Any] | None = None
 
     if analyse_cuda_state is None:
-        from scripts import diagnose_unsloth as _diagnose_unsloth
-
-        analyse_cuda_state = _diagnose_unsloth._analyse_cuda_state  # type: ignore[attr-defined]
+        from scripts.diagnose_unsloth import _analyse_cuda_state as analyse_cuda_state  # type: ignore
 
     if torch_module is None:
         try:
@@ -194,10 +192,10 @@ def evaluate_oom_headroom(
         skip_reason = "cuda_unavailable"
     else:
         if gather_metrics is None:
-            from scripts import diagnose_unsloth as _diagnose_unsloth
+            from scripts.diagnose_unsloth import _gather_cuda_metrics as _gather_cuda_metrics  # type: ignore
 
-            def gather_metrics(module: Any) -> dict[str, Any] | None:  # type: ignore[override]
-                return _diagnose_unsloth._gather_cuda_metrics(  # type: ignore[attr-defined]
+            def gather_metrics(module: Any) -> dict[str, Any] | None:  # type: ignore
+                return _gather_cuda_metrics(
                     module,
                     lambda: list(range(module.cuda.device_count())),
                 )
