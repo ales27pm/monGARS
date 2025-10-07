@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Type
@@ -15,7 +17,57 @@ try:  # pragma: no cover - optional dependency under tests
 except Exception:  # pragma: no cover - tests patch this path
     LoraConfig = get_peft_model = None  # type: ignore
 
+from monGARS.mlops.model import move_to_cpu
+
 logger = logging.getLogger(__name__)
+
+
+OVR_ENV_MAP = {
+    "per_device_train_batch_size": "OVR_PER_DEVICE_TRAIN_BATCH_SIZE",
+    "gradient_accumulation_steps": "OVR_GRAD_ACCUM_STEPS",
+    "per_device_eval_batch_size": "OVR_PER_DEVICE_EVAL_BATCH_SIZE",
+    "max_seq_length": "OVR_MAX_SEQ_LEN",
+    "eval_max_seq_length": "OVR_EVAL_MAX_SEQ_LEN",
+    "torch_dtype": "OVR_TORCH_DTYPE",
+    "dtype": "OVR_TORCH_DTYPE",
+    "gradient_checkpointing": "OVR_GRAD_CHECKPOINT",
+    "attention_implementation": "OVR_ATTN_IMPL",
+    "use_4bit": "OVR_USE_4BIT",
+    "bnb_4bit_quant_type": "OVR_BNB_QUANT",
+    "bnb_4bit_compute_dtype": "OVR_BNB_COMP_DTYPE",
+    "lora_r": "OVR_LORA_R",
+    "lora_alpha": "OVR_LORA_ALPHA",
+    "lora_dropout": "OVR_LORA_DROPOUT",
+}
+
+
+def _load_json_overrides() -> dict[str, Any]:
+    path = os.environ.get("TRAINER_OVERRIDES_JSON")
+    if path and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle).get("trainer_overrides", {})
+        except Exception:
+            return {}
+    return {}
+
+
+_OVR_JSON = _load_json_overrides()
+
+
+def ovr(key: str, default: Any | None = None) -> Any | None:
+    env_key = OVR_ENV_MAP.get(key)
+    if env_key and (value := os.environ.get(env_key)) is not None:
+        lowered = value.lower()
+        if lowered in {"true", "1"}:
+            return True
+        if lowered in {"false", "0"}:
+            return False
+        try:
+            return int(value)
+        except Exception:
+            return value
+    return _OVR_JSON.get(key, default)
 
 
 @dataclass(slots=True)
@@ -215,18 +267,22 @@ def _build_training_arguments(
 ) -> TrainingArguments:
     """Create ``TrainingArguments`` with shared defaults."""
 
+    base = dict(base_args)
     dtype_args: dict[str, Any] = {}
-    if "bf16" not in base_args and "fp16" not in base_args:
+    if "bf16" not in base and "fp16" not in base:
         if use_cuda:
             dtype_args = {"bf16": bf16_ok, "fp16": not bf16_ok}
         else:
             dtype_args = {"bf16": False, "fp16": False}
 
     if not use_cuda:
-        if "no_cuda" not in base_args:
-            dtype_args["no_cuda"] = True
-        if "use_cpu" not in base_args:
-            dtype_args["use_cpu"] = True
+        base.pop("no_cuda", None)
+        dtype_args["use_cpu"] = base.pop("use_cpu", True)
+        dtype_args["no_cuda"] = True
+    else:
+        base.pop("use_cpu", None)
+
+    gradient_checkpointing = bool(base.pop("gradient_checkpointing", True))
 
     return TrainingArguments(
         output_dir=str(cfg.output_dir),
@@ -235,9 +291,9 @@ def _build_training_arguments(
         learning_rate=cfg.learning_rate,
         num_train_epochs=cfg.epochs,
         max_steps=cfg.max_steps if cfg.max_steps > 0 else -1,
-        gradient_checkpointing=True,
+        gradient_checkpointing=gradient_checkpointing,
         **dtype_args,
-        **base_args,
+        **base,
     )
 
 
@@ -383,16 +439,49 @@ def train_qlora(
     """
 
     extra_args = dict(extra_args or {})
+    extra_args.pop("max_seq_length", None)
+    extra_args.pop("eval_max_seq_length", None)
+
+    per_device_train_batch_size = int(
+        ovr(
+            "per_device_train_batch_size",
+            extra_args.pop("per_device_train_batch_size", config.batch_size),
+        )
+    )
+    grad_accum_override = int(
+        ovr(
+            "gradient_accumulation_steps",
+            extra_args.pop("gradient_accumulation_steps", config.grad_accum),
+        )
+    )
+    per_device_eval_batch_size = int(
+        ovr(
+            "per_device_eval_batch_size",
+            extra_args.pop("per_device_eval_batch_size", config.batch_size),
+        )
+    )
+
+    gradient_checkpointing = bool(
+        ovr(
+            "gradient_checkpointing",
+            extra_args.pop("gradient_checkpointing", True),
+        )
+    )
 
     force_cpu = bool(extra_args.pop("force_cpu", False))
-    prefer_cuda = torch.cuda.is_available() and not force_cpu
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    cuda_allowed = visible_devices is None or visible_devices.strip() != ""
+    prefer_cuda = torch.cuda.is_available() and not force_cpu and cuda_allowed
     allow_cpu_fallback = bool(extra_args.pop("allow_cpu_fallback", True))
 
-    bf16_ok = (
+    dtype_pref = str(ovr("dtype", ovr("torch_dtype", None)) or "").lower()
+
+    bf16_available = (
         bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)())
         if prefer_cuda
         else False
     )
+    bf16_ok = bf16_available
 
     oom_retries = int(extra_args.pop("oom_retries", 2))
     backoff_factor = _sanitize_backoff_factor(extra_args.pop("oom_backoff_factor", 0.5))
@@ -408,9 +497,35 @@ def train_qlora(
         "torch_empty_cache_steps": extra_args.pop("torch_empty_cache_steps", 50),
     }
     base_args.update(extra_args)
+    base_args["per_device_eval_batch_size"] = max(1, per_device_eval_batch_size)
+    base_args["gradient_checkpointing"] = gradient_checkpointing
 
-    batch_size = max(1, config.batch_size)
-    grad_accum = max(1, config.grad_accum)
+    if dtype_pref:
+        if dtype_pref in {"bf16", "bfloat16"}:
+            if prefer_cuda and not bf16_available:
+                logger.warning(
+                    "Requested bf16 precision but GPU does not support it; falling back to fp16"
+                )
+                base_args["bf16"] = False
+                base_args["fp16"] = prefer_cuda
+                bf16_ok = False
+            else:
+                base_args["bf16"] = bool(prefer_cuda)
+                base_args["fp16"] = False
+                bf16_ok = prefer_cuda
+        elif dtype_pref in {"fp16", "float16", "half"}:
+            base_args["bf16"] = False
+            base_args["fp16"] = bool(prefer_cuda)
+            bf16_ok = False
+        elif dtype_pref in {"float32", "fp32", "f32"}:
+            base_args["bf16"] = False
+            base_args["fp16"] = False
+            bf16_ok = False
+        else:
+            logger.warning("Unsupported dtype override %s; ignoring", dtype_pref)
+
+    batch_size = max(1, per_device_train_batch_size)
+    grad_accum = max(1, grad_accum_override)
     attempt = 0
     use_cuda = prefer_cuda
 
@@ -466,14 +581,14 @@ def train_qlora(
                     base_args.setdefault("optim", "adamw_torch")
                     base_args["optim"] = "adamw_torch"
                     base_args.pop("no_cuda", None)
+                    base_args["use_cpu"] = True
+                    base_args["no_cuda"] = True
+                    base_args["bf16"] = False
+                    base_args["fp16"] = False
                     use_cuda = False
                     bf16_ok = False
-                    move_to_cpu = getattr(model, "to", None)
-                    if callable(move_to_cpu):
-                        try:
-                            move_to_cpu("cpu")
-                        except Exception:  # pragma: no cover - defensive guard
-                            logger.debug("Unable to move model to CPU", exc_info=True)
+                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                    move_to_cpu(model)
                     _maybe_empty_cuda_cache()
                     _reset_cuda_peak_memory_stats()
                     attempt += 1
