@@ -218,14 +218,8 @@ OOM_PATTERNS = [
     r"CUDA OOM",
     r"RuntimeError:.*out of memory",
     r"c10::Error.*out of memory",
-    r"\\bOOM\\b",
+    r"\bOOM\b",
 ]
-
-
-def looks_like_oom(stdout: str, stderr: str) -> bool:
-    text = (stdout or "") + "\n" + (stderr or "")
-    return any(re.search(pat, text, flags=re.IGNORECASE) for pat in OOM_PATTERNS)
-
 
 # -----------------------------
 # Adaptive config model
