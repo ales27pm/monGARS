@@ -517,6 +517,7 @@ def build_training_arguments(config: TrainingConfig, device: str) -> TrainingArg
         "bf16": config.bf16 and device != "cpu",
         "fp16": config.fp16 and device != "cpu",
         "tf32": config.allow_tf32,
+        "remove_unused_columns": False,
     }
 
     if config.save_steps is not None:
