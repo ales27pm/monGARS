@@ -45,7 +45,7 @@ def sh(
 def has_cmd(bin_name: str) -> bool:
     return (
         subprocess.call(
-            f"command -v {shlex.quote(bin_name)} >/dev/null 2>&1", shell=True
+            f"command -v {shlex.quote(bin_name)} >/dev/null 2>&1", shell=False
         )
         == 0
     )
