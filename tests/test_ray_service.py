@@ -115,25 +115,52 @@ def _run_orchestrator_pipeline(registry_path: Path, trainer_cls: type) -> Path:
     return Path(orchestrator.trigger_encoder_training_pipeline())
 
 
+@pytest.fixture
+def fake_vllm(monkeypatch: pytest.MonkeyPatch):
+    from modules import ray_service
+
+    class FakeSamplingParams:
+        def __init__(self, *_, **kwargs) -> None:
+            self.kwargs = kwargs
+            self.temperature = kwargs.get("temperature")
+            self.top_p = kwargs.get("top_p")
+            self.max_tokens = kwargs.get("max_tokens")
+
+    class FakeSequenceOutput:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.token_ids = [0, 1, 2]
+
+    class FakeRequestOutput:
+        def __init__(self, *, text: str) -> None:
+            self.outputs = [FakeSequenceOutput(text)]
+            self.prompt_token_ids = [10, 11]
+            self.metrics = {"latency_ms": 1.5}
+
+    class FakeLLM:
+        instances: list["FakeLLM"] = []
+        requests: list[tuple[str, list[str], FakeSamplingParams]] = []
+
+        def __init__(self, *, model: str) -> None:
+            self.model = model
+            FakeLLM.instances.append(self)
+
+        def generate(
+            self, prompts: list[str], sampling_params: FakeSamplingParams
+        ) -> list[FakeRequestOutput]:
+            FakeLLM.requests.append((self.model, prompts, sampling_params))
+            return [FakeRequestOutput(text=f"response-for-{self.model}")]
+
+    monkeypatch.setattr(ray_service, "SamplingParams", FakeSamplingParams)
+    monkeypatch.setattr(ray_service, "LLM", FakeLLM)
+    return FakeLLM
+
+
 @pytest.mark.asyncio
-async def test_ray_service_render_response_uses_ollama(monkeypatch):
+async def test_ray_service_render_response_uses_vllm(fake_vllm):
     from modules import ray_service
 
     deployment = ray_service.RayLLMDeployment(base_model_path="base")
-
-    called = {}
-
-    class FakeOllama:
-        @staticmethod
-        def chat(
-            *, model: str, messages: list[dict[str, str]], options: dict[str, float]
-        ):
-            called["model"] = model
-            called["messages"] = messages
-            called["options"] = options
-            return {"message": {"content": "ok"}, "usage": {"eval_count": 1}}
-
-    monkeypatch.setattr(ray_service, "ollama", FakeOllama())
 
     result = await deployment._render_response(
         "prompt",
@@ -142,13 +169,21 @@ async def test_ray_service_render_response_uses_ollama(monkeypatch):
         "general",
     )
 
-    assert result["content"] == "ok"
-    assert result["message"]["content"] == "ok"
+    assert result["content"] == f"response-for-{deployment.general_model}"
+    assert result["message"]["content"] == result["content"]
     assert result["usage"]["model"] == deployment.general_model
-    assert called["messages"][0]["content"] == "prompt"
+    assert result["usage"]["prompt_tokens"] == 2
+    assert result["usage"]["completion_tokens"] == 3
+
+    model, prompts, sampling_params = fake_vllm.requests[-1]
+    assert model == deployment.general_model
+    assert prompts == ["prompt"]
+    assert sampling_params.temperature == pytest.approx(deployment.temperature)
+    assert sampling_params.top_p == pytest.approx(deployment.top_p)
+    assert sampling_params.max_tokens == deployment.max_tokens
 
 
-def test_ray_service_encode_prompt_error(monkeypatch):
+def test_ray_service_encode_prompt_error(fake_vllm, monkeypatch):
     from modules import ray_service
 
     deployment = ray_service.RayLLMDeployment(base_model_path="base")
@@ -255,7 +290,7 @@ def test_llm_integration_invalid_backoff_falls_back_to_defaults(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ray_deployment_refreshes_after_training_pipeline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_vllm
 ) -> None:
     from modules import ray_service
 
@@ -305,7 +340,7 @@ async def test_ray_deployment_refreshes_after_training_pipeline(
 
 @pytest.mark.asyncio
 async def test_ray_deployment_rejects_invalid_adapter_payload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_vllm
 ) -> None:
     from modules import ray_service
 
@@ -346,7 +381,7 @@ async def test_ray_deployment_rejects_invalid_adapter_payload(
 
 @pytest.mark.asyncio
 async def test_ray_deployment_accepts_multi_replica_payload_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_vllm
 ) -> None:
     from modules import ray_service
 

@@ -26,9 +26,10 @@ except ImportError:  # pragma: no cover - fallback when ray not installed
     serve = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency for inference
-    import ollama
-except ImportError:  # pragma: no cover - Ray deployment can still start without Ollama
-    ollama = None
+    from vllm import LLM, SamplingParams
+except ImportError:  # pragma: no cover - Ray deployment can still start without vLLM
+    LLM = None  # type: ignore[assignment]
+    SamplingParams = None  # type: ignore[assignment]
 
 if serve:  # pragma: no cover - executed only when ray is installed
     try:
@@ -97,6 +98,12 @@ class RayLLMDeployment:
         coding_definition = self._model_manager.get_model_definition("coding")
         self.general_model = os.getenv("RAY_GENERAL_MODEL", general_definition.name)
         self.coding_model = os.getenv("RAY_CODING_MODEL", coding_definition.name)
+        if LLM is None or SamplingParams is None:
+            raise RuntimeError(
+                "vLLM is not available; install the vllm package in the Ray Serve image."
+            )
+        self._llm_engines: dict[str, LLM] = {}
+        self._initialise_llm_engines()
         resolved_temperature = self._model_manager.resolve_parameter(
             "general", "temperature", settings.AI_MODEL_TEMPERATURE
         )
@@ -142,6 +149,26 @@ class RayLLMDeployment:
             llm2vec_options={"device_map": DEFAULT_DEVICE_MAP},
             wrapper_dir=default_wrapper,
         )
+
+    def _initialise_llm_engines(self) -> None:
+        models = {self.general_model, self.coding_model}
+        for model_name in models:
+            if model_name in self._llm_engines:
+                continue
+            try:
+                self._llm_engines[model_name] = LLM(model=model_name)
+            except Exception as exc:  # pragma: no cover - backend-specific failures
+                logger.exception(
+                    "llm.ray.vllm_initialisation_failed",
+                    extra={"model": model_name},
+                )
+                raise RuntimeError(
+                    f"Failed to initialise vLLM engine for model {model_name!r}"
+                ) from exc
+            logger.info(
+                "llm.ray.vllm_initialised",
+                extra={"model": model_name},
+            )
 
     def _stat_manifest(self) -> float | None:
         try:
@@ -369,51 +396,50 @@ class RayLLMDeployment:
         self, prompt: str, task_type: str
     ) -> tuple[str, dict[str, Any]]:
         model = self._select_model(task_type)
-        if not ollama:
-            raise RayServeException("Ollama client is not available on the Ray replica")
+        engine = self._llm_engines.get(model)
+        if engine is None:
+            raise RayServeException(f"Model {model!r} is not loaded on this replica")
 
+        sampling_params = self._build_sampling_params()
         try:
-            response = await asyncio.to_thread(
-                ollama.chat,
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                options={
-                    "temperature": float(self.temperature),
-                    "top_p": float(self.top_p),
-                    "num_predict": int(self.max_tokens),
-                    "stream": False,
-                },
+            responses = await asyncio.to_thread(
+                engine.generate,
+                [prompt],
+                sampling_params=sampling_params,
             )
         except Exception as exc:  # pragma: no cover - backend-specific failures
             logger.exception(
-                "llm.ray.ollama_failure",
+                "llm.ray.vllm_failure",
                 extra={"model": model},
             )
             raise RayServeException("Text generation failed") from exc
 
-        message = response.get("message") if isinstance(response, dict) else None
-        text: Any
-        if isinstance(message, dict):
-            text = message.get("content")
-        else:
-            text = None
-        if not isinstance(text, str):
-            text = response.get("content") if isinstance(response, dict) else None
-        if not isinstance(text, str):
+        if not responses:
+            raise RayServeException("vLLM returned no generations")
+
+        first = responses[0]
+        outputs = getattr(first, "outputs", None)
+        if not outputs:
+            raise RayServeException("vLLM response did not include any outputs")
+        candidate = outputs[0]
+        text = getattr(candidate, "text", None)
+        if not isinstance(text, str) or not text:
             raise RayServeException("LLM response did not include textual content")
 
-        usage_raw = response.get("usage") if isinstance(response, dict) else None
-        usage: dict[str, Any]
-        if isinstance(usage_raw, dict):
-            usage = {
-                key: value
-                for key, value in usage_raw.items()
-                if isinstance(key, str) and isinstance(value, (int, float))
-            }
-        else:
-            usage = {}
+        prompt_tokens = len(getattr(first, "prompt_token_ids", []) or [])
+        completion_tokens = len(getattr(candidate, "token_ids", []) or [])
+        usage: dict[str, Any] = {
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        metrics = getattr(first, "metrics", None)
+        if isinstance(metrics, Mapping):
+            for key, value in metrics.items():
+                if isinstance(key, str) and isinstance(value, (int, float)):
+                    usage.setdefault(key, value)
 
-        usage.setdefault("model", model)
         return text, usage
 
     def _summarise_embedding(
@@ -429,6 +455,13 @@ class RayLLMDeployment:
             "norm": magnitude,
             "mean": mean_activation,
         }
+
+    def _build_sampling_params(self) -> SamplingParams:
+        return SamplingParams(
+            temperature=float(self.temperature),
+            top_p=float(self.top_p),
+            max_tokens=int(self.max_tokens),
+        )
 
     def _select_model(self, task_type: str) -> str:
         if task_type.lower() in {"code", "coding", "developer"}:

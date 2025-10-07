@@ -36,6 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "llm2vec>=0.2.3" \
         "peft>=0.13.2" \
         "sentencepiece>=0.2.0" \
+        "vllm>=0.4.2" \
         "transformers>=4.44.2"
 
 # Return to the default ray user for runtime safety.
