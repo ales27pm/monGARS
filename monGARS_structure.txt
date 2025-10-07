@@ -62,6 +62,7 @@ monGARS/
     │   ├── llm_integration.py
     │   ├── model_manager.py
     │   ├── logging.py
+    │   ├── operator_approvals.py
     │   ├── monitor.py
     │   ├── neuro_symbolic/
     │   │   ├── __init__.py

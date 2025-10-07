@@ -42,6 +42,10 @@ from monGARS.config import get_settings
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.operator_approvals import (
+    ApprovalPolicy,
+    OperatorApprovalRegistry,
+)
 from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
@@ -173,6 +177,8 @@ class EvolutionOrchestrator:
         flow_name: str = WORKFLOW_NAME,
         deployment_name: str = WORKFLOW_DEPLOYMENT_NAME,
         energy_tracker_factory: EnergyTrackerFactory | None = None,
+        approval_registry: OperatorApprovalRegistry | None = None,
+        approval_policy: ApprovalPolicy | None = None,
     ) -> None:
         self.registry_path = Path(model_registry_path)
         self.registry_path.mkdir(parents=True, exist_ok=True)
@@ -192,6 +198,10 @@ class EvolutionOrchestrator:
         self._deployment_name = deployment_name
         self._reinforcement_limit = 128
         self._reasoning_loop: ReinforcementLoop | None = None
+        self._approval_registry = approval_registry or OperatorApprovalRegistry(
+            self.registry_path / "operator_approvals.json"
+        )
+        self._reasoning_approval_policy = approval_policy
 
         self._workflow_backend = (
             workflow_backend
@@ -421,6 +431,8 @@ class EvolutionOrchestrator:
                 registry_path=self.registry_path,
                 slot_manager_cls=self._slot_manager_cls,
                 self_training_engine=SelfTrainingEngine(),
+                approval_registry=self._approval_registry,
+                approval_policy=self._reasoning_approval_policy,
             )
 
         try:
