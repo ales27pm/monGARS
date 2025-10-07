@@ -44,6 +44,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +70,8 @@ __all__ = [
     "build_sft_dataset",
     "make_sliced_trainer",
 ]
+
+LOGGER = logging.getLogger(__name__)
 
 # ---- Loader: 4-bit + CPU offload of lm_head ---------------------------------
 
@@ -168,6 +171,30 @@ def prepare_lora_model_light(
     target_modules = (
         tuple(target_modules) if target_modules else LoRAArgs.target_modules
     )
+
+    frozen_layers = 0
+    transformer = getattr(model, "model", None)
+    layers = getattr(transformer, "layers", None) if transformer is not None else None
+    if layers is not None:
+        try:
+            total_layers = len(layers)
+        except TypeError:
+            total_layers = 0
+        freeze_count = max(total_layers // 2, 0)
+        if freeze_count > 0:
+            for layer in layers[:freeze_count]:
+                for param in layer.parameters():
+                    param.requires_grad_(False)
+            frozen_layers = freeze_count
+            LOGGER.info(
+                "Gradient checkpoint freezing applied to %d/%d transformer layers.",
+                frozen_layers,
+                total_layers,
+            )
+    if frozen_layers == 0:
+        LOGGER.debug(
+            "Skipping gradient checkpoint freezing; model does not expose layered transformer blocks."
+        )
 
     # Gradient checkpointing (prefer non-reentrant variant for modern PyTorch)
     try:
@@ -348,7 +375,7 @@ def make_sliced_trainer(
         fp16=fp16,
         bf16=False,
         gradient_checkpointing=True,
-        optim="adamw_bnb_8bit",
+        optim="paged_adamw_8bit",
         torch_empty_cache_steps=50,
     )
     return SliceLossTrainer(
