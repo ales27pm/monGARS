@@ -12,3 +12,4 @@ inventory.json
 .venv/
 mongars_local.db
 unsloth_compiled_cache/
+dolphin3_finetuned/
