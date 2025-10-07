@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import inspect
 import json
 import logging
 import os
@@ -526,6 +527,16 @@ def build_training_arguments(config: TrainingConfig, device: str) -> TrainingArg
         args_kwargs["resume_from_checkpoint"] = str(config.resume_from_checkpoint)
     if config.deepspeed is not None:
         args_kwargs["deepspeed"] = str(config.deepspeed)
+
+    init_params = set(inspect.signature(TrainingArguments.__init__).parameters)
+    remapped_args: dict[str, str] = {"evaluation_strategy": "eval_strategy"}
+    for old_key, new_key in remapped_args.items():
+        if (
+            old_key in args_kwargs
+            and old_key not in init_params
+            and new_key in init_params
+        ):
+            args_kwargs[new_key] = args_kwargs.pop(old_key)
 
     return TrainingArguments(**args_kwargs)
 
