@@ -10,10 +10,56 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 from zipfile import ZipFile
 
-from .dataset.builders import DatasetBuilders
-from .dataset.provenance import ProvenanceTracker
-from .dataset.qc_filter import QCFilter
-from .extractors import code_py, configs_yaml, dockerfiles, html_jsx, shells, text_docs
+try:
+    from .dataset.builders import DatasetBuilders
+    from .dataset.provenance import ProvenanceTracker
+    from .dataset.qc_filter import QCFilter
+    from .extractors import (
+        code_py,
+        configs_yaml,
+        dockerfiles,
+        html_jsx,
+        shells,
+        text_docs,
+    )
+except Exception:  # pragma: no cover - fallback path for script execution
+    import importlib
+    from pathlib import Path as _Path
+
+    package_root = _Path(__file__).resolve().parent
+    parent_dir = package_root.parent
+    repo_root = parent_dir.parent
+
+    for candidate in (repo_root, parent_dir):
+        candidate_str = str(candidate)
+        if candidate_str and candidate_str not in sys.path:
+            sys.path.insert(0, candidate_str)
+
+    package_name = package_root.name
+
+    try:
+        DatasetBuilders = importlib.import_module(
+            f"{package_name}.dataset.builders"
+        ).DatasetBuilders
+        ProvenanceTracker = importlib.import_module(
+            f"{package_name}.dataset.provenance"
+        ).ProvenanceTracker
+        QCFilter = importlib.import_module(f"{package_name}.dataset.qc_filter").QCFilter
+        code_py = importlib.import_module(f"{package_name}.extractors.code_py")
+        configs_yaml = importlib.import_module(
+            f"{package_name}.extractors.configs_yaml"
+        )
+        dockerfiles = importlib.import_module(f"{package_name}.extractors.dockerfiles")
+        html_jsx = importlib.import_module(f"{package_name}.extractors.html_jsx")
+        shells = importlib.import_module(f"{package_name}.extractors.shells")
+        text_docs = importlib.import_module(f"{package_name}.extractors.text_docs")
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise ImportError(
+            "Failed to import monGARS_deep_scan package modules in script mode. "
+            "Run from the repository root with `PYTHONPATH=. python -m "
+            "tools.monGARS_deep_scan.deep_scan ...` or ensure the package structure "
+            f"is intact. Original error: {exc}"
+        ) from exc
 from .extractors.types import ExtractionRecord
 from .utils.io import ensure_directory, read_text_file
 from .utils.log import configure_logging, get_logger

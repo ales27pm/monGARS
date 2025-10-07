@@ -1,16 +1,21 @@
-INPUT ?= .
-OUT ?= output
-
 .PHONY: install run dryrun test
 
+PY ?= python3
+OUT ?= output
+INPUT ?= .
+
+# Adjust MODULE if your package lives elsewhere
+MODULE ?= tools.monGARS_deep_scan
+REQFILE ?= tools/monGARS_deep_scan/requirements.txt
+
 install:
-	pip install -r tools/monGARS_deep_scan/requirements.txt
+$(PY) -m pip install -r $(REQFILE)
 
 run:
-	python -m tools.monGARS_deep_scan.deep_scan --input "$(INPUT)" --out "$(OUT)"
+PYTHONPATH=. $(PY) -m $(MODULE).deep_scan --input $(INPUT) --out $(OUT)
 
 dryrun:
-	python -m tools.monGARS_deep_scan.deep_scan --dry-run --input "$(INPUT)" --out "$(OUT)"
+PYTHONPATH=. $(PY) -m $(MODULE).deep_scan --input $(INPUT) --out $(OUT) --dry-run
 
 test:
-	pytest -q
+pytest -q
