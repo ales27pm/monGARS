@@ -9,6 +9,54 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+OVR_ENV_MAP = {
+    "per_device_train_batch_size": "OVR_PER_DEVICE_TRAIN_BATCH_SIZE",
+    "gradient_accumulation_steps": "OVR_GRAD_ACCUM_STEPS",
+    "per_device_eval_batch_size": "OVR_PER_DEVICE_EVAL_BATCH_SIZE",
+    "max_seq_length": "OVR_MAX_SEQ_LEN",
+    "eval_max_seq_length": "OVR_EVAL_MAX_SEQ_LEN",
+    "torch_dtype": "OVR_TORCH_DTYPE",
+    "dtype": "OVR_TORCH_DTYPE",
+    "gradient_checkpointing": "OVR_GRAD_CHECKPOINT",
+    "attention_implementation": "OVR_ATTN_IMPL",
+    "use_4bit": "OVR_USE_4BIT",
+    "bnb_4bit_quant_type": "OVR_BNB_QUANT",
+    "bnb_4bit_compute_dtype": "OVR_BNB_COMP_DTYPE",
+    "lora_r": "OVR_LORA_R",
+    "lora_alpha": "OVR_LORA_ALPHA",
+    "lora_dropout": "OVR_LORA_DROPOUT",
+}
+
+
+def _load_json_overrides() -> dict[str, Any]:
+    path = os.environ.get("TRAINER_OVERRIDES_JSON")
+    if path and os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle).get("trainer_overrides", {})
+        except Exception:
+            return {}
+    return {}
+
+
+_OVR_JSON = _load_json_overrides()
+
+
+def ovr(key: str, default: Any | None = None) -> Any | None:
+    env_key = OVR_ENV_MAP.get(key)
+    if env_key and (value := os.environ.get(env_key)) is not None:
+        lowered = value.lower()
+        if lowered in {"true", "1"}:
+            return True
+        if lowered in {"false", "0"}:
+            return False
+        try:
+            return int(value)
+        except Exception:
+            return value
+    return _OVR_JSON.get(key, default)
+
+
 from modules.neurons.registry import update_manifest
 from monGARS.mlops.artifacts import (
     WrapperConfig,
@@ -43,12 +91,52 @@ try:  # pragma: no cover - optional dependency
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     torch = None  # type: ignore[assignment]
 
+
+def _coerce_dtype(value: str | None, fallback: str) -> str:
+    if value is None or value == "":
+        return fallback
+    return str(value).lower()
+
+
+_DEFAULT_DTYPE_NAME = os.environ.get("TORCH_DTYPE", "bfloat16")
+_DTYPE_NAME = _coerce_dtype(ovr("dtype", ovr("torch_dtype", None)), _DEFAULT_DTYPE_NAME)
+_BNB_COMPUTE_NAME = _coerce_dtype(
+    ovr("bnb_4bit_compute_dtype", None), _DTYPE_NAME or _DEFAULT_DTYPE_NAME
+)
+
+if torch is not None:
+    _DTYPE_MAP = {
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "half": torch.float16,
+        "fp32": torch.float32,
+        "float32": torch.float32,
+        "f32": torch.float32,
+    }
+    DEFAULT_TORCH_DTYPE = _DTYPE_MAP.get(
+        _coerce_dtype(_DEFAULT_DTYPE_NAME, "bfloat16"), torch.bfloat16
+    )
+    SELECTED_TORCH_DTYPE = _DTYPE_MAP.get(_DTYPE_NAME, DEFAULT_TORCH_DTYPE)
+    BNB_COMPUTE_DTYPE = _DTYPE_MAP.get(_BNB_COMPUTE_NAME, SELECTED_TORCH_DTYPE)
+else:  # pragma: no cover - torch optional in tests
+    SELECTED_TORCH_DTYPE = None
+    BNB_COMPUTE_DTYPE = None
+
+ATTENTION_IMPLEMENTATION = (ovr("attention_implementation", None) or "").strip() or None
+
 MODEL_ID = os.environ.get("MODEL_ID", "cognitivecomputations/Dolphin3.0-Llama3.1-8B")
 DATASET_NAME = os.environ.get("DATASET", "yahma/alpaca-cleaned")
 TRAIN_FRACTION = float(os.environ.get("TRAIN_FRACTION", "0.10"))
-MAX_SEQ_LEN = int(os.environ.get("MAX_SEQ_LEN", "1024"))
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "1"))
-GRAD_ACCUM = int(os.environ.get("GRAD_ACCUM", "8"))
+DEFAULT_MAX_SEQ_LEN = int(os.environ.get("MAX_SEQ_LEN", "1024"))
+MAX_SEQ_LEN = int(ovr("max_seq_length", DEFAULT_MAX_SEQ_LEN))
+EVAL_MAX_SEQ_LEN = int(ovr("eval_max_seq_length", MAX_SEQ_LEN))
+DEFAULT_BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "1"))
+BATCH_SIZE = int(ovr("per_device_train_batch_size", DEFAULT_BATCH_SIZE))
+EVAL_BATCH_SIZE = int(ovr("per_device_eval_batch_size", BATCH_SIZE))
+DEFAULT_GRAD_ACCUM = int(os.environ.get("GRAD_ACCUM", "8"))
+GRAD_ACCUM = int(ovr("gradient_accumulation_steps", DEFAULT_GRAD_ACCUM))
 LR = float(os.environ.get("LR", "2e-4"))
 EPOCHS = float(os.environ.get("EPOCHS", "1.0"))
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "-1"))
@@ -129,9 +217,11 @@ def _assemble_training_summary(
             "max_seq_len": MAX_SEQ_LEN,
             "batch_size": BATCH_SIZE,
             "grad_accum": GRAD_ACCUM,
+            "eval_batch_size": EVAL_BATCH_SIZE,
             "learning_rate": LR,
             "epochs": EPOCHS,
             "max_steps": MAX_STEPS,
+            "eval_max_seq_len": EVAL_MAX_SEQ_LEN,
             "vram_budget_mb": VRAM_BUDGET_MB,
             "activation_buffer_mb": ACTIVATION_BUFFER_MB,
             "runtime_buffer_mb": RUNTIME_BUFFER_MB,
@@ -273,10 +363,20 @@ def main() -> None:
         activation_buffer_mb=ACTIVATION_BUFFER_MB,
         runtime_buffer_mb=RUNTIME_BUFFER_MB,
         offload_dir=OFFLOAD_DIR,
+        dtype=SELECTED_TORCH_DTYPE,
+        compute_dtype=BNB_COMPUTE_DTYPE,
+        attention_implementation=ATTENTION_IMPLEMENTATION,
     )
     summarise_device_map(model)
     oom_analysis = evaluate_oom_headroom()
-    model = prepare_lora_model_light(model, LoraHyperParams())
+    default_lora = LoraHyperParams()
+    lora_params = LoraHyperParams(
+        r=int(ovr("lora_r", default_lora.r)),
+        alpha=int(ovr("lora_alpha", default_lora.alpha)),
+        dropout=float(ovr("lora_dropout", default_lora.dropout)),
+        target_modules=default_lora.target_modules,
+    )
+    model = prepare_lora_model_light(model, lora_params)
 
     dataset = prepare_instruction_dataset(
         DATASET_NAME,
@@ -296,6 +396,10 @@ def main() -> None:
             epochs=EPOCHS,
             max_steps=MAX_STEPS,
         ),
+        extra_args={
+            "per_device_eval_batch_size": max(1, EVAL_BATCH_SIZE),
+            "gradient_checkpointing": bool(ovr("gradient_checkpointing", True)),
+        },
     )
 
     adapters_dir = OUTPUT_DIR / "chat_lora"

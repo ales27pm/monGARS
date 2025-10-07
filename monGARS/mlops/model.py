@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -46,17 +46,23 @@ def load_4bit_causal_lm(
     runtime_buffer_mb: int = 768,
     offload_dir: str | Path = "./offload",
     trust_remote_code: bool = True,
+    dtype: Optional[torch.dtype] = None,
+    compute_dtype: Optional[torch.dtype] = None,
+    attention_implementation: str | None = None,
 ) -> tuple[Any, Any]:
     """Load a causal LM in 4-bit precision while keeping ``lm_head`` on CPU."""
 
     offload_path = Path(offload_dir)
     offload_path.mkdir(parents=True, exist_ok=True)
 
+    target_dtype = dtype or torch.float16
+    compute_dtype = compute_dtype or target_dtype
+
     bnb_common: dict[str, Any] = {
         "load_in_4bit": True,
         "bnb_4bit_use_double_quant": True,
         "bnb_4bit_quant_type": "nf4",
-        "bnb_4bit_compute_dtype": torch.float16,
+        "bnb_4bit_compute_dtype": compute_dtype,
     }
     try:
         bnb_cfg = BitsAndBytesConfig(
@@ -98,22 +104,27 @@ def load_4bit_causal_lm(
     }
     try:
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, **model_kwargs, torch_dtype=torch.float16
+            model_id, **model_kwargs, torch_dtype=target_dtype
         )
     except TypeError:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id, **model_kwargs, dtype=torch.float16
-        )
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id, **model_kwargs, dtype=target_dtype
+            )
+        except TypeError:
+            model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model.config.use_cache = False
-    try:  # pragma: no cover - depends on HF version
-        model.config.attn_implementation = "eager"
-    except Exception:
-        pass
+    attn_impl = attention_implementation or "eager"
+    for attr in ("attn_impl", "attn_implementation"):
+        try:  # pragma: no cover - depends on HF version
+            setattr(model.config, attr, attn_impl)
+        except Exception:
+            continue
 
     try:  # pragma: no cover - depends on torch build
         torch.backends.cuda.enable_flash_sdp(False)
