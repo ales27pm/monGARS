@@ -1,8 +1,8 @@
-name: Build Custom Québec-French Dataset
+name: Build Custom Québec-French Dataset (repo-only)
 
 on:
   push:
-    branches: ['**']
+    branches: ['**']         # run on any branch commit
   workflow_dispatch:
     inputs:
       ratios:
@@ -26,27 +26,20 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.11"
-  SCAN_OUTPUT_DIR: data/deep_scan
-  FINAL_OUTPUT_DIR: data/final
-  DATASET_RATIOS: ${{ github.event.inputs.ratios || 'frca:0.50,agent:0.40,repo:0.10' }}
-  DATASET_VAL_PCT: ${{ github.event.inputs.val_pct || 0.06 }}
-  DATASET_STRICT_QC: ${{ github.event.inputs.strict_qc || 'true' }}
-  DATASET_RETENTION_DAYS: ${{ github.event.inputs.retention_days || 14 }}
+  PYTHON_VERSION: "3.12"
 
 concurrency:
   group: custom-dataset-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  curate:
-    name: Curate Québec-French dataset
+  scan_and_build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
+    env:
+      CONFIRM_SCAN: "YES"
+      CONFIRM_DATA_FETCH: "NO"
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -56,58 +49,58 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Cache pip downloads
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('tools/monGARS_deep_scan/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
-            ${{ runner.os }}-pip-
+      - name: Install OS deps (graphviz for PNG graph)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
 
-      - name: Install dataset tooling
+      - name: Install minimal Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r tools/monGARS_deep_scan/requirements.txt
+          pip install networkx || true
 
-      - name: Execute deep scan pipeline
-        env:
-          PYTHONPATH: .
+      - name: Verify required scripts exist
+        run: |
+          test -f scripts/ultimate_repo_analyzer.py || (echo "Missing scripts/ultimate_repo_analyzer.py" && exit 1)
+          test -f scripts/prepare_dataset.py        || (echo "Missing scripts/prepare_dataset.py" && exit 1)
+
+      - name: Run analyzer (scan repo → mined artifacts)
         run: |
           set -euxo pipefail
-          python -m tools.monGARS_deep_scan.deep_scan \
-            --input . \
-            --out "${SCAN_OUTPUT_DIR}" \
-            --exclude-dir "${SCAN_OUTPUT_DIR},${FINAL_OUTPUT_DIR},.git" \
-            --jobs 4
-          ls "${SCAN_OUTPUT_DIR}"
+          python scripts/ultimate_repo_analyzer.py
+          echo "== Output tree =="
+          find data/ultimate -maxdepth 3 -type f | sort || true
 
-      - name: Build train/validation splits
-        env:
-          PYTHONPATH: .
+      - name: Assemble inputs for dataset builder
         run: |
-          python -m tools.monGARS_deep_scan.build_dataset
+          set -euxo pipefail
+          mkdir -p data/raw
+          cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/repo_sft.jsonl
+          cp data/ultimate/processed_repo/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
+          # Repo-only pipeline: use repo SFT as the FRCA source
+          cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/frca_repo.jsonl
 
-      - name: Publish dataset summary
-        env:
-          PYTHONPATH: .
+      - name: Build final dataset (train/val)
         run: |
-          python -m tools.monGARS_deep_scan.publish_summary --final-dir "${FINAL_OUTPUT_DIR}" --output summary.md
-          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          set -euxo pipefail
+          python scripts/prepare_dataset.py             --frca data/raw/frca_repo.jsonl             --agent data/raw/agent_handoff.jsonl             --repo data/raw/repo_sft.jsonl             --outdir data/final             --ratio "${{ inputs.ratios || 'frca:0.50,agent:0.40,repo:0.10' }}"             --val_pct ${{ inputs.val_pct || 0.06 }}             $([ "${{ inputs.strict_qc || true }}" = "true" ] && echo "--strict_qc" || true)
 
-      - name: Upload dataset artefacts
+          echo "== Final counts =="
+          wc -l data/final/train.jsonl || true
+          wc -l data/final/val.jsonl   || true
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: custom-quebec-french-dataset
+          name: final-custom-dataset
           path: |
-            ${{ env.SCAN_OUTPUT_DIR }}/sft_dataset.jsonl
-            ${{ env.SCAN_OUTPUT_DIR }}/agent_handoff_dataset.jsonl
-            ${{ env.SCAN_OUTPUT_DIR }}/embeddings_corpus.jsonl
-            ${{ env.SCAN_OUTPUT_DIR }}/provenance.csv
-            ${{ env.SCAN_OUTPUT_DIR }}/report.md
-            ${{ env.SCAN_OUTPUT_DIR }}/logs/**
-            ${{ env.FINAL_OUTPUT_DIR }}/train.jsonl
-            ${{ env.FINAL_OUTPUT_DIR }}/val.jsonl
-            ${{ env.FINAL_OUTPUT_DIR }}/dataset_summary.json
-          retention-days: ${{ env.DATASET_RETENTION_DAYS }}
+            data/ultimate/processed_repo/sft_repo.jsonl
+            data/ultimate/processed_repo/agent_instruct_repo.jsonl
+            data/ultimate/processed_repo/embeddings_repo.jsonl
+            data/ultimate/processed_repo/provenance.csv
+            data/ultimate/interaction_graph.dot
+            data/ultimate/interaction_graph.png
+            data/final/train.jsonl
+            data/final/val.jsonl
+          retention-days: ${{ inputs.retention_days || 14 }}
           if-no-files-found: error
