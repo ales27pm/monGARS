@@ -1,8 +1,6 @@
 name: Build Custom Québec-French Dataset
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       enable_external_fetch:
@@ -10,19 +8,19 @@ on:
         type: boolean
         default: false
       crawl_domains:
-        description: "Newline-separated list of domains you OWN / have permission to crawl"
+        description: "Newline-separated domains you OWN/have permission to crawl (e.g., https://example.qc.ca)"
         type: string
         required: false
       hansards_limit:
-        description: "Max paragraphs to pull from Hansards (0 = unlimited)"
+        description: "Max paragraphs from Hansards (0 = unlimited)"
         type: number
         default: 5000
       strict_qc:
-        description: "Strict fr-CA filter (drop non-Québécois unless agent/internal)"
+        description: "Strict fr-CA filter"
         type: boolean
         default: true
       ratios:
-        description: "Sampling ratios across sources (sum≈1), e.g. frca:0.65,agent:0.25,repo:0.10"
+        description: "Sampling ratios (sum≈1), e.g. frca:0.65,agent:0.25,repo:0.10"
         type: string
         default: "frca:0.65,agent:0.25,repo:0.10"
       val_pct:
@@ -58,7 +56,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install system deps (graph)
+      - name: Install system deps (graphviz)
         run: |
           sudo apt-get update
           sudo apt-get install -y graphviz
@@ -75,10 +73,6 @@ jobs:
             --graph \
             --systemd
 
-      - name: List mined outputs
-        run: |
-          find data/ultimate -maxdepth 3 -type f | sort || true
-
       - name: Upload scan artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -91,12 +85,12 @@ jobs:
             data/ultimate/interaction_graph.dot
             data/ultimate/interaction_graph.png
           retention-days: ${{ inputs.retention_days }}
-          if-no-files-found: warn
+          if-no-files-found: error
 
   fetch_external:
-    name: Fetch External Sources (optional)
+    name: Fetch External Sources
     runs-on: ubuntu-latest
-    if: ${{ inputs.enable_external_fetch }}
+    if: ${{ inputs.enable_external_fetch == true }}
     env:
       CONFIRM_DATA_FETCH: "YES"
     steps:
@@ -118,7 +112,7 @@ jobs:
       - name: Fetch Hansards fr-CA (usc-isi/hansards)
         run: |
           python - <<'PY'
-          import os, re, json
+          import re, json
           from pathlib import Path
           from datasets import load_dataset
 
@@ -127,7 +121,7 @@ jobs:
           out.parent.mkdir(parents=True, exist_ok=True)
 
           ds = load_dataset("usc-isi/hansards", split="train")
-          rows = []; count = 0
+          rows, count = [], 0
           for x in ds:
               fr = (x.get("french") or "").strip()
               if not fr: continue
@@ -136,28 +130,26 @@ jobs:
                   if len(para) < 50: continue
                   rows.append({"instruction": para, "input": "", "output": para})
                   count += 1
-                  if limit and count >= limit:
-                      break
-              if limit and count >= limit:
-                  break
+                  if limit and count >= limit: break
+              if limit and count >= limit: break
+
           with out.open("w", encoding="utf-8") as f:
               for r in rows:
                   f.write(json.dumps(r, ensure_ascii=False) + "\n")
           print(f"Wrote {len(rows)} → {out}")
           PY
 
-      - name: Optional: Crawl allow-listed domains
+      - name: Crawl allow-listed domains (optional)
         if: ${{ inputs.crawl_domains != '' }}
         run: |
           python - <<'PY'
-          import os, json, requests, tldextract
+          import json, requests, tldextract
           from bs4 import BeautifulSoup
           from urllib.parse import urljoin, urlparse
           from pathlib import Path
 
           domains = [d.strip() for d in """${{ inputs.crawl_domains }}""".splitlines() if d.strip()]
-          max_pages = 200
-          timeout = 8
+          max_pages, timeout = 200, 8
           out = Path("data/external/frca_crawl.jsonl")
           out.parent.mkdir(parents=True, exist_ok=True)
           rows = []
@@ -169,13 +161,10 @@ jobs:
               except Exception:
                   return True
 
-          visited=set(); queue=[]
+          visited, queue = set(), []
           for d in domains:
               base = d if d.startswith("http") else "https://" + d
-              if can_fetch(base):
-                  queue.append(base)
-              else:
-                  print(f"robots.txt disallows or unreachable: {base}")
+              if can_fetch(base): queue.append(base)
 
           while queue and len(visited) < max_pages:
               url = queue.pop(0)
@@ -183,11 +172,9 @@ jobs:
               visited.add(url)
               try:
                   r = requests.get(url, timeout=timeout, headers={"User-Agent":"monGARS-safe-crawler"})
-                  if r.status_code != 200 or "text/html" not in r.headers.get("Content-Type",""):
-                      continue
+                  if r.status_code != 200 or "text/html" not in r.headers.get("Content-Type",""): continue
                   soup = BeautifulSoup(r.text, "html.parser")
-                  texts = [t.get_text(" ", strip=True) for t in soup.find_all(["p","li","blockquote"])]
-                  for t in texts:
+                  for t in [x.get_text(" ", strip=True) for x in soup.find_all(["p","li","blockquote"])]:
                       t = t.strip()
                       if len(t) >= 50:
                           rows.append({"instruction": t, "input": "", "output": t})
@@ -221,7 +208,7 @@ jobs:
   build_dataset:
     name: Build Final Dataset
     runs-on: ubuntu-latest
-    needs: [scan]                  # only depends on scan; external fetch is optional
+    needs: [scan]   # external job is optional
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -241,30 +228,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: repo-scan-artifacts
-        # default path is ./repo-scan-artifacts
+          path: repo-scan-artifacts
 
       - name: Download external sources (if any)
-        if: ${{ inputs.enable_external_fetch }}
+        if: ${{ inputs.enable_external_fetch == true }}
         uses: actions/download-artifact@v4
         with:
           name: external-sources
           path: external-sources
 
-      - name: Assemble inputs for builder
+      - name: Assemble inputs
         run: |
           mkdir -p data/raw
-          # repo-mined
           cp repo-scan-artifacts/sft_repo.jsonl            data/raw/repo_sft.jsonl
           cp repo-scan-artifacts/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
-          # choose FRCA source
           if [ "${{ inputs.enable_external_fetch }}" = "true" ] && [ -f external-sources/frca_hansard.jsonl ]; then
             cp external-sources/frca_hansard.jsonl data/raw/frca_hansard.jsonl
-            FRCA="data/raw/frca_hansard.jsonl"
+            echo "FRCA=data/raw/frca_hansard.jsonl" >> $GITHUB_ENV
           else
-            FRCA="data/raw/repo_sft.jsonl"
+            echo "FRCA=data/raw/repo_sft.jsonl" >> $GITHUB_ENV
           fi
-          echo "FRCA source -> $FRCA" >> $GITHUB_STEP_SUMMARY
-          echo "FRCA=$FRCA" >> $GITHUB_ENV
 
       - name: Build final dataset (train/val)
         run: |
@@ -276,12 +259,6 @@ jobs:
             --ratio "${{ inputs.ratios }}" \
             --val_pct ${{ inputs.val_pct }} \
             $([ "${{ inputs.strict_qc }}" = "true" ] && echo "--strict_qc" || true)
-
-      - name: Summarize result
-        run: |
-          echo "---- Final dataset ----" >> $GITHUB_STEP_SUMMARY
-          echo "train.jsonl: $(wc -l < data/final/train.jsonl)" >> $GITHUB_STEP_SUMMARY
-          echo "val.jsonl:   $(wc -l < data/final/val.jsonl)"   >> $GITHUB_STEP_SUMMARY
 
       - name: Upload final dataset
         uses: actions/upload-artifact@v4
