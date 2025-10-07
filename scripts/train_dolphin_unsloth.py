@@ -48,6 +48,14 @@ import textwrap
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+# Import Unsloth before Transformers so its patches take effect.
+try:
+    from unsloth import FastLanguageModel
+except Exception as exc:  # pragma: no cover - optional dependency guard
+    raise RuntimeError(
+        "Unsloth is required for this script. Install it with 'pip install unsloth'."
+    ) from exc
+
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
 from huggingface_hub import login
@@ -63,13 +71,6 @@ from monGARS.mlops.artifacts import (
     build_adapter_summary,
     write_wrapper_bundle,
 )
-
-try:
-    from unsloth import FastLanguageModel
-except Exception as exc:  # pragma: no cover - optional dependency guard
-    raise RuntimeError(
-        "Unsloth is required for this script. Install it with 'pip install unsloth'."
-    ) from exc
 
 try:  # pragma: no cover - optional dependency
     from llm2vec import LLM2VecModel
@@ -575,12 +576,23 @@ def prepare_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
         "max_seq_length": config.max_seq_length,
         "load_in_4bit": config.load_in_4bit,
         "trust_remote_code": True,
+        "low_cpu_mem_usage": True,
     }
 
     if config.load_in_4bit:
         load_kwargs["dtype"] = torch.float16
     else:
         load_kwargs["dtype"] = torch.float32
+
+    if torch.cuda.is_available():
+        try:
+            free_bytes, _total_bytes = torch.cuda.mem_get_info()
+            free_mb = int(free_bytes // (1024 * 1024))
+            budget_mb = max(1024, free_mb - 512)
+            load_kwargs["device_map"] = {"": 0}
+            load_kwargs["max_memory"] = {0: f"{budget_mb}MiB"}
+        except Exception:
+            load_kwargs["device_map"] = {"": 0}
 
     model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
 
