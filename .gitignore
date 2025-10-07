@@ -11,3 +11,4 @@ inventory.json
 .vscode/
 .venv/
 mongars_local.db
+unsloth_compiled_cache/
