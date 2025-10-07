@@ -29,7 +29,7 @@ def sh(
     print(f"➡️  {cmd}")
     res = subprocess.run(
         cmd,
-        shell=True,
+        shell=False,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
