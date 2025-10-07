@@ -22,6 +22,8 @@ DEFAULT_ACTIONS: list[tuple[str, str]] = [
     ("explain", "Explain a concept in simpler terms with examples."),
 ]
 
+_FALLBACK_KEYWORD_WEIGHT = 0.2
+
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -101,11 +103,16 @@ class AUISuggester:
                     action_used_fallback for _, action_used_fallback in action_vectors
                 ):
                     return fallback_scores
-                return {
+                embedding_scores = {
                     key: _cosine(prompt_vector, vector)
                     for (key, _), (vector, _) in zip(
                         items, action_vectors, strict=False
                     )
+                }
+                return {
+                    key: embedding_scores[key]
+                    + (fallback_scores.get(key, 0.0) * _FALLBACK_KEYWORD_WEIGHT)
+                    for key in embedding_scores
                 }
             except Exception as exc:  # pragma: no cover - runtime fallback
                 logger.warning(

@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Callable
 
 import httpx
+
+try:  # pragma: no cover - optional dependency is exercised at runtime
+    from sentence_transformers import CrossEncoder
+except ImportError:  # pragma: no cover - handled gracefully during runtime
+    CrossEncoder = None
 
 from monGARS.config import get_settings
 
@@ -54,6 +61,13 @@ class RagContextEnricher:
         http_client_factory: AsyncClientFactory | None = None,
     ) -> None:
         self._settings = get_settings()
+        self._cross_encoder_model_name = getattr(
+            self._settings,
+            "rag_cross_encoder_model",
+            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        )
+        self._cross_encoder: Any | None = None
+        self._cross_encoder_lock = Lock()
         if http_client_factory is None:
             timeout = httpx.Timeout(10.0, connect=5.0)
 
@@ -93,9 +107,11 @@ class RagContextEnricher:
         if not trimmed_query:
             raise ValueError("query cannot be empty")
 
+        final_limit = self._normalise_limit(max_results)
+        initial_limit = max(final_limit, self._initial_candidate_count())
         payload: dict[str, Any] = {
             "query": trimmed_query,
-            "max_results": self._normalise_limit(max_results),
+            "max_results": initial_limit,
         }
         resolved_repositories = self._resolve_repositories(repositories)
         if resolved_repositories:
@@ -139,7 +155,14 @@ class RagContextEnricher:
 
         focus_areas = self._extract_focus_areas(data)
         references = self._extract_references(data.get("references"))
-        return RagEnrichmentResult(focus_areas=focus_areas, references=references)
+        log.info("Initial retrieval count: %s", len(references))
+        re_ranked_references = await self._re_rank_references(
+            trimmed_query, references, final_limit
+        )
+        log.info("Re-ranked count: %s", len(re_ranked_references))
+        return RagEnrichmentResult(
+            focus_areas=focus_areas, references=re_ranked_references
+        )
 
     def _service_base_url(self) -> str:
         base = getattr(self._settings, "rag_service_url", None) or getattr(
@@ -187,6 +210,16 @@ class RagContextEnricher:
         if requested is None:
             return configured_limit
         return max(1, min(requested, configured_limit))
+
+    def _initial_candidate_count(self) -> int:
+        configured = getattr(self._settings, "rag_initial_candidate_count", 50)
+        try:
+            value = int(configured)
+        except (TypeError, ValueError):
+            value = 50
+        if value <= 0:
+            return 50
+        return value
 
     def _extract_focus_areas(self, payload: Mapping[str, Any]) -> list[str]:
         raw = payload.get("focus_areas") or payload.get("focusAreas")
@@ -257,3 +290,68 @@ class RagContextEnricher:
         if default is not None:
             return default
         return None
+
+    async def _re_rank_references(
+        self,
+        query: str,
+        references: list[RagCodeReference],
+        limit: int,
+    ) -> list[RagCodeReference]:
+        if not references:
+            return []
+        if limit <= 0:
+            limit = 1
+        if len(references) <= limit:
+            return references[:limit]
+        cross_encoder = self._get_cross_encoder()
+        if cross_encoder is None:
+            return references[:limit]
+
+        pairs = [(query, self._reference_text(reference)) for reference in references]
+        try:
+            raw_scores = await asyncio.to_thread(cross_encoder.predict, pairs)
+        except Exception as exc:  # pragma: no cover - depends on model runtime
+            log.warning(
+                "rag.context_enrichment.rerank_failed",
+                extra={"error": str(exc)},
+            )
+            return references[:limit]
+        scores = [float(score) for score in raw_scores]
+        for reference, score in zip(references, scores):
+            reference.score = score
+        ranked = sorted(
+            references,
+            key=lambda item: item.score if item.score is not None else 0.0,
+            reverse=True,
+        )
+        return ranked[:limit]
+
+    def _reference_text(self, reference: RagCodeReference) -> str:
+        parts = [reference.summary]
+        if reference.file_path:
+            parts.append(reference.file_path)
+        if reference.repository:
+            parts.append(reference.repository)
+        return "\n".join(part for part in parts if part)
+
+    def _get_cross_encoder(self) -> Any | None:
+        if CrossEncoder is None:
+            log.debug(
+                "rag.context_enrichment.cross_encoder_unavailable",
+                extra={"dependency": "sentence-transformers"},
+            )
+            return None
+        if self._cross_encoder is not None:
+            return self._cross_encoder
+        with self._cross_encoder_lock:
+            if self._cross_encoder is not None:
+                return self._cross_encoder
+            try:
+                self._cross_encoder = CrossEncoder(self._cross_encoder_model_name)
+            except Exception as exc:  # pragma: no cover - model loading failure
+                log.warning(
+                    "rag.context_enrichment.cross_encoder_load_failed",
+                    extra={"error": str(exc)},
+                )
+                self._cross_encoder = None
+        return self._cross_encoder
