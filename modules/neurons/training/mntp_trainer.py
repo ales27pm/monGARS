@@ -932,7 +932,7 @@ class MNTPTrainer:
             "per_device_train_batch_size": schedule.per_device_batch_size,
             "gradient_accumulation_steps": schedule.gradient_accumulation_steps,
             "num_train_epochs": max(1, epochs),
-            "optim": "adamw_8bit",
+            "optim": "paged_adamw_8bit",
             "seed": 3407,
             "output_dir": str(self.output_dir / "outputs"),
             "gradient_checkpointing": True,
