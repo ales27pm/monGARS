@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -55,6 +56,18 @@ def ovr(key: str, default: Any | None = None) -> Any | None:
         except Exception:
             return value
     return _OVR_JSON.get(key, default)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 from modules.neurons.registry import update_manifest
@@ -164,6 +177,17 @@ REGISTRY_PATH = os.environ.get("LLM_ADAPTER_REGISTRY_PATH") or os.environ.get(
 )
 SUMMARY_FILENAME = "training_summary.json"
 
+EXPORT_AWQ = _env_flag("EXPORT_AWQ", EXPORT_MERGED_FP16)
+AWQ_DIR = Path(os.environ.get("AWQ_DIR", OUTPUT_DIR / "awq_model"))
+AWQ_W_BITS = int(os.environ.get("AWQ_W_BITS", "4"))
+AWQ_GROUP_SIZE = int(os.environ.get("AWQ_GROUP_SIZE", "128"))
+AWQ_ZERO_POINT = _env_flag("AWQ_ZERO_POINT", True)
+AWQ_VERSION = os.environ.get("AWQ_VERSION", "GEMM")
+AWQ_CALIB_DATASET = os.environ.get("AWQ_CALIB_DATASET", "wikitext2")
+AWQ_CALIB_SAMPLES = int(os.environ.get("AWQ_CALIB_SAMPLES", "128"))
+AWQ_CALIB_SEQ_LEN = int(os.environ.get("AWQ_CALIB_SEQ_LEN", "2048"))
+AWQ_TRUST_REMOTE_CODE = _env_flag("AWQ_TRUST_REMOTE_CODE", False)
+
 
 REQUIRED_PACKAGES = [
     "torch",
@@ -173,6 +197,7 @@ REQUIRED_PACKAGES = [
     "bitsandbytes>=0.44.1",
     "llm2vec",
     "sentencepiece",
+    "autoawq",
 ]
 OPTIONAL_PACKAGES = ["unsloth"]
 
@@ -185,6 +210,67 @@ def _locate_adapter_weights(adapter_dir: Path) -> Path | None:
     return next((candidate for candidate in candidates if candidate.exists()), None)
 
 
+def export_awq_quantized_model(
+    merged_dir: Path,
+    output_dir: Path,
+    *,
+    w_bits: int,
+    group_size: int,
+    zero_point: bool,
+    version: str,
+    calib_dataset: str | None,
+    calib_samples: int,
+    calib_seq_len: int,
+    trust_remote_code: bool,
+) -> bool:
+    """Export the merged model to AWQ format."""
+
+    if not merged_dir.exists():
+        raise FileNotFoundError(f"Merged model directory does not exist: {merged_dir}")
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    ensure_directory(output_dir)
+
+    try:
+        from autoawq import AutoAWQForCausalLM  # type: ignore[import-not-found]
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+        raise RuntimeError(
+            "autoawq must be installed to export AWQ quantized models"
+        ) from exc
+
+    from transformers import AutoTokenizer
+
+    quant_config: dict[str, Any] = {
+        "w_bit": int(w_bits),
+        "q_group_size": int(group_size),
+        "zero_point": bool(zero_point),
+        "version": version,
+        "calib_samples": int(calib_samples),
+        "calib_seqlen": int(calib_seq_len),
+    }
+    if calib_dataset:
+        quant_config["calib_dataset"] = calib_dataset
+
+    logger.info("Loading merged model for AWQ quantization from %s", merged_dir)
+    model = AutoAWQForCausalLM.from_pretrained(
+        str(merged_dir),
+        device_map="auto",
+        safetensors=True,
+        trust_remote_code=trust_remote_code,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(merged_dir), trust_remote_code=trust_remote_code
+    )
+
+    logger.info("Running AWQ quantization with config: %s", quant_config)
+    model.quantize(tokenizer, quant_config=quant_config)
+    model.save_quantized(str(output_dir), safetensors=True)
+    tokenizer.save_pretrained(output_dir)
+    logger.info("Saved AWQ quantized model to %s", output_dir)
+    return True
+
+
 def _assemble_training_summary(
     *,
     adapter_dir: Path,
@@ -194,6 +280,8 @@ def _assemble_training_summary(
     merged: bool,
     gguf_enabled: bool,
     gguf_method: str,
+    awq_dir: Path,
+    awq_enabled: bool,
     dataset_len: int,
     oom_analysis: dict[str, Any],
 ) -> dict[str, Any]:
@@ -235,6 +323,23 @@ def _assemble_training_summary(
     if gguf_enabled and merged:
         artifacts["gguf"] = str(GGUF_DIR)
         summary.setdefault("labels", {})["gguf_method"] = gguf_method
+    if awq_enabled:
+        artifacts["awq"] = str(awq_dir)
+        labels = summary.setdefault("labels", {})
+        labels.setdefault("awq_version", AWQ_VERSION)
+        labels.setdefault("awq_precision", f"{AWQ_W_BITS}-bit")
+        quant_summary = summary.setdefault("quantization", {})
+        awq_config = {
+            "w_bit": AWQ_W_BITS,
+            "q_group_size": AWQ_GROUP_SIZE,
+            "zero_point": AWQ_ZERO_POINT,
+            "version": AWQ_VERSION,
+            "calib_samples": AWQ_CALIB_SAMPLES,
+            "calib_seq_len": AWQ_CALIB_SEQ_LEN,
+        }
+        if AWQ_CALIB_DATASET:
+            awq_config["calib_dataset"] = AWQ_CALIB_DATASET
+        quant_summary["awq"] = awq_config
 
     summary.setdefault("analysis", {})["oom_risk"] = oom_analysis
 
@@ -412,6 +517,25 @@ def main() -> None:
     if EXPORT_MERGED_FP16:
         merged = merge_lora_adapters(MODEL_ID, adapters_dir, output_dir=merged_dir)
 
+    awq_exported = False
+    if EXPORT_AWQ and not EXPORT_MERGED_FP16:
+        logger.warning(
+            "EXPORT_AWQ is enabled but EXPORT_MERGED_FP16 is disabled; skipping AWQ export."
+        )
+    if merged and EXPORT_AWQ:
+        awq_exported = export_awq_quantized_model(
+            merged_dir,
+            AWQ_DIR,
+            w_bits=AWQ_W_BITS,
+            group_size=AWQ_GROUP_SIZE,
+            zero_point=AWQ_ZERO_POINT,
+            version=AWQ_VERSION,
+            calib_dataset=AWQ_CALIB_DATASET,
+            calib_samples=AWQ_CALIB_SAMPLES,
+            calib_seq_len=AWQ_CALIB_SEQ_LEN,
+            trust_remote_code=AWQ_TRUST_REMOTE_CODE,
+        )
+
     if EXPORT_GGUF:
         if not merged:
             raise RuntimeError("EXPORT_GGUF requires EXPORT_MERGED_FP16=1")
@@ -444,6 +568,8 @@ def main() -> None:
         merged=merged,
         gguf_enabled=EXPORT_GGUF,
         gguf_method=GGUF_METHOD,
+        awq_dir=AWQ_DIR,
+        awq_enabled=awq_exported,
         dataset_len=len(dataset),
         oom_analysis=oom_analysis,
     )
@@ -454,6 +580,8 @@ def main() -> None:
     print(f"- LoRA adapters: {adapters_dir}")
     if merged:
         print(f"- Merged FP16 model: {merged_dir}")
+    if awq_exported:
+        print(f"- AWQ quantized model: {AWQ_DIR}")
     if EXPORT_GGUF and merged:
         print(f"- GGUF export: {GGUF_DIR}")
     print(f"- Wrapper module: {wrapper_dir / 'project_wrapper.py'}")
