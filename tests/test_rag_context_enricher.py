@@ -106,7 +106,7 @@ async def test_enrich_returns_structured_payload(monkeypatch):
 
     assert calls[0]["json"] == {
         "query": "Review validation edge cases",
-        "max_results": 5,
+        "max_results": 50,
         "repositories": ["all"],
     }
     assert calls[0]["url"] == "http://rag.local/api/rag/context"
