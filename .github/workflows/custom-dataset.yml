@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       crawl_domains:
-        description: "Newline-separated list of domains you OWN / have permission to crawl (https://example.qc.ca ...)"
+        description: "Newline-separated list of domains you OWN / have permission to crawl"
         type: string
         required: false
       hansards_limit:
@@ -45,8 +45,8 @@ jobs:
     name: Scan & Mine Repo
     runs-on: ubuntu-latest
     env:
-      CONFIRM_SCAN: "YES"           # allow local scanning
-      CONFIRM_DATA_FETCH: "NO"      # no external fetching in this job
+      CONFIRM_SCAN: "YES"
+      CONFIRM_DATA_FETCH: "NO"
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -84,10 +84,10 @@ jobs:
         with:
           name: repo-scan-artifacts
           path: |
-            data/ultimate/processed/sft_repo.jsonl
-            data/ultimate/processed/agent_instruct_repo.jsonl
-            data/ultimate/processed/embeddings_repo.jsonl
-            data/ultimate/provenance.csv
+            data/ultimate/processed_repo/sft_repo.jsonl
+            data/ultimate/processed_repo/agent_instruct_repo.jsonl
+            data/ultimate/processed_repo/embeddings_repo.jsonl
+            data/ultimate/processed_repo/provenance.csv
             data/ultimate/interaction_graph.dot
             data/ultimate/interaction_graph.png
           retention-days: ${{ inputs.retention_days }}
@@ -96,10 +96,9 @@ jobs:
   fetch_external:
     name: Fetch External Sources (optional)
     runs-on: ubuntu-latest
-    needs: [scan]
     if: ${{ inputs.enable_external_fetch }}
     env:
-      CONFIRM_DATA_FETCH: "YES"     # explicitly allow external fetch here
+      CONFIRM_DATA_FETCH: "YES"
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -117,7 +116,6 @@ jobs:
           pip install "datasets>=2.0.0,<3.0.0" beautifulsoup4 requests tldextract
 
       - name: Fetch Hansards fr-CA (usc-isi/hansards)
-        id: hansards
         run: |
           python - <<'PY'
           import os, re, json
@@ -223,7 +221,7 @@ jobs:
   build_dataset:
     name: Build Final Dataset
     runs-on: ubuntu-latest
-    needs: [scan, fetch_external]
+    needs: [scan]                  # only depends on scan; external fetch is optional
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -243,35 +241,33 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: repo-scan-artifacts
-          path: _scan
+        # default path is ./repo-scan-artifacts
 
       - name: Download external sources (if any)
         if: ${{ inputs.enable_external_fetch }}
         uses: actions/download-artifact@v4
         with:
           name: external-sources
-          path: _external
+          path: external-sources
 
       - name: Assemble inputs for builder
         run: |
           mkdir -p data/raw
           # repo-mined
-          cp _scan/sft_repo.jsonl                data/raw/repo_sft.jsonl
-          cp _scan/agent_instruct_repo.jsonl     data/raw/agent_handoff.jsonl
-          # external (optional)
-          if [ -f "_external/frca_hansard.jsonl" ]; then cp _external/frca_hansard.jsonl data/raw/frca_hansard.jsonl; fi
-          if [ -f "_external/frca_crawl.jsonl" ];   then cp _external/frca_crawl.jsonl   data/raw/frca_crawl.jsonl; fi
-
-      - name: Build final dataset (train/val)
-        run: |
-          # Decide which "frca" inputs to pass:
-          # If external fetch is enabled, prefer Hansards + crawl; else fall back to repo SFT as frca source.
-          if [ "${{ inputs.enable_external_fetch }}" = "true" ] && [ -f data/raw/frca_hansard.jsonl ]; then
+          cp repo-scan-artifacts/sft_repo.jsonl            data/raw/repo_sft.jsonl
+          cp repo-scan-artifacts/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
+          # choose FRCA source
+          if [ "${{ inputs.enable_external_fetch }}" = "true" ] && [ -f external-sources/frca_hansard.jsonl ]; then
+            cp external-sources/frca_hansard.jsonl data/raw/frca_hansard.jsonl
             FRCA="data/raw/frca_hansard.jsonl"
           else
             FRCA="data/raw/repo_sft.jsonl"
           fi
+          echo "FRCA source -> $FRCA" >> $GITHUB_STEP_SUMMARY
+          echo "FRCA=$FRCA" >> $GITHUB_ENV
 
+      - name: Build final dataset (train/val)
+        run: |
           python scripts/prepare_dataset.py \
             --frca "$FRCA" \
             --agent data/raw/agent_handoff.jsonl \
@@ -283,9 +279,9 @@ jobs:
 
       - name: Summarize result
         run: |
-          echo "---- Final dataset ----"
-          wc -l data/final/train.jsonl || true
-          wc -l data/final/val.jsonl   || true
+          echo "---- Final dataset ----" >> $GITHUB_STEP_SUMMARY
+          echo "train.jsonl: $(wc -l < data/final/train.jsonl)" >> $GITHUB_STEP_SUMMARY
+          echo "val.jsonl:   $(wc -l < data/final/val.jsonl)"   >> $GITHUB_STEP_SUMMARY
 
       - name: Upload final dataset
         uses: actions/upload-artifact@v4
