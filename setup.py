@@ -1,4 +1,10 @@
+from pathlib import Path
+
 from setuptools import find_packages, setup
+
+
+HERE = Path(__file__).parent.resolve()
+LLM2VEC_URI = (HERE / "vendor" / "llm2vec_monGARS").as_uri()
 
 setup(
     name="monGARS",
@@ -35,10 +41,10 @@ setup(
         "sqlalchemy>=2.0.41",
         "tenacity>=9.1.2",
         "torch>=2.7.1",
-        "transformers>=4.44.2",
+        "transformers>=4.45.0",
         "trafilatura>=2.0.0",
         "uvicorn>=0.35.0",
-        "llm2vec>=0.2.3",
+        f"llm2vec @ {LLM2VEC_URI}",
         "cryptography>=45.0.5",
         "durationpy>=0.5,<1.0",
         "kubernetes>=8.0.2,<10.0.0",
