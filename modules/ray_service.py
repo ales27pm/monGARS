@@ -421,40 +421,19 @@ class RayLLMDeployment:
         outputs = getattr(first, "outputs", None)
         if not outputs:
             raise RayServeException("vLLM response did not include any outputs")
-
-        texts: list[str] = []
-        completion_tokens = 0
-        completion_breakdown: list[int] = []
-        for candidate in outputs:
-            candidate_text = getattr(candidate, "text", None)
-            if isinstance(candidate_text, str) and candidate_text:
-                texts.append(candidate_text)
-
-            token_ids = getattr(candidate, "token_ids", None)
-            if token_ids is not None:
-                try:
-                    token_length = len(token_ids)
-                except TypeError:
-                    token_length = 0
-                else:
-                    completion_tokens += token_length
-                    completion_breakdown.append(token_length)
-
-        if not texts:
+        candidate = outputs[0]
+        text = getattr(candidate, "text", None)
+        if not isinstance(text, str) or not text:
             raise RayServeException("LLM response did not include textual content")
 
-        prompt_token_source = getattr(first, "prompt_token_ids", []) or []
-        prompt_tokens = len(prompt_token_source)
-        text = "\n\n".join(texts)
+        prompt_tokens = len(getattr(first, "prompt_token_ids", []) or [])
+        completion_tokens = len(getattr(candidate, "token_ids", []) or [])
         usage: dict[str, Any] = {
             "model": model,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
-            "generations": len(texts),
         }
-        if completion_breakdown:
-            usage["completion_tokens_per_generation"] = completion_breakdown
         metrics = getattr(first, "metrics", None)
         if isinstance(metrics, Mapping):
             for key, value in metrics.items():

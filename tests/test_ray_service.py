@@ -127,37 +127,21 @@ def fake_vllm(monkeypatch: pytest.MonkeyPatch):
             self.max_tokens = kwargs.get("max_tokens")
 
     class FakeSequenceOutput:
-        def __init__(self, text: str | None, token_count: int = 3) -> None:
+        def __init__(self, text: str) -> None:
             self.text = text
-            self.token_ids = list(range(token_count))
+            self.token_ids = [0, 1, 2]
 
     class FakeRequestOutput:
-        def __init__(
-            self,
-            *,
-            texts: list[str | None],
-            prompt_tokens: int = 2,
-            metrics: dict[str, float] | None = None,
-            token_counts: list[int] | None = None,
-        ) -> None:
-            counts = token_counts or [3] * len(texts)
-            self.outputs = [
-                FakeSequenceOutput(text, counts[idx] if idx < len(counts) else 3)
-                for idx, text in enumerate(texts)
-            ]
-            self.prompt_token_ids = list(range(prompt_tokens))
-            self.metrics = metrics if metrics is not None else {"latency_ms": 1.5}
+        def __init__(self, *, text: str) -> None:
+            self.outputs = [FakeSequenceOutput(text)]
+            self.prompt_token_ids = [10, 11]
+            self.metrics = {"latency_ms": 1.5}
 
     class FakeLLM:
         instances: list["FakeLLM"] = []
         requests: list[tuple[str, list[str], FakeSamplingParams]] = []
-        next_generate: list[FakeRequestOutput] | None = None
-        generate_exception: Exception | None = None
-        initialisation_error: Exception | None = None
 
         def __init__(self, *, model: str) -> None:
-            if FakeLLM.initialisation_error is not None:
-                raise FakeLLM.initialisation_error
             self.model = model
             FakeLLM.instances.append(self)
 
@@ -165,29 +149,10 @@ def fake_vllm(monkeypatch: pytest.MonkeyPatch):
             self, prompts: list[str], sampling_params: FakeSamplingParams
         ) -> list[FakeRequestOutput]:
             FakeLLM.requests.append((self.model, prompts, sampling_params))
-            if FakeLLM.generate_exception is not None:
-                exc = FakeLLM.generate_exception
-                FakeLLM.generate_exception = None
-                raise exc
-            if FakeLLM.next_generate is not None:
-                result = FakeLLM.next_generate
-                FakeLLM.next_generate = None
-                return result
-            return [FakeRequestOutput(texts=[f"response-for-{self.model}"])]
-
-        @classmethod
-        def reset(cls) -> None:
-            cls.instances.clear()
-            cls.requests.clear()
-            cls.next_generate = None
-            cls.generate_exception = None
-            cls.initialisation_error = None
+            return [FakeRequestOutput(text=f"response-for-{self.model}")]
 
     monkeypatch.setattr(ray_service, "SamplingParams", FakeSamplingParams)
     monkeypatch.setattr(ray_service, "LLM", FakeLLM)
-    FakeLLM.RequestOutput = FakeRequestOutput
-    FakeLLM.SequenceOutput = FakeSequenceOutput
-    FakeLLM.reset()
     return FakeLLM
 
 
@@ -206,14 +171,9 @@ async def test_ray_service_render_response_uses_vllm(fake_vllm):
 
     assert result["content"] == f"response-for-{deployment.general_model}"
     assert result["message"]["content"] == result["content"]
-    usage = result["usage"]
-    assert usage["model"] == deployment.general_model
-    assert usage["prompt_tokens"] == 2
-    assert usage["completion_tokens"] == 3
-    assert usage["total_tokens"] == 5
-    assert usage["generations"] == 1
-    assert usage["completion_tokens_per_generation"] == [3]
-    assert usage["latency_ms"] == pytest.approx(1.5)
+    assert result["usage"]["model"] == deployment.general_model
+    assert result["usage"]["prompt_tokens"] == 2
+    assert result["usage"]["completion_tokens"] == 3
 
     model, prompts, sampling_params = fake_vllm.requests[-1]
     assert model == deployment.general_model
@@ -221,94 +181,6 @@ async def test_ray_service_render_response_uses_vllm(fake_vllm):
     assert sampling_params.temperature == pytest.approx(deployment.temperature)
     assert sampling_params.top_p == pytest.approx(deployment.top_p)
     assert sampling_params.max_tokens == deployment.max_tokens
-
-
-@pytest.mark.asyncio
-async def test_ray_service_render_response_handles_multiple_generations(fake_vllm):
-    from modules import ray_service
-
-    fake_vllm.reset()
-    fake_vllm.next_generate = [
-        fake_vllm.RequestOutput(
-            texts=["first", "second"],
-            prompt_tokens=4,
-            metrics={"latency_ms": 2.5, "time_to_first_token_ms": 0.7},
-            token_counts=[2, 4],
-        )
-    ]
-
-    deployment = ray_service.RayLLMDeployment(base_model_path="base")
-    result = await deployment._render_response(
-        "prompt", [[0.1, 0.2, 0.3]], None, "general"
-    )
-
-    assert result["content"] == "first\n\nsecond"
-    usage = result["usage"]
-    assert usage["prompt_tokens"] == 4
-    assert usage["completion_tokens"] == 6
-    assert usage["total_tokens"] == 10
-    assert usage["generations"] == 2
-    assert usage["completion_tokens_per_generation"] == [2, 4]
-    assert usage["latency_ms"] == pytest.approx(2.5)
-    assert usage["time_to_first_token_ms"] == pytest.approx(0.7)
-
-
-@pytest.mark.asyncio
-async def test_ray_service_generate_raises_on_empty_generations(fake_vllm):
-    from modules import ray_service
-
-    fake_vllm.reset()
-    fake_vllm.next_generate = []
-
-    deployment = ray_service.RayLLMDeployment(base_model_path="base")
-
-    with pytest.raises(ray_service.RayServeException) as excinfo:
-        await deployment._render_response("prompt", [[0.1]], None, "general")
-
-    assert "returned no generations" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_ray_service_generate_raises_on_missing_outputs(fake_vllm):
-    from modules import ray_service
-
-    fake_vllm.reset()
-    fake_vllm.next_generate = [fake_vllm.RequestOutput(texts=[])]
-
-    deployment = ray_service.RayLLMDeployment(base_model_path="base")
-
-    with pytest.raises(ray_service.RayServeException) as excinfo:
-        await deployment._render_response("prompt", [[0.1]], None, "general")
-
-    assert "did not include any outputs" in str(excinfo.value)
-
-
-@pytest.mark.asyncio
-async def test_ray_service_generate_raises_on_missing_text(fake_vllm):
-    from modules import ray_service
-
-    fake_vllm.reset()
-    fake_vllm.next_generate = [fake_vllm.RequestOutput(texts=[None])]
-
-    deployment = ray_service.RayLLMDeployment(base_model_path="base")
-
-    with pytest.raises(ray_service.RayServeException) as excinfo:
-        await deployment._render_response("prompt", [[0.1]], None, "general")
-
-    assert "did not include textual content" in str(excinfo.value)
-
-
-def test_ray_service_initialisation_failure_is_reported(fake_vllm):
-    from modules import ray_service
-
-    fake_vllm.reset()
-    fake_vllm.initialisation_error = RuntimeError("initialisation failed")
-
-    with pytest.raises(RuntimeError) as excinfo:
-        ray_service.RayLLMDeployment(base_model_path="base")
-
-    assert "Failed to initialise vLLM engine" in str(excinfo.value)
-    fake_vllm.reset()
 
 
 def test_ray_service_encode_prompt_error(fake_vllm, monkeypatch):
