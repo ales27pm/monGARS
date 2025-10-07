@@ -211,6 +211,34 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the RAG context enrichment service URL.",
     )
+    rag_curated_default_provenance: str = Field(
+        default="self-training",
+        description=(
+            "Label applied to curated datasets indicating their source pipeline."
+        ),
+    )
+    rag_curated_default_sensitivity: str = Field(
+        default="restricted",
+        description="Sensitivity classification applied to curated dataset exports.",
+    )
+    rag_curated_reviewer: str = Field(
+        default="self-training-automation",
+        description="Reviewer recorded against automatically curated datasets.",
+    )
+    rag_curated_default_tags: list[str] = Field(
+        default_factory=lambda: ["rag", "curated"],
+        description="Default governance tags applied to curated dataset versions.",
+    )
+    rag_curated_retention_days: int = Field(
+        default=30,
+        ge=1,
+        description="Number of days curated datasets remain valid before re-review.",
+    )
+    rag_curated_export_window_days: int = Field(
+        default=7,
+        ge=0,
+        description="Duration in days that curated datasets remain exportable post-review.",
+    )
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
         description="Directory storing adapter artifacts and manifest.",

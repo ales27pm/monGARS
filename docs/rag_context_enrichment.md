@@ -84,6 +84,5 @@ If RAG is disabled, the endpoint returns `{ "enabled": false, "focus_areas": [],
 
 - Keep repository indexing up to date to maintain high-quality results.
 - Curate `rag_repo_list` to balance context coverage against retrieval noise.
-- Document data-retention policies for the curated datasets stored in
-  `models/datasets/curated/` to ensure privacy expectations are met when RAG is
-  active.
+- Follow the curated dataset governance playbook to ensure retention policies
+  and export checks stay current as partner access scales.【F:docs/rag_dataset_governance.md†L1-L160】

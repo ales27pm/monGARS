@@ -98,8 +98,8 @@ implementation details.
 - **Reinforcement Learning Integration** – the research loop is functional yet
   not wired into production automation, so observability and rollout policies
   need definition before declaring the phase complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
-- **RAG Governance** – dataset retention and export workflows still need
-  codified guardrails before expanding partner access.【F:docs/rag_context_enrichment.md†L60-L96】
+- ✅ **RAG Governance** – retention metadata, automated scrubbing, and documented
+  export flows keep curated artefacts compliant as partner integrations scale.【F:docs/rag_dataset_governance.md†L1-L160】
 
 ## Roadmap Phase Summary
 | Phase | Status | Evidence |
@@ -115,5 +115,5 @@ implementation details.
 ## Recommended Next Steps
 1. Define an integration plan for reinforcement-learning loops, including
    telemetry, rollback, and operator controls, before marking Phase 6 complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
-2. Finalise RAG retention governance so curated artefacts can be safely shared
-   with partners without leaking sensitive context.【F:docs/rag_context_enrichment.md†L60-L96】
+2. Deliver production-ready controls for the reinforcement-learning loop so it
+   can run alongside self-training without manual babysitting.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】

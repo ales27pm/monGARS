@@ -71,3 +71,47 @@ def _sanitize_value(value: Any) -> Any:
             return tuple(sanitized_items)
         return sanitized_items
     return value
+
+
+def detect_pii(record: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Return locations of values still matching PII patterns.
+
+    The function mirrors :func:`sanitize_record` by walking nested mappings and
+    iterables. Rather than mutating the payload it records the replacement
+    tokens that would be applied if sanitisation were to run again. The result
+    maps dotted key paths (or indices for lists) to the redaction markers that
+    triggered.
+    """
+
+    findings: dict[str, set[str]] = {}
+
+    def _walk(value: Any, path: list[str]) -> None:
+        if isinstance(value, str):
+            matches = [
+                replacement
+                for pattern, replacement in _REPLACEMENTS
+                if pattern.search(value)
+            ]
+            if matches:
+                key = ".".join(path) if path else "<root>"
+                findings.setdefault(key, set()).update(matches)
+            return
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                path.append(str(key))
+                _walk(item, path)
+                path.pop()
+            return
+        if isinstance(value, Iterable) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            for index, item in enumerate(value):
+                path.append(str(index))
+                _walk(item, path)
+                path.pop()
+
+    _walk(record, [])
+    return {key: sorted(labels) for key, labels in findings.items()}
+
+
+__all__ = ["sanitize_record", "scrub_text", "detect_pii"]

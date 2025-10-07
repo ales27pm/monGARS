@@ -76,6 +76,10 @@ async def test_run_training_cycle_creates_version(
     assert Path(dataset_file).exists()
     assert trainer_stub.runs and trainer_stub.runs[0][0]["text_preview"] == "trainable"
     assert version["dataset"]["version"] == 1
+    assert version["dataset"]["quarantined"] is False
+    compliance = version["dataset"]["compliance"]
+    assert compliance["status"] == "approved"
+    assert "provenance" in compliance["metadata"]
 
 
 @pytest.mark.asyncio
@@ -208,11 +212,15 @@ async def test_dataset_catalog_and_pii_scrubbing(
     assert rows and "[REDACTED_EMAIL]" in rows[0]["text_preview"]
     assert trainer_stub.runs[0][0]["text_preview"].endswith("[REDACTED_EMAIL]")
     assert dataset_meta["version"] == 1
+    assert dataset_meta["compliance"]["status"] == "approved"
+    assert dataset_meta["governance"]["run_id"] == dataset_meta["run_id"]
+    assert dataset_meta["quarantined"] is False
 
     catalog_path = tmp_path / "datasets" / "catalog.json"
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     assert catalog["latest_version"] == 1
     assert catalog["versions"][0]["run_id"] == dataset_meta["run_id"]
+    assert catalog["versions"][0]["quarantined"] is False
 
 
 def test_collect_internal_reasoning_records_handles_running_loop(

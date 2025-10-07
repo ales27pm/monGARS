@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 from uuid import uuid4
 
-from models.datasets import DatasetCatalog, sanitize_record, scrub_text
+from models.datasets import (
+    DatasetCatalog,
+    DatasetGovernance,
+    sanitize_record,
+    scrub_text,
+)
 from monGARS.core.neurones import EmbeddingSystem
 
 logger = logging.getLogger(__name__)
@@ -74,6 +79,7 @@ class SelfTrainingEngine:
         )
         self.curated_feature_limit = max(1, curated_feature_limit)
         self._dataset_catalog = DatasetCatalog(self.dataset_root)
+        self._dataset_governance = DatasetGovernance()
         logger.info("SelfTrainingEngine initialized.")
 
     async def auto_improve(self) -> None:
@@ -247,11 +253,23 @@ class SelfTrainingEngine:
                 handle.write(json.dumps(record, sort_keys=True))
                 handle.write("\n")
 
+        created_at = datetime.now(UTC)
+        evaluation = self._dataset_governance.evaluate_dataset(
+            dataset_file,
+            run_id=run_id,
+            record_count=len(curated_batch),
+            created_at=created_at,
+        )
+
         version = self._dataset_catalog.register(
             run_id=run_id,
             dataset_dir=dataset_dir,
             dataset_file=dataset_file,
             record_count=len(curated_batch),
+            created_at=created_at,
+            governance=evaluation.metadata,
+            compliance=evaluation.as_dict(),
+            quarantined=evaluation.status != "approved",
         )
 
         return {
@@ -260,6 +278,9 @@ class SelfTrainingEngine:
             "dataset_file": str(dataset_file),
             "records": len(curated_batch),
             "version": version.version,
+            "governance": evaluation.metadata,
+            "compliance": evaluation.as_dict(),
+            "quarantined": evaluation.status != "approved",
             "catalog_entry": version.as_dict(),
         }
 
