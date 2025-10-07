@@ -1,32 +1,20 @@
-name: Build Custom Québec-French Dataset
+name: Build Custom Québec-French Dataset (Repo-only)
 
 on:
   workflow_dispatch:
     inputs:
-      enable_external_fetch:
-        description: "Fetch allowed external sources (Hansards / allow-listed crawl)"
-        type: boolean
-        default: false
-      crawl_domains:
-        description: "Domains you OWN/have permission to crawl (newline-separated, e.g. https://example.qc.ca)"
-        type: string
-        required: false
-      hansards_limit:
-        description: "Max paragraphs from Hansards (0 = unlimited)"
-        type: number
-        default: 5000
-      strict_qc:
-        description: "Strict fr-CA filter (drop non-Québécois unless agent/internal)"
-        type: boolean
-        default: true
       ratios:
         description: "Sampling ratios (sum≈1), e.g. frca:0.65,agent:0.25,repo:0.10"
         type: string
-        default: "frca:0.65,agent:0.25,repo:0.10"
+        default: "frca:0.50,agent:0.40,repo:0.10"
       val_pct:
         description: "Validation split percentage"
         type: number
         default: 0.06
+      strict_qc:
+        description: "Strict fr-CA filter (drop non-Québécois unless agent/internal)"
+        type: boolean
+        default: true
       retention_days:
         description: "Artifact retention (days)"
         type: number
@@ -39,106 +27,78 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
-  scan:
-    name: Scan & Mine Repo
+  scan_and_build:
     runs-on: ubuntu-latest
     env:
       CONFIRM_SCAN: "YES"
       CONFIRM_DATA_FETCH: "NO"
     steps:
-      - name: Check out
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install system deps (graphviz)
+      - name: Install OS deps
         run: |
           sudo apt-get update
           sudo apt-get install -y graphviz
 
       - name: Create analyzer script (lite)
         run: |
+          set -euo pipefail
           mkdir -p scripts
           cat > scripts/ultimate_repo_analyzer.py <<'PY'
 #!/usr/bin/env python3
-# Lite repo analyzer: mines SFT, agent-handoff, embeddings, and writes a DOT graph.
-import os, re, json, csv, hashlib, subprocess
+import os, re, json, csv, hashlib, subprocess, sys
 from pathlib import Path
-import sys
 
-OUT = Path("data/ultimate")
-RAW = OUT / "raw_texts"
-PROC = OUT / "processed_repo"
-RAW.mkdir(parents=True, exist_ok=True)
-PROC.mkdir(parents=True, exist_ok=True)
+OUT = Path("data/ultimate"); RAW = OUT/"raw_texts"; PROC = OUT/"processed_repo"
+for d in (RAW, PROC): d.mkdir(parents=True, exist_ok=True)
+SFT = PROC/"sft_repo.jsonl"; AGT = PROC/"agent_instruct_repo.jsonl"
+EMB = PROC/"embeddings_repo.jsonl"; PROV = PROC/"provenance.csv"
+DOT = OUT/"interaction_graph.dot"; PNG = OUT/"interaction_graph.png"
 
-SFT = PROC / "sft_repo.jsonl"
-AGT = PROC / "agent_instruct_repo.jsonl"
-EMB = PROC / "embeddings_repo.jsonl"
-PROV = PROC / "provenance.csv"
-DOT = OUT / "interaction_graph.dot"
-PNG = OUT / "interaction_graph.png"
-
-CONFIRM_SCAN = os.environ.get("CONFIRM_SCAN","")
-if CONFIRM_SCAN != "YES":
-    print("ABORT: set CONFIRM_SCAN=YES to allow local scanning.")
-    sys.exit(2)
+if os.environ.get("CONFIRM_SCAN","") != "YES":
+    print("ABORT: set CONFIRM_SCAN=YES"); sys.exit(2)
 
 EXTS = {"md","rst","txt","json","yml","yaml","py","sh","cfg","ini","toml","sql","js","ts"}
-def is_text(p: Path) -> bool:
+def is_text(p): 
     try:
-        with p.open("rb") as f:
-            b=f.read(4096)
-            return b"\x00" not in b
-    except Exception:
-        return False
+        with p.open("rb") as f: return b"\x00" not in f.read(4096)
+    except: return False
 
-# 1) collect files (respect .gitignore if available)
-root = Path(".").resolve()
-files=[]
+root = Path(".").resolve(); files=[]
 if (root/".git").exists():
     try:
         out = subprocess.check_output(["git","ls-files"], text=True)
         for rel in out.splitlines():
-            p = root/rel
+            p=root/rel
             if p.suffix.lstrip(".") in EXTS and p.exists() and is_text(p):
-                dst = RAW / p.relative_to(root)
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                dst.write_bytes(p.read_bytes())
-                files.append(dst)
-    except Exception:
-        pass
+                dst=RAW/p.relative_to(root); dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(p.read_bytes()); files.append(dst)
+    except: pass
 if not files:
     for p in root.rglob("*"):
         if p.is_file() and p.suffix.lstrip(".") in EXTS and is_text(p) and ".git" not in p.parts:
-            dst = RAW / p.relative_to(root)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(p.read_bytes())
-            files.append(dst)
+            dst=RAW/p.relative_to(root); dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(p.read_bytes()); files.append(dst)
 
-# 2) mine SFT, agent, embeddings
-DIALOG = re.compile(r'^\s*(User|Utilisateur|Client|Moi|Tu|Vous|Assistant|System|Bot|Agent)\s*[:\-—]\s*(.+)', re.I)
-PIPE   = re.compile(r'(workflow|pipeline|job|stage|steps|run:|script:|entrypoint|commands?)', re.I)
-JSON_L = re.compile(r'^\s*[\{\[]\s*".*')
-
-def sha(s): return hashlib.sha1(s.encode("utf-8")).hexdigest()[:12]
-
-sft_rows=[]; ag_rows=[]; emb_rows=[]
-prov = []
+DIALOG=re.compile(r'^\s*(User|Utilisateur|Client|Moi|Tu|Vous|Assistant|System|Bot|Agent)\s*[:\-—]\s*(.+)', re.I)
+PIPE=re.compile(r'(workflow|pipeline|job|stage|steps|run:|script:|entrypoint|commands?)', re.I)
+JSONL=re.compile(r'^\s*[\{\[]\s*".*')
+def sha(s): import hashlib; return hashlib.sha1(s.encode("utf-8")).hexdigest()[:12]
+sft_rows=[]; ag_rows=[]; emb_rows=[]; prov=[]
 
 for f in files:
-    try:
-        txt = f.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        continue
-    lines = txt.splitlines()
+    try: text=f.read_text(encoding="utf-8", errors="ignore")
+    except: continue
+    lines=text.splitlines()
 
-    # Dialogue → SFT
     cur=[]
     for i,ln in enumerate(lines):
         if DIALOG.match(ln): cur.append((i+1, ln.strip()))
@@ -147,10 +107,8 @@ for f in files:
                 instr=None; outs=[]
                 for _,l in cur:
                     m=DIALOG.match(l); who=m.group(1).lower(); content=m.group(2).strip()
-                    if instr is None and re.match(r'(user|utilisateur|client|moi|tu|vous)', who, re.I):
-                        instr=content
-                    else:
-                        outs.append(content)
+                    if instr is None and re.match(r'(user|utilisateur|client|moi|tu|vous)', who, re.I): instr=content
+                    else: outs.append(content)
                 if instr and outs:
                     rec={"instruction":instr,"input":"","output":" ".join(outs)}
                     sft_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), cur[0][0], cur[-1][0], "sft_dialog","auto"])
@@ -159,18 +117,15 @@ for f in files:
         instr=None; outs=[]
         for _,l in cur:
             m=DIALOG.match(l); who=m.group(1).lower(); content=m.group(2).strip()
-            if instr is None and re.match(r'(user|utilisateur|client|moi|tu|vous)', who, re.I):
-                instr=content
-            else:
-                outs.append(content)
+            if instr is None and re.match(r'(user|utilisateur|client|moi|tu|vous)', who, re.I): instr=content
+            else: outs.append(content)
         if instr and outs:
             rec={"instruction":instr,"input":"","output":" ".join(outs)}
             sft_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), cur[0][0], cur[-1][0], "sft_dialog","auto"])
 
-    # Pipeline → agent
     curp=[]
     for i,ln in enumerate(lines):
-        if PIPE.search(ln) or JSON_L.match(ln) or ln.strip().startswith(("steps:", "- run:", "script:")):
+        if PIPE.search(ln) or JSONL.match(ln) or ln.strip().startswith(("steps:", "- run:", "script:")):
             curp.append((i+1, ln))
         else:
             if curp:
@@ -183,68 +138,165 @@ for f in files:
         rec={"instruction":"Interpret this pipeline fragment and return structured steps as JSON. Preserve tool names and env vars.","input":block,"output":{"steps":[],"notes":"AUTO"}}
         ag_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), curp[0][0], curp[-1][0], "agent_pipeline","auto"])
 
-    # Paragraphs → embeddings
     para=[]; start=1
     for i,ln in enumerate(lines):
         if ln.strip()=="":
             if para:
-                text="\n".join(para).strip()
-                if len(text)>=40:
-                    emb_rows.append({"text":text,"source":str(f.relative_to(RAW))})
-                    prov.append([sha(text), str(f.relative_to(RAW)), start, i, "embedding_paragraph","auto"])
-                para=[]
-            start=i+2
+                t="\n".join(para).strip()
+                if len(t)>=40:
+                    emb_rows.append({"text":t,"source":str(f.relative_to(RAW))})
+                    prov.append([sha(t), str(f.relative_to(RAW)), start, i, "embedding_paragraph","auto"])
+                para=[]; start=i+2
         else:
             para.append(ln)
     if para:
-        text="\n".join(para).strip()
-        if len(text)>=40:
-            emb_rows.append({"text":text,"source":str(f.relative_to(RAW))})
-            prov.append([sha(text), str(f.relative_to(RAW)), start, len(lines), "embedding_paragraph","auto"])
+        t="\n".join(para).strip()
+        if len(t)>=40:
+            emb_rows.append({"text":t,"source":str(f.relative_to(RAW))})
+            prov.append([sha(t), str(f.relative_to(RAW)), start, len(lines), "embedding_paragraph","auto"])
 
-# write outputs
-def write_jsonl(path, rows):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w",encoding="utf-8") as f:
-        for r in rows: f.write(json.dumps(r,ensure_ascii=False)+"\n")
+def write_jsonl(p, rows):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
+        for r in rows: f.write(json.dumps(r, ensure_ascii=False)+"\n")
 
-write_jsonl(SFT, sft_rows)
-write_jsonl(AGT, ag_rows)
-write_jsonl(EMB, emb_rows)
-with PROV.open("w",encoding="utf-8",newline="") as f:
-    w=csv.writer(f); w.writerow(["record_id","source_file","start_line","end_line","type","note"])
-    w.writerows(prov)
+write_jsonl(SFT, sft_rows); write_jsonl(AGT, ag_rows); write_jsonl(EMB, emb_rows)
+with PROV.open("w", encoding="utf-8", newline="") as f:
+    w=csv.writer(f); w.writerow(["record_id","source_file","start_line","end_line","type","note"]); w.writerows(prov)
 
-# minimal DOT graph (imports are skipped in lite version)
-with DOT.open("w",encoding="utf-8") as f:
-    f.write("digraph interactions {\n")
-    f.write('  "repo" [label="repo"];\n')
-    for i in range(min(20, len(sft_rows))):
-        f.write(f'  "repo" -> "sft_{i}";\n')
+with DOT.open("w", encoding="utf-8") as f:
+    f.write("digraph interactions {\n  \"repo\" [label=\"repo\"];\n")
+    for i in range(min(20, len(sft_rows))): f.write(f'  "repo" -> "sft_{i}";\n')
     f.write("}\n")
-
-# render PNG if graphviz present
-try:
-    subprocess.run(["dot","-Tpng", str(DOT), "-o", str(PNG)], check=True)
-except Exception:
-    pass
+try: subprocess.run(["dot","-Tpng", str(DOT), "-o", str(PNG)], check=True)
+except: pass
 
 print(f"OK: SFT={len(sft_rows)} AGENT={len(ag_rows)} EMB={len(emb_rows)}")
-print("Wrote:", SFT, AGT, EMB, PROV, DOT, PNG if PNG.exists() else "")
+print("OUT:", SFT, AGT, EMB, PROV, DOT, PNG if PNG.exists() else "(no PNG)")
 PY
           chmod +x scripts/ultimate_repo_analyzer.py
 
-      - name: Run repo analyzer (scan-only)
+      - name: Run analyzer
         run: |
-          python scripts/ultimate_repo_analyzer.py \
-            --out data/ultimate \
-            --graph \
-            --systemd
+          set -euxo pipefail
+          python scripts/ultimate_repo_analyzer.py
+          echo "== Output tree =="
+          find data/ultimate -maxdepth 3 -type f | sort || true
 
-      - name: Upload scan artifacts
+      - name: Create dataset builder
+        run: |
+          set -euo pipefail
+          mkdir -p scripts
+          cat > scripts/prepare_dataset.py <<'PY'
+#!/usr/bin/env python3
+import json, random, argparse, hashlib
+from pathlib import Path
+QC_TERMS=["dépanneur","poutine","cégep","tuque","magasiner","char","chum","blonde","icitte","ben là","patente","tabarnak"]
+MIN_LEN=12; MAX_OUT_CHARS=3000
+def sha(s): import hashlib; return hashlib.sha1(s.encode("utf-8")).hexdigest()
+def is_qc(t): t=t.lower(); return any(w in t for w in QC_TERMS)
+def clamp(s,n): s=s.strip(); return s if len(s)<=n else s[:n].rsplit(" ",1)[0]+" …"
+def load_jsonl(p): 
+    if not Path(p).exists(): return []
+    with open(p,"r",encoding="utf-8") as f:
+        for line in f:
+            line=line.strip()
+            if line: yield json.loads(line)
+def norm_sft(j):
+    if not isinstance(j,dict) or "instruction" not in j or "output" not in j: return None
+    instr=(j.get("instruction") or "").strip(); inp=(j.get("input") or "").strip(); out=j.get("output")
+    if not isinstance(out,str): out=json.dumps(out,ensure_ascii=False,separators=(",",":"))
+    out=clamp(out,MAX_OUT_CHARS)
+    if len(instr)<MIN_LEN or len(out)<MIN_LEN: return None
+    return {"instruction":instr,"input":inp,"output":out}
+def dedupe(xs,key=lambda x:x):
+    s=set(); o=[]
+    for it in xs:
+        k=key(it)
+        if k in s: continue
+        s.add(k); o.append(it)
+    return o
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--frca", default="data/raw/repo_sft.jsonl") # repo-only default
+    ap.add_argument("--agent", default="data/raw/agent_handoff.jsonl")
+    ap.add_argument("--repo", default="data/raw/repo_sft.jsonl")
+    ap.add_argument("--outdir", default="data/final")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--ratio", default="frca:0.50,agent:0.40,repo:0.10")
+    ap.add_argument("--val_pct", type=float, default=0.06)
+    ap.add_argument("--strict_qc", action="store_true")
+    a=ap.parse_args(); random.seed(a.seed)
+    ratios={}; 
+    for part in a.ratio.split(","):
+        k,v=part.split(":"); ratios[k.strip()]=float(v)
+    sources={"frca":a.frca,"agent":a.agent,"repo":a.repo}
+    buckets={}
+    for name, path in sources.items():
+        rows=[]
+        for j in load_jsonl(path):
+            s=norm_sft(j)
+            if not s: continue
+            if a.strict_qc and name!="agent":
+                if not is_qc(s["instruction"]+" "+s["output"]): continue
+            rows.append(s)
+        rows=dedupe(rows, key=lambda x: sha((x["instruction"]+"|"+x["input"]).lower()))
+        buckets[name]=rows
+        print(f"[LOAD] {name}: {len(rows)}")
+    total=sum(len(v) for v in buckets.values())
+    if total==0: raise SystemExit("No data")
+    targets={k:int(ratios.get(k,0)*total) for k in buckets}
+    mixed=[]
+    for k, arr in buckets.items():
+        random.shuffle(arr)
+        take=min(len(arr), max(0, targets.get(k,0)))
+        mixed.extend(arr[:take])
+    if len(mixed)<total:
+        pool=[x for xs in buckets.values() for x in xs]; random.shuffle(pool)
+        for x in pool:
+            if len(mixed)>=total: break
+            mixed.append(x)
+    random.shuffle(mixed)
+    n_val=int(len(mixed)*a.val_pct); val=mixed[:n_val]; train=mixed[n_val:]
+    out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
+    with (out/"train.jsonl").open("w",encoding="utf-8") as f:
+        for r in train: f.write(json.dumps(r,ensure_ascii=False)+"\n")
+    with (out/"val.jsonl").open("w",encoding="utf-8") as f:
+        for r in val: f.write(json.dumps(r,ensure_ascii=False)+"\n")
+    print(f"[DONE] train={len(train)} val={len(val)} strict_qc={a.strict_qc}")
+if __name__=="__main__": main()
+PY
+          chmod +x scripts/prepare_dataset.py
+
+      - name: Assemble inputs
+        run: |
+          set -euxo pipefail
+          mkdir -p data/raw
+          # analyzer outputs -> expected inputs
+          cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/repo_sft.jsonl
+          cp data/ultimate/processed_repo/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
+          echo "== Assembled data/raw =="
+          ls -l data/raw || true
+
+      - name: Build final dataset
+        run: |
+          set -euxo pipefail
+          python scripts/prepare_dataset.py \
+            --frca data/raw/repo_sft.jsonl \
+            --agent data/raw/agent_handoff.jsonl \
+            --repo data/raw/repo_sft.jsonl \
+            --outdir data/final \
+            --ratio "${{ inputs.ratios }}" \
+            --val_pct ${{ inputs.val_pct }} \
+            $([ "${{ inputs.strict_qc }}" = "true" ] && echo "--strict_qc" || true)
+          echo "== Final counts =="
+          wc -l data/final/train.jsonl || true
+          wc -l data/final/val.jsonl   || true
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: repo-scan-artifacts
+          name: final-custom-dataset
           path: |
             data/ultimate/processed_repo/sft_repo.jsonl
             data/ultimate/processed_repo/agent_instruct_repo.jsonl
@@ -252,316 +304,6 @@ PY
             data/ultimate/processed_repo/provenance.csv
             data/ultimate/interaction_graph.dot
             data/ultimate/interaction_graph.png
-          retention-days: ${{ inputs.retention_days }}
-          if-no-files-found: error
-
-  fetch_external:
-    name: Fetch External Sources (optional)
-    runs-on: ubuntu-latest
-    if: ${{ inputs.enable_external_fetch == true }}
-    env:
-      CONFIRM_DATA_FETCH: "YES"
-    steps:
-      - name: Check out
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Python deps (fetch)
-        run: |
-          python -m pip install --upgrade pip
-          pip install "datasets>=2.0.0,<3.0.0" beautifulsoup4 requests tldextract
-
-      - name: Fetch Hansards fr-CA (usc-isi/hansards)
-        run: |
-          python - <<'PY'
-          import re, json
-          from pathlib import Path
-          from datasets import load_dataset
-
-          limit = int("${{ inputs.hansards_limit }}")
-          out = Path("data/external/frca_hansard.jsonl")
-          out.parent.mkdir(parents=True, exist_ok=True)
-
-          ds = load_dataset("usc-isi/hansards", split="train")
-          rows, count = [], 0
-          for x in ds:
-              fr = (x.get("french") or "").strip()
-              if not fr: continue
-              for para in re.split(r"\n\s*\n", fr):
-                  para = para.strip()
-                  if len(para) < 50: continue
-                  rows.append({"instruction": para, "input": "", "output": para})
-                  count += 1
-                  if limit and count >= limit: break
-              if limit and count >= limit: break
-
-          with out.open("w", encoding="utf-8") as f:
-              for r in rows:
-                  f.write(json.dumps(r, ensure_ascii=False) + "\n")
-          print(f"Wrote {len(rows)} → {out}")
-          PY
-
-      - name: Crawl allow-listed domains (optional)
-        if: ${{ inputs.crawl_domains != '' }}
-        run: |
-          python - <<'PY'
-          import json, requests, tldextract
-          from bs4 import BeautifulSoup
-          from urllib.parse import urljoin, urlparse
-          from pathlib import Path
-
-          domains = [d.strip() for d in """${{ inputs.crawl_domains }}""".splitlines() if d.strip()]
-          max_pages, timeout = 200, 8
-          out = Path("data/external/frca_crawl.jsonl")
-          out.parent.mkdir(parents=True, exist_ok=True)
-          rows = []
-
-          def can_fetch(base):
-              try:
-                  rp = requests.get(urljoin(base, "/robots.txt"), timeout=timeout)
-                  return not (rp.status_code == 200 and "disallow: /" in rp.text.lower())
-              except Exception:
-                  return True
-
-          visited, queue = set(), []
-          for d in domains:
-              base = d if d.startswith("http") else "https://" + d
-              if can_fetch(base): queue.append(base)
-
-          while queue and len(visited) < max_pages:
-              url = queue.pop(0)
-              if url in visited: continue
-              visited.add(url)
-              try:
-                  r = requests.get(url, timeout=timeout, headers={"User-Agent":"monGARS-safe-crawler"})
-                  if r.status_code != 200 or "text/html" not in r.headers.get("Content-Type",""): continue
-                  soup = BeautifulSoup(r.text, "html.parser")
-                  for t in [x.get_text(" ", strip=True) for x in soup.find_all(["p","li","blockquote"])]:
-                      t = t.strip()
-                      if len(t) >= 50:
-                          rows.append({"instruction": t, "input": "", "output": t})
-                  base_reg = tldextract.extract(url).registered_domain
-                  for a in soup.find_all("a", href=True):
-                      nu = urljoin(url, a["href"])
-                      pr = urlparse(nu)
-                      if pr.scheme in ("http","https"):
-                          reg = tldextract.extract(nu).registered_domain
-                          if reg == base_reg and nu not in visited and len(queue) < max_pages:
-                              queue.append(nu)
-              except Exception:
-                  pass
-
-          with out.open("w", encoding="utf-8") as f:
-              for r in rows:
-                  f.write(json.dumps(r, ensure_ascii=False) + "\n")
-          print(f"Crawled {len(visited)} pages; wrote {len(rows)} → {out}")
-          PY
-
-      - name: Upload external JSONLs
-        uses: actions/upload-artifact@v4
-        with:
-          name: external-sources
-          path: |
-            data/external/frca_hansard.jsonl
-            data/external/frca_crawl.jsonl
-          retention-days: ${{ inputs.retention_days }}
-          if-no-files-found: warn
-
-  build_dataset:
-    name: Build Final Dataset
-    runs-on: ubuntu-latest
-    needs: [scan]   # external fetch is optional
-    steps:
-      - name: Check out
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Python deps (builder)
-        run: |
-          python -m pip install --upgrade pip
-
-      - name: Download repo scan artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: repo-scan-artifacts
-          path: repo-scan-artifacts
-
-      - name: Download external sources (if any)
-        if: ${{ inputs.enable_external_fetch == true }}
-        uses: actions/download-artifact@v4
-        with:
-          name: external-sources
-          path: external-sources
-
-      - name: Create dataset builder script
-        run: |
-          mkdir -p scripts
-          cat > scripts/prepare_dataset.py <<'PY'
-#!/usr/bin/env python3
-import json, random, argparse, hashlib
-from pathlib import Path
-
-QC_TERMS = ["dépanneur","poutine","cégep","tuque","magasiner","char","chum","blonde","icitte","ben là","patente","tabarnak"]
-MIN_LEN = 12
-MAX_OUT_CHARS = 3000
-
-def sha(s): return hashlib.sha1(s.encode("utf-8")).hexdigest()
-
-def is_qc(text: str) -> bool:
-    t = text.lower()
-    return any(w in t for w in QC_TERMS)
-
-def clamp(s, n):
-    s = s.strip()
-    return s if len(s) <= n else s[:n].rsplit(" ",1)[0] + " …"
-
-def load_jsonl(p: Path):
-    if not p.exists(): return []
-    with p.open("r", encoding="utf-8") as f:
-        for line in f:
-            line=line.strip()
-            if not line: continue
-            yield json.loads(line)
-
-def norm_sft(j):
-    if not isinstance(j, dict): return None
-    if "instruction" not in j or "output" not in j: return None
-    instr = (j.get("instruction") or "").strip()
-    inp = (j.get("input") or "").strip()
-    out = j.get("output")
-    if not isinstance(out, str):
-        out = json.dumps(out, ensure_ascii=False, separators=(",",":"))
-    out = clamp(out, MAX_OUT_CHARS)
-    if len(instr) < MIN_LEN or len(out) < MIN_LEN: return None
-    return {"instruction": instr, "input": inp, "output": out}
-
-def dedupe_keep_first(items, key=lambda x:x):
-    seen=set(); out=[]
-    for it in items:
-        k=key(it)
-        if k in seen: continue
-        seen.add(k); out.append(it)
-    return out
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--frca", default="data/raw/frca_hansard.jsonl")
-    ap.add_argument("--agent", default="data/raw/agent_handoff.jsonl")
-    ap.add_argument("--repo", default="data/raw/repo_sft.jsonl")
-    ap.add_argument("--outdir", default="data/final")
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--ratio", default="frca:0.65,agent:0.25,repo:0.10")
-    ap.add_argument("--val_pct", type=float, default=0.06)
-    ap.add_argument("--strict_qc", action="store_true")
-    args = ap.parse_args()
-    random.seed(args.seed)
-
-    ratios = {}
-    for part in args.ratio.split(","):
-        name, val = part.split(":")
-        ratios[name.strip()] = float(val)
-
-    srcs = {
-        "frca": Path(args.frca),
-        "agent": Path(args.agent),
-        "repo": Path(args.repo),
-    }
-
-    buckets = {}
-    for name, path in srcs.items():
-        rows=[]
-        for j in load_jsonl(path):
-            s = norm_sft(j)
-            if not s: continue
-            if args.strict_qc and name != "agent":  # agent can be neutral/structured
-                if not is_qc(s["instruction"] + " " + s["output"]):
-                    continue
-            rows.append(s)
-        rows = dedupe_keep_first(rows, key=lambda x: sha((x["instruction"]+"|"+x["input"]).lower()))
-        buckets[name]=rows
-        print(f"[LOAD] {name}: {len(rows)} samples")
-
-    total = sum(len(v) for v in buckets.values())
-    if total == 0:
-        raise SystemExit("No data found. Provide at least one non-empty source.")
-
-    targets = {k: int(ratios.get(k,0)*total) for k in buckets.keys()}
-    mixed=[]
-    for k, arr in buckets.items():
-        random.shuffle(arr)
-        take = min(len(arr), max(0, targets.get(k,0)))
-        mixed.extend(arr[:take])
-
-    # top-up if rounding left gaps
-    left = max(0, total - len(mixed))
-    if left:
-        pool = [x for xs in buckets.values() for x in xs]
-        random.shuffle(pool)
-        for x in pool:
-            if len(mixed) >= total: break
-            mixed.append(x)
-
-    random.shuffle(mixed)
-    n_val = int(len(mixed)*args.val_pct)
-    val = mixed[:n_val]
-    train = mixed[n_val:]
-
-    outdir = Path(args.outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    with (outdir/"train.jsonl").open("w",encoding="utf-8") as tf:
-        for r in train: tf.write(json.dumps(r, ensure_ascii=False)+"\n")
-    with (outdir/"val.jsonl").open("w",encoding="utf-8") as vf:
-        for r in val: vf.write(json.dumps(r, ensure_ascii=False)+"\n")
-
-    print(f"[DONE] train={len(train)}  val={len(val)}  (strict_qc={args.strict_qc})")
-    print(f"       ratios={ratios}  outdir={outdir}")
-
-if __name__ == "__main__":
-    main()
-PY
-          chmod +x scripts/prepare_dataset.py
-
-      - name: Assemble inputs
-        run: |
-          mkdir -p data/raw
-          cp repo-scan-artifacts/sft_repo.jsonl            data/raw/repo_sft.jsonl
-          cp repo-scan-artifacts/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
-          # choose FRCA source
-          if [ "${{ inputs.enable_external_fetch }}" = "true" ] && [ -f external-sources/frca_hansard.jsonl ]; then
-            cp external-sources/frca_hansard.jsonl data/raw/frca_hansard.jsonl
-            echo "FRCA=data/raw/frca_hansard.jsonl" >> $GITHUB_ENV
-          else
-            echo "FRCA=data/raw/repo_sft.jsonl" >> $GITHUB_ENV
-          fi
-
-      - name: Build final dataset (train/val)
-        run: |
-          python scripts/prepare_dataset.py \
-            --frca "$FRCA" \
-            --agent data/raw/agent_handoff.jsonl \
-            --repo data/raw/repo_sft.jsonl \
-            --outdir data/final \
-            --ratio "${{ inputs.ratios }}" \
-            --val_pct ${{ inputs.val_pct }} \
-            $([ "${{ inputs.strict_qc }}" = "true" ] && echo "--strict_qc" || true)
-
-      - name: Upload final dataset
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-custom-dataset
-          path: |
             data/final/train.jsonl
             data/final/val.jsonl
           retention-days: ${{ inputs.retention_days }}
