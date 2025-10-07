@@ -35,7 +35,7 @@ git+https://github.com/unslothai/unsloth.git
 trafilatura>=2.0.0
 uvicorn>=0.35.0
 llm2vec>=0.2.3
-autoawq>=0.2.5
+autoawq>=0.2.9
 cryptography>=45.0.5
 durationpy>=0.5,<1.0
 kubernetes>=8.0.2,<10.0.0
