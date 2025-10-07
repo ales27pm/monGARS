@@ -83,11 +83,11 @@ and reality.
 - ✅ SelfTrainingEngine batches curated records, persists anonymised datasets, and
   launches `modules.neurons.training.mntp_trainer.MNTPTrainer` for both curated
   linear adapters and LoRA fine-tuning when dependencies are available.
-- 🔄 Reinforcement learning research loops now live in
+- ✅ Reinforcement learning research loops now live in
   `modules/neurons/training/reinforcement_loop.py`, complete with adaptive
-  scaling strategies and summary telemetry. Integration with production
-  automation and long-haul observability remains outstanding, so the milestone
-  stays in progress until rollout controls land.
+  scaling strategies, OpenTelemetry spans, and metrics hooks. Production
+  automation gates deployments through the operator approval registry so
+  experiments cannot roll out without sign-off.
 - ⚠️ Testing coverage for cognition and scheduling modules is solid; expand
   end-to-end evaluations for long-running MNTP jobs and multi-replica Ray Serve
   rollouts before declaring the phase complete.
@@ -117,14 +117,14 @@ and reality.
   tooling, allowing partners to integrate without scraping OpenAPI definitions.【F:sdks/python/README.md†L1-L120】【F:docs/sdk-release-guide.md†L1-L160】
 - ✅ **RAG governance**: curated datasets carry retention metadata, automated
   scrubbing checks, and operator playbooks covering exports and takedown flows.【F:docs/rag_dataset_governance.md†L1-L120】
-- **Advanced research loops**: wire the reinforcement-learning utilities into
-  production workflows (telemetry, rollback, operator approval) before closing
-  the milestone.
+- ✅ **Advanced research loops**: reinforcement-learning utilities emit
+  telemetry, persist approval requests via
+  `monGARS/core/operator_approvals.py`, and require explicit sign-off before
+  manifests update, closing the long-standing milestone gap.
 
 ## Next Critical Implementation
 
-With governance in place for curated RAG datasets, the next critical
-implementation is productionising the reinforcement-learning research loop.
-This requires adding telemetry, rollout safeguards, and operator approvals so
-the experimentation tooling can graduate into the automated self-improvement
-pipeline.
+With RL automation instrumented and guarded by operator approvals, the next
+critical implementation is extending long-haul validation for research loops.
+Focus on sustained MNTP and RL runs, energy telemetry correlation, and
+production dashboards that visualise the new reinforcement metrics end to end.
