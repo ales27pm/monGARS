@@ -1,8 +1,8 @@
-name: Build Custom Québec-French Dataset (repo-only)
+name: Build Custom Québec-French Dataset
 
 on:
   push:
-    branches: ['**']         # run on any branch commit
+    branches: ['**']
   workflow_dispatch:
     inputs:
       ratios:
@@ -26,20 +26,27 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.11"
+  SCAN_OUTPUT_DIR: data/deep_scan
+  FINAL_OUTPUT_DIR: data/final
+  DATASET_RATIOS: ${{ github.event.inputs.ratios || 'frca:0.50,agent:0.40,repo:0.10' }}
+  DATASET_VAL_PCT: ${{ github.event.inputs.val_pct || 0.06 }}
+  DATASET_STRICT_QC: ${{ github.event.inputs.strict_qc || 'true' }}
+  DATASET_RETENTION_DAYS: ${{ github.event.inputs.retention_days || 14 }}
 
 concurrency:
   group: custom-dataset-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  scan_and_build:
+  curate:
+    name: Curate Québec-French dataset
     runs-on: ubuntu-latest
-    env:
-      CONFIRM_SCAN: "YES"
-      CONFIRM_DATA_FETCH: "NO"
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -49,264 +56,58 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install OS deps (graphviz for PNG graph)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y graphviz
+      - name: Cache pip downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-${{ hashFiles('tools/monGARS_deep_scan/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.PYTHON_VERSION }}-
+            ${{ runner.os }}-pip-
 
-      - name: Create analyzer script (no heredoc)
-        run: |
-          set -euo pipefail
-          mkdir -p scripts
-          : > scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '#!/usr/bin/env python3' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'import os, re, json, csv, hashlib, subprocess, sys' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'from pathlib import Path' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'OUT = Path("data/ultimate"); RAW = OUT/"raw_texts"; PROC = OUT/"processed_repo"' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'for d in (RAW, PROC): d.mkdir(parents=True, exist_ok=True)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'SFT = PROC/"sft_repo.jsonl"; AGT = PROC/"agent_instruct_repo.jsonl"; EMB = PROC/"embeddings_repo.jsonl"' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'PROV = PROC/"provenance.csv"; DOT = OUT/"interaction_graph.dot"; PNG = OUT/"interaction_graph.png"' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'if os.environ.get("CONFIRM_SCAN","") != "YES":' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    print("ABORT: set CONFIRM_SCAN=YES"); sys.exit(2)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'EXTS = {"md","rst","txt","json","yml","yaml","py","sh","cfg","ini","toml","sql","js","ts"}' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'def is_text(p):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    try:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        with p.open("rb") as f: return b"\\x00" not in f.read(4096)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    except: return False' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'root = Path(".").resolve(); files=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'if (root/".git").exists():' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    try:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        out = subprocess.check_output(["git","ls-files"], text=True)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        for rel in out.splitlines():' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            p=root/rel' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            if p.suffix.lstrip(".") in EXTS and p.exists() and is_text(p):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                dst=RAW/p.relative_to(root); dst.parent.mkdir(parents=True, exist_ok=True)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                dst.write_bytes(p.read_bytes()); files.append(dst)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    except: pass' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'if not files:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    for p in root.rglob("*"):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        if p.is_file() and p.suffix.lstrip(".") in EXTS and is_text(p) and ".git" not in p.parts:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            dst=RAW/p.relative_to(root); dst.parent.mkdir(parents=True, exist_ok=True)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            dst.write_bytes(p.read_bytes()); files.append(dst)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'DIALOG=re.compile(r'^\\s*(User|Utilisateur|Client|Moi|Tu|Vous|Assistant|System|Bot|Agent)\\s*[:\\-—]\\s*(.+)', re.I)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'PIPE=re.compile(r'(workflow|pipeline|job|stage|steps|run:|script:|entrypoint|commands?)', re.I)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'JSONL=re.compile(r'^\\s*[\\{\\[]\\s*\".*')' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'def sha(s): import hashlib; return hashlib.sha1(s.encode("utf-8")).hexdigest()[:12]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'sft_rows=[]; ag_rows=[]; emb_rows=[]; prov=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'for f in files:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    try: text=f.read_text(encoding="utf-8", errors="ignore")' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    except: continue' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    lines=text.splitlines()' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    cur=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    for i,ln in enumerate(lines):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        if DIALOG.match(ln): cur.append((i+1, ln.strip()))' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        else:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            if cur:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                instr=None; outs=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                for _,l in cur:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    m=DIALOG.match(l); who=m.group(1).lower(); content=m.group(2).strip()' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    if instr is None and re.match(r'(user|utilisateur|client|moi|tu|vous)', who, re.I): instr=content' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    else: outs.append(content)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                if instr and outs:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    rec={"instruction":instr,"input":"","output":" ".join(outs)}' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    sft_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), cur[0][0], cur[-1][0], "sft_dialog","auto"])' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                cur=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    if cur:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        instr=None; outs=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        for _,l in cur:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            m=DIALOG.match(l); who=m.group(1).lower(); content=m.group(2).strip()' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            if instr is None and re.match(r'(user|utilisateur|client|moi|tu|vous)', who, re.I): instr=content' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            else: outs.append(content)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        if instr and outs:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            rec={"instruction":instr,"input":"","output":" ".join(outs)}' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            sft_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), cur[0][0], cur[-1][0], "sft_dialog","auto"])' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    curp=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    for i,ln in enumerate(lines):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        if PIPE.search(ln) or JSONL.match(ln) or ln.strip().startswith(("steps:", "- run:", "script:")):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            curp.append((i+1, ln))' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        else:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            if curp:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                block="\\n".join(l for _,l in curp)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                rec={"instruction":"Interpret this pipeline fragment and return structured steps as JSON. Preserve tool names and env vars.","input":block,"output":{"steps":[],"notes":"AUTO"}}' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                ag_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), curp[0][0], curp[-1][0], "agent_pipeline","auto"])' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                curp=[]' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    if curp:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        block="\\n".join(l for _,l in curp)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        rec={"instruction":"Interpret this pipeline fragment and return structured steps as JSON. Preserve tool names and env vars.","input":block,"output":{"steps":[],"notes":"AUTO"}}' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        ag_rows.append(rec); prov.append([sha(json.dumps(rec,ensure_ascii=False)), str(f.relative_to(RAW)), curp[0][0], curp[-1][0], "agent_pipeline","auto"])' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    para=[]; start=1' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    for i,ln in enumerate(lines):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        if ln.strip()=="":' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            if para:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                t="\\n".join(para).strip()' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                if len(t)>=40:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    emb_rows.append({"text":t,"source":str(f.relative_to(RAW))})' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                    prov.append([sha(t), str(f.relative_to(RAW)), start, i, "embedding_paragraph","auto"])' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '                para=[]; start=i+2' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        else:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            para.append(ln)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    if para:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        t="\\n".join(para).strip()' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        if len(t)>=40:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            emb_rows.append({"text":t,"source":str(f.relative_to(RAW))})' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '            prov.append([sha(t), str(f.relative_to(RAW)), start, len(lines), "embedding_paragraph","auto"])' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'def write_jsonl(p, rows):' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    p.parent.mkdir(parents=True, exist_ok=True)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    with p.open("w", encoding="utf-8") as f:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '        for r in rows: f.write(json.dumps(r, ensure_ascii=False)+"\\n")' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'write_jsonl(SFT, sft_rows); write_jsonl(AGT, ag_rows); write_jsonl(EMB, emb_rows)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'with PROV.open("w", encoding="utf-8", newline="") as f:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    w=csv.writer(f); w.writerow(["record_id","source_file","start_line","end_line","type","note"]); w.writerows(prov)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'with DOT.open("w", encoding="utf-8") as f:' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    f.write("digraph interactions {\\n  \\"repo\\" [label=\\"repo\\"];\\n")' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    for i in range(min(20, len(sft_rows))): f.write(f' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' "        '  \"repo\" -> \"sft_' + str(i) + '\";\\n')" >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' '    f.write("}\\n")' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'try: subprocess.run(["dot","-Tpng", str(DOT), "-o", str(PNG)], check=True)' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'except: pass' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'print(f"OK: SFT={len(sft_rows)} AGENT={len(ag_rows)} EMB={len(emb_rows)}")' >> scripts/ultimate_repo_analyzer.py
-          printf '%s\n' 'print("OUT:", SFT, AGT, EMB, PROV, DOT, PNG if PNG.exists() else "(no PNG)")' >> scripts/ultimate_repo_analyzer.py
-          chmod +x scripts/ultimate_repo_analyzer.py
-
-      - name: Create dataset builder (no heredoc)
-        run: |
-          set -euo pipefail
-          mkdir -p scripts
-          : > scripts/prepare_dataset.py
-          printf '%s\n' '#!/usr/bin/env python3' >> scripts/prepare_dataset.py
-          printf '%s\n' 'import json, random, argparse, hashlib' >> scripts/prepare_dataset.py
-          printf '%s\n' 'from pathlib import Path' >> scripts/prepare_dataset.py
-          printf '%s\n' 'QC_TERMS=["dépanneur","poutine","cégep","tuque","magasiner","char","chum","blonde","icitte","ben là","patente","tabarnak"]' >> scripts/prepare_dataset.py
-          printf '%s\n' 'MIN_LEN=12; MAX_OUT_CHARS=3000' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def sha(s): import hashlib; return hashlib.sha1(s.encode("utf-8")).hexdigest()' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def is_qc(t): t=t.lower(); return any(w in t for w in QC_TERMS)' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def clamp(s,n): s=s.strip(); return s if len(s)<=n else s[:n].rsplit(" ",1)[0]+" …"' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def load_jsonl(p):' >> scripts/prepare_dataset.py
-          printf '%s\n' '    p=Path(p);' >> scripts/prepare_dataset.py
-          printf '%s\n' '    if not p.exists(): return []' >> scripts/prepare_dataset.py
-          printf '%s\n' '    with p.open("r",encoding="utf-8") as f:' >> scripts/prepare_dataset.py
-          printf '%s\n' '        for line in f:' >> scripts/prepare_dataset.py
-          printf '%s\n' '            line=line.strip()' >> scripts/prepare_dataset.py
-          printf '%s\n' '            if line: yield json.loads(line)' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def norm_sft(j):' >> scripts/prepare_dataset.py
-          printf '%s\n' '    if not isinstance(j,dict) or "instruction" not in j or "output" not in j: return None' >> scripts/prepare_dataset.py
-          printf '%s\n' '    instr=(j.get("instruction") or "").strip(); inp=(j.get("input") or "").strip(); out=j.get("output")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    if not isinstance(out,str): out=json.dumps(out,ensure_ascii=False,separators=(",",":"))' >> scripts/prepare_dataset.py
-          printf '%s\n' '    out=clamp(out,MAX_OUT_CHARS)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    if len(instr)<MIN_LEN or len(out)<MIN_LEN: return None' >> scripts/prepare_dataset.py
-          printf '%s\n' '    return {"instruction":instr,"input":inp,"output":out}' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def dedupe(xs,key=lambda x:x):' >> scripts/prepare_dataset.py
-          printf '%s\n' '    s=set(); o=[]' >> scripts/prepare_dataset.py
-          printf '%s\n' '    for it in xs:' >> scripts/prepare_dataset.py
-          printf '%s\n' '        k=key(it)' >> scripts/prepare_dataset.py
-          printf '%s\n' '        if k in s: continue' >> scripts/prepare_dataset.py
-          printf '%s\n' '        s.add(k); o.append(it)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    return o' >> scripts/prepare_dataset.py
-          printf '%s\n' 'def main():' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap=argparse.ArgumentParser()' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--frca", default="data/raw/repo_sft.jsonl")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--agent", default="data/raw/agent_handoff.jsonl")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--repo", default="data/raw/repo_sft.jsonl")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--outdir", default="data/final")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--seed", type=int, default=42)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--ratio", default="frca:0.50,agent:0.40,repo:0.10")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--val_pct", type=float, default=0.06)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ap.add_argument("--strict_qc", action="store_true")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    a=ap.parse_args(); random.seed(a.seed)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    ratios={};' >> scripts/prepare_dataset.py
-          printf '%s\n' '    for part in a.ratio.split(","):' >> scripts/prepare_dataset.py
-          printf '%s\n' '        k,v=part.split(":"); ratios[k.strip()]=float(v)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    sources={"frca":a.frca,"agent":a.agent,"repo":a.repo}' >> scripts/prepare_dataset.py
-          printf '%s\n' '    buckets={}' >> scripts/prepare_dataset.py
-          printf '%s\n' '    for name,path in sources.items():' >> scripts/prepare_dataset.py
-          printf '%s\n' '        rows=[]' >> scripts/prepare_dataset.py
-          printf '%s\n' '        for j in load_jsonl(path):' >> scripts/prepare_dataset.py
-          printf '%s\n' '            s=norm_sft(j)' >> scripts/prepare_dataset.py
-          printf '%s\n' '            if not s: continue' >> scripts/prepare_dataset.py
-          printf '%s\n' '            if a.strict_qc and name!="agent":' >> scripts/prepare_dataset.py
-          printf '%s\n' '                if not is_qc(s["instruction"]+" "+s["output"]): continue' >> scripts/prepare_dataset.py
-          printf '%s\n' '            rows.append(s)' >> scripts/prepare_dataset.py
-          printf '%s\n' '        rows=dedupe(rows, key=lambda x: sha((x["instruction"]+"|"+x["input"]).lower()))' >> scripts/prepare_dataset.py
-          printf '%s\n' '        buckets[name]=rows' >> scripts/prepare_dataset.py
-          printf '%s\n' '        print(f"[LOAD] {name}: {len(rows)}")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    total=sum(len(v) for v in buckets.values())' >> scripts/prepare_dataset.py
-          printf '%s\n' '    if total==0: raise SystemExit("No data")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    targets={k:int(ratios.get(k,0)*total) for k in buckets}' >> scripts/prepare_dataset.py
-          printf '%s\n' '    mixed=[]' >> scripts/prepare_dataset.py
-          printf '%s\n' '    for k, arr in buckets.items():' >> scripts/prepare_dataset.py
-          printf '%s\n' '        random.shuffle(arr); take=min(len(arr), max(0, targets.get(k,0)))' >> scripts/prepare_dataset.py
-          printf '%s\n' '        mixed.extend(arr[:take])' >> scripts/prepare_dataset.py
-          printf '%s\n' '    if len(mixed)<total:' >> scripts/prepare_dataset.py
-          printf '%s\n' '        pool=[x for xs in buckets.values() for x in xs]; random.shuffle(pool)' >> scripts/prepare_dataset.py
-          printf '%s\n' '        for x in pool:' >> scripts/prepare_dataset.py
-          printf '%s\n' '            if len(mixed)>=total: break' >> scripts/prepare_dataset.py
-          printf '%s\n' '            mixed.append(x)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    random.shuffle(mixed)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    n_val=int(len(mixed)*a.val_pct); val=mixed[:n_val]; train=mixed[n_val:]' >> scripts/prepare_dataset.py
-          printf '%s\n' '    out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)' >> scripts/prepare_dataset.py
-          printf '%s\n' '    with (out/"train.jsonl").open("w",encoding="utf-8") as f:' >> scripts/prepare_dataset.py
-          printf '%s\n' '        for r in train: f.write(json.dumps(r,ensure_ascii=False)+"\\n")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    with (out/"val.jsonl").open("w",encoding="utf-8") as f:' >> scripts/prepare_dataset.py
-          printf '%s\n' '        for r in val: f.write(json.dumps(r,ensure_ascii=False)+"\\n")' >> scripts/prepare_dataset.py
-          printf '%s\n' '    print(f"[DONE] train={len(train)} val={len(val)} strict_qc={a.strict_qc}")' >> scripts/prepare_dataset.py
-          printf '%s\n' 'if __name__=="__main__": main()' >> scripts/prepare_dataset.py
-          chmod +x scripts/prepare_dataset.py
-
-      - name: Install minimal Python deps
+      - name: Install dataset tooling
         run: |
           python -m pip install --upgrade pip
-          pip install networkx || true
+          pip install -r tools/monGARS_deep_scan/requirements.txt
 
-      - name: Run analyzer
+      - name: Execute deep scan pipeline
+        env:
+          PYTHONPATH: .
         run: |
           set -euxo pipefail
-          python scripts/ultimate_repo_analyzer.py
-          echo "== Output tree =="; find data/ultimate -maxdepth 3 -type f | sort || true
+          python -m tools.monGARS_deep_scan.deep_scan \
+            --input . \
+            --out "${SCAN_OUTPUT_DIR}" \
+            --exclude-dir "${SCAN_OUTPUT_DIR},${FINAL_OUTPUT_DIR},.git" \
+            --jobs 4
+          ls "${SCAN_OUTPUT_DIR}"
 
-      - name: Assemble inputs for dataset builder
+      - name: Build train/validation splits
+        env:
+          PYTHONPATH: .
         run: |
-          set -euxo pipefail
-          mkdir -p data/raw
-          cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/repo_sft.jsonl
-          cp data/ultimate/processed_repo/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
-          cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/frca_repo.jsonl
+          python -m tools.monGARS_deep_scan.build_dataset
 
-      - name: Build final dataset (train/val)
+      - name: Publish dataset summary
+        env:
+          PYTHONPATH: .
         run: |
-          set -euxo pipefail
-          python scripts/prepare_dataset.py \
-            --frca data/raw/frca_repo.jsonl \
-            --agent data/raw/agent_handoff.jsonl \
-            --repo data/raw/repo_sft.jsonl \
-            --outdir data/final \
-            --ratio "${{ inputs.ratios || 'frca:0.50,agent:0.40,repo:0.10' }}" \
-            --val_pct ${{ inputs.val_pct || 0.06 }} \
-            $([ "${{ inputs.strict_qc || true }}" = "true" ] && echo "--strict_qc" || true)
-          echo "== Final counts =="; wc -l data/final/train.jsonl || true; wc -l data/final/val.jsonl || true
+          python -m tools.monGARS_deep_scan.publish_summary --final-dir "${FINAL_OUTPUT_DIR}" --output summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload artifacts
+      - name: Upload dataset artefacts
         uses: actions/upload-artifact@v4
         with:
-          name: final-custom-dataset
+          name: custom-quebec-french-dataset
           path: |
-            data/ultimate/processed_repo/sft_repo.jsonl
-            data/ultimate/processed_repo/agent_instruct_repo.jsonl
-            data/ultimate/processed_repo/embeddings_repo.jsonl
-            data/ultimate/processed_repo/provenance.csv
-            data/ultimate/interaction_graph.dot
-            data/ultimate/interaction_graph.png
-            data/final/train.jsonl
-            data/final/val.jsonl
-          retention-days: ${{ inputs.retention_days || 14 }}
+            ${{ env.SCAN_OUTPUT_DIR }}/sft_dataset.jsonl
+            ${{ env.SCAN_OUTPUT_DIR }}/agent_handoff_dataset.jsonl
+            ${{ env.SCAN_OUTPUT_DIR }}/embeddings_corpus.jsonl
+            ${{ env.SCAN_OUTPUT_DIR }}/provenance.csv
+            ${{ env.SCAN_OUTPUT_DIR }}/report.md
+            ${{ env.SCAN_OUTPUT_DIR }}/logs/**
+            ${{ env.FINAL_OUTPUT_DIR }}/train.jsonl
+            ${{ env.FINAL_OUTPUT_DIR }}/val.jsonl
+            ${{ env.FINAL_OUTPUT_DIR }}/dataset_summary.json
+          retention-days: ${{ env.DATASET_RETENTION_DAYS }}
           if-no-files-found: error
