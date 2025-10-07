@@ -601,7 +601,23 @@ def load_datasets_for_training(
 
     def _map_example(example: dict[str, Any]) -> dict[str, Any]:
         text = format_conversation(example, tokenizer, config)
-        return {"text": text}
+        encoded = tokenizer(
+            text,
+            max_length=config.max_seq_length,
+            truncation=True,
+            padding=False,
+            return_tensors="pt",
+        )
+
+        input_ids = encoded["input_ids"][0].tolist()
+        mapped: dict[str, Any] = {"input_ids": input_ids}
+
+        if "attention_mask" in encoded:
+            mapped["attention_mask"] = encoded["attention_mask"][0].tolist()
+        if "token_type_ids" in encoded:
+            mapped["token_type_ids"] = encoded["token_type_ids"][0].tolist()
+
+        return mapped
 
     LOGGER.info("Tokenising training dataset...")
     train_dataset = train_dataset.map(
@@ -623,19 +639,14 @@ class SupervisedFineTuningCollator:
         self.max_length = max_length
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        texts = [feature["text"] for feature in features]
-        encoded = self.tokenizer(
-            texts,
-            max_length=self.max_length,
+        batch = self.tokenizer.pad(
+            features,
             padding="longest",
-            truncation=True,
+            max_length=self.max_length,
             return_tensors="pt",
         )
-        labels = encoded["input_ids"].clone()
-        return {
-            **encoded,
-            "labels": labels,
-        }
+        batch["labels"] = batch["input_ids"].clone()
+        return batch
 
 
 def prepare_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
