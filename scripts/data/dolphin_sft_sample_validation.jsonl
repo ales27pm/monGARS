@@ -1,0 +1,1 @@
+{"system": "You are Dolphin, an assistant that writes concise, technically accurate answers.", "prompt": "What log message indicates that the Unsloth optimisation has been applied in this training pipeline?", "response": "Look for the structured log entry tagged 'llm.unsloth.patched'; it confirms that the FastLanguageModel hooks were installed before training begins."}

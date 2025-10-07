@@ -19,6 +19,11 @@ make it suitable for unattended, headless servers:
 * Optional conversion of the resulting checkpoint into an LLM2Vec encoder for
   embedding use-cases.
 
+When no dataset flags are supplied the script falls back to a bundled sample
+dataset under ``scripts/data`` so smoke tests can run without external
+downloads. Provide ``--dataset-name`` or ``--train-file`` for real fine-tuning
+jobs.
+
 Example usage (first run):
 
 ```
@@ -38,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import inspect
 import json
 import logging
 import os
@@ -64,6 +70,10 @@ from transformers import AutoTokenizer, Trainer, TrainingArguments, set_seed
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+SAMPLE_DATA_DIR = ROOT_DIR / "scripts" / "data"
+SAMPLE_TRAIN_FILE = SAMPLE_DATA_DIR / "dolphin_sft_sample_train.jsonl"
+SAMPLE_VALIDATION_FILE = SAMPLE_DATA_DIR / "dolphin_sft_sample_validation.jsonl"
 
 from modules.neurons.registry import update_manifest
 from monGARS.mlops.artifacts import (
@@ -151,6 +161,16 @@ def _safe_len(dataset: Optional[Dataset]) -> Optional[int]:
         return None
 
 
+def _resolve_sample_dataset_files() -> Optional[dict[str, str]]:
+    if not SAMPLE_TRAIN_FILE.exists():
+        return None
+
+    files: dict[str, str] = {"train": str(SAMPLE_TRAIN_FILE)}
+    if SAMPLE_VALIDATION_FILE.exists():
+        files["validation"] = str(SAMPLE_VALIDATION_FILE)
+    return files
+
+
 def generate_chat_and_embed_wrapper(
     *,
     base_model_id: str,
@@ -235,10 +255,30 @@ def build_training_summary(
         }
     )
 
+    data_files_summary: dict[str, str] = {}
+    if config.train_file is not None:
+        data_files_summary["train"] = str(config.train_file)
+    if config.validation_file is not None:
+        data_files_summary["validation"] = str(config.validation_file)
+    if data_files_summary:
+        training_meta["data_files"] = data_files_summary
+
+    if config.using_sample_dataset and config.sample_dataset_files is not None:
+        training_meta["dataset_fallback"] = {
+            "type": "bundled_sample",
+            "files": dict(config.sample_dataset_files),
+        }
+
     if wrapper_settings is not None:
         training_meta["wrapper"] = wrapper_settings
 
     labels = summary.setdefault("labels", {})
+    if config.using_sample_dataset:
+        labels["dataset_source"] = "bundled_sample"
+    elif config.dataset_name is not None:
+        labels["dataset_source"] = "huggingface"
+    elif data_files_summary:
+        labels["dataset_source"] = "custom_files"
     labels["llm2vec"] = "enabled" if wrapper_dir is not None else "not_configured"
     if wrapper_dir is not None:
         labels["wrapper"] = "chat_and_embed"
@@ -453,6 +493,8 @@ class TrainingConfig:
     resume_from_checkpoint: Optional[Path]
     deepspeed: Optional[Path]
     allow_tf32: bool
+    using_sample_dataset: bool = False
+    sample_dataset_files: Optional[dict[str, str]] = dataclasses.field(default=None)
 
 
 def build_training_arguments(config: TrainingConfig, device: str) -> TrainingArguments:
@@ -486,6 +528,16 @@ def build_training_arguments(config: TrainingConfig, device: str) -> TrainingArg
     if config.deepspeed is not None:
         args_kwargs["deepspeed"] = str(config.deepspeed)
 
+    init_params = set(inspect.signature(TrainingArguments.__init__).parameters)
+    remapped_args: dict[str, str] = {"evaluation_strategy": "eval_strategy"}
+    for old_key, new_key in remapped_args.items():
+        if (
+            old_key in args_kwargs
+            and old_key not in init_params
+            and new_key in init_params
+        ):
+            args_kwargs[new_key] = args_kwargs.pop(old_key)
+
     return TrainingArguments(**args_kwargs)
 
 
@@ -493,6 +545,9 @@ def load_datasets_for_training(
     config: TrainingConfig,
     tokenizer,
 ) -> tuple[Dataset, Optional[Dataset]]:
+    config.using_sample_dataset = False
+    config.sample_dataset_files = None
+
     data_files: dict[str, str] | None = None
     if config.train_file is not None:
         data_files = {"train": str(config.train_file)}
@@ -500,9 +555,22 @@ def load_datasets_for_training(
             data_files["validation"] = str(config.validation_file)
 
     if config.dataset_name is None and data_files is None:
-        raise ValueError(
-            "Either --dataset-name or --train-file must be provided to supply training data."
+        sample_files = _resolve_sample_dataset_files()
+        if sample_files is None:
+            raise ValueError(
+                "Either --dataset-name or --train-file must be provided to supply training data."
+            )
+
+        LOGGER.warning(
+            "No dataset provided; using bundled sample dataset at %s. Provide --dataset-name or --train-file for production runs.",
+            sample_files["train"],
         )
+        data_files = dict(sample_files)
+        config.using_sample_dataset = True
+        config.sample_dataset_files = sample_files
+        config.train_file = Path(sample_files["train"])
+        if "validation" in sample_files:
+            config.validation_file = Path(sample_files["validation"])
 
     load_kwargs: dict[str, Any] = {}
     if config.dataset_cache_dir is not None:
@@ -532,7 +600,23 @@ def load_datasets_for_training(
 
     def _map_example(example: dict[str, Any]) -> dict[str, Any]:
         text = format_conversation(example, tokenizer, config)
-        return {"text": text}
+        encoded = tokenizer(
+            text,
+            max_length=config.max_seq_length,
+            truncation=True,
+            padding=False,
+            return_tensors="pt",
+        )
+
+        input_ids = encoded["input_ids"][0].tolist()
+        mapped: dict[str, Any] = {"input_ids": input_ids}
+
+        if "attention_mask" in encoded:
+            mapped["attention_mask"] = encoded["attention_mask"][0].tolist()
+        if "token_type_ids" in encoded:
+            mapped["token_type_ids"] = encoded["token_type_ids"][0].tolist()
+
+        return mapped
 
     LOGGER.info("Tokenising training dataset...")
     train_dataset = train_dataset.map(
@@ -554,19 +638,14 @@ class SupervisedFineTuningCollator:
         self.max_length = max_length
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        texts = [feature["text"] for feature in features]
-        encoded = self.tokenizer(
-            texts,
-            max_length=self.max_length,
+        batch = self.tokenizer.pad(
+            features,
             padding="longest",
-            truncation=True,
+            max_length=self.max_length,
             return_tensors="pt",
         )
-        labels = encoded["input_ids"].clone()
-        return {
-            **encoded,
-            "labels": labels,
-        }
+        batch["labels"] = batch["input_ids"].clone()
+        return batch
 
 
 def prepare_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
