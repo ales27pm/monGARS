@@ -1,0 +1,298 @@
+name: Build Custom Québec-French Dataset
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      enable_external_fetch:
+        description: "Fetch allowed external sources (Hansards / allow-listed crawl)"
+        type: boolean
+        default: false
+      crawl_domains:
+        description: "Newline-separated list of domains you OWN / have permission to crawl (https://example.qc.ca ...)"
+        type: string
+        required: false
+      hansards_limit:
+        description: "Max paragraphs to pull from Hansards (0 = unlimited)"
+        type: number
+        default: 5000
+      strict_qc:
+        description: "Strict fr-CA filter (drop non-Québécois unless agent/internal)"
+        type: boolean
+        default: true
+      ratios:
+        description: "Sampling ratios across sources (sum≈1), e.g. frca:0.65,agent:0.25,repo:0.10"
+        type: string
+        default: "frca:0.65,agent:0.25,repo:0.10"
+      val_pct:
+        description: "Validation split percentage"
+        type: number
+        default: 0.06
+      retention_days:
+        description: "Artifact retention (days)"
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  scan:
+    name: Scan & Mine Repo
+    runs-on: ubuntu-latest
+    env:
+      CONFIRM_SCAN: "YES"           # allow local scanning
+      CONFIRM_DATA_FETCH: "NO"      # no external fetching in this job
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install system deps (graph)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install networkx
+
+      - name: Run repo analyzer (scan-only)
+        run: |
+          python scripts/ultimate_repo_analyzer.py \
+            --out data/ultimate \
+            --graph \
+            --systemd
+
+      - name: List mined outputs
+        run: |
+          find data/ultimate -maxdepth 3 -type f | sort || true
+
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-scan-artifacts
+          path: |
+            data/ultimate/processed/sft_repo.jsonl
+            data/ultimate/processed/agent_instruct_repo.jsonl
+            data/ultimate/processed/embeddings_repo.jsonl
+            data/ultimate/provenance.csv
+            data/ultimate/interaction_graph.dot
+            data/ultimate/interaction_graph.png
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: warn
+
+  fetch_external:
+    name: Fetch External Sources (optional)
+    runs-on: ubuntu-latest
+    needs: [scan]
+    if: ${{ inputs.enable_external_fetch }}
+    env:
+      CONFIRM_DATA_FETCH: "YES"     # explicitly allow external fetch here
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install "datasets>=2.0.0,<3.0.0" beautifulsoup4 requests tldextract
+
+      - name: Fetch Hansards fr-CA (usc-isi/hansards)
+        id: hansards
+        run: |
+          python - <<'PY'
+          import os, re, json
+          from pathlib import Path
+          from datasets import load_dataset
+
+          limit = int("${{ inputs.hansards_limit }}")
+          out = Path("data/external/frca_hansard.jsonl")
+          out.parent.mkdir(parents=True, exist_ok=True)
+
+          ds = load_dataset("usc-isi/hansards", split="train")
+          rows = []; count = 0
+          for x in ds:
+              fr = (x.get("french") or "").strip()
+              if not fr: continue
+              for para in re.split(r"\n\s*\n", fr):
+                  para = para.strip()
+                  if len(para) < 50: continue
+                  rows.append({"instruction": para, "input": "", "output": para})
+                  count += 1
+                  if limit and count >= limit:
+                      break
+              if limit and count >= limit:
+                  break
+          with out.open("w", encoding="utf-8") as f:
+              for r in rows:
+                  f.write(json.dumps(r, ensure_ascii=False) + "\n")
+          print(f"Wrote {len(rows)} → {out}")
+          PY
+
+      - name: Optional: Crawl allow-listed domains
+        if: ${{ inputs.crawl_domains != '' }}
+        run: |
+          python - <<'PY'
+          import os, json, requests, tldextract
+          from bs4 import BeautifulSoup
+          from urllib.parse import urljoin, urlparse
+          from pathlib import Path
+
+          domains = [d.strip() for d in """${{ inputs.crawl_domains }}""".splitlines() if d.strip()]
+          max_pages = 200
+          timeout = 8
+          out = Path("data/external/frca_crawl.jsonl")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          rows = []
+
+          def can_fetch(base):
+              try:
+                  rp = requests.get(urljoin(base, "/robots.txt"), timeout=timeout)
+                  return not (rp.status_code == 200 and "disallow: /" in rp.text.lower())
+              except Exception:
+                  return True
+
+          visited=set(); queue=[]
+          for d in domains:
+              base = d if d.startswith("http") else "https://" + d
+              if can_fetch(base):
+                  queue.append(base)
+              else:
+                  print(f"robots.txt disallows or unreachable: {base}")
+
+          while queue and len(visited) < max_pages:
+              url = queue.pop(0)
+              if url in visited: continue
+              visited.add(url)
+              try:
+                  r = requests.get(url, timeout=timeout, headers={"User-Agent":"monGARS-safe-crawler"})
+                  if r.status_code != 200 or "text/html" not in r.headers.get("Content-Type",""):
+                      continue
+                  soup = BeautifulSoup(r.text, "html.parser")
+                  texts = [t.get_text(" ", strip=True) for t in soup.find_all(["p","li","blockquote"])]
+                  for t in texts:
+                      t = t.strip()
+                      if len(t) >= 50:
+                          rows.append({"instruction": t, "input": "", "output": t})
+                  base_reg = tldextract.extract(url).registered_domain
+                  for a in soup.find_all("a", href=True):
+                      nu = urljoin(url, a["href"])
+                      pr = urlparse(nu)
+                      if pr.scheme in ("http","https"):
+                          reg = tldextract.extract(nu).registered_domain
+                          if reg == base_reg and nu not in visited and len(queue) < max_pages:
+                              queue.append(nu)
+              except Exception:
+                  pass
+
+          with out.open("w", encoding="utf-8") as f:
+              for r in rows:
+                  f.write(json.dumps(r, ensure_ascii=False) + "\n")
+          print(f"Crawled {len(visited)} pages; wrote {len(rows)} → {out}")
+          PY
+
+      - name: Upload external JSONLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-sources
+          path: |
+            data/external/frca_hansard.jsonl
+            data/external/frca_crawl.jsonl
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: warn
+
+  build_dataset:
+    name: Build Final Dataset
+    runs-on: ubuntu-latest
+    needs: [scan, fetch_external]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+
+      - name: Download repo scan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: repo-scan-artifacts
+          path: _scan
+
+      - name: Download external sources (if any)
+        if: ${{ inputs.enable_external_fetch }}
+        uses: actions/download-artifact@v4
+        with:
+          name: external-sources
+          path: _external
+
+      - name: Assemble inputs for builder
+        run: |
+          mkdir -p data/raw
+          # repo-mined
+          cp _scan/sft_repo.jsonl                data/raw/repo_sft.jsonl
+          cp _scan/agent_instruct_repo.jsonl     data/raw/agent_handoff.jsonl
+          # external (optional)
+          if [ -f "_external/frca_hansard.jsonl" ]; then cp _external/frca_hansard.jsonl data/raw/frca_hansard.jsonl; fi
+          if [ -f "_external/frca_crawl.jsonl" ];   then cp _external/frca_crawl.jsonl   data/raw/frca_crawl.jsonl; fi
+
+      - name: Build final dataset (train/val)
+        run: |
+          # Decide which "frca" inputs to pass:
+          # If external fetch is enabled, prefer Hansards + crawl; else fall back to repo SFT as frca source.
+          if [ "${{ inputs.enable_external_fetch }}" = "true" ] && [ -f data/raw/frca_hansard.jsonl ]; then
+            FRCA="data/raw/frca_hansard.jsonl"
+          else
+            FRCA="data/raw/repo_sft.jsonl"
+          fi
+
+          python scripts/prepare_dataset.py \
+            --frca "$FRCA" \
+            --agent data/raw/agent_handoff.jsonl \
+            --repo data/raw/repo_sft.jsonl \
+            --outdir data/final \
+            --ratio "${{ inputs.ratios }}" \
+            --val_pct ${{ inputs.val_pct }} \
+            $([ "${{ inputs.strict_qc }}" = "true" ] && echo "--strict_qc" || true)
+
+      - name: Summarize result
+        run: |
+          echo "---- Final dataset ----"
+          wc -l data/final/train.jsonl || true
+          wc -l data/final/val.jsonl   || true
+
+      - name: Upload final dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-custom-dataset
+          path: |
+            data/final/train.jsonl
+            data/final/val.jsonl
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
