@@ -120,10 +120,11 @@ def load_4bit_causal_lm(
 
     model.config.use_cache = False
     attn_impl = attention_implementation or "eager"
-    try:  # pragma: no cover - depends on HF version
-        model.config.attn_implementation = attn_impl
-    except Exception:
-        pass
+    for attr in ("attn_impl", "attn_implementation"):
+        try:  # pragma: no cover - depends on HF version
+            setattr(model.config, attr, attn_impl)
+        except Exception:
+            continue
 
     try:  # pragma: no cover - depends on torch build
         torch.backends.cuda.enable_flash_sdp(False)

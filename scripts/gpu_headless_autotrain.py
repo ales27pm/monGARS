@@ -176,12 +176,36 @@ def gpu_reset(idx: int = 0) -> None:
     sh(f"sudo nvidia-smi --gpu-reset -i {idx}", check=False)
 
 
+def _terminate_matching_processes(pattern: str) -> None:
+    """Terminate processes matching ``pattern`` without killing ourselves."""
+
+    regex = re.compile(pattern)
+    try:
+        import psutil
+    except Exception:
+        sh(f"pkill -f {shlex.quote(pattern)} || true", check=False)
+        return
+
+    this_pid = os.getpid()
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        pid = proc.info.get("pid")
+        if pid == this_pid:
+            continue
+        cmdline = " ".join(proc.info.get("cmdline") or [])
+        if not cmdline or not regex.search(cmdline):
+            continue
+        try:
+            proc.terminate()
+        except Exception:
+            continue
+
+
 def kill_gpu_processes() -> None:
     if not has_cmd("nvidia-smi"):
         return
     print("🛑 Killing leftover GPU processes (if any)...")
-    sh("pkill -f 'python .*build_and_wrap.py' || true", check=False)
-    sh("pkill -f 'python .*train' || true", check=False)
+    _terminate_matching_processes(r"python .*build_and_wrap.py")
+    _terminate_matching_processes(r"python [^\n]*(?:/|\s)train(?:\.py)?")
 
 
 # -----------------------------
@@ -194,7 +218,7 @@ OOM_PATTERNS = [
     r"CUDA OOM",
     r"RuntimeError:.*out of memory",
     r"c10::Error.*out of memory",
-    r"OOM",
+    r"\\bOOM\\b",
 ]
 
 
