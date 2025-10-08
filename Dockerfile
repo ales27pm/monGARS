@@ -31,6 +31,7 @@ RUN git lfs install --system
 
 WORKDIR /app
 COPY requirements.txt .
+COPY vendor/llm2vec_monGARS ./vendor/llm2vec_monGARS
 RUN python -m venv /opt/venv \
     && . /opt/venv/bin/activate \
     && pip install --upgrade pip \
