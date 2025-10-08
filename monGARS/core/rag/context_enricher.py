@@ -305,7 +305,9 @@ class RagContextEnricher:
             return references[:limit]
         cross_encoder = self._get_cross_encoder()
         if cross_encoder is None:
-            logging.warning("CrossEncoder unavailable; falling back to truncation of references. Check model availability.")
+            logging.warning(
+                "CrossEncoder unavailable; falling back to truncation of references. Check model availability."
+            )
             return references[:limit]
 
         pairs = [(query, self._reference_text(reference)) for reference in references]
