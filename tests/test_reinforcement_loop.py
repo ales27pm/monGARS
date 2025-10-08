@@ -20,7 +20,37 @@ from modules.neurons.training.reinforcement_loop import (
     ThroughputAwareScalingStrategy,
     Transition,
 )
+from monGARS.core.operator_approvals import OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
+
+
+class _RecordingSpan:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.events: list[tuple[str, dict[str, Any]]] = []
+        self.attributes: dict[str, Any] = {}
+
+    def __enter__(self) -> "_RecordingSpan":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover - interface stub
+        return None
+
+    def add_event(self, name: str, attributes: dict[str, Any] | None = None) -> None:
+        self.events.append((name, attributes or {}))
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self.attributes[key] = value
+
+
+class _RecordingTracer:
+    def __init__(self) -> None:
+        self.spans: list[_RecordingSpan] = []
+
+    def start_as_current_span(self, name: str) -> _RecordingSpan:
+        span = _RecordingSpan(name)
+        self.spans.append(span)
+        return span
 
 
 class FixedScalingStrategy:
@@ -262,6 +292,37 @@ def test_reinforcement_loop_invokes_batch_callback() -> None:
     assert observed[0].episode_count >= 1
 
 
+def test_reinforcement_loop_emits_tracing_and_metrics() -> None:
+    rewards = [0.2, 0.8]
+    policy = EpsilonGreedyPolicy(action_count=len(rewards), epsilon=0.1, seed=7)
+    tracer = _RecordingTracer()
+    metrics: list[tuple[str, dict[str, Any]]] = []
+
+    def _metrics_sink(name: str, payload: dict[str, Any]) -> None:
+        metrics.append((name, dict(payload)))
+
+    loop = ReinforcementLearningLoop(
+        environment_factory=lambda: SimpleBanditEnvironment(rewards),
+        policy=policy,
+        max_steps=1,
+        scaling_strategy=FixedScalingStrategy(),
+        initial_workers=1,
+        max_workers=1,
+        tracer_factory=lambda _: tracer,
+        metrics_sink=_metrics_sink,
+    )
+
+    summary = loop.run(total_episodes=6)
+
+    assert summary.total_episodes == 6
+    assert tracer.spans and tracer.spans[0].name == "reinforcement.loop.run"
+    recorded_events = [event for span in tracer.spans for event in span.events]
+    assert any(name == "batch.completed" for name, _ in recorded_events)
+    metric_names = [name for name, _ in metrics]
+    assert "reinforcement.loop.batch" in metric_names
+    assert metric_names[-1] == "reinforcement.loop.summary"
+
+
 class _CuriosityStub:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -390,6 +451,48 @@ def test_reasoning_reward_function_awards_bonus() -> None:
     )
     rewards = reward_fn(completions=[completion], completion_ids=[0])
     assert rewards == [1.5]
+
+
+def test_reinforcement_reasoning_requires_operator_approval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    approvals = OperatorApprovalRegistry(tmp_path / "approvals.json")
+    loop = ReinforcementLoop(
+        model_id="test-model",
+        slot_manager_cls=_SlotStub,
+        self_training_engine=SelfTrainingEngine(),
+        trainer_cls=None,
+        trainer_config_cls=None,
+        fast_model_cls=None,
+        torch_module=None,
+        approval_registry=approvals,
+    )
+
+    adapter_dir = tmp_path / "adapter"
+    adapter_dir.mkdir()
+    manifest_calls: list[dict[str, Any]] = []
+
+    def _fake_update_manifest(registry: Path, summary: dict[str, Any]):
+        manifest_calls.append(summary)
+        return SimpleNamespace(build_payload=lambda: summary)
+
+    monkeypatch.setenv("USE_RAY_SERVE", "false")
+    monkeypatch.setattr(
+        "modules.neurons.training.reinforcement_loop.update_manifest",
+        _fake_update_manifest,
+    )
+
+    evaluation = {"accuracy": 0.75, "evaluated": 10.0}
+    loop._rollout_to_manifest(evaluation, 12, adapter_dir, None)
+
+    pending = list(approvals.pending(source="reinforcement.reasoning"))
+    assert pending and not manifest_calls
+
+    approvals.approve(pending[0].request_id, operator="tester")
+
+    loop._rollout_to_manifest(evaluation, 12, adapter_dir, None)
+
+    assert manifest_calls
 
 
 def test_train_reasoning_grpo_invokes_injected_dependencies(

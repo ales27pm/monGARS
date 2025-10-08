@@ -36,7 +36,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Protocol, Sequence
 
 try:  # pragma: no cover - optional dependency at runtime
     from trl import DPOConfig, DPOTrainer  # type: ignore
@@ -70,6 +70,10 @@ except ModuleNotFoundError:  # pragma: no cover - datasets optional
 from modules.neurons.registry import update_manifest
 from monGARS.core.model_slot_manager import ModelSlotManager
 from monGARS.core.monitor import get_tracer
+from monGARS.core.operator_approvals import (
+    ApprovalPolicy,
+    OperatorApprovalRegistry,
+)
 from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
@@ -520,6 +524,10 @@ class ReinforcementLearningLoop:
         initial_workers: int = 1,
         max_workers: int | None = None,
         batch_callback: Callable[[BatchStatistics], None] | None = None,
+        tracer_factory: Callable[[str], Any] | None = get_tracer,
+        metrics_sink: (
+            Callable[[str, MutableMapping[str, float | int]], None] | None
+        ) = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -538,6 +546,8 @@ class ReinforcementLearningLoop:
         )
         self._batch_callback = batch_callback
         self._policy_lock = threading.Lock()
+        self._tracer_factory = tracer_factory
+        self._metrics_sink = metrics_sink
 
     def run(self, total_episodes: int) -> ReinforcementLearningSummary:
         """Execute the reinforcement-learning loop for the requested episodes."""
@@ -554,63 +564,119 @@ class ReinforcementLearningLoop:
         ]
         batch_index = 0
 
-        while completed < total_episodes:
-            remaining = total_episodes - completed
-            active_workers = worker_count
-            episodes_this_batch = min(remaining, active_workers)
-            batch_start = time.perf_counter()
-            results = self._execute_batch(
-                batch_index, episodes_this_batch, active_workers
-            )
-            batch_duration = time.perf_counter() - batch_start
+        tracer = (
+            self._tracer_factory("llm.reinforcement.loop")
+            if self._tracer_factory
+            else None
+        )
+        span_attributes: dict[str, Any] = {
+            "episodes.target": int(total_episodes),
+            "workers.initial": int(worker_count),
+        }
 
-            for result in results:
-                if not result.failed:
-                    self._apply_policy_update(result.transitions)
-            all_results.extend(results)
-            completed += len(results)
-
-            stats = BatchStatistics(
-                recent_results=results,
-                completed_episodes=completed,
-                total_episodes=total_episodes,
-                batch_duration=batch_duration,
-                worker_count=active_workers,
-            )
-
-            if self._batch_callback is not None:
-                try:
-                    self._batch_callback(stats)
-                except Exception:  # pragma: no cover - defensive logging
-                    logger.exception(
-                        "Batch callback failed",
-                        extra={
-                            "batch_index": batch_index,
-                            "worker_count": active_workers,
-                        },
-                    )
-
-            next_workers, reason = self._scaling_strategy.recommend_worker_count(
-                active_workers, batch_index + 1, stats
-            )
-            next_workers = max(1, min(self._max_workers, next_workers))
-            if next_workers != worker_count:
-                worker_history.append(
-                    WorkerAdjustment(
-                        batch_index=batch_index + 1,
-                        worker_count=next_workers,
-                        reason=reason,
-                    )
+        with self._start_span(
+            tracer, "reinforcement.loop.run", span_attributes
+        ) as span:
+            while completed < total_episodes:
+                remaining = total_episodes - completed
+                active_workers = worker_count
+                episodes_this_batch = min(remaining, active_workers)
+                batch_start = time.perf_counter()
+                results = self._execute_batch(
+                    batch_index, episodes_this_batch, active_workers
                 )
-                worker_count = next_workers
+                batch_duration = time.perf_counter() - batch_start
 
-            batch_index += 1
+                for result in results:
+                    if not result.failed:
+                        self._apply_policy_update(result.transitions)
+                all_results.extend(results)
+                completed += len(results)
+
+                stats = BatchStatistics(
+                    recent_results=results,
+                    completed_episodes=completed,
+                    total_episodes=total_episodes,
+                    batch_duration=batch_duration,
+                    worker_count=active_workers,
+                )
+
+                batch_metrics: MutableMapping[str, float | int] = {
+                    "batch_index": batch_index,
+                    "episodes": stats.episode_count,
+                    "success_rate": stats.success_rate,
+                    "average_reward": stats.average_reward or 0.0,
+                    "worker_count": active_workers,
+                    "batch_duration_seconds": batch_duration,
+                }
+                self._record_metrics("reinforcement.loop.batch", batch_metrics)
+                self._emit_event(
+                    span,
+                    "batch.completed",
+                    {
+                        "batch_index": batch_index,
+                        "episodes": stats.episode_count,
+                        "success_rate": stats.success_rate,
+                        "failures": stats.failure_count,
+                        "worker_count": active_workers,
+                        "average_reward": stats.average_reward or 0.0,
+                    },
+                )
+
+                if self._batch_callback is not None:
+                    try:
+                        self._batch_callback(stats)
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.exception(
+                            "Batch callback failed",
+                            extra={
+                                "batch_index": batch_index,
+                                "worker_count": active_workers,
+                            },
+                        )
+
+                next_workers, reason = self._scaling_strategy.recommend_worker_count(
+                    active_workers, batch_index + 1, stats
+                )
+                next_workers = max(1, min(self._max_workers, next_workers))
+                if next_workers != worker_count:
+                    worker_history.append(
+                        WorkerAdjustment(
+                            batch_index=batch_index + 1,
+                            worker_count=next_workers,
+                            reason=reason,
+                        )
+                    )
+                    worker_count = next_workers
+
+                batch_index += 1
 
         duration = time.perf_counter() - start_time
         total_reward = sum(result.reward for result in all_results if not result.failed)
         success_count = sum(1 for result in all_results if not result.failed)
         average_reward = total_reward / success_count if success_count else 0.0
         failures = sum(1 for result in all_results if result.failed)
+
+        summary_metrics: MutableMapping[str, float | int] = {
+            "total_episodes": total_episodes,
+            "failures": failures,
+            "average_reward": average_reward,
+            "total_reward": total_reward,
+            "wall_clock_seconds": duration,
+        }
+        self._record_metrics("reinforcement.loop.summary", summary_metrics)
+
+        if span is not None:
+            self._set_span_attributes(
+                span,
+                {
+                    "episodes.completed": completed,
+                    "episodes.failures": failures,
+                    "reward.total": total_reward,
+                    "reward.average": average_reward,
+                    "duration.seconds": duration,
+                },
+            )
 
         logger.info(
             "RL loop complete",
@@ -619,6 +685,7 @@ class ReinforcementLearningLoop:
                 "failures": failures,
                 "total_reward": round(total_reward, 4),
                 "average_reward": round(average_reward, 4),
+                "duration_seconds": round(duration, 4),
             },
         )
 
@@ -631,6 +698,48 @@ class ReinforcementLearningLoop:
             wall_clock_seconds=duration,
             worker_history=worker_history,
         )
+
+    @contextlib.contextmanager
+    def _start_span(
+        self, tracer: Any, name: str, attributes: Mapping[str, Any]
+    ) -> contextlib.AbstractContextManager[Any]:
+        if tracer is None:
+            yield None
+            return
+        try:  # pragma: no cover - depends on OpenTelemetry instrumentation
+            with tracer.start_as_current_span(name) as span:
+                self._set_span_attributes(span, attributes)
+                yield span
+        except Exception:  # pragma: no cover - tracing failures must not break loop
+            logger.debug("reinforcement.loop.tracing_unavailable", exc_info=True)
+            yield None
+
+    def _emit_event(self, span: Any, name: str, attributes: Mapping[str, Any]) -> None:
+        if span is None:
+            return
+        try:  # pragma: no cover - depends on OpenTelemetry instrumentation
+            span.add_event(name, attributes=dict(attributes))
+        except Exception:
+            logger.debug("reinforcement.loop.event_emit_failed", exc_info=True)
+
+    def _set_span_attributes(self, span: Any, attributes: Mapping[str, Any]) -> None:
+        if span is None:
+            return
+        for key, value in attributes.items():
+            try:  # pragma: no cover - depends on OpenTelemetry instrumentation
+                span.set_attribute(key, value)
+            except Exception:
+                logger.debug("reinforcement.loop.attr_set_failed", exc_info=True)
+
+    def _record_metrics(
+        self, name: str, payload: MutableMapping[str, float | int]
+    ) -> None:
+        if self._metrics_sink is None:
+            return
+        try:
+            self._metrics_sink(name, payload)
+        except Exception:  # pragma: no cover - metrics sinks are best effort
+            logger.debug("reinforcement.loop.metrics_failed", exc_info=True)
 
     def _apply_policy_update(self, transitions: Sequence[Transition]) -> None:
         if not transitions:
@@ -1212,6 +1321,8 @@ class ReinforcementLoop:
         trainer_config_cls: type | None = None,
         fast_model_cls: Any | None = None,
         torch_module: Any | None = None,
+        approval_registry: OperatorApprovalRegistry | None = None,
+        approval_policy: ApprovalPolicy | None = None,
     ) -> None:
         self.model_id = model_id
         self.slot_name = slot_name
@@ -1228,6 +1339,8 @@ class ReinforcementLoop:
         self._fast_model_cls = fast_model_cls or FastLanguageModel
         self._torch = torch_module if torch_module is not None else torch
         self._logger = logging.getLogger(__name__)
+        self._approval_registry = approval_registry
+        self._approval_policy = approval_policy
 
     def train_reasoning_grpo(
         self,
@@ -1477,12 +1590,35 @@ class ReinforcementLoop:
     ) -> None:
         if adapter_dir is None:
             return
+        metrics_payload: dict[str, float] = {
+            "reasoning_accuracy": float(evaluation.get("accuracy", 0.0)),
+            "reasoning_eval_samples": float(evaluation.get("evaluated", 0.0)),
+            "grpo_steps": float(steps),
+        }
+        approval_payload: dict[str, Any] = {
+            "metrics": metrics_payload,
+            "adapter": str(adapter_dir),
+            "weights": str(merged_dir) if merged_dir else None,
+        }
+        if self._approval_registry is not None:
+            approved = self._approval_registry.require_approval(
+                source="reinforcement.reasoning",
+                payload=approval_payload,
+                policy=self._approval_policy,
+            )
+            if not approved:
+                self._logger.info(
+                    "reinforcement.reasoning.awaiting_approval",
+                    extra={
+                        "accuracy": metrics_payload["reasoning_accuracy"],
+                        "eval_samples": metrics_payload["reasoning_eval_samples"],
+                        "adapter": str(adapter_dir),
+                    },
+                )
+                return
+
         summary = {
-            "metrics": {
-                "reasoning_accuracy": evaluation.get("accuracy", 0.0),
-                "reasoning_eval_samples": evaluation.get("evaluated", 0.0),
-                "grpo_steps": steps,
-            },
+            "metrics": metrics_payload,
             "labels": {"category": "reasoning_grpo"},
             "artifacts": {
                 "adapter": str(adapter_dir),

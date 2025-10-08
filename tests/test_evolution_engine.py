@@ -17,6 +17,7 @@ from modules.evolution_engine.orchestrator import EvolutionOrchestrator
 from monGARS.config import HardwareHeuristics, get_settings
 from monGARS.core.evolution_engine import EvolutionEngine, PerformanceIssue
 from monGARS.core.monitor import SystemStats
+from monGARS.core.operator_approvals import OperatorApprovalRegistry
 
 settings = get_settings()
 
@@ -309,6 +310,65 @@ def test_orchestrator_runs_cycle_and_rolls_out(
     assert rollout_calls
     assert rollout_calls[0]["adapter_path"] == summary["artifacts"]["adapter"]
     assert DummySlotManager.enter_calls == 1
+
+
+def test_reasoning_loop_receives_approval_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = DummyWorkflowBackend()
+    approvals = OperatorApprovalRegistry(tmp_path / "approvals.json")
+    captured: dict[str, Any] = {}
+
+    class _Trainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            return {"status": "success", "artifacts": {"adapter": "stub"}}
+
+    class _ReasoningLoopStub:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["registry"] = kwargs.get("approval_registry")
+            captured["policy"] = kwargs.get("approval_policy")
+
+        def train_reasoning_grpo(
+            self,
+            num_samples: int = 200,
+            internal_ratio: float = 0.5,
+            *,
+            max_steps: int = 100,
+        ) -> Any:
+            return SimpleNamespace(
+                accuracy=0.9,
+                steps=max_steps,
+                eval_samples=num_samples,
+                adapter_dir=None,
+                merged_dir=None,
+            )
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.ReinforcementLoop",
+        _ReasoningLoopStub,
+    )
+
+    _mock_idle(monkeypatch)
+    _mock_torch_vram(monkeypatch, allocated_gb=1.0)
+    monkeypatch.setenv("USE_RAY_SERVE", "false")
+
+    orchestrator = EvolutionOrchestrator(
+        workflow_backend=backend,
+        trainer_cls=_Trainer,
+        slot_manager_cls=SimpleNamespace,
+        data_collector=lambda: [{"text": "sample"}],
+        approval_registry=approvals,
+        approval_policy=lambda payload: bool(payload.get("metrics")),
+    )
+
+    orchestrator._run_reasoning_alignment()
+
+    assert captured["registry"] is approvals
+    assert callable(captured["policy"])
 
 
 @pytest.mark.asyncio
