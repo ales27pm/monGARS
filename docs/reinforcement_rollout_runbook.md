@@ -36,6 +36,24 @@ introduced for RL artefacts.
    - Check Ray cluster metrics to confirm adaptive scaling decisions align with
      recent batch telemetry.
 
+## Long-Haul Validation Service
+
+- The evolution engine now accepts a `ResearchLongHaulService` instance that
+  schedules long-haul validation runs whenever training cycles complete. The
+  service can operate with or without the distributed scheduler and records the
+  latest summary for downstream dashboards.
+- Configuration lives in the main settings module:
+  - `RESEARCH_LONG_HAUL_ENABLED` toggles the service (defaults to enabled).
+  - `RESEARCH_LONG_HAUL_INTERVAL_SECONDS` and
+    `RESEARCH_LONG_HAUL_JITTER_SECONDS` control the cadence when the periodic
+    loop is started.
+  - `RESEARCH_LONG_HAUL_CYCLES`, `RESEARCH_LONG_HAUL_EPISODES_PER_CYCLE`, and
+    `RESEARCH_LONG_HAUL_COOLDOWN_SECONDS` still govern the validator itself.
+- Operators can call `ResearchLongHaulService.schedule_once(reason="manual")`
+  from the Django console or a maintenance shell to trigger an ad-hoc run. The
+  service deduplicates concurrent requests and logs
+  `research.longhaul.validation_completed` when the summary is ready.
+
 ## Approving a Rollout
 
 1. Inspect the pending request (JSON record or console view). Confirm:

@@ -425,6 +425,10 @@ class Settings(BaseSettings):
         ge=0,
         description="Maximum random jitter in seconds applied to the training interval.",
     )
+    research_long_haul_enabled: EnvBool = Field(
+        default=True,
+        description="Toggle for background long-haul validation when reinforcement tooling is available.",
+    )
     research_long_haul_cycles: int = Field(
         default=3,
         ge=1,
@@ -443,6 +447,16 @@ class Settings(BaseSettings):
     research_long_haul_approval_source: str = Field(
         default="reinforcement.reasoning",
         description="Approval source monitored while aggregating long-haul validation signals.",
+    )
+    research_long_haul_interval_seconds: float = Field(
+        default=7200.0,
+        ge=0.0,
+        description="Base interval between automated research long-haul validation runs.",
+    )
+    research_long_haul_jitter_seconds: float = Field(
+        default=600.0,
+        ge=0.0,
+        description="Maximum jitter applied when scheduling long-haul validation runs.",
     )
     style_base_model: str = Field(default="hf-internal-testing/tiny-random-gpt2")
     style_adapter_dir: str = Field(default="/tmp/mongars_style")
