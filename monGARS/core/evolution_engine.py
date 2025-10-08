@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from kubernetes import client, config
 
@@ -21,6 +21,9 @@ from monGARS.core.monitor import SystemMonitor, SystemStats
 from monGARS.core.peer import PeerCommunicator
 
 from .ui_events import event_bus, make_event
+
+if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from monGARS.core.research_validation import ResearchLongHaulService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -51,6 +54,7 @@ class EvolutionEngine:
         monitor: SystemMonitor | None = None,
         orchestrator_factory: Callable[[], EvolutionOrchestrator] | None = None,
         peer_communicator: PeerCommunicator | None = None,
+        long_haul_service: "ResearchLongHaulService" | None = None,
     ) -> None:
         self.monitor = monitor or SystemMonitor(update_interval=1)
         self._stat_history: deque[SystemStats] = deque(maxlen=10)
@@ -71,6 +75,7 @@ class EvolutionEngine:
         self._peer_communicator = peer_communicator or PeerCommunicator()
         self._memory_lock = asyncio.Lock()
         self._curated_memory: deque[dict[str, Any]] = deque(maxlen=500)
+        self._long_haul_service = long_haul_service
 
     def _prune_curated_memory_locked(self, now: datetime) -> None:
         if not self._curated_memory:
@@ -375,6 +380,18 @@ class EvolutionEngine:
             logger.exception("Optimization failed")
             return False
 
+    async def _schedule_long_haul_validation(self, reason: str) -> None:
+        """Queue a research long-haul validation run if the service is configured."""
+
+        if self._long_haul_service is None:
+            return
+        try:
+            await self._long_haul_service.schedule_once(reason=reason)
+        except Exception:  # pragma: no cover - defensive guard
+            logger.exception(
+                "evolution.longhaul.schedule_failed", extra={"reason": reason}
+            )
+
     async def train_cycle(
         self,
         user_id: str | None = None,
@@ -408,6 +425,8 @@ class EvolutionEngine:
                 extra={"user_id": user_id, "version": version},
             )
             raise
+        finally:
+            await self._schedule_long_haul_validation("training-cycle")
 
         if training_result is not None:
             await self._share_training_summary(

@@ -540,6 +540,68 @@ async def test_train_cycle_executes_training_and_broadcasts(
     assert event.data["energy"]["energy_wh"] == 1.25
 
 
+@pytest.mark.asyncio
+async def test_train_cycle_schedules_long_haul_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "longhaul"
+
+    class _StubOrchestrator:
+        def __init__(self, output: Path, payload: dict[str, Any]) -> None:
+            self._output = output
+            self._payload = payload
+
+        def trigger_encoder_training_pipeline(self) -> str:
+            self._output.mkdir(parents=True, exist_ok=True)
+            (self._output / "training_summary.json").write_text(
+                json.dumps(self._payload)
+            )
+            (self._output / "energy_report.json").write_text(
+                json.dumps({"energy_wh": 0.4, "backend": "psutil"})
+            )
+            return str(self._output)
+
+    class _RecorderCommunicator:
+        async def broadcast_telemetry(self, snapshot: dict[str, Any]) -> bool:
+            return True
+
+        def update_local_telemetry(self, snapshot: dict[str, Any]) -> None:
+            return None
+
+    class _StubEventBus:
+        def __init__(self) -> None:
+            self.events: list[Any] = []
+
+        async def publish(self, event: Any) -> None:
+            self.events.append(event)
+
+    class _SpyLongHaulService:
+        def __init__(self) -> None:
+            self.reasons: list[str] = []
+
+        async def schedule_once(self, *, reason: str, **_: Any) -> None:
+            self.reasons.append(reason)
+
+    bus = _StubEventBus()
+    summary_payload = {"status": "success", "artifacts": {}, "metrics": {}}
+    long_haul = _SpyLongHaulService()
+
+    monkeypatch.setattr(
+        "monGARS.core.evolution_engine.event_bus", lambda: bus, raising=False
+    )
+
+    engine = EvolutionEngine(
+        orchestrator_factory=lambda: _StubOrchestrator(run_dir, summary_payload),
+        peer_communicator=_RecorderCommunicator(),
+        long_haul_service=long_haul,
+    )
+    engine.apply_optimizations = AsyncMock()
+
+    await engine.train_cycle(user_id="system", version="enc-longhaul")
+
+    assert long_haul.reasons == ["training-cycle"]
+
+
 def test_hardware_profile_uses_configured_heuristics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
