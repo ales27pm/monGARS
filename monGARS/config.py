@@ -425,6 +425,25 @@ class Settings(BaseSettings):
         ge=0,
         description="Maximum random jitter in seconds applied to the training interval.",
     )
+    research_long_haul_cycles: int = Field(
+        default=3,
+        ge=1,
+        description="Number of validation cycles executed during research long-haul checks.",
+    )
+    research_long_haul_episodes_per_cycle: int = Field(
+        default=64,
+        ge=1,
+        description="Number of reinforcement episodes executed in each validation cycle.",
+    )
+    research_long_haul_cooldown_seconds: float = Field(
+        default=30.0,
+        ge=0.0,
+        description="Cooldown delay between validation cycles to surface stability issues.",
+    )
+    research_long_haul_approval_source: str = Field(
+        default="reinforcement.reasoning",
+        description="Approval source monitored while aggregating long-haul validation signals.",
+    )
     style_base_model: str = Field(default="hf-internal-testing/tiny-random-gpt2")
     style_adapter_dir: str = Field(default="/tmp/mongars_style")
     style_max_history: int = Field(default=20)
