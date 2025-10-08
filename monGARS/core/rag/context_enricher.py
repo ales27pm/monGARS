@@ -305,8 +305,12 @@ class RagContextEnricher:
             return references[:limit]
         cross_encoder = self._get_cross_encoder()
         if cross_encoder is None:
-            logging.warning(
-                "CrossEncoder unavailable; falling back to truncation of references. Check model availability."
+            log.warning(
+                "rag.context_enrichment.cross_encoder_unavailable",
+                extra={
+                    "fallback": "truncate",
+                    "reference_count": len(references),
+                },
             )
             return references[:limit]
 
