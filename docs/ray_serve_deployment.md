@@ -19,6 +19,18 @@ It assumes Ray 2.x, Python 3.11, and optional Docker/Kubernetes familiarity.
    ```
 4. Verify cluster health with `ray status`.
 
+### Docker Compose (local)
+
+When running the stack with Docker Compose, the default configuration now uses
+the CPU-only Ray image so environments without NVIDIA drivers can launch the
+head node successfully. Set `COMPOSE_PROFILES=ray` before invoking `docker
+compose up` to include the Ray services. If you _do_ have GPUs available,
+override the image by exporting `RAY_HEAD_IMAGE=rayproject/ray:2.9.3-py311-cu121`
+or by using `docker-compose.gpu.yml`, which reintroduces the GPU device
+reservations. Without that override, Docker will surface `could not select
+device driver "" with capabilities: [[gpu]]` errors because the default engine
+cannot satisfy the GPU reservation that Ray previously required.
+
 For Kubernetes deployments, reuse the manifests/Helm chart produced from
 `modules/ray_service.py` so replica configuration matches the application.
 
