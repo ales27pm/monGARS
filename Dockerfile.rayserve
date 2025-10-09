@@ -25,6 +25,11 @@ RUN apt-get update \
 
 RUN git lfs install --system
 
+# Bundle the vendored llm2vec build so we can keep transformers aligned with
+# the newer releases required by vLLM without the resolver backtracking on the
+# upstream llm2vec pins.
+COPY vendor/llm2vec_monGARS /tmp/llm2vec_monGARS
+
 # Faster, resilient installs (cache + retries) with CUDA 12.1 wheels bundled
 # directly in the PyTorch wheel to avoid long dependency chains.
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -33,11 +38,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         torch==2.1.2+cu121 \
         "ray[serve]==2.9.3" \
         "accelerate>=0.33.0" \
-        "llm2vec>=0.2.3" \
         "peft>=0.13.2" \
         "sentencepiece>=0.2.0" \
         "vllm>=0.4.2" \
-        "transformers>=4.44.2"
+        "transformers>=4.44.2" \
+    && pip install --retries 5 /tmp/llm2vec_monGARS \
+    && rm -rf /tmp/llm2vec_monGARS
 
 # Return to the default ray user for runtime safety.
 USER ray
