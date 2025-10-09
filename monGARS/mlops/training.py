@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -20,6 +21,14 @@ except Exception:  # pragma: no cover - tests patch this path
 from monGARS.mlops.model import move_to_cpu
 
 logger = logging.getLogger(__name__)
+
+
+try:  # pragma: no cover - signature inspection is deterministic
+    _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU = (
+        "use_cpu" in inspect.signature(TrainingArguments.__init__).parameters
+    )
+except (TypeError, ValueError):  # pragma: no cover - defensive guard
+    _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU = False
 
 
 OVR_ENV_MAP = {
@@ -277,14 +286,17 @@ def _build_training_arguments(
 
     if not use_cuda:
         base.pop("no_cuda", None)
-        dtype_args["use_cpu"] = base.pop("use_cpu", True)
-        dtype_args["no_cuda"] = True
+        requested_use_cpu = bool(base.pop("use_cpu", True))
+        if _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU:
+            dtype_args["use_cpu"] = requested_use_cpu
+        else:  # pragma: no cover - compatibility branch for older transformers
+            dtype_args["no_cuda"] = True
     else:
         base.pop("use_cpu", None)
 
     gradient_checkpointing = bool(base.pop("gradient_checkpointing", True))
 
-    return TrainingArguments(
+    args = TrainingArguments(
         output_dir=str(cfg.output_dir),
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
@@ -295,6 +307,12 @@ def _build_training_arguments(
         **dtype_args,
         **base,
     )
+    if not use_cuda and _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU:
+        # Maintain backwards compatibility for callers expecting ``no_cuda``
+        # to reflect CPU-only execution even when Transformers prefers the
+        # newer ``use_cpu`` flag.
+        setattr(args, "no_cuda", True)
+    return args
 
 
 def _coerce_oom_hooks(raw_hooks: Any) -> tuple[OOMEventHook, ...]:

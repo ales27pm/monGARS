@@ -1,6 +1,7 @@
 """Shared pytest configuration and fixtures."""
 
 import os
+import warnings
 
 # Ensure the lightweight sqlite backend is used for tests to avoid external
 # database dependencies while pgvector-backed code paths remain exercised in
@@ -8,6 +9,12 @@ import os
 # test suite always overrides CI-provided connection strings.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./mongars_test.db"
 os.environ["SECRET_KEY"] = "test-secret-key"
+
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    module=r"^awq(\.|$)",
+)
 
 import pytest_asyncio
 

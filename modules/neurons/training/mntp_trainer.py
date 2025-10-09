@@ -13,6 +13,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+# Import Unsloth as early as possible to ensure its patches activate before
+# transformers/peft modules are loaded.
+try:  # pragma: no cover - optional dependency
+    from unsloth import FastLanguageModel
+except ModuleNotFoundError:  # pragma: no cover - fallback when unsloth missing
+    FastLanguageModel = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive guardrail around import time
+    FastLanguageModel = None  # type: ignore[assignment]
+
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
     import torch
@@ -34,11 +43,6 @@ except Exception:  # pragma: no cover - fallback if unavailable
     AutoTokenizer = None
     get_linear_schedule_with_warmup = None
     default_data_collator = None
-
-try:  # pragma: no cover - optional dependency
-    from unsloth import FastLanguageModel
-except Exception:  # pragma: no cover - fallback when unsloth missing
-    FastLanguageModel = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency
     from trl import SFTConfig, SFTTrainer
