@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, MutableMapping, Protocol
+from typing import Any, Callable, Mapping, MutableMapping, Protocol
 
 from modules.evolution_engine.energy import EnergyUsageReport
 from modules.neurons.training.reinforcement_loop import (
@@ -35,6 +35,28 @@ class ObservabilityStore(Protocol):
 
     def record_summary(self, summary: "LongHaulValidationSummary") -> None:
         """Persist the aggregated summary for dashboard consumption."""
+
+
+class SustainabilityBridge(Protocol):
+    """Surface sustainability insights to dashboards."""
+
+    def record_energy_report(
+        self,
+        report: EnergyUsageReport,
+        *,
+        scope: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Publish an energy tracker report."""
+
+    def record_reinforcement_summary(
+        self,
+        summary: "LongHaulValidationSummary",
+        *,
+        scope: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Publish an aggregated reinforcement summary."""
 
 
 @dataclass(slots=True)
@@ -126,6 +148,7 @@ class ResearchLoopLongHaulValidator:
         mnpt_callback: MNTPCallback | None = None,
         approval_source: str | None = None,
         observability_store: ObservabilityStore | None = None,
+        sustainability_bridge: SustainabilityBridge | None = None,
     ) -> None:
         if reinforcement_loop_factory is None:
             raise ValueError("reinforcement_loop_factory is required")
@@ -149,13 +172,14 @@ class ResearchLoopLongHaulValidator:
             if approval_source is not None
             else settings.research_long_haul_approval_source
         )
+        registry_root = Path(settings.llm_adapter_registry_path)
+
         if observability_store is None:
             try:
                 from monGARS.core.reinforcement_observability import (
                     ReinforcementObservabilityStore,
                 )
 
-                registry_root = Path(settings.llm_adapter_registry_path)
                 observability_store = ReinforcementObservabilityStore(
                     registry_root / "reinforcement_observability.json"
                 )
@@ -165,6 +189,24 @@ class ResearchLoopLongHaulValidator:
                 )
                 observability_store = None
         self._observability_store = observability_store
+
+        if sustainability_bridge is None:
+            try:
+                from monGARS.core.sustainability_dashboard import (
+                    SustainabilityDashboardBridge,
+                )
+
+                sustainability_bridge = SustainabilityDashboardBridge(
+                    registry_root / "sustainability_dashboard.json",
+                    observability_path=registry_root
+                    / "reinforcement_observability.json",
+                )
+            except Exception:  # pragma: no cover - optional dependency at runtime
+                logger.debug(
+                    "research.longhaul.sustainability_bridge_init_failed", exc_info=True
+                )
+                sustainability_bridge = None
+        self._sustainability_bridge = sustainability_bridge
 
     async def execute(
         self,
@@ -295,6 +337,7 @@ class ResearchLoopLongHaulValidator:
         )
 
         self._persist_observability(summary)
+        self._record_summary_for_dashboard(summary)
 
         return summary
 
@@ -312,6 +355,7 @@ class ResearchLoopLongHaulValidator:
         status = "completed"
         summary: ReinforcementLearningSummary | None = None
         mnpt_executed = False
+        energy_report: EnergyUsageReport | None = None
 
         try:
             loop = self._reinforcement_loop_factory()
@@ -368,6 +412,7 @@ class ResearchLoopLongHaulValidator:
                 incidents.append(f"energy-stop-error: {exc!r}")
                 logger.exception("research.longhaul.energy_stop_failed", exc_info=True)
             if isinstance(report, EnergyUsageReport):
+                energy_report = report
                 energy_wh = float(report.energy_wh)
             elif isinstance(report, dict) and "energy_wh" in report:
                 try:
@@ -418,6 +463,20 @@ class ResearchLoopLongHaulValidator:
                 "mnpt_executed": int(mnpt_executed),
             },
         )
+
+        if energy_report is not None:
+            self._record_cycle_energy(
+                report=energy_report,
+                cycle_index=index,
+                status=status,
+                duration_seconds=duration,
+                episodes=episodes_completed,
+                failures=failures,
+                approvals=approvals,
+                total_reward=total_reward,
+                average_reward=average_reward,
+                mnpt_executed=mnpt_executed,
+            )
 
         return (
             LongHaulCycleReport(
@@ -512,6 +571,68 @@ class ResearchLoopLongHaulValidator:
             reasons=dict(reason_counts),
             timeline=tuple(timeline),
         )
+
+    def _record_cycle_energy(
+        self,
+        *,
+        report: EnergyUsageReport,
+        cycle_index: int,
+        status: str,
+        duration_seconds: float,
+        episodes: int,
+        failures: int,
+        approvals: int | None,
+        total_reward: float,
+        average_reward: float,
+        mnpt_executed: bool,
+    ) -> None:
+        if self._sustainability_bridge is None:
+            return
+        metadata: dict[str, Any] = {
+            "cycle_index": cycle_index,
+            "status": status,
+            "duration_seconds": duration_seconds,
+            "episodes": episodes,
+            "failures": failures,
+            "total_reward": total_reward,
+            "average_reward": average_reward,
+            "mnpt_executed": mnpt_executed,
+        }
+        if approvals is not None:
+            metadata["approval_pending"] = approvals
+        try:
+            self._sustainability_bridge.record_energy_report(
+                report,
+                scope="reinforcement.longhaul.cycle",
+                metadata=metadata,
+            )
+        except Exception:  # pragma: no cover - dashboards must not break validation
+            logger.debug("research.longhaul.sustainability_cycle_failed", exc_info=True)
+
+    def _record_summary_for_dashboard(
+        self, summary: "LongHaulValidationSummary"
+    ) -> None:
+        if self._sustainability_bridge is None:
+            return
+        metadata: dict[str, Any] = {
+            "cycles": summary.total_cycles,
+            "episodes": summary.total_episodes,
+            "failures": summary.total_failures,
+            "success_rate": summary.success_rate,
+            "mnpt_runs": summary.mnpt_runs,
+        }
+        if summary.approval_pending_final is not None:
+            metadata["approval_pending_final"] = summary.approval_pending_final
+        try:
+            self._sustainability_bridge.record_reinforcement_summary(
+                summary,
+                scope="reinforcement.longhaul.summary",
+                metadata=metadata,
+            )
+        except Exception:  # pragma: no cover - dashboards must not break validation
+            logger.debug(
+                "research.longhaul.sustainability_summary_failed", exc_info=True
+            )
 
     def _count_pending_approvals(self) -> int | None:
         if self._approval_registry is None:

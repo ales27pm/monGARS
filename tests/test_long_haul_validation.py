@@ -93,6 +93,40 @@ class _RecordingObservabilityStore:
         self.records.append(summary)
 
 
+class _RecordingSustainabilityBridge:
+    def __init__(self) -> None:
+        self.energy_reports: list[dict[str, Any]] = []
+        self.reinforcement_summaries: list[dict[str, Any]] = []
+
+    def record_energy_report(
+        self,
+        report: EnergyUsageReport,
+        *,
+        scope: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "report": report,
+            "scope": scope,
+            "metadata": dict(metadata or {}),
+        }
+        self.energy_reports.append(payload)
+
+    def record_reinforcement_summary(
+        self,
+        summary: LongHaulValidationSummary,
+        *,
+        scope: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "summary": summary,
+            "scope": scope,
+            "metadata": dict(metadata or {}),
+        }
+        self.reinforcement_summaries.append(payload)
+
+
 @pytest.mark.asyncio
 async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
     approvals_path = tmp_path / "approvals.json"
@@ -153,6 +187,8 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
 
     observability_store = _RecordingObservabilityStore()
 
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=loop_factory,
         approval_registry=registry,
@@ -161,6 +197,7 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
         tracer_factory=lambda _: tracer,
         mnpt_callback=mnpt_callback,
         observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
     )
 
     summary = await validator.execute(
@@ -185,6 +222,10 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
     assert summary.cycles[1].replica_load.low == 2
     assert summary.cycles[0].replica_load.reasons["scale_up"] == 1
     assert observability_store.records and observability_store.records[0] is summary
+    assert len(sustainability_bridge.energy_reports) == 2
+    assert sustainability_bridge.energy_reports[0]["metadata"]["cycle_index"] == 0
+    assert sustainability_bridge.reinforcement_summaries
+    assert sustainability_bridge.reinforcement_summaries[0]["summary"] is summary
 
     cycle_metrics = [name for name, _ in metrics if name == "research.longhaul.cycle"]
     assert len(cycle_metrics) == 2
@@ -214,6 +255,8 @@ async def test_long_haul_validator_records_failures(tmp_path) -> None:
 
     observability_store = _RecordingObservabilityStore()
 
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=failing_factory,
         approval_registry=registry,
@@ -221,6 +264,7 @@ async def test_long_haul_validator_records_failures(tmp_path) -> None:
         metrics_sink=metrics_sink,
         tracer_factory=lambda _: _RecordingTracer(),
         observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
     )
 
     summary = await validator.execute(
@@ -236,6 +280,7 @@ async def test_long_haul_validator_records_failures(tmp_path) -> None:
     assert summary.incidents
     assert summary.cycles[0].status == "failed"
     assert any(name == "research.longhaul.cycle" for name, _ in metrics)
+    assert len(sustainability_bridge.reinforcement_summaries) == 1
 
 
 @pytest.mark.asyncio
@@ -322,6 +367,8 @@ async def test_long_haul_validator_captures_multi_replica_soak(tmp_path) -> None
 
     observability_store = _RecordingObservabilityStore()
 
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=loop_factory,
         approval_registry=registry,
@@ -330,6 +377,7 @@ async def test_long_haul_validator_captures_multi_replica_soak(tmp_path) -> None
         tracer_factory=lambda _: tracer,
         mnpt_callback=mnpt_callback,
         observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
     )
 
     summary = await validator.execute(
@@ -377,3 +425,4 @@ async def test_long_haul_validator_captures_multi_replica_soak(tmp_path) -> None
 
     event_payloads = [attrs for span in tracer.spans for _, attrs in span.events]
     assert any(payload.get("mnpt_executed") == 1 for payload in event_payloads)
+    assert len(sustainability_bridge.energy_reports) == 3

@@ -50,6 +50,42 @@ class _RecordingObservabilityStore:
         self.records.append(summary)
 
 
+class _RecordingSustainabilityBridge:
+    def __init__(self) -> None:
+        self.energy_reports: list[dict[str, Any]] = []
+        self.reinforcement_summaries: list[dict[str, Any]] = []
+
+    def record_energy_report(
+        self,
+        report: EnergyUsageReport,
+        *,
+        scope: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self.energy_reports.append(
+            {
+                "report": report,
+                "scope": scope,
+                "metadata": dict(metadata or {}),
+            }
+        )
+
+    def record_reinforcement_summary(
+        self,
+        summary: Any,
+        *,
+        scope: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self.reinforcement_summaries.append(
+            {
+                "summary": summary,
+                "scope": scope,
+                "metadata": dict(metadata or {}),
+            }
+        )
+
+
 class _FixedScalingStrategy:
     def recommend_worker_count(
         self, current_workers: int, batch_index: int, stats: Any
@@ -158,6 +194,8 @@ async def test_long_haul_service_executes_reinforcement_loop(tmp_path) -> None:
 
     observability_store = _RecordingObservabilityStore()
 
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=make_loop,
         approval_registry=registry,
@@ -166,6 +204,7 @@ async def test_long_haul_service_executes_reinforcement_loop(tmp_path) -> None:
         tracer_factory=lambda _: tracer,
         mnpt_callback=mnpt_callback,
         observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
     )
 
     service = ResearchLongHaulService(
@@ -205,6 +244,7 @@ async def test_long_haul_service_executes_reinforcement_loop(tmp_path) -> None:
     assert summary.cycles[0].episodes == 6
     assert summary.cycles[0].energy_wh == pytest.approx(energy_values_data[0])
     assert metrics[-1][0] == "research.longhaul.summary"
+    assert sustainability_bridge.reinforcement_summaries
 
     rl_summary_count = sum(
         1 for name, _ in metrics if name == "reinforcement.loop.summary"
