@@ -124,7 +124,11 @@ and reality.
 
 ## Next Critical Implementation
 
-With RL automation integrated across the orchestrator and long-haul validator,
-the next critical implementation is building durable observability for those
-runs. Focus on correlating energy telemetry, approval queues, and multi-replica
-metrics so production dashboards expose reinforcement progress end to end.【F:monGARS/core/long_haul_validation.py†L156-L226】【F:tests/test_long_haul_validation.py†L1-L220】
+Durable observability for the reinforcement loop is now in place: every
+long-haul summary is persisted to
+`models/encoders/reinforcement_observability.json`, correlating energy
+telemetry, approval queues, and replica utilisation snapshots for dashboard
+consumers.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L470】【F:tests/test_reinforcement_observability.py†L1-L62】
+With the telemetry pipeline landed, the remaining critical effort is to harden
+multi-replica soak coverage alongside the new metrics so that scaling behaviour
+stays reliable during extended research runs.【F:tests/test_long_haul_validation.py†L1-L220】

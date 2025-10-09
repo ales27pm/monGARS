@@ -42,6 +42,14 @@ class _RecordingTracer:
         return span
 
 
+class _RecordingObservabilityStore:
+    def __init__(self) -> None:
+        self.records: list[Any] = []
+
+    def record_summary(self, summary: Any) -> None:
+        self.records.append(summary)
+
+
 class _FixedScalingStrategy:
     def recommend_worker_count(
         self, current_workers: int, batch_index: int, stats: Any
@@ -148,6 +156,8 @@ async def test_long_haul_service_executes_reinforcement_loop(tmp_path) -> None:
             metrics_sink=metrics_sink,
         )
 
+    observability_store = _RecordingObservabilityStore()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=make_loop,
         approval_registry=registry,
@@ -155,6 +165,7 @@ async def test_long_haul_service_executes_reinforcement_loop(tmp_path) -> None:
         metrics_sink=metrics_sink,
         tracer_factory=lambda _: tracer,
         mnpt_callback=mnpt_callback,
+        observability_store=observability_store,
     )
 
     service = ResearchLongHaulService(
@@ -188,6 +199,7 @@ async def test_long_haul_service_executes_reinforcement_loop(tmp_path) -> None:
     assert mnpt_calls == 2
     assert summary.success_rate == pytest.approx(1.0)
     assert summary.incidents == ()
+    assert observability_store.records and observability_store.records[0] is summary
     assert len(summary.cycles) == 2
     assert all(report.status == "completed" for report in summary.cycles)
     assert summary.cycles[0].episodes == 6

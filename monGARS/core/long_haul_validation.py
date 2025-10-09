@@ -5,14 +5,17 @@ import contextlib
 import inspect
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, MutableMapping
+from pathlib import Path
+from typing import Any, Callable, MutableMapping, Protocol
 
 from modules.evolution_engine.energy import EnergyUsageReport
 from modules.neurons.training.reinforcement_loop import (
     ReinforcementLearningLoop,
     ReinforcementLearningSummary,
+    WorkerAdjustment,
 )
 from monGARS.config import get_settings
 from monGARS.core.monitor import get_tracer
@@ -25,6 +28,51 @@ EnergyTrackerFactory = Callable[[], Any]
 MetricsSink = Callable[[str, MutableMapping[str, float | int]], None]
 ReinforcementLoopFactory = Callable[[], ReinforcementLearningLoop]
 MNTPCallback = Callable[[], Any]
+
+
+class ObservabilityStore(Protocol):
+    """Persist correlated telemetry for reinforcement runs."""
+
+    def record_summary(self, summary: "LongHaulValidationSummary") -> None:
+        """Persist the aggregated summary for dashboard consumption."""
+
+
+@dataclass(slots=True)
+class ReplicaTimelineEntry:
+    """Track replica adjustments observed during reinforcement batches."""
+
+    batch_index: int
+    worker_count: int
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_index": self.batch_index,
+            "worker_count": self.worker_count,
+            "reason": self.reason,
+        }
+
+
+@dataclass(slots=True)
+class ReplicaLoadReport:
+    """Summarise replica utilisation for a single validation cycle."""
+
+    peak: int | None = None
+    low: int | None = None
+    average: float | None = None
+    events: int = 0
+    reasons: dict[str, int] = field(default_factory=dict)
+    timeline: tuple[ReplicaTimelineEntry, ...] = field(default_factory=tuple)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "peak": self.peak,
+            "low": self.low,
+            "average": self.average,
+            "events": self.events,
+            "reasons": dict(self.reasons),
+            "timeline": [entry.to_dict() for entry in self.timeline],
+        }
 
 
 @dataclass(slots=True)
@@ -42,6 +90,7 @@ class LongHaulCycleReport:
     approval_pending: int | None
     incidents: tuple[str, ...] = field(default_factory=tuple)
     mnpt_executed: bool = False
+    replica_load: ReplicaLoadReport = field(default_factory=ReplicaLoadReport)
 
 
 @dataclass(slots=True)
@@ -76,6 +125,7 @@ class ResearchLoopLongHaulValidator:
         tracer_factory: Callable[[str], Any] | None = get_tracer,
         mnpt_callback: MNTPCallback | None = None,
         approval_source: str | None = None,
+        observability_store: ObservabilityStore | None = None,
     ) -> None:
         if reinforcement_loop_factory is None:
             raise ValueError("reinforcement_loop_factory is required")
@@ -99,6 +149,22 @@ class ResearchLoopLongHaulValidator:
             if approval_source is not None
             else settings.research_long_haul_approval_source
         )
+        if observability_store is None:
+            try:
+                from monGARS.core.reinforcement_observability import (
+                    ReinforcementObservabilityStore,
+                )
+
+                registry_root = Path(settings.llm_adapter_registry_path)
+                observability_store = ReinforcementObservabilityStore(
+                    registry_root / "reinforcement_observability.json"
+                )
+            except Exception:  # pragma: no cover - optional dependency at runtime
+                logger.debug(
+                    "research.longhaul.observability_store_init_failed", exc_info=True
+                )
+                observability_store = None
+        self._observability_store = observability_store
 
     async def execute(
         self,
@@ -228,6 +294,8 @@ class ResearchLoopLongHaulValidator:
             },
         )
 
+        self._persist_observability(summary)
+
         return summary
 
     async def _run_cycle(
@@ -307,6 +375,8 @@ class ResearchLoopLongHaulValidator:
                 except (TypeError, ValueError):
                     energy_wh = None
 
+        replica_load = self._summarise_replica_load(summary)
+
         if summary is not None:
             approvals = self._count_pending_approvals()
             episodes_completed = int(summary.total_episodes)
@@ -362,6 +432,7 @@ class ResearchLoopLongHaulValidator:
                 approval_pending=approvals,
                 incidents=tuple(incidents),
                 mnpt_executed=mnpt_executed,
+                replica_load=replica_load,
             ),
             energy_wh,
             mnpt_executed,
@@ -383,6 +454,64 @@ class ResearchLoopLongHaulValidator:
             await result
             return True
         return True
+
+    def _persist_observability(self, summary: "LongHaulValidationSummary") -> None:
+        if self._observability_store is None:
+            return
+        try:
+            self._observability_store.record_summary(summary)
+        except Exception:  # pragma: no cover - observability must not break runs
+            logger.exception(
+                "research.longhaul.observability_persist_failed",
+                extra={"cycles": summary.total_cycles},
+            )
+
+    def _summarise_replica_load(
+        self, summary: ReinforcementLearningSummary | None
+    ) -> ReplicaLoadReport:
+        if summary is None:
+            return ReplicaLoadReport()
+
+        history = getattr(summary, "worker_history", None)
+        if not history:
+            return ReplicaLoadReport()
+
+        timeline: list[ReplicaTimelineEntry] = []
+        counts: list[int] = []
+        reason_counts: Counter[str] = Counter()
+
+        for item in history:
+            if isinstance(item, WorkerAdjustment):
+                batch_index = int(getattr(item, "batch_index", len(timeline)))
+                worker_count = int(getattr(item, "worker_count", 0))
+                reason = str(getattr(item, "reason", "unknown"))
+            else:
+                batch_index = int(getattr(item, "batch_index", len(timeline)))
+                worker_count = int(getattr(item, "worker_count", 0))
+                reason = str(getattr(item, "reason", "unknown"))
+
+            timeline.append(
+                ReplicaTimelineEntry(
+                    batch_index=batch_index,
+                    worker_count=worker_count,
+                    reason=reason,
+                )
+            )
+            counts.append(worker_count)
+            reason_counts[reason] += 1
+
+        if not counts:
+            return ReplicaLoadReport()
+
+        average = sum(counts) / len(counts)
+        return ReplicaLoadReport(
+            peak=max(counts),
+            low=min(counts),
+            average=average,
+            events=len(counts),
+            reasons=dict(reason_counts),
+            timeline=tuple(timeline),
+        )
 
     def _count_pending_approvals(self) -> int | None:
         if self._approval_registry is None:
@@ -451,4 +580,6 @@ __all__ = [
     "ResearchLoopLongHaulValidator",
     "LongHaulValidationSummary",
     "LongHaulCycleReport",
+    "ReplicaLoadReport",
+    "ReplicaTimelineEntry",
 ]
