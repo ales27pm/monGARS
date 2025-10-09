@@ -312,33 +312,33 @@ class EvolutionOrchestrator:
         )
         energy_report: EnergyUsageReport | None = None
 
-        try:
-            with self._acquire_model_slot():
+        with self._acquire_model_slot():
+            try:
                 if tracker is not None:
                     with tracker.track():
                         summary = trainer.fit(dataset)
                     energy_report = tracker.last_report
                 else:
                     summary = trainer.fit(dataset)
-        except Exception:
-            logger.exception("Evolution training cycle failed during MNTP fitting")
-            raise
+            except Exception:
+                logger.exception("Evolution training cycle failed during MNTP fitting")
+                raise
 
-        status = str(summary.get("status") or "").lower()
-        if status != TrainingStatus.SUCCESS.value:
-            raise RuntimeError(
-                f"MNTP trainer reported unsuccessful status: {summary.get('status')!r}"
-            )
+            status = str(summary.get("status") or "").lower()
+            if status != TrainingStatus.SUCCESS.value:
+                raise RuntimeError(
+                    f"MNTP trainer reported unsuccessful status: {summary.get('status')!r}"
+                )
 
-        summary.setdefault("version", summary.get("version") or uuid4().hex)
-        summary.setdefault("completed_at", datetime.now(timezone.utc).isoformat())
+            summary.setdefault("version", summary.get("version") or uuid4().hex)
+            summary.setdefault("completed_at", datetime.now(timezone.utc).isoformat())
 
-        self._persist_run_artifacts(run_dir, summary, energy_report)
-        self._update_manifest(summary)
-        try:
-            self.rollout_adapter(summary)
-        except Exception:  # pragma: no cover - rollout failures must not crash
-            logger.exception("Adapter rollout failed")
+            self._persist_run_artifacts(run_dir, summary, energy_report)
+            self._update_manifest(summary)
+            try:
+                self.rollout_adapter(summary)
+            except Exception:  # pragma: no cover - rollout failures must not crash
+                logger.exception("Adapter rollout failed")
 
         try:
             self._run_reinforcement_alignment(dataset)

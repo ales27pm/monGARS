@@ -545,11 +545,13 @@ def train_qlora(
     batch_size = max(1, per_device_train_batch_size)
     grad_accum = max(1, grad_accum_override)
     attempt = 0
+    gpu_ooms = 0
     use_cuda = prefer_cuda
 
     _disable_model_cache(model)
 
     while True:
+        attempt += 1
         args = _build_training_arguments(
             config, base_args, batch_size, grad_accum, bf16_ok, use_cuda
         )
@@ -563,7 +565,7 @@ def train_qlora(
         logger.info(
             "Starting QLoRA fine-tuning",
             extra={
-                "attempt": attempt + 1,
+                "attempt": attempt,
                 "batch_size": batch_size,
                 "grad_accum": grad_accum,
             },
@@ -573,52 +575,58 @@ def train_qlora(
             trainer.train()
         except Exception as exc:  # pragma: no cover - covered via unit tests
             if not _is_cuda_oom(exc):
+                del trainer
                 raise
 
             should_retry, next_batch, next_grad = _handle_cuda_oom(
                 trainer=trainer,
                 exc=exc,
-                attempt=attempt,
+                attempt=gpu_ooms,
                 max_retries=oom_retries,
                 batch_size=batch_size,
                 grad_accum=grad_accum,
                 backoff_factor=backoff_factor,
                 hooks=oom_hooks,
             )
+            gpu_ooms += 1
 
-            if not should_retry:
-                if use_cuda and allow_cpu_fallback and torch.cuda.is_available():
-                    logger.warning(
-                        "CUDA OOM persisted after applying backoff; falling back to CPU training",
-                        extra={
-                            "attempt": attempt + 1,
-                            "batch_size": batch_size,
-                            "grad_accum": grad_accum,
-                        },
-                    )
-                    base_args.setdefault("optim", "adamw_torch")
-                    base_args["optim"] = "adamw_torch"
-                    base_args.pop("no_cuda", None)
-                    base_args["use_cpu"] = True
-                    base_args["no_cuda"] = True
-                    base_args["bf16"] = False
-                    base_args["fp16"] = False
-                    use_cuda = False
-                    bf16_ok = False
-                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-                    move_to_cpu(model)
-                    _maybe_empty_cuda_cache()
-                    _reset_cuda_peak_memory_stats()
-                    attempt += 1
-                    del trainer
-                    continue
+            if oom_retries <= 0:
+                del trainer
                 raise
 
-            batch_size = next_batch
-            grad_accum = next_grad
-            attempt += 1
+            if should_retry and gpu_ooms <= oom_retries:
+                batch_size = next_batch
+                grad_accum = next_grad
+                del trainer
+                continue
+
+            if use_cuda and allow_cpu_fallback and torch.cuda.is_available():
+                logger.warning(
+                    "CUDA OOM persisted after applying backoff; falling back to CPU training",
+                    extra={
+                        "attempt": attempt,
+                        "batch_size": batch_size,
+                        "grad_accum": grad_accum,
+                    },
+                )
+                base_args.setdefault("optim", "adamw_torch")
+                base_args["optim"] = "adamw_torch"
+                base_args.pop("no_cuda", None)
+                base_args["use_cpu"] = True
+                base_args["no_cuda"] = True
+                base_args["bf16"] = False
+                base_args["fp16"] = False
+                use_cuda = False
+                bf16_ok = False
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                move_to_cpu(model)
+                _maybe_empty_cuda_cache()
+                _reset_cuda_peak_memory_stats()
+                del trainer
+                continue
+
             del trainer
-            continue
+            raise
 
         logger.info("Training completed")
         return trainer

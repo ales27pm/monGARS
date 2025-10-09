@@ -173,6 +173,15 @@ if DEBUG:
     for debug_host in _iter_debug_hosts():
         if debug_host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(debug_host)
+    if "0.0.0.0" not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append("0.0.0.0")
+
+_compose_env_hosts = [
+    *_parse_host_csv(os.environ.get("WEBAPP_HOST")),
+    *_parse_host_csv(os.environ.get("HOST")),
+]
+if _compose_env_hosts and "0.0.0.0" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("0.0.0.0")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
