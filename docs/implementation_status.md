@@ -134,8 +134,12 @@ Durable observability for the reinforcement loop is now in place: every
 long-haul summary is persisted to
 `models/encoders/reinforcement_observability.json`, correlating energy
 telemetry, approval queues, and replica utilisation snapshots for dashboard
-consumers.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L470】【F:tests/test_reinforcement_observability.py†L1-L62】
-With reinforcement validation on autopilot, the next critical effort is to wire
-the energy tracker outputs and reinforcement observability feeds into the
-shared sustainability dashboards so operators can correlate consumption with
-deployment decisions.【F:modules/evolution_engine/energy.py†L1-L160】【F:docs/codebase_status_report.md†L169-L214】
+consumers.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L520】【F:tests/test_reinforcement_observability.py†L1-L62】
+The energy tracker outputs now land alongside those observability feeds via
+`SustainabilityDashboardBridge`, which writes
+`models/encoders/sustainability_dashboard.json` and emits
+`llm.sustainability.*` metrics so shared dashboards can correlate consumption,
+approvals, and replica utilisation for every deployment decision.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:monGARS/core/long_haul_validation.py†L120-L520】【F:tests/test_sustainability_dashboard.py†L1-L160】
+With dashboards consuming the full sustainability signal, the next focus is on
+deriving rollout guidance—linking carbon intensity and replica utilisation to
+hardware-aware deployment policies across clusters.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:docs/codebase_status_report.md†L169-L214】

@@ -109,10 +109,12 @@ implementation details.
 - **Credential Hardening** – legacy bootstrap accounts were removed from FastAPI;
   audit existing deployments to ensure no environments still rely on the retired
   defaults before rotating secrets.【F:monGARS/api/web_api.py†L41-L88】
-- **Sustainability Dashboards** – energy tracking, reinforcement observability,
-  and replica analytics are persisted locally; the remaining gap is wiring those
-  feeds into shared dashboards and alerting so operators can act on consumption
-  trends.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:docs/implementation_status.md†L130-L160】
+- ✅ **Sustainability Dashboards** – energy tracker reports and reinforcement
+  observability feeds now converge in
+  `models/encoders/sustainability_dashboard.json`, with OpenTelemetry metrics
+  (`llm.sustainability.*`) exposing the same data for Grafana and alerting. The
+  bridge updates run automatically during long-haul validation so operators have
+  unified energy, approval, and replica insights for deployment decisions.【F:monGARS/core/long_haul_validation.py†L123-L520】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
 - ✅ **RAG Governance** – retention metadata, automated scrubbing, and documented
   export flows keep curated artefacts compliant as partner integrations scale.【F:docs/rag_dataset_governance.md†L1-L160】
 
@@ -130,7 +132,9 @@ implementation details.
 
 ## Recommended Next Steps
 
-1. Integrate reinforcement observability and energy tracker outputs into shared
-   dashboards/alerts so sustainability metrics guide deployment decisions.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
-2. Extend sustainability analytics to include cross-node artefact reuse and
-   hardware-aware rollouts once dashboards surface baseline consumption trends.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:docs/implementation_status.md†L150-L160】
+1. Leverage the sustainability dashboard feed to model cross-node artefact
+   reuse and carbon-aware rollout policies, enriching the shared metrics with
+   deployment recommendations.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:modules/evolution_engine/orchestrator.py†L1-L160】
+2. Extend sustainability analytics to include hardware-aware rollouts once
+   dashboards surface baseline consumption trends, combining replica insights
+   with the new energy stream.【F:monGARS/core/long_haul_validation.py†L123-L520】【F:docs/implementation_status.md†L150-L160】

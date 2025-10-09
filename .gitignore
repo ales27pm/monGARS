@@ -14,6 +14,7 @@ vendor/llm2vec_monGARS/build/
 # Test artifacts
 mongars_test.db
 models/encoders/cycle-*/
+models/encoders/sustainability_dashboard.json
 .vscode/
 .venv/
 mongars_local.db
