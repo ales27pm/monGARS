@@ -4,6 +4,7 @@ import logging
 import os
 import secrets
 import sys
+import uuid
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -568,7 +569,9 @@ def ensure_secret_key(
         else "SECRET_KEY not configured; generated ephemeral key for debug use only."
     )
     log.warning(message)
-    generated_key = secrets.token_urlsafe(64)
+    token = secrets.token_urlsafe(64)
+    suffix = uuid.uuid4().hex
+    generated_key = f"{token}.{suffix}"
     return settings.model_copy(update={"SECRET_KEY": generated_key}), True
 
 
@@ -661,13 +664,11 @@ def configure_telemetry(settings: Settings) -> None:
 def get_settings() -> Settings:
     settings = Settings()
     try:
-        loop = asyncio.get_running_loop()
-        vault_secrets = {}
+        asyncio.get_running_loop()
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        vault_secrets = loop.run_until_complete(fetch_secrets_from_vault(settings))
-        loop.close()
+        vault_secrets = asyncio.run(fetch_secrets_from_vault(settings))
+    else:
+        vault_secrets = {}
     for key, value in vault_secrets.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
