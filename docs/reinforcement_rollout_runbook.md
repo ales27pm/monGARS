@@ -9,7 +9,9 @@ introduced for RL artefacts.
 
 - **Telemetry** – `ReinforcementLearningLoop` now emits OpenTelemetry spans and
   structured metrics via the `reinforcement.loop.*` namespace. Metrics feed the
-  existing observability pipeline, enabling dashboards and alerts.
+  observability pipeline and are snapshotted to
+  `models/encoders/reinforcement_observability.json`, correlating approvals,
+  energy usage, and replica utilisation for dashboards and alerts.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L470】
 - **Approval Registry** – Every RL rollout creates or reuses an approval
   request stored in `models/encoders/operator_approvals.json` via
   `OperatorApprovalRegistry`. Requests are auto-approved only when the configured
@@ -27,9 +29,13 @@ introduced for RL artefacts.
      re-training. Each record captures the evaluation summary for auditing.
 2. **Verify Telemetry Streams**
    - Dashboard: `llm.reinforcement.loop` panel in Grafana (or equivalent).
+   - File store: confirm the most recent entry in
+     `models/encoders/reinforcement_observability.json` reflects the latest
+     validation run and includes replica load metrics.
    - Metrics: `reinforcement.loop.batch.success_rate`,
      `reinforcement.loop.summary.average_reward`,
-     `reinforcement.loop.summary.failures`.
+     `reinforcement.loop.summary.failures`, and the derived replica counters
+     persisted by the observability store.
    - Alerts: Investigate gaps or sudden drops in throughput before approving
      new artefacts.
 3. **Audit Worker Scaling**

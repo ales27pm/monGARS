@@ -9,6 +9,7 @@ import pytest
 from modules.evolution_engine.energy import EnergyUsageReport
 from modules.neurons.training.reinforcement_loop import (
     ReinforcementLearningSummary,
+    WorkerAdjustment,
 )
 from monGARS.core.long_haul_validation import (
     LongHaulCycleReport,
@@ -84,6 +85,14 @@ class _EnergyTracker:
             )
 
 
+class _RecordingObservabilityStore:
+    def __init__(self) -> None:
+        self.records: list[LongHaulValidationSummary] = []
+
+    def record_summary(self, summary: LongHaulValidationSummary) -> None:
+        self.records.append(summary)
+
+
 @pytest.mark.asyncio
 async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
     approvals_path = tmp_path / "approvals.json"
@@ -99,7 +108,10 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
                 episode_results=[],
                 failures=2,
                 wall_clock_seconds=0.4,
-                worker_history=[],
+                worker_history=[
+                    WorkerAdjustment(batch_index=0, worker_count=2, reason="initial"),
+                    WorkerAdjustment(batch_index=1, worker_count=3, reason="scale_up"),
+                ],
             ),
             ReinforcementLearningSummary(
                 total_episodes=12,
@@ -108,7 +120,12 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
                 episode_results=[],
                 failures=1,
                 wall_clock_seconds=0.5,
-                worker_history=[],
+                worker_history=[
+                    WorkerAdjustment(batch_index=0, worker_count=3, reason="initial"),
+                    WorkerAdjustment(
+                        batch_index=1, worker_count=2, reason="scale_down"
+                    ),
+                ],
             ),
         ]
     )
@@ -134,6 +151,8 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
         nonlocal mnpt_calls
         mnpt_calls += 1
 
+    observability_store = _RecordingObservabilityStore()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=loop_factory,
         approval_registry=registry,
@@ -141,6 +160,7 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
         metrics_sink=metrics_sink,
         tracer_factory=lambda _: tracer,
         mnpt_callback=mnpt_callback,
+        observability_store=observability_store,
     )
 
     summary = await validator.execute(
@@ -161,6 +181,10 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
     assert all(isinstance(report, LongHaulCycleReport) for report in summary.cycles)
     assert summary.cycles[0].mnpt_executed is True
     assert summary.cycles[1].energy_wh == pytest.approx(1.6)
+    assert summary.cycles[0].replica_load.peak == 3
+    assert summary.cycles[1].replica_load.low == 2
+    assert summary.cycles[0].replica_load.reasons["scale_up"] == 1
+    assert observability_store.records and observability_store.records[0] is summary
 
     cycle_metrics = [name for name, _ in metrics if name == "research.longhaul.cycle"]
     assert len(cycle_metrics) == 2
@@ -188,12 +212,15 @@ async def test_long_haul_validator_records_failures(tmp_path) -> None:
     def energy_factory() -> _EnergyTracker:
         return _EnergyTracker(energy_values)
 
+    observability_store = _RecordingObservabilityStore()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=failing_factory,
         approval_registry=registry,
         energy_tracker_factory=energy_factory,
         metrics_sink=metrics_sink,
         tracer_factory=lambda _: _RecordingTracer(),
+        observability_store=observability_store,
     )
 
     summary = await validator.execute(
