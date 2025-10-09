@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-Last updated: 2025-10-05
+Last updated: 2025-12-02
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -60,7 +60,7 @@ and reality.
   failure rates when selecting targets
   (`monGARS/core/distributed_scheduler.py`, `monGARS/core/peer.py`).
 
-## Phase 5 – Web Interface & API Refinement (In Progress – Target Q1 2026)
+## Phase 5 – Web Interface & API Refinement (Completed Q4 2025)
 
 - FastAPI routes for `/token`, `/api/v1/conversation/chat`,
   `/api/v1/conversation/history`, `/api/v1/review/rag-context`, and peer
@@ -73,8 +73,8 @@ and reality.
   persists user records, and login bootstrap flows now rely exclusively on
   persisted accounts after retiring the legacy demo credential mapping in
   `monGARS/api/web_api.py`.
-- Planned work: consolidate validation rules and formalise RAG dataset
-  governance before widening partner access.
+- RAG dataset governance is documented and enforced through the catalog
+  metadata pipeline.【F:docs/rag_dataset_governance.md†L1-L120】【F:models/datasets/governance.py†L41-L132】
 
 ## Phase 6 – Self-Improvement & Research (Target Q2 2026)
 
@@ -89,8 +89,8 @@ and reality.
   automation gates deployments through the operator approval registry so
   experiments cannot roll out without sign-off.
 - ⚠️ Testing coverage for cognition and scheduling modules is solid; expand
-  end-to-end evaluations for long-running MNTP jobs and multi-replica Ray Serve
-  rollouts before declaring the phase complete.
+  sustained multi-replica evaluations and dashboards that surface approval and
+  energy telemetry from long-haul runs before declaring the phase complete.【F:monGARS/core/long_haul_validation.py†L156-L226】
 
 ## Phase 7 – Sustainability & Longevity (Future)
 
@@ -124,7 +124,7 @@ and reality.
 
 ## Next Critical Implementation
 
-With RL automation instrumented and guarded by operator approvals, the next
-critical implementation is extending long-haul validation for research loops.
-Focus on sustained MNTP and RL runs, energy telemetry correlation, and
-production dashboards that visualise the new reinforcement metrics end to end.
+With RL automation integrated across the orchestrator and long-haul validator,
+the next critical implementation is building durable observability for those
+runs. Focus on correlating energy telemetry, approval queues, and multi-replica
+metrics so production dashboards expose reinforcement progress end to end.【F:monGARS/core/long_haul_validation.py†L156-L226】【F:tests/test_long_haul_validation.py†L1-L220】

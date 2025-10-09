@@ -2,21 +2,21 @@
 
 ## Summary
 
-Instrumentation, rollout safeguards, and operator approvals have now been
-implemented for the reinforcement-learning (RL) research loop. The loop emits
-OpenTelemetry spans, streams metrics, and records approval requests before
-deploying artefacts, closing the operational gap highlighted in the status
-reports.【F:docs/implementation_status.md†L96-L140】【F:modules/neurons/training/reinforcement_loop.py†L520-L760】
+Reinforcement-learning (RL) runs now stream approvals, telemetry, and artefacts
+through the orchestrator and long-haul validator. The next priority is
+operationalising that data: shared dashboards and sustained multi-replica soak
+tests need to land so operators can track RL output alongside self-training.
+【F:docs/implementation_status.md†L96-L140】【F:docs/codebase_status_report.md†L104-L160】
 
 ## Supporting Signals
 
-- **Implementation Status Report** – calls out RL automation as the remaining
-  contradiction after the governance milestone.【F:docs/implementation_status.md†L96-L140】
-- **Codebase Status Report** – recommends prioritising telemetry and operational
-  controls before graduating RL into production workflows.【F:docs/codebase_status_report.md†L96-L140】
-- **Evolution Engine Orchestrator** – already integrates curated datasets,
-  making it the natural landing spot once RL artefacts can be generated and
-  approved safely.【F:modules/evolution_engine/orchestrator.py†L1-L320】
+- **Implementation Status Report** – highlights the need for durable
+  observability before Phase 6 can close.【F:docs/implementation_status.md†L124-L160】
+- **Codebase Status Report** – flags long-haul observability as the primary
+  remaining risk and calls for multi-replica soak coverage.【F:docs/codebase_status_report.md†L96-L160】
+- **Evolution Engine Orchestrator & Validator** – already emit approvals,
+  rewards, and energy metrics, providing the data feeds dashboards must
+  visualise.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L156-L226】
 
 ## Rationale for Prioritising RL Operationalisation
 
@@ -30,26 +30,28 @@ reports.【F:docs/implementation_status.md†L96-L140】【F:modules/neurons/tra
 
 ## Implementation Outline
 
-1. **Runbooks** – publish the RL rollout guide alongside the RAG governance
-   documentation so operators understand how to review approval queues and
-   rollback artefacts if needed.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
-2. **Integration Tests** – schedule long-haul evaluation covering sustained RL
-   runs, ensuring telemetry and approval checkpoints stay healthy under load.
-3. **Metrics Dashboards** – extend observability dashboards to include the new
-   `reinforcement.loop.*` metrics emitted by the telemetry sink.
+1. **Dashboards & Alerts** – wire the long-haul metrics (reward curves, approval
+   counts, energy usage) into shared dashboards with alert thresholds for
+   regressions.【F:monGARS/core/long_haul_validation.py†L156-L226】
+2. **Soak & Multi-Replica Tests** – extend the long-haul integration suite to
+   exercise concurrent RL and MNTP runs with multiple Ray replicas to flush out
+   scheduler and manifest contention.【F:tests/test_long_haul_validation.py†L1-L220】
+3. **Operator Runbooks** – update the reinforcement rollout guide with the new
+   dashboard links and alert handling procedures so on-call staff can respond
+   quickly.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
 
 ## Success Criteria & Validation
 
 - RL training cycles emit metrics and logs that surface in the same dashboards
   as self-training events.
 - Deployment of RL artefacts requires an explicit approval or automated policy
-  pass, with clear rollback instructions.
+  pass, with clear rollback instructions surfaced alongside dashboards.【F:monGARS/core/long_haul_validation.py†L156-L226】
 - Updated documentation (including runbooks) enables on-call operators to triage
-  RL incidents without specialist knowledge.
+  RL incidents without specialist knowledge.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
 
 ## Follow-On Work Once RL Is Operational
 
 - Resume energy-efficiency research outlined for the sustainability phase once
-  RL experiments can run safely in production.
+  RL observability is standardised across deployments.【F:modules/evolution_engine/energy.py†L1-L120】
 - Expand partner telemetry to correlate RL-driven responses with engagement and
-  satisfaction metrics.
+  satisfaction metrics using the shared dashboards as the foundation.【F:docs/codebase_status_report.md†L137-L188】

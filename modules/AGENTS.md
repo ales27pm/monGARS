@@ -15,8 +15,8 @@ Covers optional subsystems under `modules/`, including evolution and neuron trai
 - **Self-Improvement Focus**
   - ✅ Personality profiles persisted via SQLModel with live adapter updates.
   - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-  - 🔄 Reinforcement-learning research loops ship under `modules/neurons/training/reinforcement_loop.py`; integrate telemetry, rollout, and operator controls before calling the milestone complete.
-  - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts, and distributed workflows.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - 🔄 Expand tests and dashboards for long-running MNTP jobs, multi-replica Ray Serve rollouts, and energy telemetry correlation across distributed workflows.【F:tests/test_long_haul_validation.py†L1-L220】【F:monGARS/core/long_haul_validation.py†L156-L226】
 
 ## Design Tenets
 
