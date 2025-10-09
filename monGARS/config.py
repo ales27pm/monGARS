@@ -4,6 +4,7 @@ import logging
 import os
 import secrets
 import sys
+import uuid
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -568,7 +569,9 @@ def ensure_secret_key(
         else "SECRET_KEY not configured; generated ephemeral key for debug use only."
     )
     log.warning(message)
-    generated_key = secrets.token_urlsafe(64)
+    token = secrets.token_urlsafe(64)
+    suffix = uuid.uuid4().hex
+    generated_key = f"{token}.{suffix}"
     return settings.model_copy(update={"SECRET_KEY": generated_key}), True
 
 
