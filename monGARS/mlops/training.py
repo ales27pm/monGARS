@@ -590,17 +590,19 @@ def train_qlora(
             )
             gpu_ooms += 1
 
-            if oom_retries <= 0:
-                del trainer
-                raise
+            can_retry_gpu = should_retry and gpu_ooms <= oom_retries
 
-            if should_retry and gpu_ooms <= oom_retries:
+            if can_retry_gpu:
                 batch_size = next_batch
                 grad_accum = next_grad
                 del trainer
                 continue
 
-            if use_cuda and allow_cpu_fallback and torch.cuda.is_available():
+            can_fallback_to_cpu = (
+                use_cuda and allow_cpu_fallback and torch.cuda.is_available()
+            )
+
+            if can_fallback_to_cpu:
                 logger.warning(
                     "CUDA OOM persisted after applying backoff; falling back to CPU training",
                     extra={
@@ -618,7 +620,6 @@ def train_qlora(
                 base_args["fp16"] = False
                 use_cuda = False
                 bf16_ok = False
-                os.environ["CUDA_VISIBLE_DEVICES"] = ""
                 move_to_cpu(model)
                 _maybe_empty_cuda_cache()
                 _reset_cuda_peak_memory_stats()
