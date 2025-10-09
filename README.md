@@ -44,12 +44,12 @@ modules so contributors can experiment end-to-end without bespoke tooling.
   accounts, and the Python/TypeScript SDKs ship with documented release
   tooling.【F:monGARS/api/web_api.py†L41-L120】【F:docs/sdk-release-guide.md†L1-L80】【F:docs/sdk-overview.md†L1-L112】
 - **Phase 6 – Self-Improvement & Research**: Automated MNTP self-training and
-  reinforcement-learning loops run through the evolution orchestrator and
-  long-haul validator with operator approvals, though sustained multi-replica
-  testing remains in flight.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L200】【F:tests/test_long_haul_validation.py†L1-L220】
-- **Open Risks**: Expand long-haul reinforcement dashboards and multi-replica
-  validation so energy telemetry and approval metrics surface before closing
-  the remaining roadmap items.【F:monGARS/core/long_haul_validation.py†L156-L226】【F:docs/codebase_status_report.md†L137-L188】
+  reinforcement-learning loops now operate with scheduled long-haul soak tests,
+  durable observability snapshots, and operator approvals coordinated by the
+  research long-haul service, closing the roadmap milestone.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】【F:tests/test_research_long_haul_service.py†L1-L200】
+- **Open Risks**: Prioritise sustainability—extend the energy tracker feeds and
+  hardware-aware rollouts into shared dashboards before declaring the
+  longevity phase ready for production workloads.【F:modules/evolution_engine/energy.py†L1-L160】【F:docs/codebase_status_report.md†L169-L214】
 
 See [docs/codebase_status_report.md](docs/codebase_status_report.md) for the full
 audit of runtime modules, tests, and deployment assets.【F:docs/codebase_status_report.md†L1-L188】

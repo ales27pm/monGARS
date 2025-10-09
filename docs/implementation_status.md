@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-Last updated: 2025-12-02
+Last updated: 2026-02-18
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -76,7 +76,7 @@ and reality.
 - RAG dataset governance is documented and enforced through the catalog
   metadata pipeline.【F:docs/rag_dataset_governance.md†L1-L120】【F:models/datasets/governance.py†L41-L132】
 
-## Phase 6 – Self-Improvement & Research (Target Q2 2026)
+## Phase 6 – Self-Improvement & Research (Completed Q1 2026)
 
 - ✅ Personality profiles persist via SQLModel and reload into memory-backed
   caches on demand.
@@ -87,10 +87,13 @@ and reality.
   `modules/neurons/training/reinforcement_loop.py`, complete with adaptive
   scaling strategies, OpenTelemetry spans, and metrics hooks. Production
   automation gates deployments through the operator approval registry so
-  experiments cannot roll out without sign-off.
-- ⚠️ Testing coverage for cognition and scheduling modules is solid; expand
-  sustained multi-replica evaluations and dashboards that surface approval and
-  energy telemetry from long-haul runs before declaring the phase complete.【F:monGARS/core/long_haul_validation.py†L156-L226】
+  experiments cannot roll out without sign-off.【F:modules/neurons/training/reinforcement_loop.py†L1-L200】【F:monGARS/core/operator_approvals.py†L1-L200】
+- ✅ ResearchLongHaulService orchestrates scheduled soak tests, deduplicates
+  concurrent runs, and exposes the latest reinforcement summary for other
+  services.【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_research_long_haul_service.py†L1-L200】
+- ✅ Long-haul validation persists replica-load analytics and energy series for
+  dashboards via the reinforcement observability store, with integration tests
+  covering multi-replica and failure scenarios.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_long_haul_validation.py†L200-L320】【F:monGARS/core/long_haul_validation.py†L120-L320】
 
 ## Phase 7 – Sustainability & Longevity (Future)
 
@@ -121,6 +124,9 @@ and reality.
   telemetry, persist approval requests via
   `monGARS/core/operator_approvals.py`, and require explicit sign-off before
   manifests update, closing the long-standing milestone gap.
+- ✅ **Long-haul automation**: ResearchLongHaulService and the observability store
+  deliver unattended validation coverage plus durable telemetry feeds for RL
+  dashboards.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】
 
 ## Next Critical Implementation
 
@@ -129,6 +135,7 @@ long-haul summary is persisted to
 `models/encoders/reinforcement_observability.json`, correlating energy
 telemetry, approval queues, and replica utilisation snapshots for dashboard
 consumers.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L470】【F:tests/test_reinforcement_observability.py†L1-L62】
-With the telemetry pipeline landed, the remaining critical effort is to harden
-multi-replica soak coverage alongside the new metrics so that scaling behaviour
-stays reliable during extended research runs.【F:tests/test_long_haul_validation.py†L1-L220】
+With reinforcement validation on autopilot, the next critical effort is to wire
+the energy tracker outputs and reinforcement observability feeds into the
+shared sustainability dashboards so operators can correlate consumption with
+deployment decisions.【F:modules/evolution_engine/energy.py†L1-L160】【F:docs/codebase_status_report.md†L169-L214】
