@@ -22,7 +22,7 @@ jobs:
           isort --check --diff .
           black --check .
       - name: Run tests
-        run: pytest -q
+        run: pytest
 
   inventory:
     runs-on: ubuntu-latest
