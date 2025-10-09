@@ -37,6 +37,19 @@ def test_get_settings_requires_secret_in_production(monkeypatch):
         config.get_settings()
 
 
+def test_settings_defers_secret_when_vault_configured(monkeypatch):
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    settings = config.Settings(
+        debug=False,
+        JWT_ALGORITHM="HS256",
+        VAULT_URL="https://vault.example",  # noqa: S106 - test fixture value
+        VAULT_TOKEN="unit-test-token",  # noqa: S106 - test fixture value
+    )
+
+    assert settings.SECRET_KEY is None
+
+
 @pytest.mark.parametrize("value", ["True", "true", "1"])
 def test_debug_env_parsing_variants(monkeypatch, value):
     monkeypatch.setenv("DEBUG", value)

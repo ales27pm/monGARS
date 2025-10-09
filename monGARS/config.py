@@ -2,10 +2,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import uuid
-import re
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -141,6 +141,10 @@ class Settings(BaseSettings):
         """Generate ephemeral secrets for debug builds and validate JWT configuration."""
 
         secret_value = (self.SECRET_KEY or "").strip()
+        vault_configured = bool(
+            (self.VAULT_URL or "").strip() and (self.VAULT_TOKEN or "").strip()
+        )
+        deferred_secret = False
 
         if self.debug:
             if not secret_value:
@@ -151,7 +155,11 @@ class Settings(BaseSettings):
             object.__setattr__(self, "SECRET_KEY", secret_value)
         else:
             if not secret_value:
-                raise ValueError("SECRET_KEY must be provided in production")
+                if vault_configured:
+                    deferred_secret = True
+                    secret_value = None
+                else:
+                    raise ValueError("SECRET_KEY must be provided in production")
             object.__setattr__(self, "SECRET_KEY", secret_value)
 
         algorithm = (self.JWT_ALGORITHM or "").strip().upper()
@@ -164,13 +172,13 @@ class Settings(BaseSettings):
 
         symmetric_match = re.fullmatch(r"HS\d+", algorithm)
         if symmetric_match:
-            if not self.SECRET_KEY:
-                raise ValueError(
-                    "Symmetric JWT algorithms require SECRET_KEY to be configured."
-                )
             if private_key or public_key:
                 raise ValueError(
                     "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported with symmetric JWT algorithms."
+                )
+            if not self.SECRET_KEY and not deferred_secret:
+                raise ValueError(
+                    "Symmetric JWT algorithms require SECRET_KEY to be configured."
                 )
         else:
             if not (private_key and public_key):
