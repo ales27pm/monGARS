@@ -13,11 +13,7 @@ Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGAR
 ## Roadmap Alignment
 
 - **API Refinement**
-  - ✅ FastAPI chat/history/token endpoints with validation.
-  - ✅ Django chat UI with progressive enhancement.
-  - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
-  - 🔄 Replaced hard-coded credential stores with database-backed auth flows (the `DEFAULT_USERS` bootstrap in `monGARS/api/web_api.py` still provisions demo accounts until the cleanup lands).
-  - 🚧 Publish polished SDKs and reference clients.
+  - _(No matching roadmap entries for `Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)`)_
 
 ## Endpoint Design
 

@@ -41,13 +41,15 @@ modules so contributors can experiment end-to-end without bespoke tooling.
 ## Project Health
 - **Phase 5 – Web/API Refinement**: REST, WebSocket, and Django operator flows
   are production-ready, credential bootstrap now relies solely on persisted
-  accounts, and the SDK publishing milestone remains open.【F:monGARS/api/web_api.py†L43-L84】【F:docs/codebase_status_report.md†L76-L108】
+  accounts, and the Python/TypeScript SDKs ship with documented release
+  tooling.【F:monGARS/api/web_api.py†L41-L120】【F:docs/sdk-release-guide.md†L1-L80】【F:docs/sdk-overview.md†L1-L112】
 - **Phase 6 – Self-Improvement & Research**: Automated MNTP self-training and
-  reinforcement-learning loops exist, yet integration with operational rollout
-  controls and long-haul observability keeps the milestone in progress.【F:monGARS/core/self_training.py†L1-L160】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】【F:docs/codebase_status_report.md†L109-L144】
-- **Open Risks**: Prioritise packaging the Python/TypeScript SDKs and defining
-  reinforcement-learning rollout guardrails before closing the remaining
-  roadmap items.【F:docs/codebase_status_report.md†L145-L188】
+  reinforcement-learning loops run through the evolution orchestrator and
+  long-haul validator with operator approvals, though sustained multi-replica
+  testing remains in flight.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L200】【F:tests/test_long_haul_validation.py†L1-L220】
+- **Open Risks**: Expand long-haul reinforcement dashboards and multi-replica
+  validation so energy telemetry and approval metrics surface before closing
+  the remaining roadmap items.【F:monGARS/core/long_haul_validation.py†L156-L226】【F:docs/codebase_status_report.md†L137-L188】
 
 See [docs/codebase_status_report.md](docs/codebase_status_report.md) for the full
 audit of runtime modules, tests, and deployment assets.【F:docs/codebase_status_report.md†L1-L188】

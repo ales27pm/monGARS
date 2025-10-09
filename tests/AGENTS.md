@@ -17,12 +17,12 @@ suites.
   - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
   - ✅ Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
   - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
-  - 🔄 Replace demo users in `web_api.py` with the database-backed authentication flow and migrations (default accounts still load at runtime and must be removed).
+  - ✅ Replace demo users in `web_api.py` with the database-backed authentication flow and migrations; bootstrap now persists accounts without shipping in-memory defaults.【F:monGARS/api/authentication.py†L17-L120】【F:monGARS/api/web_api.py†L41-L120】
 - **Research Coverage**
   - ✅ Personality profiles persisted via SQLModel with live adapter updates.
   - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-  - 🔄 Reinforcement-learning research loops ship under `modules/neurons/training/reinforcement_loop.py`; integrate telemetry, rollout, and operator controls before calling the milestone complete.
-  - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts, and distributed workflows.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - 🔄 Expand tests and dashboards for long-running MNTP jobs, multi-replica Ray Serve rollouts, and energy telemetry correlation across distributed workflows.【F:tests/test_long_haul_validation.py†L1-L220】【F:monGARS/core/long_haul_validation.py†L156-L226】
 
 ## Structure & Conventions
 

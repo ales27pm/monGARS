@@ -20,7 +20,7 @@ highlights the non-negotiable guardrails and shared context.
   - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
   - ✅ Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
   - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
-  - 🔄 Replace demo users in `web_api.py` with the database-backed authentication flow and migrations (default accounts still load at runtime and must be removed).
+  - ✅ Replace demo users in `web_api.py` with the database-backed authentication flow and migrations; bootstrap now persists accounts without shipping in-memory defaults.【F:monGARS/api/authentication.py†L17-L120】【F:monGARS/api/web_api.py†L41-L120】
 - **Phase 3 – Hardware & Performance**
   - ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
   - ✅ Multi-architecture build scripts and cache metrics.
@@ -29,11 +29,7 @@ highlights the non-negotiable guardrails and shared context.
   - ✅ Extend Alembic migrations for the newest SQLModel tables, including legacy tables created outside the current ORM layer.
   - ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*` metrics emitted by `LLMIntegration`).
 - **Phase 5 – Web/API Refinement**
-  - ✅ FastAPI chat/history/token endpoints with validation.
-  - ✅ Django chat UI with progressive enhancement.
-  - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
-  - 🔄 Replaced hard-coded credential stores with database-backed auth flows (the `DEFAULT_USERS` bootstrap in `monGARS/api/web_api.py` still provisions demo accounts until the cleanup lands).
-  - 🚧 Publish polished SDKs and reference clients.
+  - _(No matching roadmap entries for `Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)`)_
 
 ## Workflow Guardrails
 

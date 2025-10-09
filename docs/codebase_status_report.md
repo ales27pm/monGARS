@@ -53,8 +53,8 @@ implementation details.
   dependencies are available.【F:modules/neurons/training/mntp_trainer.py†L1-L160】【F:modules/neurons/training/mntp_trainer.py†L161-L320】
 - Reinforcement-learning research loops are implemented in
   `modules/neurons/training/reinforcement_loop.py`, including adaptive scaling
-  strategies and summary telemetry, though integration with production
-  deployment workflows remains optional for now.【F:modules/neurons/training/reinforcement_loop.py†L1-L160】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
+  strategies, operator approvals, and evolution orchestrator integration for
+  manifest rollouts.【F:modules/neurons/training/reinforcement_loop.py†L1-L160】【F:modules/evolution_engine/orchestrator.py†L360-L440】
 - `monGARS/core/self_training.py` orchestrates automated self-improvement by
   curating records, persisting anonymised datasets, and launching MNTP training
   runs on a schedule.【F:monGARS/core/self_training.py†L1-L160】【F:monGARS/core/self_training.py†L161-L320】
@@ -95,9 +95,9 @@ implementation details.
 - **Credential Hardening** – legacy bootstrap accounts were removed from FastAPI;
   audit existing deployments to ensure no environments still rely on the retired
   defaults before rotating secrets.【F:monGARS/api/web_api.py†L41-L88】
-- **Reinforcement Learning Integration** – the research loop is functional yet
-  not wired into production automation, so observability and rollout policies
-  need definition before declaring the phase complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
+- **Long-Haul Observability** – reinforcement runs emit energy and approval
+  metrics, but shared dashboards and multi-replica soak coverage still need to
+  be delivered before treating the loop as production hardened.【F:monGARS/core/long_haul_validation.py†L156-L226】【F:tests/test_long_haul_validation.py†L1-L220】
 - ✅ **RAG Governance** – retention metadata, automated scrubbing, and documented
   export flows keep curated artefacts compliant as partner integrations scale.【F:docs/rag_dataset_governance.md†L1-L160】
 
@@ -109,11 +109,11 @@ implementation details.
 | 3 – Hardware & Performance | ✅ Complete | Scheduler metrics, worker tuning, and Ray Serve integration are implemented.【F:monGARS/utils/hardware.py†L1-L120】【F:monGARS/core/distributed_scheduler.py†L1-L200】【F:monGARS/core/llm_integration.py†L1-L200】 |
 | 4 – Collaborative Networking | ✅ Complete | Peer telemetry, load-aware scheduling, and Sommeil optimisation loops are shipping.【F:monGARS/core/peer.py†L1-L200】【F:monGARS/core/sommeil.py†L1-L160】 |
 | 5 – Web/API Refinement | ✅ Complete | FastAPI endpoints, WebSocket streaming, and published SDK packages cover partner integrations end-to-end.【F:monGARS/api/web_api.py†L41-L88】【F:docs/sdk-release-guide.md†L1-L160】 |
-| 6 – Self-Improvement & Research | 🔄 In Progress | Self-training and RL tooling exist, yet reinforcement runs are not integrated and long-haul tests are pending.【F:monGARS/core/self_training.py†L1-L200】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】 |
+| 6 – Self-Improvement & Research | 🔄 In Progress | Self-training and RL tooling drive orchestrated runs and approvals; remaining work focuses on multi-replica soak tests and observability dashboards.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:tests/test_long_haul_validation.py†L1-L220】 |
 | 7 – Sustainability & Longevity | 🌱 Planned | Evolution engine and energy tracking are present, but cross-node artefact sharing and energy dashboards remain design items.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:modules/evolution_engine/energy.py†L1-L160】 |
 
 ## Recommended Next Steps
-1. Define an integration plan for reinforcement-learning loops, including
-   telemetry, rollback, and operator controls, before marking Phase 6 complete.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
-2. Deliver production-ready controls for the reinforcement-learning loop so it
-   can run alongside self-training without manual babysitting.【F:modules/neurons/training/reinforcement_loop.py†L320-L520】
+1. Instrument shared dashboards and alerts that surface long-haul reinforcement
+   energy usage, approval queues, and reward metrics for operators.【F:monGARS/core/long_haul_validation.py†L156-L226】
+2. Expand sustained multi-replica tests to stress the orchestrated reinforcement
+   loop alongside self-training workloads.【F:tests/test_long_haul_validation.py†L1-L220】【F:tests/test_long_haul_validation.py†L220-L320】

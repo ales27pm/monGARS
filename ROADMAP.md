@@ -9,9 +9,9 @@ required to reach production readiness.
 - ✅ Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
 - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude
   secrets and build artefacts.
-- 🔄 Replace demo users in `web_api.py` with the database-backed authentication
-  flow and migrations (default accounts still load at runtime and must be
-  removed).
+- ✅ Replace demo users in `web_api.py` with the database-backed authentication
+  flow and migrations; bootstrap now persists accounts without shipping
+  in-memory defaults.【F:monGARS/api/authentication.py†L17-L120】【F:monGARS/api/web_api.py†L41-L120】
 
 ## Phase 1 – Core Infrastructure (✅ Completed Q1 2025)
 
@@ -44,14 +44,14 @@ required to reach production readiness.
 - ✅ Implemented load-aware scheduling strategies and shared optimisation telemetry
   across nodes.
 
-## Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)
+## Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)
 
 - ✅ FastAPI chat/history/token endpoints with validation.
 - ✅ Django chat UI with progressive enhancement.
 - ✅ FastAPI WebSocket handler with ticket verification, history replay, and
   streaming guarded by `WS_ENABLE_EVENTS`.
 - ✅ Replaced hard-coded credential stores with database-backed auth flows;
-  FastAPI no longer seeds demo credentials at startup.
+  FastAPI no longer seeds demo credentials at startup.【F:monGARS/api/web_api.py†L41-L120】
 - ✅ Publish polished SDKs and reference clients with documented release flows.【F:docs/sdk-release-guide.md†L1-L160】【F:docs/sdk-overview.md†L1-L120】
 
 ## Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)
@@ -59,11 +59,12 @@ required to reach production readiness.
 - ✅ Personality profiles persisted via SQLModel with live adapter updates.
 - ✅ Self-training cycles produce real adapter artefacts via
   `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-- 🔄 Reinforcement-learning research loops ship under
-  `modules/neurons/training/reinforcement_loop.py`; integrate telemetry,
-  rollout, and operator controls before calling the milestone complete.
-- 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts,
-  and distributed workflows.
+- ✅ Reinforcement-learning research loops run through the evolution
+  orchestrator, operator approvals, and long-haul validator with telemetry and
+  manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+- 🔄 Expand tests and dashboards for long-running MNTP jobs, multi-replica Ray
+  Serve rollouts, and energy telemetry correlation across distributed
+  workflows.【F:tests/test_long_haul_validation.py†L1-L220】【F:monGARS/core/long_haul_validation.py†L156-L226】
 
 ## Phase 7 – Sustainability & Longevity (🌱 Future)
 
