@@ -37,6 +37,19 @@ def test_get_settings_requires_secret_in_production(monkeypatch):
         config.get_settings()
 
 
+def test_settings_defers_secret_when_vault_configured(monkeypatch):
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    settings = config.Settings(
+        debug=False,
+        JWT_ALGORITHM="HS256",
+        VAULT_URL="https://vault.example",  # noqa: S106 - test fixture value
+        VAULT_TOKEN="unit-test-token",  # noqa: S106 - test fixture value
+    )
+
+    assert settings.SECRET_KEY is None
+
+
 @pytest.mark.parametrize("value", ["True", "true", "1"])
 def test_debug_env_parsing_variants(monkeypatch, value):
     monkeypatch.setenv("DEBUG", value)
@@ -65,7 +78,7 @@ def test_otel_debug_env_parsing(monkeypatch, value):
 def test_settings_rejects_private_keys_when_hs256_locked(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
 
-    with pytest.raises(ValueError, match="not supported when JWT_ALGORITHM is HS256"):
+    with pytest.raises(ValueError, match="not supported with symmetric JWT algorithms"):
         config.Settings(
             JWT_ALGORITHM="HS256",
             JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nfoo\n-----END PRIVATE KEY-----",
@@ -76,7 +89,9 @@ def test_settings_rejects_private_keys_when_hs256_locked(monkeypatch):
 def test_settings_reject_non_hs256_algorithm(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
 
-    with pytest.raises(ValueError, match="must be set to HS256"):
+    with pytest.raises(
+        ValueError, match="Asymmetric JWT algorithms require both JWT_PRIVATE_KEY"
+    ):
         config.Settings(JWT_ALGORITHM="RS256")
 
 
@@ -91,10 +106,11 @@ def test_validate_jwt_configuration_allows_hs256_with_secret(monkeypatch):
 def test_validate_jwt_configuration_requires_secret_key(monkeypatch):
     monkeypatch.delenv("SECRET_KEY", raising=False)
 
-    settings = config.Settings(JWT_ALGORITHM="HS256")
+    settings = config.Settings(JWT_ALGORITHM="HS256", SECRET_KEY="unit-test-secret")
+    settings_without_secret = settings.model_copy(update={"SECRET_KEY": None})
 
-    with pytest.raises(ValueError, match="requires SECRET_KEY"):
-        config.validate_jwt_configuration(settings)
+    with pytest.raises(ValueError, match="require SECRET_KEY"):
+        config.validate_jwt_configuration(settings_without_secret)
 
 
 def test_database_url_password_override(monkeypatch):

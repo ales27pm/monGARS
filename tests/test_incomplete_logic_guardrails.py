@@ -26,6 +26,7 @@ def _iter_python_files(root: Path) -> list[Path]:
         "build",
         "dist",
         "node_modules",
+        "unsloth_compiled_cache",
         "venv",
     }
 

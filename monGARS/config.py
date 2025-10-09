@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import uuid
@@ -56,6 +57,14 @@ def _parse_env_bool(value: Any) -> bool:
 
 
 EnvBool = Annotated[bool, BeforeValidator(_parse_env_bool)]
+
+
+def _generate_secret_key() -> str:
+    """Create a high-entropy secret key suitable for symmetric JWT signing."""
+
+    token = secrets.token_urlsafe(64)
+    suffix = uuid.uuid4().hex
+    return f"{token}.{suffix}"
 
 
 class HardwareHeuristics(BaseModel):
@@ -116,31 +125,67 @@ class Settings(BaseSettings):
     JWT_PRIVATE_KEY: str | None = Field(
         default=None,
         description=(
-            "Deprecated placeholder for RSA support. Ignored while JWT_ALGORITHM is locked to HS256."
+            "PEM-encoded private key used for asymmetric JWT algorithms (e.g. RS256)."
         ),
     )
     JWT_PUBLIC_KEY: str | None = Field(
         default=None,
         description=(
-            "Deprecated placeholder for RSA support. Ignored while JWT_ALGORITHM is locked to HS256."
+            "PEM-encoded public key paired with JWT_PRIVATE_KEY for asymmetric algorithms."
         ),
     )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
 
     @model_validator(mode="after")
-    def validate_jwt_keys(self) -> "Settings":
-        """Ensure the configured JWT algorithm matches the provided key material."""
+    def _derive_secret_key_and_validate(self) -> "Settings":
+        """Generate ephemeral secrets for debug builds and validate JWT configuration."""
 
-        algorithm = self.JWT_ALGORITHM.upper()
-        if algorithm != "HS256":
-            raise ValueError(
-                "JWT_ALGORITHM must be set to HS256 until managed key storage is available."
-            )
-        if self.JWT_PRIVATE_KEY or self.JWT_PUBLIC_KEY:
-            raise ValueError(
-                "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported when JWT_ALGORITHM is HS256."
-            )
-        object.__setattr__(self, "JWT_ALGORITHM", "HS256")
+        secret_value = (self.SECRET_KEY or "").strip()
+        vault_configured = bool(
+            (self.VAULT_URL or "").strip() and (self.VAULT_TOKEN or "").strip()
+        )
+        deferred_secret = False
+
+        if self.debug:
+            if not secret_value:
+                secret_value = _generate_secret_key()
+                log.warning(
+                    "SECRET_KEY not configured; generated ephemeral key for debug use only."
+                )
+            object.__setattr__(self, "SECRET_KEY", secret_value)
+        else:
+            if not secret_value:
+                if vault_configured:
+                    deferred_secret = True
+                    secret_value = None
+                else:
+                    raise ValueError("SECRET_KEY must be provided in production")
+            object.__setattr__(self, "SECRET_KEY", secret_value)
+
+        algorithm = (self.JWT_ALGORITHM or "").strip().upper()
+        object.__setattr__(self, "JWT_ALGORITHM", algorithm)
+
+        private_key = (self.JWT_PRIVATE_KEY or "").strip() or None
+        public_key = (self.JWT_PUBLIC_KEY or "").strip() or None
+        object.__setattr__(self, "JWT_PRIVATE_KEY", private_key)
+        object.__setattr__(self, "JWT_PUBLIC_KEY", public_key)
+
+        symmetric_match = re.fullmatch(r"HS\d+", algorithm)
+        if symmetric_match:
+            if private_key or public_key:
+                raise ValueError(
+                    "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported with symmetric JWT algorithms."
+                )
+            if not self.SECRET_KEY and not deferred_secret:
+                raise ValueError(
+                    "Symmetric JWT algorithms require SECRET_KEY to be configured."
+                )
+        else:
+            if not (private_key and public_key):
+                raise ValueError(
+                    "Asymmetric JWT algorithms require both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY."
+                )
+
         return self
 
     database_url: AnyUrl = Field(
@@ -569,9 +614,7 @@ def ensure_secret_key(
         else "SECRET_KEY not configured; generated ephemeral key for debug use only."
     )
     log.warning(message)
-    token = secrets.token_urlsafe(64)
-    suffix = uuid.uuid4().hex
-    generated_key = f"{token}.{suffix}"
+    generated_key = _generate_secret_key()
     return settings.model_copy(update={"SECRET_KEY": generated_key}), True
 
 
@@ -579,16 +622,23 @@ def validate_jwt_configuration(settings: Settings) -> None:
     """Validate that JWT settings have consistent key material."""
 
     algorithm = settings.JWT_ALGORITHM.upper()
-    if algorithm != "HS256":
+    symmetric_algorithms = {"HS256", "HS384", "HS512"}
+
+    if algorithm in symmetric_algorithms:
+        if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
+            raise ValueError(
+                "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must not be defined when using symmetric JWT algorithms."
+            )
+        if not settings.SECRET_KEY:
+            raise ValueError(
+                "Symmetric JWT algorithms require SECRET_KEY to be configured."
+            )
+        return
+
+    if not (settings.JWT_PRIVATE_KEY and settings.JWT_PUBLIC_KEY):
         raise ValueError(
-            "JWT_ALGORITHM must be HS256 to match the deployed secret management strategy."
+            "Asymmetric JWT algorithms require both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY."
         )
-    if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
-        raise ValueError(
-            "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must not be defined when using HS256."
-        )
-    if not settings.SECRET_KEY:
-        raise ValueError("HS256 requires SECRET_KEY to be configured.")
 
 
 async def fetch_secrets_from_vault(
