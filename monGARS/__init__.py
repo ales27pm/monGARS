@@ -13,6 +13,34 @@ underlying dependency change.
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import warnings
+
+try:  # pragma: no cover - optional dependency
+    importlib.import_module("unsloth")
+except Exception:  # pragma: no cover - optional dependency missing or failing
+    pass
+
+_original_simplefilter = warnings.simplefilter
+
+
+def _awq_safe_simplefilter(
+    action: str,
+    category: type[Warning] | None = None,
+    lineno: int = 0,
+    append: bool = False,
+) -> None:
+    if action == "default" and category is DeprecationWarning:
+        for frame in inspect.stack():
+            if "awq/__init__.py" in frame.filename:
+                _original_simplefilter("ignore", category, lineno, append)
+                return
+    _original_simplefilter(action, category, lineno, append)
+
+
+warnings.simplefilter = _awq_safe_simplefilter
+
 import torch
 from torch import nn
 from transformers import activations as _transformers_activations

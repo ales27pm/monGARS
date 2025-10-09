@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import os
 import tempfile
 import time
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,15 +28,47 @@ from transformers import (
     default_data_collator,
 )
 
+_original_simplefilter = warnings.simplefilter
+
+
+def _suppress_awq_simplefilter(
+    action: str,
+    category: type[Warning] | None = None,
+    lineno: int = 0,
+    append: bool = False,
+) -> None:
+    if action == "default" and category is DeprecationWarning:
+        _original_simplefilter("ignore", category, lineno, append)
+        return
+    _original_simplefilter(action, category, lineno, append)
+
+
+warnings.simplefilter = _suppress_awq_simplefilter
 try:
     from peft import LoraConfig, PeftModel, get_peft_model
 except ImportError as exc:  # pragma: no cover - dependency missing at import time
     raise RuntimeError(
         "peft is required for style fine-tuning. Install the 'peft' package."
     ) from exc
+finally:
+    warnings.simplefilter = _original_simplefilter
 
 
 logger = logging.getLogger(__name__)
+
+
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=r".*AutoAWQ is officially deprecated.*",
+)
+
+try:  # pragma: no cover - deterministic signature inspection
+    _LORA_CONFIG_SUPPORTS_FAN_IN_OUT = (
+        "fan_in_fan_out" in inspect.signature(LoraConfig.__init__).parameters
+    )
+except (TypeError, ValueError):  # pragma: no cover - defensive guard
+    _LORA_CONFIG_SUPPORTS_FAN_IN_OUT = False
 
 
 def _resolve_hidden_size(config: AutoConfig) -> int:
@@ -54,6 +88,15 @@ def _default_device() -> str:
 def _fingerprint_interactions(interactions: Sequence[dict[str, str]]) -> str:
     payload = json.dumps(interactions, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _model_requires_fan_in_fan_out(model: PreTrainedModel) -> bool:
+    """Detect whether the underlying model relies on GPT-style Conv1D layers."""
+
+    for module in model.modules():
+        if module.__class__.__name__ == "Conv1D":
+            return True
+    return False
 
 
 @dataclass
@@ -233,13 +276,18 @@ class AdapterTrainer:
             fingerprint,
         )
         training_model = self._create_model(trainable=True)
-        lora_config = LoraConfig(
-            r=self._config.lora_r,
-            lora_alpha=self._config.lora_alpha,
-            lora_dropout=self._config.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
+        lora_kwargs = {
+            "r": self._config.lora_r,
+            "lora_alpha": self._config.lora_alpha,
+            "lora_dropout": self._config.lora_dropout,
+            "bias": "none",
+            "task_type": "CAUSAL_LM",
+        }
+        if _LORA_CONFIG_SUPPORTS_FAN_IN_OUT:
+            lora_kwargs["fan_in_fan_out"] = _model_requires_fan_in_fan_out(
+                training_model
+            )
+        lora_config = LoraConfig(**lora_kwargs)
         training_model = get_peft_model(training_model, lora_config)
         dataset = ConversationDataset(
             self._tokenizer,
@@ -261,6 +309,7 @@ class AdapterTrainer:
             report_to=[],
             optim="adamw_torch",
             fp16=False,
+            dataloader_pin_memory=torch.cuda.is_available(),
         )
         trainer = Trainer(
             model=training_model,

@@ -18,14 +18,7 @@ from typing import Any
 
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
 
-try:  # pragma: no cover - optional dependency at runtime
-    import torch
-except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-    torch = None  # type: ignore[assignment]
-    _TORCH_IMPORT_ERROR = exc
-else:
-    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
-
+# Import Unsloth before torch/transformer ecosystems to activate its patches.
 try:  # pragma: no cover - optional dependency at runtime
     from unsloth import FastLanguageModel  # type: ignore
 except (ModuleNotFoundError, _NotImplError) as exc:  # pragma: no cover
@@ -36,6 +29,14 @@ except Exception as exc:  # pragma: no cover - defensive guardrail
     _UNSLOTH_IMPORT_ERROR = exc
 else:
     _UNSLOTH_IMPORT_ERROR = None
+
+try:  # pragma: no cover - optional dependency at runtime
+    import torch
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 
 try:  # pragma: no cover - optional helper for GPU diagnostics
     import GPUtil  # type: ignore

@@ -38,6 +38,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Protocol, Sequence
 
+# Import Unsloth as early as possible to guarantee its patches execute before
+# transformer-based helpers from TRL are loaded.
+try:  # pragma: no cover - optional dependency for reasoning loop
+    from unsloth import FastLanguageModel  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
+    FastLanguageModel = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive guard
+    FastLanguageModel = None  # type: ignore[assignment]
+
 try:  # pragma: no cover - optional dependency at runtime
     from trl import DPOConfig, DPOTrainer  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - trl is optional in tests
@@ -54,13 +63,6 @@ try:  # pragma: no cover - optional dependency for reasoning loop
     import torch
 except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
     torch = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - optional dependency for reasoning loop
-    from unsloth import FastLanguageModel  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
-    FastLanguageModel = None  # type: ignore[assignment]
-except Exception:  # pragma: no cover - defensive guard
-    FastLanguageModel = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency at runtime
     from datasets import Dataset  # type: ignore
