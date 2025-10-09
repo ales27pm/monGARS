@@ -8,6 +8,12 @@ __pycache__/
 .DS_Store
 .env
 inventory.json
+# Vendor build artifacts
+vendor/llm2vec_monGARS/build/
+
+# Test artifacts
+mongars_test.db
+models/encoders/cycle-*/
 .vscode/
 .venv/
 mongars_local.db
