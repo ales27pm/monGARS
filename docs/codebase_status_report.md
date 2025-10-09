@@ -82,6 +82,9 @@ implementation details.
 - `monGARS/core/peer.py` encrypts inter-node messages, caches telemetry, and
   supports dynamic bearer token rotation to keep distributed coordination secure
   and observable.【F:monGARS/core/peer.py†L1-L200】【F:monGARS/core/peer.py†L200-L360】
+- `ResearchLongHaulService` schedules unattended validation cycles, deduplicates
+  concurrent jobs, and captures the latest reinforcement summary for downstream
+  consumers, ensuring RL telemetry remains fresh without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_research_long_haul_service.py†L1-L200】
 
 ## Tests & Guardrails
 
@@ -106,10 +109,10 @@ implementation details.
 - **Credential Hardening** – legacy bootstrap accounts were removed from FastAPI;
   audit existing deployments to ensure no environments still rely on the retired
   defaults before rotating secrets.【F:monGARS/api/web_api.py†L41-L88】
-- **Long-Haul Observability** – reinforcement runs now persist energy,
-  approvals, and replica telemetry for dashboards via the durable
-  observability store, with only extended multi-replica soak coverage
-  outstanding before calling the loop production-hardened.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L470】【F:tests/test_long_haul_validation.py†L1-L220】
+- **Sustainability Dashboards** – energy tracking, reinforcement observability,
+  and replica analytics are persisted locally; the remaining gap is wiring those
+  feeds into shared dashboards and alerting so operators can act on consumption
+  trends.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:docs/implementation_status.md†L130-L160】
 - ✅ **RAG Governance** – retention metadata, automated scrubbing, and documented
   export flows keep curated artefacts compliant as partner integrations scale.【F:docs/rag_dataset_governance.md†L1-L160】
 
@@ -122,12 +125,12 @@ implementation details.
 | 3 – Hardware & Performance      | ✅ Complete    | Scheduler metrics, worker tuning, and Ray Serve integration are implemented.【F:monGARS/utils/hardware.py†L1-L120】【F:monGARS/core/distributed_scheduler.py†L1-L200】【F:monGARS/core/llm_integration.py†L1-L200】                                          |
 | 4 – Collaborative Networking    | ✅ Complete    | Peer telemetry, load-aware scheduling, and Sommeil optimisation loops are shipping.【F:monGARS/core/peer.py†L1-L200】【F:monGARS/core/sommeil.py†L1-L160】                                                                                                   |
 | 5 – Web/API Refinement          | ✅ Complete    | FastAPI endpoints, WebSocket streaming, and published SDK packages cover partner integrations end-to-end.【F:monGARS/api/web_api.py†L41-L88】【F:docs/sdk-release-guide.md†L1-L160】                                                                         |
-| 6 – Self-Improvement & Research | 🔄 In Progress | Self-training and RL tooling drive orchestrated runs and approvals; remaining work focuses on multi-replica soak tests and observability dashboards.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:tests/test_long_haul_validation.py†L1-L220】 |
+| 6 – Self-Improvement & Research | ✅ Complete    | Research long-haul automation, observability snapshots, and multi-replica coverage keep reinforcement loops production-ready.【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】 |
 | 7 – Sustainability & Longevity  | 🌱 Planned     | Evolution engine and energy tracking are present, but cross-node artefact sharing and energy dashboards remain design items.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:modules/evolution_engine/energy.py†L1-L160】                           |
 
 ## Recommended Next Steps
 
-1. Instrument shared dashboards and alerts that surface long-haul reinforcement
-   energy usage, approval queues, and reward metrics for operators.【F:monGARS/core/long_haul_validation.py†L156-L226】
-2. Expand sustained multi-replica tests to stress the orchestrated reinforcement
-   loop alongside self-training workloads.【F:tests/test_long_haul_validation.py†L1-L220】【F:tests/test_long_haul_validation.py†L220-L320】
+1. Integrate reinforcement observability and energy tracker outputs into shared
+   dashboards/alerts so sustainability metrics guide deployment decisions.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
+2. Extend sustainability analytics to include cross-node artefact reuse and
+   hardware-aware rollouts once dashboards surface baseline consumption trends.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:docs/implementation_status.md†L150-L160】

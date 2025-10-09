@@ -2,56 +2,53 @@
 
 ## Summary
 
-Reinforcement-learning (RL) runs now stream approvals, telemetry, and artefacts
-through the orchestrator and long-haul validator. The next priority is
-operationalising that data: shared dashboards and sustained multi-replica soak
-tests need to land so operators can track RL output alongside self-training.
-【F:docs/implementation_status.md†L96-L140】【F:docs/codebase_status_report.md†L104-L160】
+Reinforcement validation is now automated and observable; the next priority is
+connecting the sustainability data exhaust—energy tracker metrics,
+reinforcement observability snapshots, and hardware-aware rollouts—to shared
+dashboards and alerts so operators can act on consumption trends in real
+time.【F:docs/implementation_status.md†L130-L160】【F:docs/codebase_status_report.md†L169-L214】
 
 ## Supporting Signals
 
-- **Implementation Status Report** – highlights the need for durable
-  observability before Phase 6 can close.【F:docs/implementation_status.md†L124-L160】
-- **Codebase Status Report** – flags long-haul observability as the primary
-  remaining risk and calls for multi-replica soak coverage.【F:docs/codebase_status_report.md†L96-L160】
-- **Evolution Engine Orchestrator & Validator** – already emit approvals,
-  rewards, and energy metrics, providing the data feeds dashboards must
-  visualise.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L156-L226】
+- **Implementation Status Report** – Phase 6 closed with observability feeds and
+  now shifts focus to energy dashboards for the sustainability
+  milestone.【F:docs/implementation_status.md†L130-L160】
+- **Codebase Status Report** – lists sustainability dashboards as the top risk
+  now that long-haul validation runs autonomously.【F:docs/codebase_status_report.md†L169-L214】
+- **Energy Tracker & Observability Store** – already emit the consumption data
+  that dashboards must surface for operators.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
 
-## Rationale for Prioritising RL Operationalisation
+## Rationale for Prioritising Sustainability Telemetry
 
-1. **Experiment Velocity** – moving RL into the automated cycle reduces the
-   manual work currently required to evaluate policy improvements.
-2. **Safety & Observability** – explicit telemetry and guardrails prevent
-   regressions when exploring novel reward models.
-3. **Partner Readiness** – RL-backed suggestions unlock new product
-   capabilities, but only once the rollout and rollback story matches the rest
-   of the platform.
+1. **Operational Stewardship** – grounding approvals in consumption data ensures
+   reinforcement experiments align with sustainability goals.
+2. **Capacity Planning** – dashboards that unify reward curves and energy trends
+   let operators schedule GPU-intensive work during favourable energy windows.
+3. **Partner Readiness** – downstream teams need actionable sustainability
+   metrics before enabling reinforcement-driven features in production.
 
 ## Implementation Outline
 
-1. **Dashboards & Alerts** – wire the long-haul metrics (reward curves, approval
-   counts, energy usage) into shared dashboards with alert thresholds for
-   regressions.【F:monGARS/core/long_haul_validation.py†L156-L226】
-2. **Soak & Multi-Replica Tests** – extend the long-haul integration suite to
-   exercise concurrent RL and MNTP runs with multiple Ray replicas to flush out
-   scheduler and manifest contention.【F:tests/test_long_haul_validation.py†L1-L220】
-3. **Operator Runbooks** – update the reinforcement rollout guide with the new
-   dashboard links and alert handling procedures so on-call staff can respond
-   quickly.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
+1. **Dashboards & Alerts** – surface reinforcement observability snapshots,
+   energy tracker metrics, and replica analytics in shared dashboards with alert
+   thresholds for regressions.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:modules/evolution_engine/energy.py†L1-L160】
+2. **Hardware-Aware Rollouts** – correlate the dashboard signals with evolution
+   engine scheduling so energy-heavy experiments favour efficient replicas.【F:modules/evolution_engine/orchestrator.py†L1-L160】
+3. **Operator Runbooks** – extend the sustainability playbook with dashboard
+   links, remediation flows, and escalation paths once metrics are live.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
 
 ## Success Criteria & Validation
 
-- RL training cycles emit metrics and logs that surface in the same dashboards
-  as self-training events.
-- Deployment of RL artefacts requires an explicit approval or automated policy
-  pass, with clear rollback instructions surfaced alongside dashboards.【F:monGARS/core/long_haul_validation.py†L156-L226】
-- Updated documentation (including runbooks) enables on-call operators to triage
-  RL incidents without specialist knowledge.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
+- Reinforcement and sustainability metrics co-exist in the shared dashboards
+  alongside self-training events.
+- Energy consumption trends trigger actionable alerts with documented
+  remediation steps for operators.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
+- Updated documentation enables on-call staff to balance reinforcement outcomes
+  with sustainability objectives without specialist knowledge.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
 
-## Follow-On Work Once RL Is Operational
+## Follow-On Work Once Sustainability Dashboards Ship
 
-- Resume energy-efficiency research outlined for the sustainability phase once
-  RL observability is standardised across deployments.【F:modules/evolution_engine/energy.py†L1-L120】
-- Expand partner telemetry to correlate RL-driven responses with engagement and
-  satisfaction metrics using the shared dashboards as the foundation.【F:docs/codebase_status_report.md†L137-L188】
+- Resume advanced energy-efficiency experiments (carbon-aware scheduling,
+  replica bin-packing) after dashboards surface baseline trends.【F:modules/evolution_engine/energy.py†L1-L160】
+- Expand partner telemetry to correlate reinforcement-driven responses with
+  engagement metrics leveraging the new sustainability dashboards.【F:docs/codebase_status_report.md†L169-L214】
