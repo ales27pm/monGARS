@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from time import monotonic
 from typing import Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
@@ -49,6 +51,8 @@ class Iris:
         backoff_factor: float = 0.5,
         max_content_length: int = 1_500_000,
         headers: Mapping[str, str] | None = None,
+        search_cache_ttl: float | None = 300.0,
+        search_cache_size: int = 128,
     ) -> None:
         if max_concurrency <= 0:
             msg = "max_concurrency must be a positive integer"
@@ -59,12 +63,22 @@ class Iris:
         if max_content_length <= 0:
             msg = "max_content_length must be positive"
             raise ValueError(msg)
+        if search_cache_ttl is not None and search_cache_ttl <= 0:
+            msg = "search_cache_ttl must be positive when provided"
+            raise ValueError(msg)
+        if search_cache_size <= 0:
+            msg = "search_cache_size must be a positive integer"
+            raise ValueError(msg)
 
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._timeout = httpx.Timeout(request_timeout)
         self._max_retries = max_retries
         self._backoff_factor = backoff_factor
         self._max_content_length = max_content_length
+        self._search_cache_ttl = search_cache_ttl
+        self._search_cache_size = search_cache_size
+        self._search_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self._search_cache_lock = asyncio.Lock()
         merged_headers = dict(_DEFAULT_HEADERS)
         if headers:
             merged_headers.update(headers)
@@ -102,6 +116,11 @@ class Iris:
             return None
 
         search_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+        cache_key = query.casefold()
+
+        cached = await self._get_cached_snippet(cache_key)
+        if cached is not None:
+            return cached
 
         async with self._semaphore:
             response = await self._request_with_retries("GET", search_url)
@@ -134,9 +153,14 @@ class Iris:
             if document:
                 best_candidate = self._select_snippet(document, snippet_text)
                 if best_candidate:
+                    await self._store_cached_snippet(cache_key, best_candidate)
                     return best_candidate
 
-        return snippet_text or None
+        if snippet_text:
+            await self._store_cached_snippet(cache_key, snippet_text)
+            return snippet_text
+
+        return None
 
     async def _request_with_retries(
         self, method: str, url: str, **kwargs: object
@@ -337,3 +361,28 @@ class Iris:
         if document.text:
             return document.text[:500]
         return fallback
+
+    async def _get_cached_snippet(self, key: str) -> str | None:
+        ttl = self._search_cache_ttl
+        if ttl is None:
+            return None
+        async with self._search_cache_lock:
+            cached = self._search_cache.get(key)
+            if cached is None:
+                return None
+            timestamp, snippet = cached
+            if monotonic() - timestamp > ttl:
+                self._search_cache.pop(key, None)
+                return None
+            self._search_cache.move_to_end(key)
+            return snippet
+
+    async def _store_cached_snippet(self, key: str, snippet: str) -> None:
+        ttl = self._search_cache_ttl
+        if ttl is None:
+            return
+        async with self._search_cache_lock:
+            self._search_cache[key] = (monotonic(), snippet)
+            self._search_cache.move_to_end(key)
+            while len(self._search_cache) > self._search_cache_size:
+                self._search_cache.popitem(last=False)

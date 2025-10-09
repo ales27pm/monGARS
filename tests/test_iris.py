@@ -249,6 +249,97 @@ async def test_search_falls_back_to_snippet(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_search_caches_snippets(monkeypatch):
+    from monGARS.core.iris import Iris, IrisDocument
+
+    html = """
+    <html>
+      <body>
+        <div class="result">
+          <a class="result__a" href="https://example.com">Example</a>
+          <div class="result__snippet">Example snippet</div>
+        </div>
+      </body>
+    </html>
+    """
+    search_response = make_response("https://duckduckgo.com/html/?q=test", html)
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        ClientFactory(responses=[search_response]),
+    )
+
+    iris = Iris(search_cache_ttl=60.0, search_cache_size=4)
+
+    fetch_calls = 0
+
+    async def fake_fetch_document(url):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return IrisDocument(url=url, text="Doc text", summary="Doc summary")
+
+    monkeypatch.setattr(iris, "fetch_document", fake_fetch_document)
+
+    result = await iris.search("Test Query")
+    assert result == "Doc summary"
+    assert fetch_calls == 1
+
+    result_cached = await iris.search("Test Query")
+    assert result_cached == "Doc summary"
+    assert fetch_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_search_cache_expires(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    html_first = """
+    <html>
+      <body>
+        <div class="result">
+          <div class="result__snippet">Snippet 1</div>
+        </div>
+      </body>
+    </html>
+    """
+    html_second = html_first.replace("Snippet 1", "Snippet 2")
+    responses = [
+        make_response("https://duckduckgo.com/html/?q=test", html_first),
+        make_response("https://duckduckgo.com/html/?q=test", html_second),
+    ]
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        ClientFactory(responses=responses),
+    )
+
+    class FakeMonotonic:
+        def __init__(self):
+            self.value = 0.0
+
+        def advance(self, amount: float) -> None:
+            self.value += amount
+
+        def __call__(self) -> float:
+            return self.value
+
+    fake_monotonic = FakeMonotonic()
+    monkeypatch.setattr("monGARS.core.iris.monotonic", fake_monotonic)
+
+    iris = Iris(search_cache_ttl=1.0, search_cache_size=2)
+
+    first = await iris.search("Cache Example")
+    assert first == "Snippet 1"
+
+    fake_monotonic.advance(2.0)
+
+    second = await iris.search("Cache Example")
+    assert second == "Snippet 2"
+
+
+@pytest.mark.asyncio
 async def test_fetch_document_returns_structured_payload(monkeypatch):
     from monGARS.core.iris import Iris
 
