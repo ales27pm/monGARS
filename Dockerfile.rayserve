@@ -35,12 +35,13 @@ COPY vendor/llm2vec_monGARS /tmp/llm2vec_monGARS
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U --retries 5 pip \
     && pip install --retries 5 --extra-index-url https://download.pytorch.org/whl/cu121 \
-        torch==2.1.2+cu121 \
+        torch==2.3.0+cu121 \
         "ray[serve]==2.9.3" \
         "accelerate>=0.33.0" \
         "peft>=0.13.2" \
         "sentencepiece>=0.2.0" \
-        "vllm>=0.4.2" \
+        "vllm==0.4.2" \
+        "xformers==0.0.26.post1" \
         "transformers>=4.44.2" \
     && pip install --retries 5 /tmp/llm2vec_monGARS \
     && rm -rf /tmp/llm2vec_monGARS

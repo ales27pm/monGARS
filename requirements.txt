@@ -46,7 +46,7 @@ websocket-client>=1.8.0
 websockets>=12.0
 # Optional reinforcement-learning stack; install with the "grpo" extra.
 trl>=0.23.1 ; extra == "grpo"
-vllm>=0.5.0 ; extra == "grpo"
+vllm>=0.4.2,<0.5 ; extra == "grpo"
 pytest
 pytest-asyncio>=0.23.8,<0.25
 alembic>=1.13.2
