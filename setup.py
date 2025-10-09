@@ -55,7 +55,7 @@ setup(
     extras_require={
         "grpo": [
             "trl>=0.23.1",
-            "vllm>=0.5.0",
+            "vllm>=0.4.2,<0.5",
         ],
     },
 )
