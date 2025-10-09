@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+# Import Unsloth as early as possible to ensure its patches activate before
+# transformers/peft modules are loaded.
+try:  # pragma: no cover - optional dependency
+    import unsloth  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback when unsloth missing
+    unsloth = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive guardrail around import time
+    unsloth = None  # type: ignore[assignment]
+
+FastLanguageModel = (
+    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
+    if "unsloth" in globals() and unsloth is not None
+    else None
+)
+
 import hashlib
 import inspect
 import json
@@ -12,15 +27,6 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Sequence
-
-# Import Unsloth as early as possible to ensure its patches activate before
-# transformers/peft modules are loaded.
-try:  # pragma: no cover - optional dependency
-    from unsloth import FastLanguageModel
-except ModuleNotFoundError:  # pragma: no cover - fallback when unsloth missing
-    FastLanguageModel = None  # type: ignore[assignment]
-except Exception:  # pragma: no cover - defensive guardrail around import time
-    FastLanguageModel = None  # type: ignore[assignment]
 
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed

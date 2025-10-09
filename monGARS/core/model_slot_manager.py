@@ -8,27 +8,30 @@ safely offloaded when GPU memory pressure exceeds the configured threshold.
 
 from __future__ import annotations
 
-import builtins
+# Import Unsloth before torch/transformer ecosystems to activate its patches.
+try:  # pragma: no cover - optional dependency at runtime
+    import unsloth  # type: ignore
+except ModuleNotFoundError as exc:  # pragma: no cover
+    unsloth = None  # type: ignore[assignment]
+    _UNSLOTH_IMPORT_ERROR: Exception | None = exc
+except Exception as exc:  # pragma: no cover - defensive guardrail
+    unsloth = None  # type: ignore[assignment]
+    _UNSLOTH_IMPORT_ERROR = exc
+else:
+    _UNSLOTH_IMPORT_ERROR = None
+
+FastLanguageModel = (
+    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
+    if "unsloth" in globals() and unsloth is not None
+    else None
+)
+
 import logging
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-
-_NotImplError = getattr(builtins, "NotImplemented" + "Error")
-
-# Import Unsloth before torch/transformer ecosystems to activate its patches.
-try:  # pragma: no cover - optional dependency at runtime
-    from unsloth import FastLanguageModel  # type: ignore
-except (ModuleNotFoundError, _NotImplError) as exc:  # pragma: no cover
-    FastLanguageModel = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR: Exception | None = exc
-except Exception as exc:  # pragma: no cover - defensive guardrail
-    FastLanguageModel = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR = exc
-else:
-    _UNSLOTH_IMPORT_ERROR = None
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
