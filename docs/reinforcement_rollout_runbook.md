@@ -19,6 +19,9 @@ introduced for RL artefacts.
 - **Evolution Orchestrator** – The orchestrator instantiates
   `ReinforcementLoop` with the approval registry so reasoning adapters cannot be
   published until an operator signs off or a policy approves them automatically.
+- **Carbon-Aware Rollout Policy** – Evolution training cycles consult the
+  sustainability dashboard before executing, logging deferrals when carbon
+  intensity or approval backlogs exceed the configured guardrails.【F:modules/evolution_engine/sustainability.py†L1-L235】【F:modules/evolution_engine/orchestrator.py†L260-L360】
 
 ## Daily Checklist
 
@@ -41,6 +44,10 @@ introduced for RL artefacts.
 3. **Audit Worker Scaling**
    - Check Ray cluster metrics to confirm adaptive scaling decisions align with
      recent batch telemetry.
+4. **Review Carbon-Aware Deferrals**
+   - Inspect `carbon_policy.*` log entries to confirm deferred training cycles
+     align with sustainability expectations and capture follow-up actions when
+     high-emission periods persist.【F:modules/evolution_engine/orchestrator.py†L260-L360】
 
 ## Long-Haul Validation Service
 

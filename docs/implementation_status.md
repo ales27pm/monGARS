@@ -99,6 +99,10 @@ and reality.
 
 - Evolution Engine orchestrates diagnostics and safe optimisation cycles, now
   backed by tangible adapter artefacts.
+- ✅ Carbon-aware rollout policy consults sustainability telemetry before
+  running evolution training cycles, deferring jobs when carbon intensity,
+  approval backlogs, or incident counts breach guardrails, giving operators an
+  actionable sustainability lever.【F:modules/evolution_engine/sustainability.py†L1-L235】【F:modules/evolution_engine/orchestrator.py†L180-L360】
 - Energy-usage reporting, advanced hardware-aware scaling, and cross-node sharing
   of optimisation artefacts remain open research topics.
 
@@ -140,6 +144,7 @@ The energy tracker outputs now land alongside those observability feeds via
 `models/encoders/sustainability_dashboard.json` and emits
 `llm.sustainability.*` metrics so shared dashboards can correlate consumption,
 approvals, and replica utilisation for every deployment decision.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:monGARS/core/long_haul_validation.py†L120-L520】【F:tests/test_sustainability_dashboard.py†L1-L160】
-With dashboards consuming the full sustainability signal, the next focus is on
-deriving rollout guidance—linking carbon intensity and replica utilisation to
-hardware-aware deployment policies across clusters.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:docs/codebase_status_report.md†L169-L214】
+Carbon-aware gating now enforces sustainability guardrails for training cycles.
+The next focus is quantifying cross-node artefact reuse and translating
+sustainability dashboards into hardware-aware placement hints so that energy
+savings materialise across clusters.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:modules/evolution_engine/orchestrator.py†L360-L520】【F:docs/codebase_status_report.md†L169-L214】

@@ -715,8 +715,10 @@ def get_settings() -> Settings:
     settings = Settings()
     vault_secrets = fetch_secrets_from_vault(settings)
     for key, value in vault_secrets.items():
-        if hasattr(settings, key):
+        try:
             setattr(settings, key, value)
+        except (AttributeError, TypeError, ValueError):
+            object.__setattr__(settings, key, value)
     settings, _ = ensure_secret_key(settings)
     validate_jwt_configuration(settings)
     configure_telemetry(settings)

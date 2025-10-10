@@ -23,7 +23,8 @@ monGARS/
 │   ├── integration_test.py
 │   ├── self_training_test.py
 │   ├── property_test.py
-│   └── chaos_test.py
+│   ├── chaos_test.py
+│   └── test_sustainability_policy.py
 ├── k8s/
 │   ├── deployment.yaml
 │   ├── prometheus.yaml
@@ -34,7 +35,12 @@ monGARS/
 ├── modules/
 │   ├── ray_service.py
 │   ├── evolution_engine/
-│   │   └── orchestrator.py
+│   │   ├── __init__.py
+│   │   ├── energy.py
+│   │   ├── hardware.py
+│   │   ├── orchestrator.py
+│   │   ├── self_training.py
+│   │   └── sustainability.py
 │   └── neurons/
 │       ├── __init__.py
 │       ├── core.py

@@ -30,6 +30,7 @@ except Exception:  # pragma: no cover - gracefully degrade when Prefect missing
 
 from modules.evolution_engine.energy import EnergyTracker, EnergyUsageReport
 from modules.evolution_engine.self_training import collect_curated_data
+from modules.evolution_engine.sustainability import CarbonAwarePolicy
 from modules.neurons.registry import update_manifest
 from modules.neurons.training import (
     PreferenceAlignmentLoop,
@@ -179,6 +180,7 @@ class EvolutionOrchestrator:
         energy_tracker_factory: EnergyTrackerFactory | None = None,
         approval_registry: OperatorApprovalRegistry | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        sustainability_policy: CarbonAwarePolicy | None = None,
     ) -> None:
         self.registry_path = Path(model_registry_path)
         self.registry_path.mkdir(parents=True, exist_ok=True)
@@ -202,6 +204,9 @@ class EvolutionOrchestrator:
             self.registry_path / "operator_approvals.json"
         )
         self._reasoning_approval_policy = approval_policy
+        self._sustainability_policy = (
+            sustainability_policy or self._default_carbon_policy()
+        )
 
         self._workflow_backend = (
             workflow_backend
@@ -291,6 +296,44 @@ class EvolutionOrchestrator:
         except Exception:
             logger.exception("Failed to register evolution workflow schedule")
 
+    def _carbon_policy_allows_rollout(self) -> bool:
+        if self._sustainability_policy is None:
+            return True
+
+        try:
+            decision = self._sustainability_policy.evaluate(
+                scope="reinforcement.longhaul"
+            )
+        except Exception:
+            logger.exception("carbon_policy.evaluation_failed")
+            return True
+
+        if decision.should_proceed:
+            logger.info(
+                "carbon_policy.approved",
+                extra=decision.as_logging_context(),
+            )
+            return True
+
+        logger.info(
+            "carbon_policy.deferred",
+            extra=decision.as_logging_context(),
+        )
+        return False
+
+    def _default_carbon_policy(self) -> CarbonAwarePolicy | None:
+        try:
+            return CarbonAwarePolicy(
+                self.registry_path / "sustainability_dashboard.json"
+            )
+        except Exception:
+            logger.debug(
+                "carbon_policy.init_failed",
+                extra={"registry_path": str(self.registry_path)},
+                exc_info=True,
+            )
+            return None
+
     def _run_flow(self, *, force: bool = False) -> str | None:
         run_dir = self._execute_training_cycle(force=force)
         return str(run_dir) if run_dir is not None else None
@@ -298,6 +341,9 @@ class EvolutionOrchestrator:
     def _execute_training_cycle(self, *, force: bool) -> Path | None:
         if not force and not self._system_is_idle():
             logger.info("Skipping training cycle because the host is busy")
+            return None
+
+        if not force and not self._carbon_policy_allows_rollout():
             return None
 
         dataset = self._collect_dataset()
