@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from datasets import Dataset, DatasetDict, load_dataset
 from transformers import PreTrainedTokenizerBase
+
+from datasets import Dataset, DatasetDict, load_dataset
 
 logger = logging.getLogger(__name__)
 
