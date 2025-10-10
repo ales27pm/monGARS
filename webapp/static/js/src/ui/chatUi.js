@@ -12,12 +12,16 @@ export function createChatUi({ elements, timelineStore }) {
     (elements.send ? elements.send.textContent.trim() : "Envoyer");
   const sendBusyMarkup =
     '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Envoi…';
+  const SUPPORTED_TONES = ["muted", "info", "success", "danger", "warning"];
   const composerStatusDefault =
     (elements.composerStatus && elements.composerStatus.textContent.trim()) ||
     "Appuyez sur Ctrl+Entrée pour envoyer rapidement.";
   const filterHintDefault =
     (elements.filterHint && elements.filterHint.textContent.trim()) ||
     "Utilisez le filtre pour limiter l'historique. Appuyez sur Échap pour effacer.";
+  const voiceStatusDefault =
+    (elements.voiceStatus && elements.voiceStatus.textContent.trim()) ||
+    "Vérification des capacités vocales…";
   const promptMax = Number(elements.prompt?.getAttribute("maxlength")) || null;
   const prefersReducedMotion =
     window.matchMedia &&
@@ -34,6 +38,7 @@ export function createChatUi({ elements, timelineStore }) {
   const state = {
     resetStatusTimer: null,
     hideScrollTimer: null,
+    voiceStatusTimer: null,
     activeFilter: "",
     historyBootstrapped: elements.transcript.childElementCount > 0,
     bootstrapping: false,
@@ -88,9 +93,10 @@ export function createChatUi({ elements, timelineStore }) {
 
   function setComposerStatus(message, tone = "muted") {
     if (!elements.composerStatus) return;
-    const tones = ["muted", "info", "success", "danger", "warning"];
     elements.composerStatus.textContent = message;
-    tones.forEach((t) => elements.composerStatus.classList.remove(`text-${t}`));
+    SUPPORTED_TONES.forEach((t) =>
+      elements.composerStatus.classList.remove(`text-${t}`),
+    );
     elements.composerStatus.classList.add(`text-${tone}`);
   }
 
@@ -105,6 +111,156 @@ export function createChatUi({ elements, timelineStore }) {
     state.resetStatusTimer = window.setTimeout(() => {
       setComposerStatusIdle();
     }, delay);
+  }
+
+  function setVoiceStatus(message, tone = "muted") {
+    if (!elements.voiceStatus) return;
+    if (state.voiceStatusTimer) {
+      clearTimeout(state.voiceStatusTimer);
+      state.voiceStatusTimer = null;
+    }
+    elements.voiceStatus.textContent = message;
+    SUPPORTED_TONES.forEach((t) =>
+      elements.voiceStatus.classList.remove(`text-${t}`),
+    );
+    elements.voiceStatus.classList.add(`text-${tone}`);
+  }
+
+  function scheduleVoiceStatusIdle(delay = 4000) {
+    if (!elements.voiceStatus) return;
+    if (state.voiceStatusTimer) {
+      clearTimeout(state.voiceStatusTimer);
+    }
+    state.voiceStatusTimer = window.setTimeout(() => {
+      setVoiceStatus(voiceStatusDefault, "muted");
+      state.voiceStatusTimer = null;
+    }, delay);
+  }
+
+  function setVoiceAvailability({ recognition = false, synthesis = false } = {}) {
+    if (elements.voiceControls) {
+      elements.voiceControls.classList.toggle(
+        "d-none",
+        !recognition && !synthesis,
+      );
+    }
+    if (elements.voiceRecognitionGroup) {
+      elements.voiceRecognitionGroup.classList.toggle(
+        "d-none",
+        !recognition,
+      );
+    }
+    if (elements.voiceToggle) {
+      elements.voiceToggle.disabled = !recognition;
+      elements.voiceToggle.setAttribute(
+        "title",
+        recognition
+          ? "Activer ou désactiver la dictée vocale."
+          : "Dictée vocale indisponible dans ce navigateur.",
+      );
+      elements.voiceToggle.setAttribute("aria-pressed", "false");
+      elements.voiceToggle.classList.remove("btn-danger");
+      elements.voiceToggle.classList.add("btn-outline-secondary");
+      elements.voiceToggle.textContent = "🎙️ Activer la dictée";
+    }
+    if (elements.voiceAutoSend) {
+      elements.voiceAutoSend.disabled = !recognition;
+    }
+    if (!recognition) {
+      setVoiceTranscript("", { state: "idle" });
+    }
+    if (elements.voiceSynthesisGroup) {
+      elements.voiceSynthesisGroup.classList.toggle("d-none", !synthesis);
+    }
+    if (elements.voicePlayback) {
+      elements.voicePlayback.disabled = !synthesis;
+    }
+    if (elements.voiceStopPlayback) {
+      elements.voiceStopPlayback.disabled = !synthesis;
+    }
+    if (elements.voiceVoiceSelect) {
+      elements.voiceVoiceSelect.disabled = !synthesis;
+      if (!synthesis) {
+        elements.voiceVoiceSelect.innerHTML = "";
+      }
+    }
+  }
+
+  function setVoiceListening(listening) {
+    if (!elements.voiceToggle) return;
+    elements.voiceToggle.setAttribute("aria-pressed", listening ? "true" : "false");
+    elements.voiceToggle.classList.toggle("btn-danger", listening);
+    elements.voiceToggle.classList.toggle("btn-outline-secondary", !listening);
+    elements.voiceToggle.textContent = listening
+      ? "🛑 Arrêter l'écoute"
+      : "🎙️ Activer la dictée";
+  }
+
+  function setVoiceTranscript(text, options = {}) {
+    if (!elements.voiceTranscript) return;
+    const value = text || "";
+    const stateValue = options.state || (value ? "final" : "idle");
+    elements.voiceTranscript.textContent = value;
+    elements.voiceTranscript.dataset.state = stateValue;
+    if (!value && options.placeholder) {
+      elements.voiceTranscript.textContent = options.placeholder;
+    }
+  }
+
+  function setVoicePreferences(prefs = {}) {
+    if (elements.voiceAutoSend) {
+      elements.voiceAutoSend.checked = Boolean(prefs.autoSend);
+    }
+    if (elements.voicePlayback) {
+      elements.voicePlayback.checked = Boolean(prefs.playback);
+    }
+  }
+
+  function setVoiceSpeaking(active) {
+    if (elements.voiceSpeakingIndicator) {
+      elements.voiceSpeakingIndicator.classList.toggle("d-none", !active);
+    }
+    if (elements.voiceStopPlayback) {
+      elements.voiceStopPlayback.disabled = !active;
+    }
+  }
+
+  function setVoiceVoiceOptions(voices = [], selectedUri = null) {
+    if (!elements.voiceVoiceSelect) return;
+    const select = elements.voiceVoiceSelect;
+    const frag = document.createDocumentFragment();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = voices.length
+      ? "Voix par défaut du système"
+      : "Aucune voix disponible";
+    frag.appendChild(placeholder);
+    voices.forEach((voice) => {
+      const option = document.createElement("option");
+      option.value = voice.voiceURI || voice.name || "";
+      const bits = [voice.name || voice.voiceURI || "Voix"];
+      if (voice.lang) {
+        bits.push(`(${voice.lang})`);
+      }
+      if (voice.default) {
+        bits.push("• défaut");
+      }
+      option.textContent = bits.join(" ");
+      frag.appendChild(option);
+    });
+    select.innerHTML = "";
+    select.appendChild(frag);
+    if (selectedUri) {
+      let matched = false;
+      Array.from(select.options).forEach((option) => {
+        if (!matched && option.value === selectedUri) {
+          matched = true;
+        }
+      });
+      select.value = matched ? selectedUri : "";
+    } else {
+      select.value = "";
+    }
   }
 
   function updatePromptMetrics() {
@@ -881,6 +1037,36 @@ export function createChatUi({ elements, timelineStore }) {
         }
       });
     }
+
+    if (elements.voiceToggle) {
+      elements.voiceToggle.addEventListener("click", () => {
+        emit("voice-toggle");
+      });
+    }
+
+    if (elements.voiceAutoSend) {
+      elements.voiceAutoSend.addEventListener("change", (event) => {
+        emit("voice-autosend-change", { enabled: event.target.checked });
+      });
+    }
+
+    if (elements.voicePlayback) {
+      elements.voicePlayback.addEventListener("change", (event) => {
+        emit("voice-playback-change", { enabled: event.target.checked });
+      });
+    }
+
+    if (elements.voiceStopPlayback) {
+      elements.voiceStopPlayback.addEventListener("click", () => {
+        emit("voice-stop-playback");
+      });
+    }
+
+    if (elements.voiceVoiceSelect) {
+      elements.voiceVoiceSelect.addEventListener("change", (event) => {
+        emit("voice-voice-change", { voiceURI: event.target.value || null });
+      });
+    }
   }
 
   function initialise() {
@@ -888,6 +1074,7 @@ export function createChatUi({ elements, timelineStore }) {
     updatePromptMetrics();
     autosizePrompt();
     setComposerStatusIdle();
+    setVoiceTranscript("", { state: "idle", placeholder: "" });
     attachEvents();
   }
 
@@ -919,6 +1106,14 @@ export function createChatUi({ elements, timelineStore }) {
     setWsStatus,
     updateNetworkStatus,
     scrollToBottom,
+    setVoiceStatus,
+    scheduleVoiceStatusIdle,
+    setVoiceAvailability,
+    setVoiceListening,
+    setVoiceTranscript,
+    setVoicePreferences,
+    setVoiceSpeaking,
+    setVoiceVoiceOptions,
     set diagnostics(value) {
       Object.assign(diagnostics, value);
     },
@@ -930,5 +1125,8 @@ export function createChatUi({ elements, timelineStore }) {
     formatPerf,
     isStreaming,
     hasStreamBuffer,
+    get voiceStatusDefault() {
+      return voiceStatusDefault;
+    },
   };
 }
