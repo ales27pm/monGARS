@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import hvac
 from opentelemetry import metrics, trace
@@ -39,6 +39,11 @@ from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
 log = logging.getLogger(__name__)
+
+
+SecretKeyOrigin = Literal[
+    "missing", "provided", "vault", "ephemeral", "generated", "deferred"
+]
 
 
 def _parse_env_bool(value: Any) -> bool:
@@ -122,7 +127,7 @@ class Settings(BaseSettings):
         min_length=1,
         description="Application secret used for JWT signing; override in production.",
     )
-    _vault_secret_required: bool = PrivateAttr(default=False)
+    _secret_key_origin: SecretKeyOrigin = PrivateAttr(default="missing")
     JWT_ALGORITHM: str = Field(default="HS256")
     JWT_PRIVATE_KEY: str | None = Field(
         default=None,
@@ -142,20 +147,23 @@ class Settings(BaseSettings):
     def _derive_secret_key_and_validate(self) -> "Settings":
         """Generate ephemeral secrets for debug builds and validate JWT configuration."""
 
-        secret_value = (self.SECRET_KEY or "").strip() or None
+        raw_secret = self.SECRET_KEY
+        secret_value = (raw_secret or "").strip() or None
         vault_configured = bool(
             (self.VAULT_URL or "").strip() and (self.VAULT_TOKEN or "").strip()
         )
-        deferred_secret = False
 
-        if self.debug:
-            object.__setattr__(self, "SECRET_KEY", secret_value)
+        if secret_value is not None:
+            secret_origin: SecretKeyOrigin = "provided"
+        elif self.debug:
+            secret_origin = "ephemeral"
+        elif vault_configured:
+            secret_origin = "deferred"
         else:
-            if vault_configured and secret_value is None:
-                deferred_secret = True
-            elif secret_value is None:
-                raise ValueError("SECRET_KEY must be provided in production")
-            object.__setattr__(self, "SECRET_KEY", secret_value)
+            secret_origin = "missing"
+
+        object.__setattr__(self, "SECRET_KEY", secret_value)
+        object.__setattr__(self, "_secret_key_origin", secret_origin)
 
         self._vault_secret_required = deferred_secret
 
@@ -172,10 +180,6 @@ class Settings(BaseSettings):
             if private_key or public_key:
                 raise ValueError(
                     "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported with symmetric JWT algorithms."
-                )
-            if not self.SECRET_KEY and not deferred_secret and not self.debug:
-                raise ValueError(
-                    "Symmetric JWT algorithms require SECRET_KEY to be configured."
                 )
         else:
             if not (private_key and public_key):
@@ -607,11 +611,15 @@ def ensure_secret_key(
 ) -> tuple[Settings, bool]:
     """Ensure the settings object contains a SECRET_KEY."""
 
-    if settings.SECRET_KEY:
+    origin: SecretKeyOrigin = getattr(settings, "_secret_key_origin", "missing")
+
+    if settings.SECRET_KEY and origin not in {"ephemeral"}:
         return settings, False
-    if getattr(settings, "_vault_secret_required", False):
+
+    if origin == "deferred":
         raise ValueError("SECRET_KEY must be provided in production")
-    if settings.debug:
+
+    if settings.debug or origin == "ephemeral":
         message = (
             log_message
             if log_message is not None
@@ -619,7 +627,10 @@ def ensure_secret_key(
         )
         log.warning(message)
         generated_key = _generate_secret_key()
-        return settings.model_copy(update={"SECRET_KEY": generated_key}), True
+        new_settings = settings.model_copy(update={"SECRET_KEY": generated_key})
+        object.__setattr__(new_settings, "_secret_key_origin", "generated")
+        return new_settings, True
+
     raise ValueError("SECRET_KEY must be provided in production")
 
 
@@ -731,8 +742,11 @@ def get_settings() -> Settings:
         if extras:
             object.__setattr__(settings, "__pydantic_extra__", extras)
         if "SECRET_KEY" in vault_secrets:
-            settings._vault_secret_required = False
-    if getattr(settings, "_vault_secret_required", False) and not settings.SECRET_KEY:
+            object.__setattr__(settings, "_secret_key_origin", "vault")
+    if (
+        getattr(settings, "_secret_key_origin", "missing") == "deferred"
+        and not settings.SECRET_KEY
+    ):
         raise ValueError("SECRET_KEY must be provided in production")
     settings, _ = ensure_secret_key(settings)
     validate_jwt_configuration(settings)
