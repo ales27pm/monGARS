@@ -26,6 +26,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PostgresDsn,
+    PrivateAttr,
     RedisDsn,
     field_validator,
     model_validator,
@@ -121,6 +122,7 @@ class Settings(BaseSettings):
         min_length=1,
         description="Application secret used for JWT signing; override in production.",
     )
+    _vault_secret_required: bool = PrivateAttr(default=False)
     JWT_ALGORITHM: str = Field(default="HS256")
     JWT_PRIVATE_KEY: str | None = Field(
         default=None,
@@ -149,12 +151,13 @@ class Settings(BaseSettings):
         if self.debug:
             object.__setattr__(self, "SECRET_KEY", secret_value)
         else:
-            if vault_configured:
+            if vault_configured and secret_value is None:
                 deferred_secret = True
-                secret_value = None
             elif secret_value is None:
                 raise ValueError("SECRET_KEY must be provided in production")
             object.__setattr__(self, "SECRET_KEY", secret_value)
+
+        self._vault_secret_required = deferred_secret
 
         algorithm = (self.JWT_ALGORITHM or "").strip().upper()
         object.__setattr__(self, "JWT_ALGORITHM", algorithm)
@@ -606,6 +609,8 @@ def ensure_secret_key(
 
     if settings.SECRET_KEY:
         return settings, False
+    if getattr(settings, "_vault_secret_required", False):
+        raise ValueError("SECRET_KEY must be provided in production")
     if settings.debug:
         message = (
             log_message
@@ -725,6 +730,10 @@ def get_settings() -> Settings:
             object.__setattr__(settings, key, value)
         if extras:
             object.__setattr__(settings, "__pydantic_extra__", extras)
+        if "SECRET_KEY" in vault_secrets:
+            settings._vault_secret_required = False
+    if getattr(settings, "_vault_secret_required", False) and not settings.SECRET_KEY:
+        raise ValueError("SECRET_KEY must be provided in production")
     settings, _ = ensure_secret_key(settings)
     validate_jwt_configuration(settings)
     configure_telemetry(settings)
