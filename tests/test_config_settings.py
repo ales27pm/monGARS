@@ -50,6 +50,36 @@ def test_settings_defers_secret_when_vault_configured(monkeypatch):
     assert settings.SECRET_KEY is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vault_secrets",
+    [
+        {"SECRET_KEY": "vault-secret"},
+        {"SECRET_KEY": "vault-secret", "API_KEY": "vault-api-key"},
+        {"SECRET_KEY": "another-secret", "API_KEY": "another-api-key", "DB_PASSWORD": "db-pass"},
+    ],
+)
+async def test_get_settings_fetches_vault_secret_with_active_loop(monkeypatch, vault_secrets):
+    monkeypatch.setenv("DEBUG", "false")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.setenv("VAULT_URL", "https://vault.example")
+    monkeypatch.setenv("VAULT_TOKEN", "unit-test-token")
+
+    captured: dict[str, config.Settings] = {}
+
+    def _fake_fetch(settings: config.Settings) -> dict[str, str]:
+        captured["settings"] = settings
+        return vault_secrets
+
+    monkeypatch.setattr(config, "fetch_secrets_from_vault", _fake_fetch)
+
+    settings = config.get_settings()
+
+    assert captured
+    for key, value in vault_secrets.items():
+        assert getattr(settings, key) == value
+
+
 @pytest.mark.parametrize("value", ["True", "true", "1"])
 def test_debug_env_parsing_variants(monkeypatch, value):
     monkeypatch.setenv("DEBUG", value)
