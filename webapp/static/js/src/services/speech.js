@@ -68,7 +68,17 @@ export function createSpeechService({ defaultLanguage } = {}) {
     typeof navigator !== "undefined" && navigator.userAgent
       ? navigator.userAgent.toLowerCase()
       : "";
-  const isAppleMobile = /iphone|ipad|ipod/.test(userAgent);
+  const platform =
+    typeof navigator !== "undefined" && navigator.platform
+      ? navigator.platform.toLowerCase()
+      : "";
+  const maxTouchPoints =
+    typeof navigator !== "undefined" && typeof navigator.maxTouchPoints === "number"
+      ? navigator.maxTouchPoints
+      : 0;
+  const isAppleMobile =
+    /iphone|ipad|ipod/.test(userAgent) ||
+    (platform === "macintel" && maxTouchPoints > 1);
   const isSafari =
     /safari/.test(userAgent) &&
     !/crios|fxios|chrome|android|edge|edg|opr|opera/.test(userAgent);
