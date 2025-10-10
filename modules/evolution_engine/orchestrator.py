@@ -386,16 +386,6 @@ class EvolutionOrchestrator:
             except Exception:  # pragma: no cover - rollout failures must not crash
                 logger.exception("Adapter rollout failed")
 
-        try:
-            self._run_reinforcement_alignment(dataset)
-        except Exception:  # pragma: no cover - reinforcement must not block
-            logger.exception("Reinforcement alignment loop failed")
-
-        try:
-            self._run_reasoning_alignment()
-        except Exception:  # pragma: no cover - reasoning loop must not block
-            logger.exception("Reasoning GRPO loop failed")
-
         return run_dir
 
     def _ensure_alignment_components(
