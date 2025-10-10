@@ -214,7 +214,9 @@ export class ChatApp {
     });
 
     this.ui.on("voice-toggle", () => {
-      this.toggleVoiceListening();
+      this.toggleVoiceListening().catch((err) => {
+        console.error("Voice toggle failed", err);
+      });
     });
 
     this.ui.on("voice-autosend-change", ({ enabled }) => {
@@ -367,7 +369,7 @@ export class ChatApp {
     );
   }
 
-  toggleVoiceListening() {
+  async toggleVoiceListening() {
     if (!this.speech || !this.speech.isRecognitionSupported()) {
       this.ui.setVoiceStatus(
         "La dictée vocale n'est pas disponible dans ce navigateur.",
@@ -395,7 +397,7 @@ export class ChatApp {
       window.clearTimeout(this.voiceState.restartTimer);
       this.voiceState.restartTimer = null;
     }
-    const started = this.speech.startListening({
+    const started = await this.speech.startListening({
       language: this.voicePrefs.language,
       interimResults: true,
       continuous: false,
@@ -643,18 +645,30 @@ export class ChatApp {
       if (this.voiceState.listening || this.voiceState.awaitingResponse) {
         return;
       }
-      const started = this.speech.startListening({
+      const attempt = this.speech.startListening({
         language: this.voicePrefs.language,
         interimResults: true,
         continuous: false,
       });
-      if (!started) {
-        this.voiceState.enabled = false;
-        this.ui.setVoiceStatus(
-          "Impossible de relancer la dictée vocale.",
-          "danger",
-        );
-      }
+      Promise.resolve(attempt)
+        .then((started) => {
+          if (started) {
+            return;
+          }
+          this.voiceState.enabled = false;
+          this.ui.setVoiceStatus(
+            "Impossible de relancer la dictée vocale.",
+            "danger",
+          );
+        })
+        .catch((err) => {
+          this.voiceState.enabled = false;
+          console.error("Automatic voice restart failed", err);
+          this.ui.setVoiceStatus(
+            "Impossible de relancer la dictée vocale.",
+            "danger",
+          );
+        });
     }, delay);
   }
 

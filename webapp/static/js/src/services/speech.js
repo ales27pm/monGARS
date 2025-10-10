@@ -61,6 +61,116 @@ export function createSpeechService({ defaultLanguage } = {}) {
   let speaking = false;
   let preferredVoiceURI = null;
   let voicesCache = [];
+  let microphonePrimed = false;
+  let microphonePriming = null;
+
+  const userAgent =
+    typeof navigator !== "undefined" && navigator.userAgent
+      ? navigator.userAgent.toLowerCase()
+      : "";
+  const platform =
+    typeof navigator !== "undefined" && navigator.platform
+      ? navigator.platform.toLowerCase()
+      : "";
+  const maxTouchPoints =
+    typeof navigator !== "undefined" && typeof navigator.maxTouchPoints === "number"
+      ? navigator.maxTouchPoints
+      : 0;
+  const isAppleMobile =
+    /iphone|ipad|ipod/.test(userAgent) ||
+    (platform === "macintel" && maxTouchPoints > 1);
+  const isSafari =
+    /safari/.test(userAgent) &&
+    !/crios|fxios|chrome|android|edge|edg|opr|opera/.test(userAgent);
+
+  function requiresMicrophonePriming() {
+    if (!recognitionSupported) {
+      return false;
+    }
+    if (microphonePrimed) {
+      return false;
+    }
+    if (typeof navigator === "undefined") {
+      return false;
+    }
+    if (
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getUserMedia !== "function"
+    ) {
+      return false;
+    }
+    return isAppleMobile && isSafari;
+  }
+
+  function releaseStream(stream) {
+    if (!stream) {
+      return;
+    }
+    const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
+    tracks.forEach((track) => {
+      try {
+        track.stop();
+      } catch (err) {
+        console.debug("Unable to stop track", err);
+      }
+    });
+  }
+
+  async function ensureMicrophoneAccess() {
+    if (!requiresMicrophonePriming()) {
+      return true;
+    }
+    if (microphonePrimed) {
+      return true;
+    }
+    if (microphonePriming) {
+      try {
+        return await microphonePriming;
+      } catch (err) {
+        return false;
+      }
+    }
+    microphonePriming = navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        microphonePrimed = true;
+        releaseStream(stream);
+        return true;
+      })
+      .catch((err) => {
+        emitError({
+          source: "recognition",
+          code: "permission-denied",
+          message:
+            "Autorisation du microphone refusée. Activez l'accès dans les réglages de Safari.",
+          details: err,
+        });
+        return false;
+      })
+      .finally(() => {
+        microphonePriming = null;
+      });
+    return microphonePriming;
+  }
+
+  function isPermissionError(error) {
+    if (!error) {
+      return false;
+    }
+    const code =
+      typeof error === "string"
+        ? error
+        : error.name || error.code || error.message || "";
+    const normalised = String(code).toLowerCase();
+    return [
+      "notallowederror",
+      "not-allowed",
+      "service-not-allowed",
+      "securityerror",
+      "permissiondeniederror",
+      "aborterror",
+    ].some((candidate) => normalised.includes(candidate));
+  }
 
   function emitError(payload) {
     const enriched = {
@@ -158,7 +268,7 @@ export function createSpeechService({ defaultLanguage } = {}) {
     return recognition;
   }
 
-  function startListening(options = {}) {
+  async function startListening(options = {}) {
     if (!recognitionSupported) {
       emitError({
         source: "recognition",
@@ -180,10 +290,36 @@ export function createSpeechService({ defaultLanguage } = {}) {
     instance.interimResults = options.interimResults !== false;
     instance.continuous = Boolean(options.continuous);
     instance.maxAlternatives = options.maxAlternatives || 1;
+    if (requiresMicrophonePriming()) {
+      const granted = await ensureMicrophoneAccess();
+      if (!granted) {
+        return false;
+      }
+    }
     try {
       instance.start();
       return true;
     } catch (err) {
+      if (requiresMicrophonePriming() && !microphonePrimed && isPermissionError(err)) {
+        const granted = await ensureMicrophoneAccess();
+        if (granted) {
+          try {
+            instance.start();
+            return true;
+          } catch (retryErr) {
+            emitError({
+              source: "recognition",
+              code: "start-failed",
+              message:
+                retryErr && retryErr.message
+                  ? retryErr.message
+                  : "Impossible de démarrer la reconnaissance vocale.",
+              details: retryErr,
+            });
+            return false;
+          }
+        }
+      }
       emitError({
         source: "recognition",
         code: "start-failed",
