@@ -50,9 +50,7 @@ def _generate_secret_key() -> str:
 
 
 def _vault_configured(s) -> bool:
-    return bool(getattr(s, "VAULT_URL", None)) and bool(
-        getattr(s, "VAULT_TOKEN", None)
-    )
+    return bool(getattr(s, "VAULT_URL", None)) and bool(getattr(s, "VAULT_TOKEN", None))
 
 
 SecretKeyOrigin = Literal[
@@ -742,7 +740,9 @@ def get_settings() -> Settings:
         secrets_map = fetch_secrets_from_vault(settings)
         if secrets_map:
             updates = {
-                key: value for key, value in secrets_map.items() if hasattr(settings, key)
+                key: value
+                for key, value in secrets_map.items()
+                if hasattr(settings, key)
             }
             if updates:
                 settings = settings.model_copy(update=updates)
@@ -757,6 +757,8 @@ def get_settings() -> Settings:
                 object.__setattr__(settings, "__pydantic_extra__", extra)
             if "SECRET_KEY" in updates:
                 object.__setattr__(settings, "_secret_key_origin", "vault")
+        if not settings.SECRET_KEY:
+            raise ValueError("SECRET_KEY must be provided in production")
         validate_jwt_configuration(settings)
         configure_telemetry(settings)
         return settings
