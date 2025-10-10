@@ -51,7 +51,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 import torch
-from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
@@ -61,6 +60,8 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
+
+from datasets import load_dataset
 
 # ---- Public API --------------------------------------------------------------
 

@@ -31,12 +31,13 @@ from typing import Any, Iterable, Sequence
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
     import torch
-    from datasets import load_dataset
     from peft import LoraConfig, TaskType, get_peft_model
     from torch.nn.utils import clip_grad_norm_
     from torch.utils.data import DataLoader
     from transformers import AutoModelForCausalLM, AutoTokenizer, default_data_collator
     from transformers.optimization import get_linear_schedule_with_warmup
+
+    from datasets import load_dataset
 except Exception:  # pragma: no cover - fallback if unavailable
     torch = None
     load_dataset = None

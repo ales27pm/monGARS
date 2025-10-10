@@ -6,7 +6,6 @@ import argparse
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
     DataCollatorForLanguageModeling,
@@ -14,6 +13,8 @@ from transformers import (
     TrainingArguments,
 )
 from unsloth import FastLanguageModel
+
+from datasets import load_dataset
 
 BASE_MODEL = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
 SYSTEM_PROMPT = (
