@@ -51,7 +51,15 @@ def test_settings_defers_secret_when_vault_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_settings_fetches_vault_secret_with_active_loop(monkeypatch):
+@pytest.mark.parametrize(
+    "vault_secrets",
+    [
+        {"SECRET_KEY": "vault-secret"},
+        {"SECRET_KEY": "vault-secret", "API_KEY": "vault-api-key"},
+        {"SECRET_KEY": "another-secret", "API_KEY": "another-api-key", "DB_PASSWORD": "db-pass"},
+    ],
+)
+async def test_get_settings_fetches_vault_secret_with_active_loop(monkeypatch, vault_secrets):
     monkeypatch.setenv("DEBUG", "false")
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.setenv("VAULT_URL", "https://vault.example")
@@ -61,14 +69,15 @@ async def test_get_settings_fetches_vault_secret_with_active_loop(monkeypatch):
 
     def _fake_fetch(settings: config.Settings) -> dict[str, str]:
         captured["settings"] = settings
-        return {"SECRET_KEY": "vault-secret"}
+        return vault_secrets
 
     monkeypatch.setattr(config, "fetch_secrets_from_vault", _fake_fetch)
 
     settings = config.get_settings()
 
     assert captured
-    assert settings.SECRET_KEY == "vault-secret"
+    for key, value in vault_secrets.items():
+        assert getattr(settings, key) == value
 
 
 @pytest.mark.parametrize("value", ["True", "true", "1"])
