@@ -1,10 +1,10 @@
-import asyncio
 import json
 import logging
 import os
 import re
 import secrets
 import sys
+import time
 import uuid
 from collections.abc import Sequence
 from functools import lru_cache
@@ -641,7 +641,7 @@ def validate_jwt_configuration(settings: Settings) -> None:
         )
 
 
-async def fetch_secrets_from_vault(
+def fetch_secrets_from_vault(
     settings: Settings, attempts: int = 3, delay: float = 1.0
 ) -> dict:
     if not settings.VAULT_URL or not settings.VAULT_TOKEN:
@@ -663,7 +663,7 @@ async def fetch_secrets_from_vault(
                 exc,
             )
             if attempt < attempts:
-                await asyncio.sleep(delay)
+                time.sleep(delay)
 
     log.critical("Failed to fetch secrets from Vault after %s attempts", attempts)
     return {}
@@ -713,12 +713,7 @@ def configure_telemetry(settings: Settings) -> None:
 @lru_cache()
 def get_settings() -> Settings:
     settings = Settings()
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        vault_secrets = asyncio.run(fetch_secrets_from_vault(settings))
-    else:
-        vault_secrets = {}
+    vault_secrets = fetch_secrets_from_vault(settings)
     for key, value in vault_secrets.items():
         if hasattr(settings, key):
             setattr(settings, key, value)
