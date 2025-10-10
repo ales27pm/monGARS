@@ -128,13 +128,12 @@ implementation details.
 | 4 – Collaborative Networking    | ✅ Complete    | Peer telemetry, load-aware scheduling, and Sommeil optimisation loops are shipping.【F:monGARS/core/peer.py†L1-L200】【F:monGARS/core/sommeil.py†L1-L160】                                                                                                   |
 | 5 – Web/API Refinement          | ✅ Complete    | FastAPI endpoints, WebSocket streaming, and published SDK packages cover partner integrations end-to-end.【F:monGARS/api/web_api.py†L41-L88】【F:docs/sdk-release-guide.md†L1-L160】                                                                         |
 | 6 – Self-Improvement & Research | ✅ Complete    | Research long-haul automation, observability snapshots, and multi-replica coverage keep reinforcement loops production-ready.【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】 |
-| 7 – Sustainability & Longevity  | 🌱 Planned     | Evolution engine and energy tracking are present, but cross-node artefact sharing and energy dashboards remain design items.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:modules/evolution_engine/energy.py†L1-L160】                           |
+| 7 – Sustainability & Longevity  | 🌱 Planned     | Evolution engine and energy tracking are present, and carbon-aware rollout gating now defers high-emission cycles; cross-node artefact sharing and hardware-aware guidance remain open.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:modules/evolution_engine/energy.py†L1-L160】                           |
 
 ## Recommended Next Steps
 
 1. Leverage the sustainability dashboard feed to model cross-node artefact
-   reuse and carbon-aware rollout policies, enriching the shared metrics with
-   deployment recommendations.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:modules/evolution_engine/orchestrator.py†L1-L160】
+   reuse, enriching shared metrics with energy savings and reuse ratios.【F:monGARS/core/sustainability_dashboard.py†L200-L320】【F:monGARS/core/long_haul_validation.py†L520-L660】
 2. Extend sustainability analytics to include hardware-aware rollouts once
    dashboards surface baseline consumption trends, combining replica insights
-   with the new energy stream.【F:monGARS/core/long_haul_validation.py†L123-L520】【F:docs/implementation_status.md†L150-L160】
+   with the new energy stream.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:docs/implementation_status.md†L180-L200】

@@ -4,20 +4,21 @@
 
 Reinforcement validation is automated and the sustainability dashboards now
 receive energy tracker metrics and observability snapshots via the
-`SustainabilityDashboardBridge`. The next priority is to convert that unified
-signal into actionable guidance—carbon-aware rollout policies, cross-node
-artefact reuse, and hardware recommendations that keep consumption within
-targets while scaling deployments.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:docs/implementation_status.md†L130-L160】
+`SustainabilityDashboardBridge`. Carbon-aware gating is live, so the next
+priority is to operationalise the remaining signals—quantify cross-node
+artefact reuse and surface hardware-aware placement guidance so the dashboards
+drive tangible energy savings across deployments.【F:modules/evolution_engine/sustainability.py†L1-L235】【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:docs/implementation_status.md†L130-L200】
 
 ## Supporting Signals
 
-- **Implementation Status Report** – sustainability dashboards now publish
-  `llm.sustainability.*` metrics, freeing the roadmap to focus on actionable
-  policies.【F:docs/implementation_status.md†L130-L160】
-- **Codebase Status Report** – highlights carbon-aware rollouts and cross-node
-  reuse as the next evolution now that the telemetry feed is unified.【F:docs/codebase_status_report.md†L169-L214】
+- **Implementation Status Report** – carbon-aware gating has shipped, leaving
+  reuse analytics and placement guidance as the remaining sustainability
+  deliverables.【F:docs/implementation_status.md†L130-L200】
+- **Codebase Status Report** – highlights cross-node reuse and hardware-aware
+  placement as the next evolution now that telemetry is unified.【F:docs/codebase_status_report.md†L169-L214】
 - **Energy Tracker & Sustainability Bridge** – persist per-cycle energy data and
-  reinforcement summaries for dashboards and downstream automation hooks.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
+  reinforcement summaries for dashboards and downstream automation hooks, ready
+  to support reuse analytics.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
 
 ## Rationale for Prioritising Sustainability Telemetry
 
@@ -30,31 +31,30 @@ targets while scaling deployments.【F:monGARS/core/sustainability_dashboard.py�
 
 ## Implementation Outline
 
-1. **Carbon-Aware Rollouts** – build policies that read the sustainability
-   dashboard feed and adjust rollout timing, replica placement, or approval
-   thresholds based on emissions intensity.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:modules/evolution_engine/orchestrator.py†L1-L160】
-2. **Cross-Node Artefact Reuse** – quantify adapter reuse and amortised energy
-   savings using the per-cycle energy history, feeding optimisation heuristics
-   in the evolution engine.【F:monGARS/core/long_haul_validation.py†L120-L520】【F:modules/evolution_engine/orchestrator.py†L1-L160】
-3. **Operator Playbooks** – extend the sustainability runbooks with new
-   automation hooks, carbon thresholds, and remediation flows powered by the
-   dashboard feed.【F:docs/reinforcement_rollout_runbook.md†L1-L160】【F:docs/codebase_status_report.md†L169-L214】
+1. **Cross-Node Artefact Reuse Metrics** – enrich the sustainability dashboard
+   payload with reuse ratios and amortised energy savings so operators can
+   prioritise adapters that reduce retraining cost.【F:monGARS/core/long_haul_validation.py†L520-L660】【F:monGARS/core/sustainability_dashboard.py†L200-L320】
+2. **Hardware-Aware Placement Guidance** – translate sustainability telemetry
+   into scheduler hints (time windows, replica mixes, GPU affinity) that feed the
+   evolution orchestrator and distributed scheduler.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:monGARS/core/distributed_scheduler.py†L1-L220】
+3. **Operator Playbooks** – extend sustainability runbooks with reuse analytics
+   and placement recommendations so on-call staff can act on the richer
+   telemetry without manual calculations.【F:docs/reinforcement_rollout_runbook.md†L1-L200】【F:docs/codebase_status_report.md†L169-L214】
 
 ## Success Criteria & Validation
 
-- Carbon-aware rollout policies adjust deployment timing or replica mix based on
-  energy intensity and approval backlog surfaced in the dashboards.【F:modules/evolution_engine/orchestrator.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
 - Dashboards expose energy savings from artefact reuse, guiding operators toward
-  efficient experimentation pathways.【F:monGARS/core/long_haul_validation.py†L120-L520】【F:docs/codebase_status_report.md†L169-L214】
-- Updated runbooks walk on-call staff through interpreting sustainability
-  metrics, carbon thresholds, and remediation actions without specialist
-  knowledge.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
+  efficient experimentation pathways.【F:monGARS/core/long_haul_validation.py†L520-L660】【F:docs/codebase_status_report.md†L169-L214】
+- Scheduler hints reflect carbon-aware placement recommendations derived from
+  sustainability telemetry.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:monGARS/core/distributed_scheduler.py†L1-L220】
+- Updated runbooks walk on-call staff through interpreting reuse metrics,
+  placement hints, and remediation actions without specialist
+  knowledge.【F:docs/reinforcement_rollout_runbook.md†L1-L200】
 
 ## Follow-On Work Once Sustainability Dashboards Ship
 
-- Iterate on energy-efficiency experiments (carbon-aware scheduling,
-  replica bin-packing) once rollout policies have baseline data to act
-  upon.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
+- Iterate on energy-efficiency experiments (carbon-aware bin-packing, GPU
+  affinity policies) once reuse metrics surface baseline opportunities.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
 - Expand partner telemetry to correlate reinforcement-driven responses with
   engagement metrics leveraging the sustainability dashboards and policy
   outputs.【F:docs/codebase_status_report.md†L169-L214】

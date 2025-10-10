@@ -5,6 +5,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import json
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -14,6 +15,7 @@ import pytest
 
 from modules.evolution_engine.hardware import HardwareProfile
 from modules.evolution_engine.orchestrator import EvolutionOrchestrator
+from modules.evolution_engine.sustainability import CarbonAwareDecision
 from monGARS.config import HardwareHeuristics, get_settings
 from monGARS.core.evolution_engine import EvolutionEngine, PerformanceIssue
 from monGARS.core.monitor import SystemStats
@@ -167,6 +169,57 @@ def test_orchestrator_skips_when_vram_pressure(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert orchestrator.run_training_cycle() is None
+
+
+def test_orchestrator_defers_when_carbon_policy_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = DummyWorkflowBackend()
+    _mock_idle(monkeypatch)
+    _mock_torch_vram(monkeypatch, allocated_gb=1.0)
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class RecordingTrainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.training_config_path = training_config_path
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            raise AssertionError("trainer should not execute when policy blocks")
+
+    class DenyPolicy:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, scope: str | None = None) -> CarbonAwareDecision:
+            self.calls += 1
+            return CarbonAwareDecision(
+                should_proceed=False,
+                reason="blocked for test",
+                carbon_intensity_g_co2_per_kwh=800.0,
+                energy_window_wh=500.0,
+                approvals_pending=12,
+                incidents=0,
+                recommended_delay=timedelta(minutes=30),
+            )
+
+    policy = DenyPolicy()
+
+    orchestrator = EvolutionOrchestrator(
+        model_registry_path=tmp_path / "registry",
+        training_config_path=config_path,
+        workflow_backend=backend,
+        trainer_cls=RecordingTrainer,
+        slot_manager_cls=None,
+        data_collector=lambda: ["sample"],
+        sustainability_policy=policy,
+    )
+
+    assert orchestrator.run_training_cycle() is None
+    assert policy.calls == 1
 
 
 def test_orchestrator_trains_when_vram_query_fails(
