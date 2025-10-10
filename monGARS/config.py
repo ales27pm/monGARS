@@ -604,6 +604,8 @@ def ensure_secret_key(
 ) -> tuple[Settings, bool]:
     """Ensure the settings object contains a SECRET_KEY."""
 
+    if settings.SECRET_KEY:
+        return settings, False
     if settings.debug:
         message = (
             log_message
@@ -613,8 +615,6 @@ def ensure_secret_key(
         log.warning(message)
         generated_key = _generate_secret_key()
         return settings.model_copy(update={"SECRET_KEY": generated_key}), True
-    if settings.SECRET_KEY:
-        return settings, False
     raise ValueError("SECRET_KEY must be provided in production")
 
 

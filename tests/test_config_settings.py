@@ -9,6 +9,7 @@ def clear_settings_cache(monkeypatch):
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.delenv("DEBUG", raising=False)
     monkeypatch.delenv("OTEL_DEBUG", raising=False)
+    monkeypatch.delenv("EVENTBUS_USE_REDIS", raising=False)
     yield
     config.get_settings.cache_clear()
 
@@ -109,6 +110,29 @@ def test_otel_debug_env_parsing(monkeypatch, value):
     monkeypatch.setenv("OTEL_DEBUG", value)
     settings = config.get_settings()
     assert settings.otel_debug is True
+
+
+@pytest.mark.parametrize("value", ["True", "true", "1"])
+def test_eventbus_use_redis_env_parsing_true(monkeypatch, value):
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    monkeypatch.setenv("EVENTBUS_USE_REDIS", value)
+    settings = config.get_settings()
+    assert settings.EVENTBUS_USE_REDIS is True
+
+
+@pytest.mark.parametrize("value", ["False", "false", "0"])
+def test_eventbus_use_redis_env_parsing_false(monkeypatch, value):
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    monkeypatch.setenv("EVENTBUS_USE_REDIS", value)
+    settings = config.get_settings()
+    assert settings.EVENTBUS_USE_REDIS is False
+
+
+def test_eventbus_use_redis_default_false(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    monkeypatch.delenv("EVENTBUS_USE_REDIS", raising=False)
+    settings = config.get_settings()
+    assert settings.EVENTBUS_USE_REDIS is False
 
 
 def test_settings_rejects_private_keys_when_hs256_locked(monkeypatch):
