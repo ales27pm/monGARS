@@ -6,7 +6,7 @@ import pytest
 os.environ.setdefault("DEBUG", "True")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
-from monGARS.core.caching.tiered_cache import TieredCache
+from monGARS.core.caching.tiered_cache import SimpleDiskCache, TieredCache
 
 
 @pytest.mark.asyncio
@@ -34,6 +34,16 @@ async def test_tiered_cache_ttl(tmp_path):
     await cache.set("expire", "v", ttl=1)
     await asyncio.sleep(1.5)
     assert await cache.get("expire") is None
+
+
+@pytest.mark.asyncio
+async def test_simple_disk_cache_negative_ttl(tmp_path):
+    cache = SimpleDiskCache(str(tmp_path))
+
+    await cache.set("persist", "value", ttl=-5)
+    await asyncio.sleep(0.1)
+
+    assert await cache.get("persist") == "value"
 
 
 @pytest.mark.asyncio
