@@ -5,11 +5,10 @@ import re
 import secrets
 import sys
 import time
-import uuid
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Optional
 
 import hvac
 from opentelemetry import metrics, trace
@@ -41,6 +40,21 @@ from monGARS.utils.hardware import recommended_worker_count
 log = logging.getLogger(__name__)
 
 
+# --- helpers (top-level) ---
+
+
+def _generate_secret_key() -> str:
+    """Create a high-entropy secret key suitable for symmetric JWT signing."""
+
+    return secrets.token_urlsafe(64)
+
+
+def _vault_configured(s) -> bool:
+    return bool(getattr(s, "VAULT_URL", None)) and bool(
+        getattr(s, "VAULT_TOKEN", None)
+    )
+
+
 SecretKeyOrigin = Literal[
     "missing", "provided", "vault", "ephemeral", "generated", "deferred"
 ]
@@ -63,14 +77,6 @@ def _parse_env_bool(value: Any) -> bool:
 
 
 EnvBool = Annotated[bool, BeforeValidator(_parse_env_bool)]
-
-
-def _generate_secret_key() -> str:
-    """Create a high-entropy secret key suitable for symmetric JWT signing."""
-
-    token = secrets.token_urlsafe(64)
-    suffix = uuid.uuid4().hex
-    return f"{token}.{suffix}"
 
 
 class HardwareHeuristics(BaseModel):
@@ -122,11 +128,7 @@ class Settings(BaseSettings):
     worker_deployment_name: str = Field(default="mongars-workers")
     worker_deployment_namespace: str = Field(default="default")
 
-    SECRET_KEY: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Application secret used for JWT signing; override in production.",
-    )
+    SECRET_KEY: Optional[str] = None
     _secret_key_origin: SecretKeyOrigin = PrivateAttr(default="missing")
     JWT_ALGORITHM: str = Field(default="HS256")
     JWT_PRIVATE_KEY: str | None = Field(
@@ -149,9 +151,7 @@ class Settings(BaseSettings):
 
         raw_secret = self.SECRET_KEY
         secret_value = (raw_secret or "").strip() or None
-        vault_configured = bool(
-            (self.VAULT_URL or "").strip() and (self.VAULT_TOKEN or "").strip()
-        )
+        vault_configured = _vault_configured(self)
 
         if secret_value is not None:
             secret_origin: SecretKeyOrigin = "provided"
@@ -726,27 +726,44 @@ def configure_telemetry(settings: Settings) -> None:
 
 @lru_cache()
 def get_settings() -> Settings:
+    """Load configuration with debug, Vault, and production policies applied."""
+
     settings = Settings()
-    vault_secrets = fetch_secrets_from_vault(settings)
-    if vault_secrets:
-        extras: dict[str, Any] = dict(getattr(settings, "__pydantic_extra__", {}) or {})
-        model_fields = settings.__class__.model_fields
-        for key, value in vault_secrets.items():
-            if key in model_fields:
-                setattr(settings, key, value)
-                continue
-            extras[key] = value
-            object.__setattr__(settings, key, value)
-        if extras:
-            object.__setattr__(settings, "__pydantic_extra__", extras)
-        if "SECRET_KEY" in vault_secrets:
-            object.__setattr__(settings, "_secret_key_origin", "vault")
-    if (
-        getattr(settings, "_secret_key_origin", "missing") == "deferred"
-        and not settings.SECRET_KEY
-    ):
+
+    if settings.debug:
+        debug_secret = _generate_secret_key()
+        debug_settings = settings.model_copy(update={"SECRET_KEY": debug_secret})
+        object.__setattr__(debug_settings, "_secret_key_origin", "generated")
+        validate_jwt_configuration(debug_settings)
+        configure_telemetry(debug_settings)
+        return debug_settings
+
+    if _vault_configured(settings):
+        secrets_map = fetch_secrets_from_vault(settings)
+        if secrets_map:
+            updates = {
+                key: value for key, value in secrets_map.items() if hasattr(settings, key)
+            }
+            if updates:
+                settings = settings.model_copy(update=updates)
+            extra: dict[str, Any] = dict(
+                getattr(settings, "__pydantic_extra__", {}) or {}
+            )
+            for key, value in secrets_map.items():
+                if not hasattr(settings, key):
+                    extra[key] = value
+                    object.__setattr__(settings, key, value)
+            if extra:
+                object.__setattr__(settings, "__pydantic_extra__", extra)
+            if "SECRET_KEY" in updates:
+                object.__setattr__(settings, "_secret_key_origin", "vault")
+        validate_jwt_configuration(settings)
+        configure_telemetry(settings)
+        return settings
+
+    if not settings.SECRET_KEY:
         raise ValueError("SECRET_KEY must be provided in production")
-    settings, _ = ensure_secret_key(settings)
+
     validate_jwt_configuration(settings)
     configure_telemetry(settings)
     return settings
