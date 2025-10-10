@@ -322,6 +322,74 @@ body.dark-mode .composer-count {
   color: #d1d1d1;
 }
 
+.voice-controls {
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  padding-top: 0.75rem;
+}
+
+.voice-section + .voice-section {
+  margin-top: 0.5rem;
+}
+
+.voice-controls .form-check-label {
+  font-size: 0.8rem;
+}
+
+.voice-controls .form-check-input {
+  cursor: pointer;
+}
+
+.voice-controls button {
+  white-space: nowrap;
+}
+
+.voice-controls .voice-select {
+  min-width: 160px;
+  max-width: 260px;
+}
+
+.voice-transcript {
+  display: block;
+  min-height: 1.5rem;
+  font-size: 0.85rem;
+  font-style: italic;
+  opacity: 0.8;
+  transition:
+    color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.voice-transcript[data-state="interim"] {
+  opacity: 0.9;
+}
+
+.voice-transcript[data-state="final"] {
+  font-style: normal;
+  font-weight: 600;
+  color: #212529;
+  opacity: 1;
+}
+
+.voice-transcript[data-state="idle"] {
+  opacity: 0.65;
+}
+
+#voice-status {
+  transition: color 0.2s ease;
+}
+
+#voice-speaking-indicator {
+  font-size: 0.7rem;
+}
+
+body.dark-mode .voice-controls {
+  border-top-color: rgba(255, 255, 255, 0.08);
+}
+
+body.dark-mode .voice-transcript[data-state="final"] {
+  color: #f8f9fa;
+}
+
 #prompt {
   resize: none;
   min-height: 2.75rem;

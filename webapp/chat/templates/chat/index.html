@@ -300,6 +300,82 @@
                     >0 / 1000</span
                   >
                 </div>
+                <div
+                  class="voice-controls mt-3"
+                  id="voice-controls"
+                  aria-live="polite"
+                  aria-label="Contrôles vocaux"
+                >
+                  <div id="voice-recognition-group" class="voice-section">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                      <button
+                        type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        id="voice-toggle"
+                        aria-pressed="false"
+                        disabled
+                      >
+                        🎙️ Activer la dictée
+                      </button>
+                      <div class="form-check form-switch m-0">
+                        <input
+                          class="form-check-input"
+                          type="checkbox"
+                          id="voice-auto-send"
+                        />
+                        <label class="form-check-label" for="voice-auto-send">
+                          Envoyer automatiquement
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    id="voice-synthesis-group"
+                    class="voice-section mt-2"
+                  >
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                      <div class="form-check form-switch m-0">
+                        <input
+                          class="form-check-input"
+                          type="checkbox"
+                          id="voice-playback"
+                        />
+                        <label class="form-check-label" for="voice-playback">
+                          Lire les réponses
+                        </label>
+                      </div>
+                      <label class="form-label mb-0 small" for="voice-voice-select">
+                        Voix
+                      </label>
+                      <select
+                        id="voice-voice-select"
+                        class="form-select form-select-sm voice-select"
+                      ></select>
+                      <button
+                        type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        id="voice-stop-playback"
+                        disabled
+                      >
+                        🔇 Couper la lecture
+                      </button>
+                      <span
+                        id="voice-speaking-indicator"
+                        class="badge bg-secondary d-none"
+                      >
+                        Lecture…
+                      </span>
+                    </div>
+                  </div>
+                  <p class="small text-muted mb-1 mt-2" id="voice-status">
+                    Vérification des capacités vocales…
+                  </p>
+                  <output
+                    id="voice-transcript"
+                    class="voice-transcript form-text text-muted"
+                    aria-live="polite"
+                  ></output>
+                </div>
               </form>
             </div>
           </main>
