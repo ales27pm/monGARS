@@ -171,7 +171,7 @@ class EventBus:
         self._backend: EventBackend = self._select_backend()
 
     def _select_backend(self) -> EventBackend:
-        if settings.REDIS_URL and aioredis:
+        if settings.EVENTBUS_USE_REDIS and settings.REDIS_URL and aioredis:
             try:
                 return RedisEventBackend(
                     redis_url=str(settings.REDIS_URL),

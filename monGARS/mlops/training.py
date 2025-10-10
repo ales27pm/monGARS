@@ -599,7 +599,10 @@ def train_qlora(
                 continue
 
             can_fallback_to_cpu = (
-                use_cuda and allow_cpu_fallback and torch.cuda.is_available()
+                use_cuda
+                and allow_cpu_fallback
+                and torch.cuda.is_available()
+                and gpu_ooms <= oom_retries
             )
 
             if can_fallback_to_cpu:

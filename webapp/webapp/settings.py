@@ -180,6 +180,9 @@ _compose_env_hosts = [
     *_parse_host_csv(os.environ.get("WEBAPP_HOST")),
     *_parse_host_csv(os.environ.get("HOST")),
 ]
+for compose_host in _compose_env_hosts:
+    if compose_host and compose_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(compose_host)
 if _compose_env_hosts and "0.0.0.0" not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append("0.0.0.0")
 

@@ -140,26 +140,20 @@ class Settings(BaseSettings):
     def _derive_secret_key_and_validate(self) -> "Settings":
         """Generate ephemeral secrets for debug builds and validate JWT configuration."""
 
-        secret_value = (self.SECRET_KEY or "").strip()
+        secret_value = (self.SECRET_KEY or "").strip() or None
         vault_configured = bool(
             (self.VAULT_URL or "").strip() and (self.VAULT_TOKEN or "").strip()
         )
         deferred_secret = False
 
         if self.debug:
-            if not secret_value:
-                secret_value = _generate_secret_key()
-                log.warning(
-                    "SECRET_KEY not configured; generated ephemeral key for debug use only."
-                )
             object.__setattr__(self, "SECRET_KEY", secret_value)
         else:
-            if not secret_value:
-                if vault_configured:
-                    deferred_secret = True
-                    secret_value = None
-                else:
-                    raise ValueError("SECRET_KEY must be provided in production")
+            if vault_configured:
+                deferred_secret = True
+                secret_value = None
+            elif secret_value is None:
+                raise ValueError("SECRET_KEY must be provided in production")
             object.__setattr__(self, "SECRET_KEY", secret_value)
 
         algorithm = (self.JWT_ALGORITHM or "").strip().upper()
@@ -176,7 +170,7 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported with symmetric JWT algorithms."
                 )
-            if not self.SECRET_KEY and not deferred_secret:
+            if not self.SECRET_KEY and not deferred_secret and not self.debug:
                 raise ValueError(
                     "Symmetric JWT algorithms require SECRET_KEY to be configured."
                 )
@@ -422,6 +416,12 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the Redis connection string, e.g. redis://localhost:6379/0.",
     )
+    EVENTBUS_USE_REDIS: EnvBool = Field(
+        default=False,
+        description=(
+            "Enable the Redis-backed event bus. When false, the in-memory backend is always used."
+        ),
+    )
     EVENTBUS_MEMORY_QUEUE_MAXSIZE: int = Field(
         default=1000,
         ge=1,
@@ -604,18 +604,18 @@ def ensure_secret_key(
 ) -> tuple[Settings, bool]:
     """Ensure the settings object contains a SECRET_KEY."""
 
+    if settings.debug:
+        message = (
+            log_message
+            if log_message is not None
+            else "Generated ephemeral SECRET_KEY for debug mode; do not use in production."
+        )
+        log.warning(message)
+        generated_key = _generate_secret_key()
+        return settings.model_copy(update={"SECRET_KEY": generated_key}), True
     if settings.SECRET_KEY:
         return settings, False
-    if not settings.debug:
-        raise ValueError("SECRET_KEY must be provided in production")
-    message = (
-        log_message
-        if log_message is not None
-        else "SECRET_KEY not configured; generated ephemeral key for debug use only."
-    )
-    log.warning(message)
-    generated_key = _generate_secret_key()
-    return settings.model_copy(update={"SECRET_KEY": generated_key}), True
+    raise ValueError("SECRET_KEY must be provided in production")
 
 
 def validate_jwt_configuration(settings: Settings) -> None:
@@ -714,11 +714,17 @@ def configure_telemetry(settings: Settings) -> None:
 def get_settings() -> Settings:
     settings = Settings()
     vault_secrets = fetch_secrets_from_vault(settings)
-    for key, value in vault_secrets.items():
-        try:
-            setattr(settings, key, value)
-        except (AttributeError, TypeError, ValueError):
+    if vault_secrets:
+        extras: dict[str, Any] = dict(getattr(settings, "__pydantic_extra__", {}) or {})
+        model_fields = settings.__class__.model_fields
+        for key, value in vault_secrets.items():
+            if key in model_fields:
+                setattr(settings, key, value)
+                continue
+            extras[key] = value
             object.__setattr__(settings, key, value)
+        if extras:
+            object.__setattr__(settings, "__pydantic_extra__", extras)
     settings, _ = ensure_secret_key(settings)
     validate_jwt_configuration(settings)
     configure_telemetry(settings)
