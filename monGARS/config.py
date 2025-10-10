@@ -165,6 +165,8 @@ class Settings(BaseSettings):
         object.__setattr__(self, "SECRET_KEY", secret_value)
         object.__setattr__(self, "_secret_key_origin", secret_origin)
 
+        self._vault_secret_required = deferred_secret
+
         algorithm = (self.JWT_ALGORITHM or "").strip().upper()
         object.__setattr__(self, "JWT_ALGORITHM", algorithm)
 
