@@ -56,9 +56,18 @@ class SimpleDiskCache:
         async with self.lock:
             self.directory.mkdir(parents=True, exist_ok=True)
             path = self._path(key)
+            expires_at: float | None
+            if ttl is None:
+                expires_at = None
+            else:
+                try:
+                    ttl_value = float(ttl)
+                except (TypeError, ValueError):
+                    ttl_value = 0.0
+                expires_at = None if ttl_value <= 0 else time.time() + ttl_value
             data = {
                 "value": value,
-                "expires": time.time() + ttl if ttl else None,
+                "expires": expires_at,
             }
             with path.open("w", encoding="utf-8") as fh:
                 json.dump(data, fh)
