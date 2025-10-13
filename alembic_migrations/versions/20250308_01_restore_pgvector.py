@@ -20,7 +20,7 @@ depends_on = None
 
 
 VECTOR_DIMENSIONS = 3072
-MAX_IVFFLAT_DIMENSIONS = 2000
+HNSW_DIMENSION_LIMIT = 2000
 ROW_BATCH_SIZE = 500
 
 
@@ -113,11 +113,14 @@ def upgrade() -> None:
             existing_nullable=True,
         )
 
-    index_backend = "ivfflat"
-    index_with: dict[str, str] = {"lists": "100"}
-    if VECTOR_DIMENSIONS > MAX_IVFFLAT_DIMENSIONS:
-        index_backend = "hnsw"
-        index_with = {"m": "16", "ef_construction": "64"}
+    index_backend = "hnsw"
+    index_with: dict[str, str] = {"m": "16", "ef_construction": "64"}
+    if VECTOR_DIMENSIONS > HNSW_DIMENSION_LIMIT:
+        # HNSW indexes in pgvector currently impose a hard cap of 2000 dimensions.
+        # Fall back to ivfflat when embeddings exceed that limit so the migration can
+        # complete successfully on wider vector representations.
+        index_backend = "ivfflat"
+        index_with = {"lists": "100"}
 
     op.create_index(
         "ix_conversation_history_vector_cosine",
