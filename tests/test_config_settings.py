@@ -32,10 +32,23 @@ def test_secret_key_is_random_between_calls(monkeypatch):
     assert len(second.SECRET_KEY) >= 32
 
 
-def test_get_settings_requires_secret_in_production(monkeypatch):
+def test_get_settings_bootstraps_secret_in_production(monkeypatch, tmp_path, caplog):
+    config.get_settings.cache_clear()
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEBUG=false\n")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DEBUG", "false")
-    with pytest.raises(ValueError, match="SECRET_KEY must be provided in production"):
-        config.get_settings()
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    with caplog.at_level("CRITICAL"):
+        settings = config.get_settings()
+
+    assert settings.SECRET_KEY
+    assert len(settings.SECRET_KEY) >= 32
+    assert "SECRET_KEY missing while DEBUG is disabled" in caplog.text
+    assert "Persist SECRET_KEY" in caplog.text
+    assert "SECRET_KEY=" in env_file.read_text()
+    config.get_settings.cache_clear()
 
 
 def test_settings_defers_secret_when_vault_configured(monkeypatch):

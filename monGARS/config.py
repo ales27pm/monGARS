@@ -8,7 +8,7 @@ import time
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Iterable, Literal, Optional
 
 import hvac
 from opentelemetry import metrics, trace
@@ -51,6 +51,27 @@ def _generate_secret_key() -> str:
 
 def _vault_configured(s) -> bool:
     return bool(getattr(s, "VAULT_URL", None)) and bool(getattr(s, "VAULT_TOKEN", None))
+
+
+def _iter_env_files(settings: "Settings") -> Iterable[Path]:
+    """Yield candidate env files configured for the settings model."""
+
+    env_file = settings.model_config.get("env_file")
+    if not env_file:
+        return []
+
+    if isinstance(env_file, (str, Path)):
+        env_files: Iterable[str | Path] = (env_file,)
+    else:
+        env_files = env_file
+
+    resolved: list[Path] = []
+    for entry in env_files:
+        path = Path(entry)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        resolved.append(path)
+    return resolved
 
 
 SecretKeyOrigin = Literal[
@@ -630,6 +651,55 @@ def ensure_secret_key(
     raise ValueError("SECRET_KEY must be provided in production")
 
 
+def _persist_secret_key(settings: Settings) -> Settings:
+    """Persist an auto-generated SECRET_KEY for misconfigured environments.
+
+    When the runtime is configured for production but no SECRET_KEY is defined,
+    containerised deployments can end up crash-looping. To keep the service
+    available we generate a high-entropy key, inject it into the current process,
+    and attempt to update the configured ``.env`` file so subsequent runs reuse
+    the same value. The caller is responsible for logging any warnings.
+    """
+
+    generated_key = _generate_secret_key()
+    os.environ["SECRET_KEY"] = generated_key
+
+    for env_path in _iter_env_files(settings):
+        try:
+            existing_lines = env_path.read_text().splitlines()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:  # pragma: no cover - unlikely but defend anyway
+            log.warning("Unable to read env file %s: %s", env_path, exc)
+            continue
+
+        updated = False
+        new_lines: list[str] = []
+        for raw in existing_lines:
+            if raw.lstrip().startswith("#") or "=" not in raw:
+                new_lines.append(raw)
+                continue
+            key, sep, value = raw.partition("=")
+            if key.strip() == "SECRET_KEY":
+                new_lines.append(f"SECRET_KEY={generated_key}")
+                updated = True
+            else:
+                new_lines.append(raw)
+        if not updated:
+            new_lines.append(f"SECRET_KEY={generated_key}")
+
+        try:
+            env_path.write_text("\n".join(new_lines) + "\n")
+        except OSError as exc:  # pragma: no cover - writing may fail on RO filesystems
+            log.warning("Unable to persist SECRET_KEY to %s: %s", env_path, exc)
+        else:
+            break
+
+    new_settings = settings.model_copy(update={"SECRET_KEY": generated_key})
+    object.__setattr__(new_settings, "_secret_key_origin", "generated")
+    return new_settings
+
+
 def validate_jwt_configuration(settings: Settings) -> None:
     """Validate that JWT settings have consistent key material."""
 
@@ -764,7 +834,11 @@ def get_settings() -> Settings:
         return settings
 
     if not settings.SECRET_KEY:
-        raise ValueError("SECRET_KEY must be provided in production")
+        log.critical(
+            "SECRET_KEY missing while DEBUG is disabled; generating ephemeral key. "
+            "Persist SECRET_KEY in your environment or Vault to avoid token invalidation."
+        )
+        settings = _persist_secret_key(settings)
 
     validate_jwt_configuration(settings)
     configure_telemetry(settings)
