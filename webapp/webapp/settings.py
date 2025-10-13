@@ -272,17 +272,39 @@ def _database_config_from_url(url: str) -> dict[str, Any]:
     else:
         raise RuntimeError(f"Unsupported database scheme: {parsed.scheme!r}")
 
-    name = unquote(parsed.path.lstrip("/")) or os.environ.get("DB_NAME") or ""
-    host = parsed.hostname or os.environ.get("DB_HOST", "")
-    port = str(parsed.port or os.environ.get("DB_PORT", ""))
-    user = (
-        unquote(parsed.username) if parsed.username else os.environ.get("DB_USER", "")
-    )
-    password = (
-        unquote(parsed.password)
-        if parsed.password
-        else os.environ.get("DB_PASSWORD", "")
-    )
+    def _override_env(*keys: str) -> str | None:
+        for key in keys:
+            value = os.environ.get(key)
+            if value and value.strip():
+                return value
+        return None
+
+    name = unquote(parsed.path.lstrip("/")) or ""
+    name_override = _override_env("DB_NAME", "POSTGRES_DB")
+    if name_override:
+        name = name_override
+
+    host = parsed.hostname or ""
+    host_override = _override_env("DB_HOST")
+    if host_override:
+        host = host_override
+
+    port: str = ""
+    if parsed.port is not None:
+        port = str(parsed.port)
+    port_override = _override_env("DB_PORT", "POSTGRES_PORT")
+    if port_override:
+        port = str(port_override)
+
+    user = unquote(parsed.username) if parsed.username else ""
+    user_override = _override_env("DB_USER", "POSTGRES_USER")
+    if user_override:
+        user = user_override
+
+    password = unquote(parsed.password) if parsed.password else ""
+    password_override = _override_env("DB_PASSWORD", "POSTGRES_PASSWORD")
+    if password_override:
+        password = password_override
     options = {
         key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     }
