@@ -82,10 +82,12 @@ def _load_secret_from_env_files(settings: "Settings") -> str | None:
     for env_path in _iter_env_files(settings):
         try:
             env_values = dotenv_values(env_path, encoding="utf-8") or {}
-        except OSError as exc:
-            # Reading env files can fail when the path is missing or unreadable.
+        except (OSError, UnicodeDecodeError) as exc:
+            # Reading env files can fail when the path is missing, unreadable, or misencoded.
             # The caller treats the result as best-effort so we log and skip.
-            log.debug("Skipping env file %s while resolving SECRET_KEY: %s", env_path, exc)
+            log.debug(
+                "Skipping env file %s while resolving SECRET_KEY: %s", env_path, exc
+            )
             continue
 
         if candidate := (env_values.get("SECRET_KEY") or "").strip():
@@ -226,26 +228,34 @@ class Settings(BaseSettings):
         #   3. Remaining config or persisted values are treated as provided.
         secret_value = inputs.resolved_value
         if inputs.env_var and secret_value == inputs.env_var:
-            secret_source = "env_var"
+            secret_source = (
+                "env_var"  # noqa: S105 - provenance label, not a secret value
+            )
         elif inputs.env_file and secret_value == inputs.env_file:
-            secret_source = "env_file"
+            secret_source = (
+                "env_file"  # noqa: S105 - provenance label, not a secret value
+            )
         elif secret_value is not None:
-            secret_source = "config"
+            secret_source = (
+                "config"  # noqa: S105 - provenance label, not a secret value
+            )
         else:
             secret_source = None
 
         if inputs.vault_configured:
             if secret_value is None or secret_source == "env_file":
-                secret_origin: SecretKeyOrigin = "deferred"
+                secret_origin: SecretKeyOrigin = (
+                    "deferred"  # noqa: S105 - provenance label
+                )
                 secret_value = None
             else:
-                secret_origin = "provided"
+                secret_origin = "provided"  # noqa: S105 - provenance label
         elif secret_value is not None:
-            secret_origin = "provided"
+            secret_origin = "provided"  # noqa: S105 - provenance label
         elif self.debug:
-            secret_origin = "ephemeral"
+            secret_origin = "ephemeral"  # noqa: S105 - provenance label
         else:
-            secret_origin = "missing"
+            secret_origin = "missing"  # noqa: S105 - provenance label
 
         object.__setattr__(self, "SECRET_KEY", secret_value)
         object.__setattr__(self, "_secret_key_origin", secret_origin)
@@ -912,8 +922,13 @@ def get_settings() -> Settings:
                 object.__setattr__(settings, "__pydantic_extra__", extra)
             if "SECRET_KEY" in updates:
                 object.__setattr__(settings, "_secret_key_origin", "vault")
-        if not settings.SECRET_KEY:
-            raise ValueError("SECRET_KEY must be provided in production")
+        if (
+            re.fullmatch(r"HS\d+", settings.JWT_ALGORITHM.strip().upper())
+            and not settings.SECRET_KEY
+        ):
+            raise ValueError(
+                "Symmetric JWT algorithms require SECRET_KEY to be configured."
+            )
         validate_jwt_configuration(settings)
         configure_telemetry(settings)
         return settings
