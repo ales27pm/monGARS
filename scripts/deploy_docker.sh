@@ -404,7 +404,7 @@ prepare_ports() {
   local ray_dashboard_port=""
   local ray_client_port=""
   if (( enable_ray )); then
-    ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP"
+    ensure_port_available "RAY_HTTP_PORT" 8005 "Ray Serve HTTP"
     ray_http_port="$RAY_HTTP_PORT"
     ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard"
     ray_dashboard_port="$RAY_DASHBOARD_PORT"
