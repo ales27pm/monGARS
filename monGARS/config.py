@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal, Optional
 
 import hvac
+from dotenv import dotenv_values, set_key
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -60,10 +61,9 @@ def _iter_env_files(settings: "Settings") -> Iterable[Path]:
     if not env_file:
         return []
 
-    if isinstance(env_file, (str, Path)):
-        env_files: Iterable[str | Path] = (env_file,)
-    else:
-        env_files = env_file
+    env_files: Iterable[str | Path] = (
+        (env_file,) if isinstance(env_file, (str, Path)) else env_file
+    )
 
     resolved: list[Path] = []
     for entry in env_files:
@@ -75,7 +75,13 @@ def _iter_env_files(settings: "Settings") -> Iterable[Path]:
 
 
 SecretKeyOrigin = Literal[
-    "missing", "provided", "vault", "ephemeral", "generated", "deferred"
+    "missing",
+    "provided",
+    "vault",
+    "ephemeral",
+    "generated",
+    "persisted",
+    "deferred",
 ]
 
 
@@ -664,39 +670,58 @@ def _persist_secret_key(settings: Settings) -> Settings:
     generated_key = _generate_secret_key()
     os.environ["SECRET_KEY"] = generated_key
 
+    persisted_key: str | None = None
+
     for env_path in _iter_env_files(settings):
         try:
-            existing_lines = env_path.read_text().splitlines()
-        except FileNotFoundError:
-            continue
+            env_values = dotenv_values(env_path, encoding="utf-8") or {}
         except OSError as exc:  # pragma: no cover - unlikely but defend anyway
             log.warning("Unable to read env file %s: %s", env_path, exc)
             continue
 
-        updated = False
-        new_lines: list[str] = []
-        for raw in existing_lines:
-            if raw.lstrip().startswith("#") or "=" not in raw:
-                new_lines.append(raw)
-                continue
-            key, sep, value = raw.partition("=")
-            if key.strip() == "SECRET_KEY":
-                new_lines.append(f"SECRET_KEY={generated_key}")
-                updated = True
-            else:
-                new_lines.append(raw)
-        if not updated:
-            new_lines.append(f"SECRET_KEY={generated_key}")
-
-        try:
-            env_path.write_text("\n".join(new_lines) + "\n")
-        except OSError as exc:  # pragma: no cover - writing may fail on RO filesystems
-            log.warning("Unable to persist SECRET_KEY to %s: %s", env_path, exc)
-        else:
+        existing_key = (env_values.get("SECRET_KEY") or "").strip() or None
+        if existing_key:
+            persisted_key = existing_key
+            log.info(
+                "SECRET_KEY already persisted in %s; reusing existing value.", env_path
+            )
             break
 
-    new_settings = settings.model_copy(update={"SECRET_KEY": generated_key})
-    object.__setattr__(new_settings, "_secret_key_origin", "generated")
+        try:
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            set_key(str(env_path), "SECRET_KEY", generated_key)
+        except OSError as exc:  # pragma: no cover - writing may fail on RO filesystems
+            log.warning("Unable to persist SECRET_KEY to %s: %s", env_path, exc)
+            continue
+
+        log.info("Persisted generated SECRET_KEY to %s", env_path)
+
+        try:
+            updated_values = dotenv_values(env_path, encoding="utf-8") or {}
+        except OSError as exc:  # pragma: no cover - best effort re-read
+            log.warning(
+                "Unable to re-read SECRET_KEY from %s after persistence: %s",
+                env_path,
+                exc,
+            )
+            persisted_key = generated_key
+        else:
+            final_key = (updated_values.get("SECRET_KEY") or "").strip()
+            if final_key:
+                persisted_key = final_key
+                if final_key != generated_key:
+                    log.info(
+                        "Adopting SECRET_KEY written by another process in %s.",
+                        env_path,
+                    )
+        break
+
+    final_key = (persisted_key or generated_key).strip()
+    os.environ["SECRET_KEY"] = final_key
+
+    origin: SecretKeyOrigin = "generated" if final_key == generated_key else "persisted"
+    new_settings = settings.model_copy(update={"SECRET_KEY": final_key})
+    object.__setattr__(new_settings, "_secret_key_origin", origin)
     return new_settings
 
 
