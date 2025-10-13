@@ -7,13 +7,18 @@ from monGARS import config
 
 @pytest.fixture(autouse=True)
 def clear_settings_cache(monkeypatch):
+    original_model_config = config.Settings.model_config.copy()
     config.get_settings.cache_clear()
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.delenv("DEBUG", raising=False)
     monkeypatch.delenv("OTEL_DEBUG", raising=False)
     monkeypatch.delenv("EVENTBUS_USE_REDIS", raising=False)
-    yield
-    config.get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        config.Settings.model_config.clear()
+        config.Settings.model_config.update(original_model_config)
+        config.get_settings.cache_clear()
 
 
 def test_get_settings_generates_secret_for_debug(monkeypatch):
