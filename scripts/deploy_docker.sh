@@ -267,7 +267,6 @@ ensure_port_available() {
   mark_port_reserved "$candidate"
   printf -v "$key" '%s' "$candidate"
   export "$key"
-  printf '%s\n' "$candidate"
 }
 
 synchronise_ws_allowed_origins() {
@@ -372,35 +371,45 @@ prepare_ports() {
   RESERVED_PORTS=()
 
   local api_port
-  api_port=$(ensure_port_available "API_PORT" 8000 "API service")
+  ensure_port_available "API_PORT" 8000 "API service"
+  api_port="$API_PORT"
 
   local webapp_port
-  webapp_port=$(ensure_port_available "WEBAPP_PORT" 8001 "Django webapp")
+  ensure_port_available "WEBAPP_PORT" 8001 "Django webapp"
+  webapp_port="$WEBAPP_PORT"
 
   local postgres_port
-  postgres_port=$(ensure_port_available "POSTGRES_PORT" 5432 "Postgres database")
+  ensure_port_available "POSTGRES_PORT" 5432 "Postgres database"
+  postgres_port="$POSTGRES_PORT"
 
   local redis_port
-  redis_port=$(ensure_port_available "REDIS_PORT" 6379 "Redis cache")
+  ensure_port_available "REDIS_PORT" 6379 "Redis cache"
+  redis_port="$REDIS_PORT"
 
   local mlflow_port
-  mlflow_port=$(ensure_port_available "MLFLOW_PORT" 5000 "MLflow server")
+  ensure_port_available "MLFLOW_PORT" 5000 "MLflow server"
+  mlflow_port="$MLFLOW_PORT"
 
   local vault_port
-  vault_port=$(ensure_port_available "VAULT_PORT" 8200 "Vault server")
+  ensure_port_available "VAULT_PORT" 8200 "Vault server"
+  vault_port="$VAULT_PORT"
 
   local ollama_port=""
   if (( enable_inference )); then
-    ollama_port=$(ensure_port_available "OLLAMA_PORT" 11434 "Ollama service")
+    ensure_port_available "OLLAMA_PORT" 11434 "Ollama service"
+    ollama_port="$OLLAMA_PORT"
   fi
 
   local ray_http_port=""
   local ray_dashboard_port=""
   local ray_client_port=""
   if (( enable_ray )); then
-    ray_http_port=$(ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP")
-    ray_dashboard_port=$(ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard")
-    ray_client_port=$(ensure_port_available "RAY_CLIENT_PORT" 10001 "Ray client")
+    ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP"
+    ray_http_port="$RAY_HTTP_PORT"
+    ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard"
+    ray_dashboard_port="$RAY_DASHBOARD_PORT"
+    ensure_port_available "RAY_CLIENT_PORT" 10001 "Ray client"
+    ray_client_port="$RAY_CLIENT_PORT"
   fi
 
   synchronise_ws_allowed_origins "$api_port" "$webapp_port"
