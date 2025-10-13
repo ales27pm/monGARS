@@ -1,9 +1,11 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 
 from monGARS.core.bouche import Bouche
 from monGARS.core.services import SpeakerService
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 
 def _assert_segment_payload(turn_payload: dict) -> None:

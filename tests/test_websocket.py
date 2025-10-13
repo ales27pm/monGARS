@@ -5,7 +5,7 @@ os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -17,6 +17,8 @@ from monGARS.api.web_api import app, ws_manager
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.ui_events import make_event
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 

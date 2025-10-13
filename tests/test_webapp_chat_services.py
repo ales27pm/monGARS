@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import httpx
@@ -15,6 +15,8 @@ from monGARS.api.dependencies import get_persistence_repository, hippocampus
 from monGARS.api.web_api import app, get_conversational_module
 from monGARS.core.security import SecurityManager
 from webapp.chat import services
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 
 class DummyResponse:

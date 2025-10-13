@@ -1,7 +1,7 @@
 import os
 import sys
 import types
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("SECRET_KEY", "test")
@@ -13,6 +13,8 @@ from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.security import SecurityManager
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 
