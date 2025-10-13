@@ -115,11 +115,81 @@ sys.exit(0)
 PY
 }
 
+RESERVED_PORTS=()
+
+port_is_reserved() {
+  local port="$1"
+  for reserved in "${RESERVED_PORTS[@]}"; do
+    if [[ "$reserved" == "$port" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+mark_port_reserved() {
+  local port="$1"
+  if ! port_is_reserved "$port"; then
+    RESERVED_PORTS+=("$port")
+  fi
+}
+
+port_owned_by_project() {
+  local port="$1"
+  python3 - "$PROJECT_NAME" "$port" <<'PY'
+import json
+import subprocess
+import sys
+
+project = sys.argv[1]
+port = sys.argv[2]
+
+try:
+    output = subprocess.check_output(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            "{{json .}}",
+        ],
+        text=True,
+    )
+except subprocess.CalledProcessError:
+    sys.exit(1)
+
+target = str(int(port))
+
+for line in output.splitlines():
+    if not line.strip():
+        continue
+    try:
+        data = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    ports = data.get("Ports") or ""
+    for chunk in ports.split(","):
+        chunk = chunk.strip()
+        if "->" not in chunk:
+            continue
+        host_part = chunk.split("->", 1)[0].strip()
+        if not host_part:
+            continue
+        # Entries can appear as "0.0.0.0:8000" or ":::8000"
+        host_port = host_part.rsplit(":", 1)[-1]
+        host_port = host_port.split("-", 1)[0]
+        if host_port == target:
+            sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 ensure_port_available() {
   local key="$1"
   local default_value="$2"
   local description="$3"
-  local -n reserved_ref="$4"
 
   local source=""
   local candidate=""
@@ -150,15 +220,27 @@ ensure_port_available() {
     exit 1
   fi
 
+  if (( candidate < 1 || candidate > 65535 )); then
+    err "${description}: port '$candidate' for $key is out of valid range (1-65535)"
+    exit 1
+  fi
+
   local original="$candidate"
   local max_port=65535
 
+  if (( candidate < 1 )); then
+    candidate=1
+  fi
+
   while (( candidate <= max_port )); do
-    if [[ -n "${reserved_ref[$candidate]+set}" ]]; then
+    if port_is_reserved "$candidate"; then
       ((candidate++))
       continue
     fi
     if port_is_available "$candidate"; then
+      break
+    fi
+    if port_owned_by_project "$candidate"; then
       break
     fi
     ((candidate++))
@@ -182,8 +264,9 @@ ensure_port_available() {
     fi
   fi
 
-  reserved_ref[$candidate]=1
-  export "$key=$candidate"
+  mark_port_reserved "$candidate"
+  printf -v "$key" '%s' "$candidate"
+  export "$key"
   printf '%s' "$candidate"
 }
 
@@ -285,38 +368,38 @@ prepare_ports() {
   local enable_inference="$1"
   local enable_ray="$2"
 
-  local -A reserved=()
+  RESERVED_PORTS=()
 
   local api_port
-  api_port=$(ensure_port_available "API_PORT" 8000 "API service" reserved)
+  api_port=$(ensure_port_available "API_PORT" 8000 "API service")
 
   local webapp_port
-  webapp_port=$(ensure_port_available "WEBAPP_PORT" 8001 "Django webapp" reserved)
+  webapp_port=$(ensure_port_available "WEBAPP_PORT" 8001 "Django webapp")
 
   local postgres_port
-  postgres_port=$(ensure_port_available "POSTGRES_PORT" 5432 "Postgres database" reserved)
+  postgres_port=$(ensure_port_available "POSTGRES_PORT" 5432 "Postgres database")
 
   local redis_port
-  redis_port=$(ensure_port_available "REDIS_PORT" 6379 "Redis cache" reserved)
+  redis_port=$(ensure_port_available "REDIS_PORT" 6379 "Redis cache")
 
   local mlflow_port
-  mlflow_port=$(ensure_port_available "MLFLOW_PORT" 5000 "MLflow server" reserved)
+  mlflow_port=$(ensure_port_available "MLFLOW_PORT" 5000 "MLflow server")
 
   local vault_port
-  vault_port=$(ensure_port_available "VAULT_PORT" 8200 "Vault server" reserved)
+  vault_port=$(ensure_port_available "VAULT_PORT" 8200 "Vault server")
 
   local ollama_port=""
   if (( enable_inference )); then
-    ollama_port=$(ensure_port_available "OLLAMA_PORT" 11434 "Ollama service" reserved)
+    ollama_port=$(ensure_port_available "OLLAMA_PORT" 11434 "Ollama service")
   fi
 
   local ray_http_port=""
   local ray_dashboard_port=""
   local ray_client_port=""
   if (( enable_ray )); then
-    ray_http_port=$(ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP" reserved)
-    ray_dashboard_port=$(ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard" reserved)
-    ray_client_port=$(ensure_port_available "RAY_CLIENT_PORT" 10001 "Ray client" reserved)
+    ray_http_port=$(ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP")
+    ray_dashboard_port=$(ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard")
+    ray_client_port=$(ensure_port_available "RAY_CLIENT_PORT" 10001 "Ray client")
   fi
 
   synchronise_ws_allowed_origins "$api_port" "$webapp_port"
