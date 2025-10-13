@@ -283,7 +283,7 @@ services:
     command: >-
       bash -lc "serve start --address=ray://ray-head:10001 --http-host=0.0.0.0 --http-port=8000"
     ports:
-      - "${RAY_HTTP_PORT:-8000}:8000"
+      - "${RAY_HTTP_PORT:-8005}:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/-/healthz || exit 1"]
       interval: 10s
