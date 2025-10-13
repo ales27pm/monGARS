@@ -20,6 +20,7 @@ depends_on = None
 
 
 VECTOR_DIMENSIONS = 3072
+MAX_IVFFLAT_DIMENSIONS = 2000
 ROW_BATCH_SIZE = 500
 
 
@@ -112,12 +113,18 @@ def upgrade() -> None:
             existing_nullable=True,
         )
 
+    index_backend = "ivfflat"
+    index_with: dict[str, str] = {"lists": "100"}
+    if VECTOR_DIMENSIONS > MAX_IVFFLAT_DIMENSIONS:
+        index_backend = "hnsw"
+        index_with = {"m": "16", "ef_construction": "64"}
+
     op.create_index(
         "ix_conversation_history_vector_cosine",
         "conversation_history",
         ["vector"],
-        postgresql_using="ivfflat",
-        postgresql_with={"lists": "100"},
+        postgresql_using=index_backend,
+        postgresql_with=index_with,
         postgresql_ops={"vector": "vector_cosine_ops"},
     )
 
