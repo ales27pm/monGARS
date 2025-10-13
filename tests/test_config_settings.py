@@ -7,13 +7,18 @@ from monGARS import config
 
 @pytest.fixture(autouse=True)
 def clear_settings_cache(monkeypatch):
+    original_model_config = config.Settings.model_config.copy()
     config.get_settings.cache_clear()
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.delenv("DEBUG", raising=False)
     monkeypatch.delenv("OTEL_DEBUG", raising=False)
     monkeypatch.delenv("EVENTBUS_USE_REDIS", raising=False)
-    yield
-    config.get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        config.Settings.model_config.clear()
+        config.Settings.model_config.update(original_model_config)
+        config.get_settings.cache_clear()
 
 
 def test_get_settings_generates_secret_for_debug(monkeypatch):
@@ -91,11 +96,56 @@ def test_settings_defers_secret_when_vault_configured(monkeypatch):
     settings = config.Settings(
         debug=False,
         JWT_ALGORITHM="HS256",
-        VAULT_URL="https://vault.example",  # noqa: S106 - test fixture value
+        VAULT_URL="https://vault.example",
         VAULT_TOKEN="unit-test-token",  # noqa: S106 - test fixture value
     )
 
     assert settings.SECRET_KEY is None
+
+
+def test_settings_ignores_env_file_secret_when_vault_configured(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET_KEY=env-secret\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    settings = config.Settings(
+        debug=False,
+        JWT_ALGORITHM="HS256",
+        VAULT_URL="https://vault.example",
+        VAULT_TOKEN="unit-test-token",  # noqa: S106 - test fixture value
+    )
+
+    assert settings.SECRET_KEY is None
+    assert settings._secret_key_origin == "deferred"
+
+
+def test_settings_ignores_all_env_file_secrets_when_vault_configured(
+    monkeypatch, tmp_path
+):
+    defaults_env = tmp_path / "defaults.env"
+    defaults_env.write_text("SECRET_KEY=defaults-secret\n", encoding="utf-8")
+    override_env = tmp_path / ".env"
+    override_env.write_text("SECRET_KEY=override-secret\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(
+        config.Settings.model_config,
+        "env_file",
+        ["defaults.env", ".env"],
+    )
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    settings = config.Settings(
+        debug=False,
+        JWT_ALGORITHM="HS256",
+        VAULT_URL="https://vault.example",
+        VAULT_TOKEN="unit-test-token",  # noqa: S106 - test fixture value
+    )
+
+    assert settings.SECRET_KEY is None
+    assert settings._secret_key_origin == "deferred"
 
 
 @pytest.mark.asyncio
