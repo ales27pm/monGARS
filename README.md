@@ -154,8 +154,11 @@ scripts/deploy_docker.sh destroy           # stop stack and drop volumes
 ```
 
 The helper script automatically creates `.env` from `.env.example`, rotates
-development secrets, and keeps your Compose project name consistent. Optional
-profiles:
+development secrets, keeps your Compose project name consistent, and now checks
+for host-port conflicts before starting containers. When a requested port is in
+use, the script selects the next available value, exports it for the Compose
+run, and updates `.env` (plus `WS_ALLOWED_ORIGINS`) so follow-up runs reuse the
+working configuration. Optional profiles:
 
 - `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
 - `--with-ray` provisions a Ray head node and Serve deployment. The Serve HTTP
