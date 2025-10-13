@@ -294,10 +294,7 @@ def _database_config_from_url(url: str) -> dict[str, Any]:
         "PASSWORD": ("POSTGRES_PASSWORD", "DB_PASSWORD"),
     }
 
-    overrides = {
-        key: _override_env(*env_map[key]) or defaults[key]
-        for key in defaults
-    }
+    overrides = {key: _override_env(*env_map[key]) or defaults[key] for key in defaults}
     options = {
         key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     }
