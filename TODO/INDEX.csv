@@ -1,0 +1,759 @@
+path,line,function,signature,status
+.tools/inventory.py,46,??,??,generated
+.tools/inventory.py,56,??,??,generated
+.tools/inventory.py,78,??,??,generated
+.tools/inventory.py,87,??,??,generated
+.tools/inventory.py,117,??,??,generated
+.tools/inventory.py,165,??,??,generated
+.tools/inventory.py,172,??,??,generated
+.tools/inventory.py,188,??,??,generated
+.tools/inventory.py,198,??,??,generated
+.tools/inventory.py,225,??,??,generated
+.tools/inventory.py,240,??,??,generated
+alembic_migrations/env.py,31,??,??,generated
+alembic_migrations/env.py,61,??,??,generated
+alembic_migrations/versions/20250130_01_convert_vectors_to_json.py,20,??,??,generated
+alembic_migrations/versions/20250130_01_convert_vectors_to_json.py,55,??,??,generated
+alembic_migrations/versions/20250304_01_align_sqlmodel_tables.py,14,??,??,generated
+alembic_migrations/versions/20250304_01_align_sqlmodel_tables.py,113,??,??,generated
+alembic_migrations/versions/20250308_01_restore_pgvector.py,26,??,??,generated
+alembic_migrations/versions/20250308_01_restore_pgvector.py,42,??,??,generated
+alembic_migrations/versions/20250308_01_restore_pgvector.py,74,??,??,generated
+alembic_migrations/versions/20250308_01_restore_pgvector.py,140,??,??,generated
+alembic_migrations/versions/20251004_01_add_ttl_to_memory.py,14,??,??,generated
+alembic_migrations/versions/20251004_01_add_ttl_to_memory.py,69,??,??,generated
+build_and_wrap.py,30,??,??,generated
+build_and_wrap.py,44,??,??,generated
+build_and_wrap.py,272,??,??,generated
+build_and_wrap.py,388,??,??,generated
+fix_compose_gpu.py,9,??,??,generated
+init_db.py,27,??,??,generated
+light_peft_patch.py,78,??,??,generated
+light_peft_patch.py,159,??,??,generated
+light_peft_patch.py,212,??,??,generated
+light_peft_patch.py,235,LoRAArgs._req_grad_hook,"def _req_grad_hook(module, inputs, output):",generated
+light_peft_patch.py,262,LoRAArgs._req_grad_hook,"def _req_grad_hook(module, inputs, output):",generated
+light_peft_patch.py,271,LoRAArgs.to_pc,def to_pc(ex):,generated
+light_peft_patch.py,327,LoRAArgs.build,def build(ex):,generated
+light_peft_patch.py,347,LoRAArgs.build,def build(ex):,generated
+models/datasets/catalog.py,35,??,??,generated
+models/datasets/governance.py,28,??,??,generated
+models/datasets/sanitizer.py,31,??,??,generated
+models/datasets/sanitizer.py,56,??,??,generated
+models/datasets/sanitizer.py,74,??,??,generated
+modules/evolution_engine/orchestrator.py,72,??,??,generated
+modules/evolution_engine/orchestrator.py,276,??,??,generated
+modules/evolution_engine/orchestrator.py,390,??,??,generated
+modules/evolution_engine/orchestrator.py,424,??,??,generated
+modules/evolution_engine/orchestrator.py,660,??,??,generated
+modules/evolution_engine/self_training.py,20,??,??,generated
+modules/evolution_engine/self_training.py,53,??,??,generated
+modules/evolution_engine/self_training.py,70,??,??,generated
+modules/evolution_engine/sustainability.py,27,??,??,generated
+modules/evolution_engine/sustainability.py,211,??,??,generated
+modules/evolution_engine/sustainability.py,227,??,??,generated
+modules/evolution_engine/sustainability.py,254,??,??,generated
+modules/evolution_engine/sustainability.py,300,??,??,generated
+modules/evolution_engine/sustainability.py,317,??,??,generated
+modules/evolution_engine/sustainability.py,334,??,??,generated
+modules/evolution_engine/sustainability.py,353,??,??,generated
+modules/neurons/core.py,26,??,??,generated
+modules/neurons/core.py,80,??,??,generated
+modules/neurons/core.py,115,??,??,generated
+modules/neurons/core.py,218,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,326,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,341,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,361,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,370,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,426,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,455,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,469,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,497,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,550,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,561,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/core.py,617,_ChatAndEmbedEncoder.disable_gradient,def disable_gradient(self):  # noqa: D401 - context manager wrapper,generated
+modules/neurons/registry.py,18,??,??,generated
+modules/neurons/registry.py,65,??,??,generated
+modules/neurons/registry.py,75,??,??,generated
+modules/neurons/registry.py,83,??,??,generated
+modules/neurons/registry.py,91,??,??,generated
+modules/neurons/registry.py,182,??,??,generated
+modules/neurons/registry.py,195,??,??,generated
+modules/neurons/registry.py,264,??,??,generated
+modules/neurons/training/mntp_trainer.py,69,??,??,generated
+modules/neurons/training/mntp_trainer.py,137,??,??,generated
+modules/neurons/training/mntp_trainer.py,185,??,??,generated
+modules/neurons/training/mntp_trainer.py,233,??,??,generated
+modules/neurons/training/mntp_trainer.py,295,??,??,generated
+modules/neurons/training/mntp_trainer.py,307,??,??,generated
+modules/neurons/training/mntp_trainer.py,325,??,??,generated
+modules/neurons/training/mntp_trainer.py,377,??,??,generated
+modules/neurons/training/mntp_trainer.py,440,??,??,generated
+modules/neurons/training/mntp_trainer.py,457,??,??,generated
+modules/neurons/training/mntp_trainer.py,489,??,??,generated
+modules/neurons/training/mntp_trainer.py,559,??,??,generated
+modules/neurons/training/mntp_trainer.py,623,??,??,generated
+modules/neurons/training/mntp_trainer.py,661,??,??,generated
+modules/neurons/training/mntp_trainer.py,784,??,??,generated
+modules/neurons/training/mntp_trainer.py,830,??,??,generated
+modules/neurons/training/mntp_trainer.py,912,??,??,generated
+modules/neurons/training/mntp_trainer.py,1083,??,??,generated
+modules/neurons/training/mntp_trainer.py,1155,??,??,generated
+modules/neurons/training/mntp_trainer.py,1166,??,??,generated
+modules/neurons/training/mntp_trainer.py,1193,??,??,generated
+modules/neurons/training/mntp_trainer.py,1209,??,??,generated
+modules/neurons/training/mntp_trainer.py,1294,??,??,generated
+modules/neurons/training/mntp_trainer.py,1310,??,??,generated
+modules/neurons/training/mntp_trainer.py,1416,??,??,generated
+modules/neurons/training/mntp_trainer.py,1455,??,??,generated
+modules/neurons/training/mntp_trainer.py,1468,??,??,generated
+modules/neurons/training/mntp_trainer.py,1609,??,??,generated
+modules/neurons/training/mntp_trainer.py,1660,??,??,generated
+modules/neurons/training/mntp_trainer.py,1704,??,??,generated
+modules/neurons/training/reinforcement_loop.py,136,??,??,generated
+modules/neurons/training/reinforcement_loop.py,273,??,??,generated
+modules/neurons/training/reinforcement_loop.py,283,??,??,generated
+modules/neurons/training/reinforcement_loop.py,296,??,??,generated
+modules/neurons/training/reinforcement_loop.py,343,??,??,generated
+modules/neurons/training/reinforcement_loop.py,431,??,??,generated
+modules/neurons/training/reinforcement_loop.py,462,??,??,generated
+modules/neurons/training/reinforcement_loop.py,741,??,??,generated
+modules/neurons/training/reinforcement_loop.py,795,??,??,generated
+modules/neurons/training/reinforcement_loop.py,859,??,??,generated
+modules/neurons/training/reinforcement_loop.py,909,??,??,generated
+modules/neurons/training/reinforcement_loop.py,935,??,??,generated
+modules/neurons/training/reinforcement_loop.py,967,??,??,generated
+modules/neurons/training/reinforcement_loop.py,987,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1010,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1097,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1131,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1227,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1280,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1415,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1483,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1536,??,??,generated
+modules/neurons/training/reinforcement_loop.py,1560,??,??,generated
+modules/ray_service.py,54,??,??,generated
+modules/ray_service.py,68,??,??,generated
+modules/ray_service.py,82,??,??,generated
+modules/ray_service.py,152,??,??,generated
+modules/ray_service.py,300,??,??,generated
+modules/ray_service.py,322,??,??,generated
+modules/ray_service.py,346,??,??,generated
+modules/ray_service.py,465,??,??,generated
+modules/ray_service.py,572,??,??,generated
+modules/ray_service.py,603,??,??,generated
+monGARS/__init__.py,26,??,??,generated
+monGARS/__init__.py,52,??,??,generated
+monGARS/api/authentication.py,71,??,??,generated
+monGARS/api/authentication.py,134,??,??,generated
+monGARS/api/authentication.py,176,??,??,generated
+monGARS/api/schemas.py,30,??,??,generated
+monGARS/api/schemas.py,49,??,??,generated
+monGARS/api/schemas.py,103,??,??,generated
+monGARS/api/schemas.py,140,??,??,generated
+monGARS/api/schemas.py,162,??,??,generated
+monGARS/api/schemas.py,176,??,??,generated
+monGARS/api/schemas.py,191,??,??,generated
+monGARS/api/schemas.py,209,??,??,generated
+monGARS/api/schemas.py,229,??,??,generated
+monGARS/api/schemas.py,273,??,??,generated
+monGARS/api/schemas.py,287,??,??,generated
+monGARS/api/schemas.py,305,??,??,generated
+monGARS/api/schemas.py,329,??,??,generated
+monGARS/api/schemas.py,342,??,??,generated
+monGARS/api/ticket_signer.py,66,??,??,generated
+monGARS/api/web_api.py,83,??,??,generated
+monGARS/api/ws_manager.py,27,??,??,generated
+monGARS/api/ws_manager.py,191,??,??,generated
+monGARS/api/ws_manager.py,293,??,??,generated
+monGARS/api/ws_ticket.py,25,??,??,generated
+monGARS/config.py,46,??,??,generated
+monGARS/config.py,76,??,??,generated
+monGARS/config.py,107,??,??,generated
+monGARS/config.py,220,??,??,generated
+monGARS/config.py,299,??,??,generated
+monGARS/config.py,628,??,??,generated
+monGARS/config.py,638,??,??,generated
+monGARS/config.py,656,??,??,generated
+monGARS/config.py,687,??,??,generated
+monGARS/config.py,796,??,??,generated
+monGARS/config.py,819,??,??,generated
+monGARS/config.py,847,??,??,generated
+monGARS/core/aui.py,26,??,??,generated
+monGARS/core/aui.py,63,??,??,generated
+monGARS/core/bouche.py,30,??,??,generated
+monGARS/core/caching/tiered_cache.py,32,??,??,generated
+monGARS/core/caching/tiered_cache.py,83,??,??,generated
+monGARS/core/cortex/curiosity_engine.py,53,??,??,generated
+monGARS/core/cortex/curiosity_engine.py,325,??,??,generated
+monGARS/core/cortex/curiosity_engine.py,359,??,??,generated
+monGARS/core/cortex/curiosity_engine.py,552,??,??,generated
+monGARS/core/cortex/curiosity_engine.py,706,??,??,generated
+monGARS/core/distributed_scheduler.py,30,??,??,generated
+monGARS/core/distributed_scheduler.py,81,??,??,generated
+monGARS/core/distributed_scheduler.py,167,??,??,generated
+monGARS/core/distributed_scheduler.py,305,??,??,generated
+monGARS/core/distributed_scheduler.py,314,??,??,generated
+monGARS/core/distributed_scheduler.py,366,??,??,generated
+monGARS/core/dynamic_response.py,19,??,??,generated
+monGARS/core/embeddings.py,31,??,??,generated
+monGARS/core/embeddings.py,120,??,??,generated
+monGARS/core/evolution_engine.py,51,??,??,generated
+monGARS/core/evolution_engine.py,222,??,??,generated
+monGARS/core/evolution_engine.py,462,??,??,generated
+monGARS/core/evolution_engine.py,573,??,??,generated
+monGARS/core/hippocampus.py,30,??,??,generated
+monGARS/core/iris.py,48,??,??,generated
+monGARS/core/iris.py,297,??,??,generated
+monGARS/core/iris.py,338,??,??,generated
+monGARS/core/iris.py,418,??,??,generated
+monGARS/core/iris.py,446,??,??,generated
+monGARS/core/llm_integration.py,82,??,??,generated
+monGARS/core/llm_integration.py,120,??,??,generated
+monGARS/core/llm_integration.py,213,??,??,generated
+monGARS/core/llm_integration.py,257,??,??,generated
+monGARS/core/llm_integration.py,352,??,??,generated
+monGARS/core/llm_integration.py,409,??,??,generated
+monGARS/core/llm_integration.py,539,??,??,generated
+monGARS/core/llm_integration.py,810,??,??,generated
+monGARS/core/llm_integration.py,833,??,??,generated
+monGARS/core/llm_integration.py,961,??,??,generated
+monGARS/core/llm_integration.py,986,??,??,generated
+monGARS/core/long_haul_validation.py,35,??,??,generated
+monGARS/core/long_haul_validation.py,42,??,??,generated
+monGARS/core/long_haul_validation.py,516,??,??,generated
+monGARS/core/long_haul_validation.py,574,??,??,generated
+monGARS/core/mains_virtuelles.py,21,??,??,generated
+monGARS/core/mains_virtuelles.py,49,??,??,generated
+monGARS/core/mimicry.py,39,??,??,generated
+monGARS/core/mimicry.py,100,??,??,generated
+monGARS/core/mimicry.py,249,??,??,generated
+monGARS/core/mimicry.py,327,??,??,generated
+monGARS/core/mimicry.py,336,??,??,generated
+monGARS/core/mimicry.py,361,??,??,generated
+monGARS/core/mimicry_lexicon.py,61,??,??,generated
+monGARS/core/model_manager.py,32,??,??,generated
+monGARS/core/model_manager.py,43,??,??,generated
+monGARS/core/model_manager.py,345,??,??,generated
+monGARS/core/model_manager.py,362,??,??,generated
+monGARS/core/model_manager.py,384,??,??,generated
+monGARS/core/model_manager.py,403,??,??,generated
+monGARS/core/model_manager.py,418,??,??,generated
+monGARS/core/model_slot_manager.py,88,??,??,generated
+monGARS/core/model_slot_manager.py,114,??,??,generated
+monGARS/core/model_slot_manager.py,134,??,??,generated
+monGARS/core/model_slot_manager.py,219,??,??,generated
+monGARS/core/model_slot_manager.py,346,??,??,generated
+monGARS/core/monitor.py,27,??,??,generated
+monGARS/core/neurones.py,48,??,??,generated
+monGARS/core/neurones.py,191,??,??,generated
+monGARS/core/neurones.py,265,??,??,generated
+monGARS/core/neurones.py,291,??,??,generated
+monGARS/core/operator_approvals.py,45,??,??,generated
+monGARS/core/operator_approvals.py,66,??,??,generated
+monGARS/core/operator_approvals.py,155,??,??,generated
+monGARS/core/operator_approvals.py,167,??,??,generated
+monGARS/core/operator_approvals.py,199,??,??,generated
+monGARS/core/peer.py,26,??,??,generated
+monGARS/core/peer.py,211,??,??,generated
+monGARS/core/peer.py,224,??,??,generated
+monGARS/core/peer.py,264,??,??,generated
+monGARS/core/peer.py,360,??,??,generated
+monGARS/core/peer.py,380,??,??,generated
+monGARS/core/peer.py,402,??,??,generated
+monGARS/core/peer.py,411,??,??,generated
+monGARS/core/peer.py,437,??,??,generated
+monGARS/core/peer.py,501,??,??,generated
+monGARS/core/persistence.py,67,??,??,generated
+monGARS/core/persistence.py,128,??,??,generated
+monGARS/core/persistence.py,165,??,??,generated
+monGARS/core/persistence.py,195,??,??,generated
+monGARS/core/persistence.py,491,??,??,generated
+monGARS/core/persistence.py,557,??,??,generated
+monGARS/core/persistence.py,571,??,??,generated
+monGARS/core/personality.py,33,??,??,generated
+monGARS/core/personality.py,97,??,??,generated
+monGARS/core/rag/context_enricher.py,57,??,??,generated
+monGARS/core/rag/context_enricher.py,166,??,??,generated
+monGARS/core/rag/context_enricher.py,174,??,??,generated
+monGARS/core/rag/context_enricher.py,201,??,??,generated
+monGARS/core/rag/context_enricher.py,213,??,??,generated
+monGARS/core/rag/context_enricher.py,223,??,??,generated
+monGARS/core/rag/context_enricher.py,261,??,??,generated
+monGARS/core/rag/context_enricher.py,273,??,??,generated
+monGARS/core/reinforcement_observability.py,24,??,??,generated
+monGARS/core/reinforcement_observability.py,69,??,??,generated
+monGARS/core/reinforcement_observability.py,149,??,??,generated
+monGARS/core/research_validation.py,59,??,??,generated
+monGARS/core/research_validation.py,202,??,??,generated
+monGARS/core/security.py,21,??,??,generated
+monGARS/core/security.py,129,??,??,generated
+monGARS/core/self_training.py,45,??,??,generated
+monGARS/core/self_training.py,151,??,??,generated
+monGARS/core/self_training.py,213,??,??,generated
+monGARS/core/self_training.py,241,??,??,generated
+monGARS/core/self_training.py,429,??,??,generated
+monGARS/core/services.py,10,MemoryService.__init__,"def __init__(self, hippocampus: Hippocampus):",generated
+monGARS/core/social.py,15,??,??,generated
+monGARS/core/style_finetuning.py,32,??,??,generated
+monGARS/core/style_finetuning.py,80,??,??,generated
+monGARS/core/style_finetuning.py,141,??,??,generated
+monGARS/core/style_finetuning.py,168,??,??,generated
+monGARS/core/style_finetuning.py,449,??,??,generated
+monGARS/core/style_finetuning.py,491,??,??,generated
+monGARS/core/style_finetuning.py,644,??,??,generated
+monGARS/core/sustainability_dashboard.py,85,??,??,generated
+monGARS/core/sustainability_dashboard.py,277,??,??,generated
+monGARS/core/sustainability_dashboard.py,292,??,??,generated
+monGARS/core/ui_events.py,39,??,??,generated
+monGARS/core/ui_events.py,54,??,??,generated
+monGARS/core/ui_events.py,60,??,??,generated
+monGARS/core/ui_events.py,68,??,??,generated
+monGARS/core/ui_events.py,89,??,??,generated
+monGARS/core/ui_events.py,167,??,??,generated
+monGARS/core/ui_events.py,196,??,??,generated
+monGARS/db/models.py,68,??,??,generated
+monGARS/init_db.py,40,??,??,generated
+monGARS/init_db.py,63,??,??,generated
+monGARS/init_db.py,79,??,??,generated
+monGARS/init_db.py,170,??,??,generated
+monGARS/init_db.py,189,_AsyncSessionProxy.__init__,"def __init__(self, session):",generated
+monGARS/init_db.py,206,_AsyncTransactionProxy.__init__,"def __init__(self, transaction):",generated
+monGARS/init_db.py,212,_AsyncSessionProxy.begin,def begin(self):,generated
+monGARS/mlops/artifacts.py,39,??,??,generated
+monGARS/mlops/artifacts.py,132,??,??,generated
+monGARS/mlops/dataset.py,18,??,??,generated
+monGARS/mlops/dataset.py,26,??,??,generated
+monGARS/mlops/dataset.py,87,??,??,generated
+monGARS/mlops/diagnostics/analysis.py,8,??,??,generated
+monGARS/mlops/diagnostics/cuda_metrics.py,11,??,??,generated
+monGARS/mlops/diagnostics/cuda_metrics.py,52,??,??,generated
+monGARS/mlops/diagnostics/environment.py,12,??,??,generated
+monGARS/mlops/model.py,13,??,??,generated
+monGARS/mlops/model.py,137,??,??,generated
+monGARS/mlops/model.py,151,??,??,generated
+monGARS/mlops/model.py,162,??,??,generated
+monGARS/mlops/training.py,51,??,??,generated
+monGARS/mlops/training.py,65,??,??,generated
+monGARS/mlops/training.py,119,??,??,generated
+monGARS/mlops/training.py,132,??,??,generated
+monGARS/mlops/training.py,208,??,??,generated
+monGARS/mlops/training.py,335,??,??,generated
+monGARS/mlops/training.py,637,??,??,generated
+monGARS/mlops/training_pipeline.py,26,??,??,generated
+monGARS/mlops/training_pipeline.py,138,??,??,generated
+monGARS/mlops/utils.py,21,??,??,generated
+monGARS/mlops/utils.py,34,??,??,generated
+monGARS/mlops/utils.py,44,??,??,generated
+monGARS/mlops/wrapper_loader.py,32,??,??,generated
+monGARS/mlops/wrapper_loader.py,49,??,??,generated
+monGARS/mlops/wrapper_loader.py,72,??,??,generated
+monGARS/mlops/wrapper_loader.py,118,??,??,generated
+monGARS/utils/database.py,11,??,??,generated
+scripts/build_multimodule_dataset.py,56,??,??,generated
+scripts/build_multimodule_dataset.py,125,??,??,generated
+scripts/build_multimodule_dataset.py,155,??,??,generated
+scripts/build_multimodule_dataset.py,171,??,??,generated
+scripts/build_multimodule_dataset.py,190,??,??,generated
+scripts/deploy_docker.sh,288,??,??,generated
+scripts/deploy_docker.sh,303,??,??,generated
+scripts/deploy_docker.sh,323,normalise,def normalise(value: str):,generated
+scripts/deploy_docker.sh,471,ensure,def ensure(entry: str):,generated
+scripts/export_llm2vec_wrapper.py,26,??,??,generated
+scripts/export_llm2vec_wrapper.py,72,??,??,generated
+scripts/export_llm2vec_wrapper.py,147,LLM2Vec.embed,"def embed(self, texts: str | Iterable[str]):",generated
+scripts/gpu_headless_autotrain.py,22,??,??,generated
+scripts/gpu_headless_autotrain.py,91,??,??,generated
+scripts/gpu_headless_autotrain.py,99,??,??,generated
+scripts/gpu_headless_autotrain.py,118,??,??,generated
+scripts/gpu_headless_autotrain.py,131,??,??,generated
+scripts/gpu_headless_autotrain.py,144,??,??,generated
+scripts/gpu_headless_autotrain.py,177,??,??,generated
+scripts/gpu_headless_autotrain.py,201,??,??,generated
+scripts/gpu_headless_autotrain.py,245,??,??,generated
+scripts/manage_agents.py,38,??,??,generated
+scripts/manage_agents.py,48,??,??,generated
+scripts/manage_agents.py,94,??,??,generated
+scripts/manage_agents.py,102,??,??,generated
+scripts/manage_agents.py,129,??,??,generated
+scripts/manage_agents.py,227,??,??,generated
+scripts/prepare_dataset.py,24,??,??,generated
+scripts/prepare_dataset.py,28,sha,def sha(s):,generated
+scripts/prepare_dataset.py,33,is_qc,def is_qc(t):,generated
+scripts/prepare_dataset.py,38,clamp,"def clamp(s, n):",generated
+scripts/prepare_dataset.py,49,load_jsonl,def load_jsonl(p):,generated
+scripts/prepare_dataset.py,63,norm_sft,def norm_sft(j):,generated
+scripts/prepare_dataset.py,75,dedupe,"def dedupe(xs, key=lambda x: x):",generated
+scripts/provision_models.py,18,??,??,generated
+scripts/provision_models.py,233,??,??,generated
+scripts/run_dolphin_unsloth_workflow.py,71,??,??,generated
+scripts/run_dolphin_unsloth_workflow.py,114,??,??,generated
+scripts/run_dolphin_unsloth_workflow.py,158,??,??,generated
+scripts/run_dolphin_unsloth_workflow.py,244,??,??,generated
+scripts/run_dolphin_unsloth_workflow.py,310,??,??,generated
+scripts/run_dolphin_unsloth_workflow.py,471,??,??,generated
+scripts/sdk_release.py,15,??,??,generated
+scripts/sdk_release.py,67,??,??,generated
+scripts/sdk_release.py,88,??,??,generated
+scripts/train_dolphin_unsloth.py,97,??,??,generated
+scripts/train_dolphin_unsloth.py,110,??,??,generated
+scripts/train_dolphin_unsloth.py,139,??,??,generated
+scripts/train_dolphin_unsloth.py,154,??,??,generated
+scripts/train_dolphin_unsloth.py,173,??,??,generated
+scripts/train_dolphin_unsloth.py,370,??,??,generated
+scripts/train_dolphin_unsloth.py,499,??,??,generated
+scripts/train_dolphin_unsloth.py,545,??,??,generated
+scripts/train_dolphin_unsloth.py,603,??,??,generated
+scripts/train_dolphin_unsloth.py,720,??,??,generated
+scripts/train_dolphin_unsloth_multimodule.py,39,??,??,generated
+scripts/train_dolphin_unsloth_multimodule.py,47,_setup_logging,def _setup_logging():,generated
+scripts/train_dolphin_unsloth_multimodule.py,53,_detect_device_map,def _detect_device_map():,generated
+scripts/train_dolphin_unsloth_multimodule.py,68,_load_unsloth,"def _load_unsloth(base_model: str, max_len: int, try_4bit: bool = True):",generated
+scripts/train_dolphin_unsloth_multimodule.py,85,_get_peft,"def _get_peft(model, r: int = 8, alpha: int = 16, dropout: float = 0.05):",generated
+scripts/train_dolphin_unsloth_multimodule.py,133,_get_peft,"def _get_peft(model, r: int = 8, alpha: int = 16, dropout: float = 0.05):",generated
+scripts/train_dolphin_unsloth_multimodule.py,181,_tokenize,"def _tokenize(tokenizer, ds, max_len: int):",generated
+scripts/train_dolphin_unsloth_multimodule.py,182,_tok,def _tok(batch):,generated
+scripts/train_dolphin_unsloth_multimodule.py,208,_tok,def _tok(batch):,generated
+scripts/train_dolphin_unsloth_multimodule.py,236,LLM2Vec.generate,"def generate(self, prompt, max_new_tokens=512, temperature=0.2, top_p=0.9):",generated
+scripts/train_dolphin_unsloth_multimodule.py,250,LLM2Vec.embed,"def embed(self, texts):",generated
+scripts/train_dolphin_unsloth_multimodule.py,265,LLM2Vec.embed,"def embed(self, texts):",generated
+scripts/train_dolphin_unsloth_multimodule.py,300,main,def main():,generated
+scripts/train_monGARS_unsloth.py,24,??,??,generated
+scripts/ultimate_repo_analyzer.py,44,??,??,generated
+scripts/ultimate_repo_analyzer.py,89,is_text,def is_text(p):,generated
+scripts/ultimate_repo_analyzer.py,252,sha,def sha(s):,generated
+sdks/python/examples/chat_cli.py,12,??,??,generated
+sdks/python/monGARS_sdk/client.py,34,??,??,generated
+sdks/python/monGARS_sdk/client.py,63,??,??,generated
+sdks/python/monGARS_sdk/client.py,108,??,??,generated
+sdks/python/monGARS_sdk/client.py,136,??,??,generated
+sdks/python/monGARS_sdk/client.py,298,??,??,generated
+sdks/python/monGARS_sdk/exceptions.py,14,??,??,generated
+tests/api/test_contract.py,47,??,??,generated
+tests/api/test_contract.py,166,??,??,generated
+tests/integration_test.py,6,??,??,generated
+tests/integration_test.py,12,DummyGPUtil.getGPUs,def getGPUs(self):,generated
+tests/integration_test.py,34,DummyGPUtil.getGPUs,def getGPUs(self):,generated
+tests/mlops/test_model.py,14,??,??,generated
+tests/mlops/test_model.py,63,??,??,generated
+tests/self_training_test.py,12,??,??,generated
+tests/test_api_chat.py,20,??,??,generated
+tests/test_api_history.py,16,??,??,generated
+tests/test_api_model_management.py,28,??,??,generated
+tests/test_api_model_management.py,95,client,def client(fake_model_manager: FakeModelManager):,generated
+tests/test_api_rag.py,25,??,??,generated
+tests/test_api_schemas.py,13,??,??,generated
+tests/test_api_schemas.py,23,??,??,generated
+tests/test_api_schemas.py,28,??,??,generated
+tests/test_api_schemas.py,38,??,??,generated
+tests/test_config_settings.py,9,clear_settings_cache,def clear_settings_cache(monkeypatch):,generated
+tests/test_config_settings.py,22,clear_settings_cache,def clear_settings_cache(monkeypatch):,generated
+tests/test_config_settings.py,30,test_get_settings_generates_secret_for_debug,def test_get_settings_generates_secret_for_debug(monkeypatch):,generated
+tests/test_config_settings.py,40,test_secret_key_is_random_between_calls,def test_secret_key_is_random_between_calls(monkeypatch):,generated
+tests/test_config_settings.py,70,test_get_settings_bootstraps_secret_in_production,"def test_get_settings_bootstraps_secret_in_production(monkeypatch, tmp_path, caplog):",generated
+tests/test_config_settings.py,78,test_get_settings_warns_when_env_file_read_only,"def test_get_settings_warns_when_env_file_read_only(monkeypatch, tmp_path, caplog):",generated
+tests/test_config_settings.py,91,_fail_set_key,"def _fail_set_key(*args, **kwargs):",generated
+tests/test_config_settings.py,104,test_settings_defers_secret_when_vault_configured,def test_settings_defers_secret_when_vault_configured(monkeypatch):,generated
+tests/test_config_settings.py,122,test_settings_ignores_env_file_secret_when_vault_configured,"def test_settings_ignores_env_file_secret_when_vault_configured(monkeypatch, tmp_path):",generated
+tests/test_config_settings.py,173,test_settings_ignores_env_file_secret_when_vault_configured,"def test_settings_ignores_env_file_secret_when_vault_configured(monkeypatch, tmp_path):",generated
+tests/test_config_settings.py,188,test_debug_env_parsing_variants,"def test_debug_env_parsing_variants(monkeypatch, value):",generated
+tests/test_config_settings.py,196,test_debug_env_false_variants,"def test_debug_env_false_variants(monkeypatch, value):",generated
+tests/test_config_settings.py,204,test_otel_debug_env_parsing,"def test_otel_debug_env_parsing(monkeypatch, value):",generated
+tests/test_config_settings.py,213,test_eventbus_use_redis_env_parsing_true,"def test_eventbus_use_redis_env_parsing_true(monkeypatch, value):",generated
+tests/test_config_settings.py,221,test_eventbus_use_redis_env_parsing_false,"def test_eventbus_use_redis_env_parsing_false(monkeypatch, value):",generated
+tests/test_config_settings.py,226,test_eventbus_use_redis_env_parsing_false,"def test_eventbus_use_redis_env_parsing_false(monkeypatch, value):",generated
+tests/test_config_settings.py,233,test_eventbus_use_redis_default_false,def test_eventbus_use_redis_default_false(monkeypatch):,generated
+tests/test_config_settings.py,244,test_settings_rejects_private_keys_when_hs256_locked,def test_settings_rejects_private_keys_when_hs256_locked(monkeypatch):,generated
+tests/test_config_settings.py,253,test_settings_reject_non_hs256_algorithm,def test_settings_reject_non_hs256_algorithm(monkeypatch):,generated
+tests/test_config_settings.py,261,test_validate_jwt_configuration_allows_hs256_with_secret,def test_validate_jwt_configuration_allows_hs256_with_secret(monkeypatch):,generated
+tests/test_config_settings.py,271,test_validate_jwt_configuration_requires_secret_key,def test_validate_jwt_configuration_requires_secret_key(monkeypatch):,generated
+tests/test_config_settings.py,284,test_database_url_password_override,def test_database_url_password_override(monkeypatch):,generated
+tests/test_curiosity_engine.py,14,??,??,generated
+tests/test_curiosity_engine.py,131,??,??,generated
+tests/test_curiosity_engine.py,176,test_curiosity_engine_initialises_from_settings,def test_curiosity_engine_initialises_from_settings(monkeypatch):,generated
+tests/test_curiosity_engine.py,191,OddRow.data,def data(self):  # noqa: ANN001 - interface mimics driver row,generated
+tests/test_curiosity_engine.py,261,OddRow.data,def data(self):  # noqa: ANN001 - interface mimics driver row,generated
+tests/test_curiosity_engine.py,306,RecordingResult.__init__,"def __init__(self, entities):",generated
+tests/test_curiosity_engine.py,316,RecordingResult.__init__,"def __init__(self, entities):",generated
+tests/test_curiosity_engine.py,401,RecordingResult.__init__,"def __init__(self, entities):",generated
+tests/test_curiosity_engine.py,449,AsyncIterableResult.__aiter__,def __aiter__(self):,generated
+tests/test_curiosity_engine.py,499,AsyncIterableResult.__aiter__,def __aiter__(self):,generated
+tests/test_curiosity_engine.py,546,AsyncIterableResult.__aiter__,def __aiter__(self):,generated
+tests/test_diagnose_unsloth.py,13,??,??,generated
+tests/test_diagnose_unsloth.py,80,test_main_outputs_extended_payload,"def test_main_outputs_extended_payload(monkeypatch, capsys):",generated
+tests/test_diagnose_unsloth.py,88,test_cli_rejects_non_positive_thresholds,def test_cli_rejects_non_positive_thresholds():,generated
+tests/test_diagnose_unsloth.py,104,test_force_flag_is_forwarded,"def test_force_flag_is_forwarded(monkeypatch, capsys):",generated
+tests/test_diagnose_unsloth.py,135,test_oom_analysis_classifies_critical,def test_oom_analysis_classifies_critical():,generated
+tests/test_diagnose_unsloth.py,163,test_oom_analysis_classifies_warning,def test_oom_analysis_classifies_warning():,generated
+tests/test_diagnose_unsloth.py,191,test_oom_analysis_classifies_ok,def test_oom_analysis_classifies_ok():,generated
+tests/test_distributed_scheduler.py,47,??,??,generated
+tests/test_distributed_scheduler.py,152,make_task,def make_task(n: int):,generated
+tests/test_dynamic_response.py,9,??,??,generated
+tests/test_dynamic_response.py,15,??,??,generated
+tests/test_embeddings.py,10,??,??,generated
+tests/test_evolution_engine.py,28,??,??,generated
+tests/test_evolution_engine.py,270,_FakeCuda.device,"def device(self, index: int):  # type: ignore[override]",generated
+tests/test_extractors_unit.py,13,??,??,generated
+tests/test_extractors_unit.py,21,test_python_docstring_extraction_produces_dialog_and_embedding,def test_python_docstring_extraction_produces_dialog_and_embedding():,generated
+tests/test_extractors_unit.py,34,helper,def helper():,generated
+tests/test_extractors_unit.py,56,test_yaml_workflow_step_extraction,def test_yaml_workflow_step_extraction():,generated
+tests/test_extractors_unit.py,68,test_dockerfile_parses_run_commands,def test_dockerfile_parses_run_commands():,generated
+tests/test_extractors_unit.py,80,test_shell_comment_embedding_and_usage,def test_shell_comment_embedding_and_usage():,generated
+tests/test_hardware_utils.py,5,??,??,generated
+tests/test_hardware_utils.py,10,test_detect_embedded_device_arm,def test_detect_embedded_device_arm():,generated
+tests/test_hardware_utils.py,15,test_detect_embedded_device_aarch64,def test_detect_embedded_device_aarch64():,generated
+tests/test_hardware_utils.py,20,test_detect_embedded_device_arm64,def test_detect_embedded_device_arm64():,generated
+tests/test_hardware_utils.py,34,test_detect_embedded_device_non_arm,def test_detect_embedded_device_non_arm():,generated
+tests/test_hardware_utils.py,39,test_recommended_worker_count_defaults,def test_recommended_worker_count_defaults():,generated
+tests/test_hardware_utils.py,46,test_recommended_worker_count_arm,def test_recommended_worker_count_arm():,generated
+tests/test_hardware_utils.py,53,test_recommended_worker_count_cpu_count_none,def test_recommended_worker_count_cpu_count_none():,generated
+tests/test_hardware_utils.py,60,test_recommended_worker_count_cpu_count_zero,def test_recommended_worker_count_cpu_count_zero():,generated
+tests/test_image_captioning.py,34,??,??,generated
+tests/test_image_captioning.py,53,DummyFile.__enter__,def __enter__(self):,generated
+tests/test_image_captioning.py,55,DummyFile.__enter__,def __enter__(self):,generated
+tests/test_incomplete_logic_guardrails.py,12,??,??,generated
+tests/test_incomplete_logic_guardrails.py,14,??,??,generated
+tests/test_incomplete_logic_guardrails.py,40,??,??,generated
+tests/test_init_db.py,17,??,??,generated
+tests/test_init_db.py,104,test_resolve_database_url_rejects_remote_without_override,def test_resolve_database_url_rejects_remote_without_override(monkeypatch):,generated
+tests/test_init_db.py,117,test_build_sync_url_honours_password_override,def test_build_sync_url_honours_password_override(monkeypatch):,generated
+tests/test_init_db.py,132,test_build_sync_url_password_override_suppresses_logging,"def test_build_sync_url_password_override_suppresses_logging(monkeypatch, caplog):",generated
+tests/test_iris.py,9,??,??,generated
+tests/test_iris.py,62,patch_dependencies,def patch_dependencies(monkeypatch):,generated
+tests/test_iris.py,307,FakeMonotonic.__init__,def __init__(self):,generated
+tests/test_iris.py,309,FakeMonotonic.__init__,def __init__(self):,generated
+tests/test_iris.py,370,FakeMonotonic.__init__,def __init__(self):,generated
+tests/test_iris.py,415,BlockingClient.__init__,def __init__(self):,generated
+tests/test_llm_adapter_refresh.py,7,??,??,generated
+tests/test_llm_adapter_refresh.py,38,Resp.raise_for_status,def raise_for_status(self):,generated
+tests/test_llm_adapter_refresh.py,40,Resp.raise_for_status,def raise_for_status(self):,generated
+tests/test_llm_model_manager.py,8,??,??,generated
+tests/test_llm_model_manager.py,13,_write_config,"def _write_config(path, data):",generated
+tests/test_llm_model_manager.py,19,_build_settings,def _build_settings(**overrides):,generated
+tests/test_llm_model_manager.py,55,test_model_manager_loads_profile_from_config,def test_model_manager_loads_profile_from_config(tmp_path):,generated
+tests/test_llm_model_manager.py,93,test_model_definition_string_entries_preserve_role,def test_model_definition_string_entries_preserve_role(tmp_path):,generated
+tests/test_llm_ray.py,22,Resp.raise_for_status,def raise_for_status(self):,generated
+tests/test_llm_ray.py,24,Resp.raise_for_status,def raise_for_status(self):,generated
+tests/test_llm_ray.py,49,FailingClient.__init__,"def __init__(self, *_, **__):",generated
+tests/test_llm_ray.py,92,ErroringClient.__init__,"def __init__(self, *_, **__):",generated
+tests/test_migration_restore_pgvector.py,44,??,??,generated
+tests/test_migration_restore_pgvector.py,66,??,??,generated
+tests/test_mlops_training.py,15,??,??,generated
+tests/test_mlops_training.py,49,trainer_config,def trainer_config(tmp_path):,generated
+tests/test_mlops_training.py,58,trainer_config,def trainer_config(tmp_path):,generated
+tests/test_mlops_training.py,72,test_train_qlora_success,def test_train_qlora_success(trainer_config):,generated
+tests/test_mlops_training.py,88,test_train_qlora_retries_with_smaller_batch,def test_train_qlora_retries_with_smaller_batch(trainer_config):,generated
+tests/test_mlops_training.py,106,test_train_qlora_reduces_gradient_accumulation_when_batch_is_one,def test_train_qlora_reduces_gradient_accumulation_when_batch_is_one(trainer_config):,generated
+tests/test_mlops_training.py,124,test_train_qlora_raises_after_exhausting_retries,def test_train_qlora_raises_after_exhausting_retries(trainer_config):,generated
+tests/test_mlops_training.py,139,test_train_qlora_does_not_retry_on_non_oom,def test_train_qlora_does_not_retry_on_non_oom(trainer_config):,generated
+tests/test_mlops_training.py,156,test_train_qlora_honours_custom_backoff_factor,def test_train_qlora_honours_custom_backoff_factor(trainer_config):,generated
+tests/test_mlops_training.py,161,test_train_qlora_emits_oom_events,def test_train_qlora_emits_oom_events(trainer_config):,generated
+tests/test_mntp_trainer.py,15,??,??,generated
+tests/test_mntp_trainer.py,139,_DummyModel.named_parameters,def named_parameters(self):  # pragma: no cover - simple iterator,generated
+tests/test_mntp_trainer.py,256,trainer_setup,"def trainer_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):",generated
+tests/test_model_slot_manager.py,16,??,??,generated
+tests/test_model_slot_manager.py,32,_DummyModel.load_state_dict,"def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True):",generated
+tests/test_model_slot_manager.py,96,_DummyModel.load_state_dict,"def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True):",generated
+tests/test_model_slot_manager.py,136,_DummyModel.load_state_dict,"def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True):",generated
+tests/test_neuron_manager.py,11,??,??,generated
+tests/test_neuron_manager.py,233,??,??,generated
+tests/test_neuron_manager.py,364,??,??,generated
+tests/test_neuron_manager.py,375,??,??,generated
+tests/test_neuron_manager.py,386,??,??,generated
+tests/test_peer_communication.py,15,secret_key_env,def secret_key_env(monkeypatch):,generated
+tests/test_peer_communication.py,49,secret_key_env,def secret_key_env(monkeypatch):,generated
+tests/test_persistence.py,16,??,??,generated
+tests/test_personality.py,9,FakeSession.__init__,"def __init__(self, record=None):",generated
+tests/test_personality.py,22,Result.__init__,"def __init__(self, record):",generated
+tests/test_personality.py,24,Result.__init__,"def __init__(self, record):",generated
+tests/test_personality.py,37,Result.scalar_one_or_none,def scalar_one_or_none(self):,generated
+tests/test_personality.py,41,fake_factory,def fake_factory(record=None):,generated
+tests/test_personality.py,47,FakeSession.factory,def factory():,generated
+tests/test_personality.py,52,load_engine,"def load_engine(factory, monkeypatch):",generated
+tests/test_personality.py,62,FakeSelect.where,"def where(self, *a, **k):",generated
+tests/test_python_sdk.py,24,??,??,generated
+tests/test_python_sdk.py,38,??,??,generated
+tests/test_python_sdk.py,121,??,??,generated
+tests/test_rag_context_enricher.py,20,??,??,generated
+tests/test_ray_service.py,21,??,??,generated
+tests/test_ray_service.py,123,fake_vllm,def fake_vllm(monkeypatch: pytest.MonkeyPatch):,generated
+tests/test_ray_service.py,299,fake_vllm,def fake_vllm(monkeypatch: pytest.MonkeyPatch):,generated
+tests/test_ray_service.py,312,test_ray_service_initialisation_failure_is_reported,def test_ray_service_initialisation_failure_is_reported(fake_vllm):,generated
+tests/test_ray_service.py,318,test_ray_service_encode_prompt_error,"def test_ray_service_encode_prompt_error(fake_vllm, monkeypatch):",generated
+tests/test_ray_service.py,326,DummyNeuronManager.failing_encode,def failing_encode(_):,generated
+tests/test_ray_service.py,360,DummyClient.__init__,"def __init__(self, *_, **__):",generated
+tests/test_ray_service.py,391,DummyClient.__init__,"def __init__(self, *_, **__):",generated
+tests/test_ray_service.py,404,test_llm_integration_negative_backoff_entries_are_ignored,def test_llm_integration_negative_backoff_entries_are_ignored(monkeypatch):,generated
+tests/test_ray_service.py,548,test_llm_integration_invalid_backoff_falls_back_to_defaults,def test_llm_integration_invalid_backoff_falls_back_to_defaults(monkeypatch):,generated
+tests/test_ray_service.py,582,test_llm_integration_invalid_backoff_falls_back_to_defaults,def test_llm_integration_invalid_backoff_falls_back_to_defaults(monkeypatch):,generated
+tests/test_ray_service.py,590,test_update_ray_deployment_validates_payload,def test_update_ray_deployment_validates_payload(monkeypatch):,generated
+tests/test_ray_service.py,628,test_update_ray_deployment_rejects_unknown_keys,def test_update_ray_deployment_rejects_unknown_keys(monkeypatch):,generated
+tests/test_reinforcement_long_haul_integration.py,17,??,??,generated
+tests/test_reinforcement_long_haul_integration.py,97,??,??,generated
+tests/test_reinforcement_loop.py,28,??,??,generated
+tests/test_reinforcement_loop.py,67,??,??,generated
+tests/test_reinforcement_loop.py,496,_TrainerStub._fake_update_manifest,"def _fake_update_manifest(registry: Path, summary: dict[str, Any]):",generated
+tests/test_reinforcement_loop.py,508,_TrainerStub._fake_update_manifest,"def _fake_update_manifest(registry: Path, summary: dict[str, Any]):",generated
+tests/test_run_dolphin_unsloth_workflow.py,11,??,??,generated
+tests/test_run_dolphin_unsloth_workflow.py,84,test_parse_arguments_env_token,"def test_parse_arguments_env_token(monkeypatch, tmp_path):",generated
+tests/test_run_dolphin_unsloth_workflow.py,102,test_parse_arguments_conflicting_flags,def test_parse_arguments_conflicting_flags(tmp_path):,generated
+tests/test_run_dolphin_unsloth_workflow.py,117,test_build_datasets_deduplicates_and_respects_minimum,def test_build_datasets_deduplicates_and_respects_minimum(tmp_path):,generated
+tests/test_scripts_provision_models.py,13,??,??,generated
+tests/test_scripts_provision_models.py,24,DummyEngine.curate_reasoning_dataset,"def curate_reasoning_dataset(self, num_samples: int, internal_ratio: float):",generated
+tests/test_scripts_provision_models.py,33,DummySlotManager.__enter__,def __enter__(self):,generated
+tests/test_sdk_release_script.py,9,??,??,generated
+tests/test_security_manager.py,10,??,??,generated
+tests/test_security_manager.py,22,??,??,generated
+tests/test_social_media.py,17,??,??,generated
+tests/test_social_media.py,28,FakeSession.post,"def post(self, *args, **kwargs):",generated
+tests/test_social_media.py,48,UnauthorizedSession.post,"def post(self, *args, **kwargs):",generated
+tests/test_social_media.py,53,TimeoutSession.post,"def post(self, *args, **kwargs):",generated
+tests/test_social_media.py,64,ErrorSession.post,"def post(self, *args, **kwargs):",generated
+tests/test_sustainability_dashboard.py,16,??,??,generated
+tests/test_ticket_signer.py,13,??,??,generated
+tests/test_ticket_signer.py,42,??,??,generated
+tests/test_ticket_signer.py,64,??,??,generated
+tests/test_ticket_signer.py,76,??,??,generated
+tests/test_ticket_signer.py,88,??,??,generated
+tests/test_ticket_signer.py,95,??,??,generated
+tests/test_ticket_signer.py,106,??,??,generated
+tests/test_ticket_signer.py,117,??,??,generated
+tests/test_token_security.py,11,??,??,generated
+tests/test_token_security.py,18,test_encrypt_and_decrypt_roundtrip,def test_encrypt_and_decrypt_roundtrip():,generated
+tests/test_token_security.py,35,test_encrypt_and_decrypt_with_custom_key,def test_encrypt_and_decrypt_with_custom_key(monkeypatch):,generated
+tests/test_token_security.py,51,test_decrypt_with_wrong_key,def test_decrypt_with_wrong_key(monkeypatch):,generated
+tests/test_token_security.py,58,test_encrypt_and_decrypt_empty_token,def test_encrypt_and_decrypt_empty_token():,generated
+tests/test_token_security.py,65,test_encrypt_and_decrypt_very_long_token,def test_encrypt_and_decrypt_very_long_token():,generated
+tests/test_training_pipeline.py,19,??,??,generated
+tests/test_ui_events.py,74,??,??,generated
+tests/test_webapp_chat_services.py,23,??,??,generated
+tests/test_webapp_chat_services.py,34,DummyAsyncClient.__init__,"def __init__(self, response: DummyResponse, recorder: dict[str, object]):",generated
+tests/test_webapp_chat_services.py,101,DummyAsyncClient.__init__,"def __init__(self, response: DummyResponse, recorder: dict[str, object]):",generated
+tests/test_webapp_settings.py,9,??,??,generated
+tests/test_webapp_settings.py,27,test_debug_includes_private_addresses,def test_debug_includes_private_addresses(monkeypatch):,generated
+tests/test_webapp_settings.py,64,test_debug_env_hosts_are_preserved,def test_debug_env_hosts_are_preserved(monkeypatch):,generated
+tests/test_webapp_settings.py,95,test_compose_defaults_include_container_host,def test_compose_defaults_include_container_host(monkeypatch):,generated
+tests/test_websocket.py,60,??,??,generated
+tests/test_websocket.py,148,_connect_ws,"def _connect_ws(client: TestClient, ticket: str):",generated
+tests/test_wrapper_loader.py,9,??,??,generated
+tests/test_wrapper_loader.py,55,??,??,generated
+tests/test_ws_manager.py,15,??,??,generated
+tests/test_ws_manager.py,138,??,??,generated
+tools/monGARS_deep_scan/build_dataset.py,18,??,??,generated
+tools/monGARS_deep_scan/build_dataset.py,33,??,??,generated
+tools/monGARS_deep_scan/build_dataset.py,53,??,??,generated
+tools/monGARS_deep_scan/build_dataset.py,86,??,??,generated
+tools/monGARS_deep_scan/dataset/qc_filter.py,22,??,??,generated
+tools/monGARS_deep_scan/deep_scan.py,114,??,??,generated
+tools/monGARS_deep_scan/deep_scan.py,186,??,??,generated
+tools/monGARS_deep_scan/deep_scan.py,231,??,??,generated
+tools/monGARS_deep_scan/extractors/code_py.py,11,??,??,generated
+tools/monGARS_deep_scan/extractors/code_py.py,24,??,??,generated
+tools/monGARS_deep_scan/extractors/code_py.py,47,??,??,generated
+tools/monGARS_deep_scan/extractors/code_py.py,74,??,??,generated
+tools/monGARS_deep_scan/extractors/configs_yaml.py,19,??,??,generated
+tools/monGARS_deep_scan/extractors/dockerfiles.py,13,??,??,generated
+tools/monGARS_deep_scan/extractors/html_jsx.py,17,??,??,generated
+tools/monGARS_deep_scan/extractors/shells.py,8,??,??,generated
+tools/monGARS_deep_scan/extractors/shells.py,27,??,??,generated
+tools/monGARS_deep_scan/extractors/text_docs.py,17,??,??,generated
+tools/monGARS_deep_scan/publish_summary.py,9,??,??,generated
+tools/monGARS_deep_scan/publish_summary.py,42,??,??,generated
+tools/monGARS_deep_scan/utils/io.py,10,??,??,generated
+tools/monGARS_deep_scan/utils/io.py,32,??,??,generated
+tools/monGARS_deep_scan/utils/parallel.py,8,??,??,generated
+tools/monGARS_deep_scan/utils/text_clean.py,28,??,??,generated
+tools/monGARS_deep_scan/utils/text_clean.py,64,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/E5Data.py,36,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/E5Data.py,53,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/E5Data.py,56,E5Data.__len__,def __len__(self):,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/E5Data.py,148,E5Data.load_data,"def load_data(self, file_path: str = None):",generated
+vendor/llm2vec_monGARS/llm2vec/dataset/Wiki1M.py,9,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/Wiki1M.py,19,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/Wiki1M.py,22,Wiki1M.__len__,def __len__(self):,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/Wiki1M.py,38,Wiki1M.load_data,"def load_data(self, file_path: str = None):",generated
+vendor/llm2vec_monGARS/llm2vec/dataset/dataset.py,20,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/dataset.py,38,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/dataset/dataset.py,46,Dataset.load_data,"def load_data(self, file_path: str = None):",generated
+vendor/llm2vec_monGARS/llm2vec/dataset/dataset.py,48,Dataset.load_data,"def load_data(self, file_path: str = None):",generated
+vendor/llm2vec_monGARS/llm2vec/dataset/dataset.py,51,Dataset.__getitem__,"def __getitem__(self, index):",generated
+vendor/llm2vec_monGARS/llm2vec/dataset/utils.py,2,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/experiment_utils.py,2,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/experiment_utils.py,42,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,32,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,45,batch_to_device,"def batch_to_device(batch, target_device: device):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,64,LLM2Vec._get_model_class,"def _get_model_class(cls, config_class_name, enable_bidirectional):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,81,LLM2Vec._get_model_class,"def _get_model_class(cls, config_class_name, enable_bidirectional):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,146,LLM2Vec._get_model_class,"def _get_model_class(cls, config_class_name, enable_bidirectional):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,181,LLM2Vec.prepare_for_tokenization,"def prepare_for_tokenization(self, text):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,224,LLM2Vec.tokenize,"def tokenize(self, texts):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,231,LLM2Vec._skip_instruction,"def _skip_instruction(self, sentence_feature):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,240,LLM2Vec.forward,"def forward(self, sentence_feature: Dict[str, Tensor]):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,274,LLM2Vec.get_pooling,"def get_pooling(self, features, last_hidden_states):  # All models padded from left",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,305,LLM2Vec._convert_to_str,"def _convert_to_str(self, instruction, text):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,389,LLM2Vec._convert_to_str,"def _convert_to_str(self, instruction, text):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,411,LLM2Vec.update,def update(*args):,generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,433,LLM2Vec.save,"def save(self, output_path, merge_before_save=False, save_config=True):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,460,LLM2Vec.save,"def save(self, output_path, merge_before_save=False, save_config=True):",generated
+vendor/llm2vec_monGARS/llm2vec/llm2vec.py,479,LLM2Vec._text_length,"def _text_length(self, text: Union[List[int], List[List[int]]]):",generated
+vendor/llm2vec_monGARS/llm2vec/loss/HardNegativeNLLLoss.py,8,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/loss/HardNegativeNLLLoss.py,16,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/loss/loss_utils.py,11,AllGather.forward,"def forward(ctx, tensor_list, tensor, group, async_op):",generated
+vendor/llm2vec_monGARS/llm2vec/loss/loss_utils.py,18,AllGather.backward,"def backward(ctx, *grad_list):",generated
+vendor/llm2vec_monGARS/llm2vec/loss/loss_utils.py,34,AllGather.backward,"def backward(ctx, *grad_list):",generated
+vendor/llm2vec_monGARS/llm2vec/loss/loss_utils.py,56,cos_sim,"def cos_sim(a: Tensor, b: Tensor):",generated
+vendor/llm2vec_monGARS/llm2vec/loss/utils.py,2,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/models/attn_mask_utils.py,5,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/models/attn_mask_utils.py,69,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,22,??,??,generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,34,ModifiedGemmaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,40,ModifiedGemmaFlashAttention2.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,46,ModifiedGemmaSdpaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,59,ModifiedGemmaDecoderLayer.__init__,"def __init__(self, config: GemmaConfig, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,76,ModifiedGemmaDecoderLayer.__init__,"def __init__(self, config: GemmaConfig, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,100,GemmaBiModel.__init__,"def __init__(self, config: GemmaConfig):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,189,GemmaBiForMNTP.__init__,"def __init__(self, config):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,199,GemmaBiForMNTP.get_model_for_peft,def get_model_for_peft(self):,generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,203,GemmaBiForMNTP.set_model_for_peft,"def set_model_for_peft(self, model: PeftModel):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_gemma.py,207,GemmaBiForMNTP.save_peft_model,"def save_peft_model(self, path):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,24,ModifiedLlamaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,30,ModifiedLlamaFlashAttention2.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,36,ModifiedLlamaSdpaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,49,ModifiedLlamaDecoderLayer.__init__,"def __init__(self, config: LlamaConfig, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,66,ModifiedLlamaDecoderLayer.__init__,"def __init__(self, config: LlamaConfig, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,91,LlamaBiModel.__init__,"def __init__(self, config: LlamaConfig):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,189,LlamaBiForMNTP.__init__,"def __init__(self, config):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,199,LlamaBiForMNTP.get_model_for_peft,def get_model_for_peft(self):,generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,203,LlamaBiForMNTP.set_model_for_peft,"def set_model_for_peft(self, model: PeftModel):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_llama.py,207,LlamaBiForMNTP.save_peft_model,"def save_peft_model(self, path):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,28,ModifiedMistralAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,34,ModifiedMistralFlashAttention2.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,40,ModifiedMistralSdpaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,53,ModifiedMistralDecoderLayer.__init__,"def __init__(self, config: MistralConfig, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,72,ModifiedMistralDecoderLayer.__init__,"def __init__(self, config: MistralConfig, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,99,MistralBiModel.__init__,"def __init__(self, config: MistralConfig):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,221,MistralBiForMNTP.__init__,"def __init__(self, config):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,231,MistralBiForMNTP.get_model_for_peft,def get_model_for_peft(self):,generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,235,MistralBiForMNTP.set_model_for_peft,"def set_model_for_peft(self, model: PeftModel):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,239,MistralBiForMNTP.save_peft_model,"def save_peft_model(self, path):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,28,ModifiedQwen2Attention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,34,ModifiedQwen2FlashAttention2.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,40,ModifiedQwen2SdpaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,53,ModifiedQwen2DecoderLayer.__init__,"def __init__(self, config: Qwen2Config, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,70,ModifiedQwen2DecoderLayer.__init__,"def __init__(self, config: Qwen2Config, layer_idx: int):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,94,Qwen2BiForMNTP.__init__,"def __init__(self, config):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,104,Qwen2BiForMNTP.get_model_for_peft,def get_model_for_peft(self):,generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,108,Qwen2BiForMNTP.set_model_for_peft,"def set_model_for_peft(self, model: PeftModel):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,112,Qwen2BiForMNTP.save_peft_model,"def save_peft_model(self, path):",generated
+vendor/llm2vec_monGARS/llm2vec/models/utils.py,5,??,??,generated
+webapp/chat/decorators.py,4,??,??,generated
+webapp/chat/services.py,112,??,??,generated
+webapp/webapp/settings.py,11,??,??,generated
+webapp/webapp/settings.py,30,??,??,generated
+webapp/webapp/settings.py,42,??,??,generated
+webapp/webapp/settings.py,74,??,??,generated
+webapp/webapp/settings.py,102,??,??,generated
+webapp/webapp/settings.py,228,??,??,generated
+webapp/webapp/settings.py,307,??,??,generated
+webapp/webapp/settings.py,350,??,??,generated
