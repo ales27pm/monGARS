@@ -272,28 +272,36 @@ def _database_config_from_url(url: str) -> dict[str, Any]:
     else:
         raise RuntimeError(f"Unsupported database scheme: {parsed.scheme!r}")
 
-    name = unquote(parsed.path.lstrip("/")) or os.environ.get("DB_NAME") or ""
-    host = parsed.hostname or os.environ.get("DB_HOST", "")
-    port = str(parsed.port or os.environ.get("DB_PORT", ""))
-    user = (
-        unquote(parsed.username) if parsed.username else os.environ.get("DB_USER", "")
-    )
-    password = (
-        unquote(parsed.password)
-        if parsed.password
-        else os.environ.get("DB_PASSWORD", "")
-    )
+    def _override_env(*keys: str) -> str | None:
+        for key in keys:
+            value = os.environ.get(key)
+            if value and value.strip():
+                return value
+        return None
+
+    defaults = {
+        "NAME": unquote(parsed.path.lstrip("/")) or "",
+        "HOST": parsed.hostname or "",
+        "PORT": str(parsed.port) if parsed.port is not None else "",
+        "USER": unquote(parsed.username) if parsed.username else "",
+        "PASSWORD": unquote(parsed.password) if parsed.password else "",
+    }
+    env_map = {
+        "NAME": ("POSTGRES_DB", "DB_NAME"),
+        "HOST": ("POSTGRES_HOST", "DB_HOST"),
+        "PORT": ("POSTGRES_PORT", "DB_PORT"),
+        "USER": ("POSTGRES_USER", "DB_USER"),
+        "PASSWORD": ("POSTGRES_PASSWORD", "DB_PASSWORD"),
+    }
+
+    overrides = {key: _override_env(*env_map[key]) or defaults[key] for key in defaults}
     options = {
         key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     }
 
     config: dict[str, Any] = {
         "ENGINE": engine,
-        "NAME": name,
-        "USER": user,
-        "PASSWORD": password,
-        "HOST": host,
-        "PORT": port,
+        **overrides,
     }
 
     conn_max_age = _database_conn_max_age(engine)
