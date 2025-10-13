@@ -40,5 +40,5 @@ suites.
 
 ## Tooling
 
-Default command is `pytest -q`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1`
+Default command is `pytest`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1`
 for triage. Generate coverage with `pytest --cov=monGARS --cov=modules` when requested.
