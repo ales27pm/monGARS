@@ -186,6 +186,89 @@ sys.exit(1)
 PY
 }
 
+
+  if (( candidate < 1 || candidate > 65535 )); then
+    err "${description}: port '$candidate' for $key is out of valid range (1-65535)"
+    exit 1
+  fi
+
+  if (( candidate < 1 )); then
+    candidate=1
+  fi
+
+    if port_is_reserved "$candidate"; then
+    if port_owned_by_project "$candidate"; then
+      break
+    fi
+  mark_port_reserved "$candidate"
+  printf -v "$key" '%s' "$candidate"
+  export "$key"
+    if [[ "$reserved" == "$port" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+mark_port_reserved() {
+  local port="$1"
+  if ! port_is_reserved "$port"; then
+    RESERVED_PORTS+=("$port")
+  fi
+}
+
+port_owned_by_project() {
+  local port="$1"
+  python3 - "$PROJECT_NAME" "$port" <<'PY'
+import json
+import subprocess
+import sys
+
+project = sys.argv[1]
+port = sys.argv[2]
+
+try:
+    output = subprocess.check_output(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            "{{json .}}",
+        ],
+        text=True,
+    )
+except subprocess.CalledProcessError:
+    sys.exit(1)
+
+target = str(int(port))
+
+for line in output.splitlines():
+    if not line.strip():
+        continue
+    try:
+        data = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    ports = data.get("Ports") or ""
+    for chunk in ports.split(","):
+        chunk = chunk.strip()
+        if "->" not in chunk:
+            continue
+        host_part = chunk.split("->", 1)[0].strip()
+        if not host_part:
+            continue
+        # Entries can appear as "0.0.0.0:8000" or ":::8000"
+        host_port = host_part.rsplit(":", 1)[-1]
+        host_port = host_port.split("-", 1)[0]
+        if host_port == target:
+            sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 ensure_port_available() {
   local key="$1"
   local default_value="$2"
@@ -260,19 +343,19 @@ ensure_port_available() {
     fi
   else
     if [[ "$source" == "default" ]]; then
-      update_env_var "$key" "$candidate"
-    fi
-  fi
+  RESERVED_PORTS=()
+  api_port=$(ensure_port_available "API_PORT" 8000 "API service")
+  webapp_port=$(ensure_port_available "WEBAPP_PORT" 8001 "Django webapp")
 
-  mark_port_reserved "$candidate"
-  printf -v "$key" '%s' "$candidate"
-  export "$key"
-  printf '%s' "$candidate"
-}
+  postgres_port=$(ensure_port_available "POSTGRES_PORT" 5432 "Postgres database")
+  redis_port=$(ensure_port_available "REDIS_PORT" 6379 "Redis cache")
+  mlflow_port=$(ensure_port_available "MLFLOW_PORT" 5000 "MLflow server")
+  vault_port=$(ensure_port_available "VAULT_PORT" 8200 "Vault server")
+    ollama_port=$(ensure_port_available "OLLAMA_PORT" 11434 "Ollama service")
 
-synchronise_ws_allowed_origins() {
-  local api_port="$1"
-  local webapp_port="$2"
+    ray_http_port=$(ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP")
+    ray_dashboard_port=$(ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard")
+    ray_client_port=$(ensure_port_available "RAY_CLIENT_PORT" 10001 "Ray client")
   local override="${WS_ALLOWED_ORIGINS-__UNSET__}"
 
   local updated
