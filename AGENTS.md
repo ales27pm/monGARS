@@ -35,7 +35,7 @@ highlights the non-negotiable guardrails and shared context.
 
 - Target **Python 3.11** across tooling and CI.
 - Format with `black` and `isort` using the repository `pyproject.toml` configuration.
-- Run `pytest -q` before raising a pull request; record skipped suites and why.
+- Run `pytest` before raising a pull request; record skipped suites and why.
 - Document architecture, configuration, and operator workflows in `docs/` or the README when behaviour
     changes.
 
