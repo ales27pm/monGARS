@@ -279,43 +279,32 @@ def _database_config_from_url(url: str) -> dict[str, Any]:
                 return value
         return None
 
-    name = unquote(parsed.path.lstrip("/")) or ""
-    name_override = _override_env("DB_NAME", "POSTGRES_DB")
-    if name_override:
-        name = name_override
+    defaults = {
+        "NAME": unquote(parsed.path.lstrip("/")) or "",
+        "HOST": parsed.hostname or "",
+        "PORT": str(parsed.port) if parsed.port is not None else "",
+        "USER": unquote(parsed.username) if parsed.username else "",
+        "PASSWORD": unquote(parsed.password) if parsed.password else "",
+    }
+    env_map = {
+        "NAME": ("POSTGRES_DB", "DB_NAME"),
+        "HOST": ("POSTGRES_HOST", "DB_HOST"),
+        "PORT": ("POSTGRES_PORT", "DB_PORT"),
+        "USER": ("POSTGRES_USER", "DB_USER"),
+        "PASSWORD": ("POSTGRES_PASSWORD", "DB_PASSWORD"),
+    }
 
-    host = parsed.hostname or ""
-    host_override = _override_env("DB_HOST")
-    if host_override:
-        host = host_override
-
-    port: str = ""
-    if parsed.port is not None:
-        port = str(parsed.port)
-    port_override = _override_env("DB_PORT", "POSTGRES_PORT")
-    if port_override:
-        port = str(port_override)
-
-    user = unquote(parsed.username) if parsed.username else ""
-    user_override = _override_env("DB_USER", "POSTGRES_USER")
-    if user_override:
-        user = user_override
-
-    password = unquote(parsed.password) if parsed.password else ""
-    password_override = _override_env("DB_PASSWORD", "POSTGRES_PASSWORD")
-    if password_override:
-        password = password_override
+    overrides = {
+        key: _override_env(*env_map[key]) or defaults[key]
+        for key in defaults
+    }
     options = {
         key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     }
 
     config: dict[str, Any] = {
         "ENGINE": engine,
-        "NAME": name,
-        "USER": user,
-        "PASSWORD": password,
-        "HOST": host,
-        "PORT": port,
+        **overrides,
     }
 
     conn_max_age = _database_conn_max_age(engine)
