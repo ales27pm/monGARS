@@ -74,6 +74,24 @@ def _iter_env_files(settings: "Settings") -> Iterable[Path]:
     return resolved
 
 
+def _load_secret_from_env_files(settings: "Settings") -> str | None:
+    """Return the first non-empty SECRET_KEY discovered in configured env files."""
+
+    for env_path in _iter_env_files(settings):
+        try:
+            env_values = dotenv_values(env_path, encoding="utf-8") or {}
+        except OSError:
+            # Reading env files can fail when the path is missing or unreadable.
+            # The caller treats the result as best-effort so we silently skip.
+            continue
+
+        candidate = (env_values.get("SECRET_KEY") or "").strip()
+        if candidate:
+            return candidate
+
+    return None
+
+
 SecretKeyOrigin = Literal[
     "missing",
     "provided",
@@ -177,13 +195,26 @@ class Settings(BaseSettings):
         raw_secret = self.SECRET_KEY
         secret_value = (raw_secret or "").strip() or None
         vault_configured = _vault_configured(self)
+        env_secret = (os.environ.get("SECRET_KEY") or "").strip() or None
+        env_file_secret = _load_secret_from_env_files(self)
 
-        if secret_value is not None:
+        secret_from_env_var = bool(env_secret and secret_value == env_secret)
+        secret_from_env_file = bool(
+            not secret_from_env_var
+            and env_file_secret
+            and secret_value == env_file_secret
+        )
+
+        if vault_configured:
+            if secret_value is None or secret_from_env_file:
+                secret_origin: SecretKeyOrigin = "deferred"
+                secret_value = None
+            else:
+                secret_origin = "provided"
+        elif secret_value is not None:
             secret_origin: SecretKeyOrigin = "provided"
         elif self.debug:
             secret_origin = "ephemeral"
-        elif vault_configured:
-            secret_origin = "deferred"
         else:
             secret_origin = "missing"
 

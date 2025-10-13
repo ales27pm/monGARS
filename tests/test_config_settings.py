@@ -98,6 +98,24 @@ def test_settings_defers_secret_when_vault_configured(monkeypatch):
     assert settings.SECRET_KEY is None
 
 
+def test_settings_ignores_env_file_secret_when_vault_configured(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET_KEY=env-secret\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    settings = config.Settings(
+        debug=False,
+        JWT_ALGORITHM="HS256",
+        VAULT_URL="https://vault.example",  # noqa: S106 - test fixture value
+        VAULT_TOKEN="unit-test-token",  # noqa: S106 - test fixture value
+    )
+
+    assert settings.SECRET_KEY is None
+    assert getattr(settings, "_secret_key_origin") == "deferred"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "vault_secrets",
