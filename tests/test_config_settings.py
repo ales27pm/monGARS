@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from monGARS import config
@@ -32,10 +34,55 @@ def test_secret_key_is_random_between_calls(monkeypatch):
     assert len(second.SECRET_KEY) >= 32
 
 
-def test_get_settings_requires_secret_in_production(monkeypatch):
+def test_get_settings_bootstraps_secret_in_production(monkeypatch, tmp_path, caplog):
+    config.get_settings.cache_clear()
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEBUG=false\n")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DEBUG", "false")
-    with pytest.raises(ValueError, match="SECRET_KEY must be provided in production"):
-        config.get_settings()
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    with caplog.at_level("INFO"):
+        settings = config.get_settings()
+
+    assert settings.SECRET_KEY
+    assert len(settings.SECRET_KEY) >= 32
+    assert "SECRET_KEY missing while DEBUG is disabled" in caplog.text
+    assert "Persisted generated SECRET_KEY" in caplog.text
+    assert "SECRET_KEY=" in env_file.read_text()
+
+    persisted = settings.SECRET_KEY
+    config.get_settings.cache_clear()
+    caplog.clear()
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    with caplog.at_level("INFO"):
+        settings_again = config.get_settings()
+
+    assert settings_again.SECRET_KEY == persisted
+    assert settings_again._secret_key_origin == "provided"
+    assert "SECRET_KEY missing while DEBUG is disabled" not in caplog.text
+
+
+def test_get_settings_warns_when_env_file_read_only(monkeypatch, tmp_path, caplog):
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEBUG=false\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEBUG", "false")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    def _fail_set_key(*args, **kwargs):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(config, "set_key", _fail_set_key)
+
+    with caplog.at_level("WARNING"):
+        settings = config.get_settings()
+
+    assert settings.SECRET_KEY
+    assert os.environ["SECRET_KEY"] == settings.SECRET_KEY
+    assert "Unable to persist SECRET_KEY" in caplog.text
+    assert "SECRET_KEY=" not in env_file.read_text(encoding="utf-8")
 
 
 def test_settings_defers_secret_when_vault_configured(monkeypatch):
