@@ -31,6 +31,306 @@ log()  { printf '%s[monGARS]%s %s\n' "${BLUE}"   "${NC}" "$1"; }
 warn() { printf '%s[monGARS]%s %s\n' "${YELLOW}" "${NC}" "$1"; }
 err()  { printf '%s[monGARS]%s %s\n' "${RED}"    "${NC}" "$1" >&2; }
 
+update_env_var() {
+  local key="$1"
+  local value="$2"
+  python3 - "$ENV_FILE" "$key" "$value" <<'PY'
+import sys
+from pathlib import Path
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+
+if env_path.exists():
+    lines = env_path.read_text().splitlines()
+else:
+    lines = []
+
+updated = False
+for idx, raw in enumerate(lines):
+    stripped = raw.strip()
+    if not stripped or stripped.startswith('#') or '=' not in raw:
+        continue
+    name, _, _ = raw.partition('=')
+    if name.strip() == key:
+        lines[idx] = f"{key}={value}"
+        updated = True
+        break
+
+if not updated:
+    lines.append(f"{key}={value}")
+
+env_path.write_text("\n".join(lines) + "\n")
+PY
+}
+
+read_env_var_with_source() {
+  local key="$1"
+  local default_value="$2"
+  python3 - "$ENV_FILE" "$key" "$default_value" <<'PY'
+import sys
+from pathlib import Path
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+default_value = sys.argv[3]
+
+found = False
+value = default_value
+
+if env_path.exists():
+    for raw in env_path.read_text().splitlines():
+        if '=' not in raw:
+            continue
+        stripped = raw.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        name, _, rest = raw.partition('=')
+        if name.strip() == key:
+            value = rest.strip()
+            found = True
+            break
+
+print(f"{value}::{int(found)}")
+PY
+}
+
+port_is_available() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", port))
+    except OSError:
+        sys.exit(1)
+
+sys.exit(0)
+PY
+}
+
+ensure_port_available() {
+  local key="$1"
+  local default_value="$2"
+  local description="$3"
+  local -n reserved_ref="$4"
+
+  local source=""
+  local candidate=""
+
+  if [[ -n "${!key-}" ]]; then
+    candidate="${!key}"
+    source="env"
+  else
+    local result
+    result=$(read_env_var_with_source "$key" "$default_value")
+    local value_part=${result%%::*}
+    local found_flag=${result##*::}
+    candidate="$value_part"
+    if [[ "$found_flag" == "1" ]]; then
+      source="file"
+    else
+      source="default"
+    fi
+  fi
+
+  if [[ -z "$candidate" ]]; then
+    candidate="$default_value"
+    source="default"
+  fi
+
+  if [[ ! "$candidate" =~ ^[0-9]+$ ]]; then
+    err "${description}: invalid port '$candidate' for $key"
+    exit 1
+  fi
+
+  local original="$candidate"
+  local max_port=65535
+
+  while (( candidate <= max_port )); do
+    if [[ -n "${reserved_ref[$candidate]+set}" ]]; then
+      ((candidate++))
+      continue
+    fi
+    if port_is_available "$candidate"; then
+      break
+    fi
+    ((candidate++))
+  done
+
+  if (( candidate > max_port )); then
+    err "${description}: unable to find an available port starting from $original"
+    exit 1
+  fi
+
+  if [[ "$candidate" != "$original" ]]; then
+    if [[ "$source" == "env" ]]; then
+      warn "${description}: environment override ${key}=$original is busy; using $candidate for this run"
+    else
+      warn "${description}: port $original is busy; updated to $candidate"
+      update_env_var "$key" "$candidate"
+    fi
+  else
+    if [[ "$source" == "default" ]]; then
+      update_env_var "$key" "$candidate"
+    fi
+  fi
+
+  reserved_ref[$candidate]=1
+  export "$key=$candidate"
+  printf '%s' "$candidate"
+}
+
+synchronise_ws_allowed_origins() {
+  local api_port="$1"
+  local webapp_port="$2"
+  local override="${WS_ALLOWED_ORIGINS-__UNSET__}"
+
+  local updated
+  updated=$(python3 - "$ENV_FILE" "$api_port" "$webapp_port" "$override" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+env_path = Path(sys.argv[1])
+api_port = int(sys.argv[2])
+webapp_port = int(sys.argv[3])
+override = sys.argv[4]
+
+def load_current() -> str:
+    if override != "__UNSET__":
+        return override
+    if env_path.exists():
+        for raw in env_path.read_text().splitlines():
+            if '=' not in raw:
+                continue
+            stripped = raw.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            name, _, value = raw.partition('=')
+            if name.strip() == 'WS_ALLOWED_ORIGINS':
+                return value.strip()
+    return '["http://localhost:8000","http://localhost:8001"]'
+
+def normalise(value: str):
+    try:
+        data = json.loads(value)
+        if isinstance(data, list):
+            return [str(item) for item in data]
+    except json.JSONDecodeError:
+        pass
+    value = value.strip().strip('[]')
+    if not value:
+        return []
+    parts = []
+    for chunk in value.split(','):
+        chunk = chunk.strip().strip("\"'")
+        if chunk:
+            parts.append(chunk)
+    return parts
+
+current_raw = load_current()
+entries = normalise(current_raw)
+
+def ensure(entry: str):
+    if entry not in entries:
+        entries.append(entry)
+
+ensure(f"http://localhost:{api_port}")
+ensure(f"http://127.0.0.1:{api_port}")
+ensure(f"http://localhost:{webapp_port}")
+ensure(f"http://127.0.0.1:{webapp_port}")
+
+result = json.dumps(entries)
+
+if override == "__UNSET__":
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+    else:
+        lines = []
+    updated = False
+    for idx, raw in enumerate(lines):
+        if '=' not in raw:
+            continue
+        stripped = raw.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        name, _, _ = raw.partition('=')
+        if name.strip() == 'WS_ALLOWED_ORIGINS':
+            if lines[idx].strip() != f"WS_ALLOWED_ORIGINS={result}":
+                lines[idx] = f"WS_ALLOWED_ORIGINS={result}"
+            updated = True
+            break
+    if not updated:
+        lines.append(f"WS_ALLOWED_ORIGINS={result}")
+    env_path.write_text("\n".join(lines) + "\n")
+
+print(result)
+PY
+) || {
+    err "Failed to calculate WS_ALLOWED_ORIGINS";
+    exit 1;
+  }
+
+  export WS_ALLOWED_ORIGINS="$updated"
+}
+
+prepare_ports() {
+  local enable_inference="$1"
+  local enable_ray="$2"
+
+  local -A reserved=()
+
+  local api_port
+  api_port=$(ensure_port_available "API_PORT" 8000 "API service" reserved)
+
+  local webapp_port
+  webapp_port=$(ensure_port_available "WEBAPP_PORT" 8001 "Django webapp" reserved)
+
+  local postgres_port
+  postgres_port=$(ensure_port_available "POSTGRES_PORT" 5432 "Postgres database" reserved)
+
+  local redis_port
+  redis_port=$(ensure_port_available "REDIS_PORT" 6379 "Redis cache" reserved)
+
+  local mlflow_port
+  mlflow_port=$(ensure_port_available "MLFLOW_PORT" 5000 "MLflow server" reserved)
+
+  local vault_port
+  vault_port=$(ensure_port_available "VAULT_PORT" 8200 "Vault server" reserved)
+
+  local ollama_port=""
+  if (( enable_inference )); then
+    ollama_port=$(ensure_port_available "OLLAMA_PORT" 11434 "Ollama service" reserved)
+  fi
+
+  local ray_http_port=""
+  local ray_dashboard_port=""
+  local ray_client_port=""
+  if (( enable_ray )); then
+    ray_http_port=$(ensure_port_available "RAY_HTTP_PORT" 8000 "Ray Serve HTTP" reserved)
+    ray_dashboard_port=$(ensure_port_available "RAY_DASHBOARD_PORT" 8265 "Ray dashboard" reserved)
+    ray_client_port=$(ensure_port_available "RAY_CLIENT_PORT" 10001 "Ray client" reserved)
+  fi
+
+  synchronise_ws_allowed_origins "$api_port" "$webapp_port"
+
+  local summary="API=${api_port}, Webapp=${webapp_port}, Postgres=${postgres_port}, Redis=${redis_port}, MLflow=${mlflow_port}, Vault=${vault_port}"
+  if [[ -n "$ollama_port" ]]; then
+    summary+="; Ollama=${ollama_port}"
+  fi
+  if [[ -n "$ray_http_port" ]]; then
+    summary+="; Ray HTTP=${ray_http_port}, Ray dashboard=${ray_dashboard_port}, Ray client=${ray_client_port}"
+  fi
+  log "Host ports resolved: ${summary}"
+}
+
 ensure_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
     err "Required tool '$1' is not installed or not on PATH."
@@ -174,14 +474,31 @@ main() {
   local build_images=1
   local passthrough=()
 
+  local enable_inference=0
+  local enable_ray=0
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --with-ollama) profiles+=(inference) ;;
-      --with-ray)    profiles+=(ray) ;;
-      --with-all)    profiles+=(inference ray) ;;
+      --with-ollama)
+        profiles+=(inference)
+        enable_inference=1
+        ;;
+      --with-ray)
+        profiles+=(ray)
+        enable_ray=1
+        ;;
+      --with-all)
+        profiles+=(inference ray)
+        enable_inference=1
+        enable_ray=1
+        ;;
       --profile)
         shift || { err "--profile requires an argument"; exit 1; }
         profiles+=("$1")
+        case "$1" in
+          inference) enable_inference=1 ;;
+          ray)       enable_ray=1 ;;
+        esac
         ;;
       --pull)     pull_before=1 ;;
       --no-build) build_images=0 ;;
@@ -203,9 +520,20 @@ main() {
     done
   fi
 
+  if [[ -n "${COMPOSE_PROFILES-}" ]]; then
+    local normalized_profiles="${COMPOSE_PROFILES//,/ }"
+    for token in $normalized_profiles; do
+      case "$token" in
+        inference) enable_inference=1 ;;
+        ray)       enable_ray=1 ;;
+      esac
+    done
+  fi
+
   case "$command" in
     up)
       ensure_env_file
+      prepare_ports "$enable_inference" "$enable_ray"
       if (( pull_before )); then
         log "Pulling container images"
         compose "${profile_args[@]}" pull
