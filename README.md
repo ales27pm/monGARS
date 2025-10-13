@@ -162,7 +162,7 @@ working configuration. Optional profiles:
 
 - `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
 - `--with-ray` provisions a Ray head node and Serve deployment. The Serve HTTP
-  endpoint binds to `${RAY_HTTP_PORT:-8000}`, the dashboard is exposed via
+  endpoint binds to `${RAY_HTTP_PORT:-8005}`, the dashboard is exposed via
   `${RAY_DASHBOARD_PORT:-8265}`, and the Ray Client API is forwarded to
   `${RAY_CLIENT_PORT:-10001}`. Toggle `USE_RAY_SERVE=true` and update
   `RAY_SERVE_URL` in `.env` if you expose a different port.
