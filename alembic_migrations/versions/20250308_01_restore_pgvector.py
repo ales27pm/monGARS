@@ -21,6 +21,7 @@ depends_on = None
 
 VECTOR_DIMENSIONS = 3072
 MAX_IVFFLAT_DIMENSIONS = 2000
+PGVECTOR_MAX_INDEX_DIMENSIONS = 2000
 ROW_BATCH_SIZE = 500
 
 
@@ -112,6 +113,15 @@ def upgrade() -> None:
             existing_type=Vector(VECTOR_DIMENSIONS),
             existing_nullable=True,
         )
+
+    if VECTOR_DIMENSIONS > PGVECTOR_MAX_INDEX_DIMENSIONS:
+        context = op.get_context()
+        context.output_buffer.write(
+            "Skipping vector index creation because the configured dimension"
+            f" ({VECTOR_DIMENSIONS}) exceeds the pgvector index limit"
+            f" ({PGVECTOR_MAX_INDEX_DIMENSIONS}).\n"
+        )
+        return
 
     index_backend = "ivfflat"
     index_with: dict[str, str] = {"lists": "100"}

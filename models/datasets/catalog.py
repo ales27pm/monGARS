@@ -6,9 +6,14 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:  # pragma: no cover - compatibility shim for Python <3.11
+    from datetime import UTC  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - Python 3.10 runtime
+    UTC = timezone.utc  # type: ignore[assignment]
 
 log = logging.getLogger(__name__)
 
