@@ -125,7 +125,7 @@ slide decks or ops runbooks.
 | Evolution modules | `modules/` | Adapter training, diagnostics, research tooling |
 | Django UI | `webapp/` | Operator-facing chat console and auth proxy |
 | Persistence | `init_db.py`, `monGARS/core/persistence.py` | SQLModel schemas, Hippocampus caching, Redis/disk tiers |
-| Tooling | `tasks.py`, `build_*.sh`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
+| Tooling | `tasks.py`, `build_*.sh`, `docker_menu.py`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
 
 ## Getting Started
 ### Prerequisites
@@ -147,36 +147,50 @@ uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 
 ### Docker Compose Stack
 ```bash
-scripts/deploy_docker.sh up --pull         # build images, generate secrets, start core services
-scripts/deploy_docker.sh up --with-all     # include Ollama and Ray Serve profiles
-scripts/deploy_docker.sh logs api          # follow API logs
-scripts/deploy_docker.sh destroy           # stop stack and drop volumes
+python scripts/docker_menu.py
 ```
 
-The helper script automatically creates `.env` from `.env.example`, rotates
-development secrets, keeps your Compose project name consistent, and now checks
-for host-port conflicts before starting containers. When a requested port is in
-use, the script selects the next available value, exports it for the Compose
-run, and updates `.env` (plus `WS_ALLOWED_ORIGINS`) so follow-up runs reuse the
-working configuration. Optional profiles:
+The interactive orchestrator introduces a terminal menu with options to deploy
+(`up --build -d`), start without rebuilding, stop, restart, inspect status,
+tail logs, rebuild images, pull upstream images, open a shell inside any
+service, and destroy the stack. Additional tooling now:
 
-- `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
-- `--with-ray` provisions a Ray head node and Serve deployment. The Serve HTTP
-  endpoint binds to `${RAY_HTTP_PORT:-8005}`, the dashboard is exposed via
-  `${RAY_DASHBOARD_PORT:-8265}`, and the Ray Client API is forwarded to
-  `${RAY_CLIENT_PORT:-10001}`. Toggle `USE_RAY_SERVE=true` and update
-  `RAY_SERVE_URL` in `.env` if you expose a different port.
-- Base images (now built from the public
-  `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image—no NVIDIA Container
-  Registry login required) ship with Git, Git LFS, FFmpeg, spaCy's
-  `fr_core_news_sm` model, and transformer tooling (`accelerate`, `peft`,
-  `transformers`, `llm2vec`) so
-  containers can pull adapters, process multimedia context, and invoke LLMs out
-  of the box.
+- Creates `.env` from `.env.example` on first run and rotates weak defaults for
+  JWT, Django, Postgres, and Vault secrets.
+- Scans for port collisions across API, webapp, Postgres, Redis, MLflow, Vault,
+  Ollama, and Ray endpoints. Busy ports are replaced with the next available
+  value, persisted back to `.env`, and reflected in `WS_ALLOWED_ORIGINS` so
+  browsers connect without manual edits.
+- Lets you toggle optional profiles before startup. Enable the Ollama profile
+  to launch the local LLM runtime or the Ray profile to expose the Ray head
+  node (`${RAY_DASHBOARD_PORT:-8265}`), Ray Client API
+  (`${RAY_CLIENT_PORT:-10001}`), and Serve HTTP gateway (`${RAY_HTTP_PORT:-8005}`).
+- Provides guided diagnostics (`option 12`) that optionally auto-remediate
+  missing `.env` entries, weak secrets, stale ports, and Compose syntax issues
+  before you deploy.
+- Offers an auto-heal routine (`option 13`) that restarts unhealthy services
+  after a successful diagnostic pass so the stack can recover without manual
+  container juggling.
+- Exposes an environment summary (`option 14`) with sensitive values redacted to
+  support incident response without leaking secrets in shared terminals.
+- Captures Compose failures, runs lightweight triage (status snapshots +
+  diagnostics), and suggests remediation such as port regeneration or network
+  rebuilds when commands exit unsuccessfully.
 
-Use `scripts/deploy_docker.sh ps` to inspect container health and
-`scripts/deploy_docker.sh destroy` when you need a clean slate (volumes and
-orphan containers are removed).
+For automated pipelines you can continue to call Docker Compose directly:
+
+```bash
+docker compose -f docker-compose.yml --project-name mongars up -d
+```
+
+The refreshed Compose topology keeps the same service names but now uses
+anchors to share environment blocks, consistent health checks, and optional
+profiles for inference (`ollama`) and distributed serving (`ray-head`,
+`rayserve`). Base images are still built from
+`pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` with Git, Git LFS, FFmpeg, the
+`fr_core_news_sm` spaCy model, and transformer tooling preinstalled so
+containers can pull adapters, process multimedia context, and invoke LLMs out
+of the box.
 
 ### Django Operator Console
 ```bash

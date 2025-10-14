@@ -356,10 +356,6 @@ scripts/build_multimodule_dataset.py,125,??,??,generated
 scripts/build_multimodule_dataset.py,155,??,??,generated
 scripts/build_multimodule_dataset.py,171,??,??,generated
 scripts/build_multimodule_dataset.py,190,??,??,generated
-scripts/deploy_docker.sh,288,??,??,generated
-scripts/deploy_docker.sh,303,??,??,generated
-scripts/deploy_docker.sh,323,normalise,def normalise(value: str):,generated
-scripts/deploy_docker.sh,471,ensure,def ensure(entry: str):,generated
 scripts/export_llm2vec_wrapper.py,26,??,??,generated
 scripts/export_llm2vec_wrapper.py,72,??,??,generated
 scripts/export_llm2vec_wrapper.py,147,LLM2Vec.embed,"def embed(self, texts: str | Iterable[str]):",generated

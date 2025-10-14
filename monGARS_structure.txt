@@ -14,7 +14,7 @@ monGARS/
 ├── configs/
 │   └── llm_models.json
 ├── scripts/
-│   ├── deploy_docker.sh
+│   ├── docker_menu.py
 │   └── provision_models.py
 ├── tasks.py
 ├── tests/
