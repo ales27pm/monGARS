@@ -15,7 +15,9 @@ class FakeTensor:
 
     __array_priority__ = 1000
 
-    def __init__(self, data: Iterable[float] | np.ndarray, *, device: str = "cpu") -> None:
+    def __init__(
+        self, data: Iterable[float] | np.ndarray, *, device: str = "cpu"
+    ) -> None:
         self._data = np.array(data, dtype=float)
         self.device = device
 
@@ -111,17 +113,23 @@ class FakeModel:
         self.eval_called = True
         return self
 
-    def __call__(self, *, input_ids: FakeTensor, attention_mask: FakeTensor, **kwargs: Any) -> FakeOutput:
+    def __call__(
+        self, *, input_ids: FakeTensor, attention_mask: FakeTensor, **kwargs: Any
+    ) -> FakeOutput:
         if self.fail_direct:
             raise TypeError("direct call unsupported")
         self.forward_calls.append(kwargs)
         batch, seq = input_ids.shape
-        data = np.arange(batch * seq * self.hidden_size, dtype=float).reshape(batch, seq, self.hidden_size)
+        data = np.arange(batch * seq * self.hidden_size, dtype=float).reshape(
+            batch, seq, self.hidden_size
+        )
         hidden = FakeTensor(data + 1, device=input_ids.device)
         self.last_hidden_data = hidden.numpy()
         if self.return_last_only:
             return FakeOutput(hidden_states=None, last_hidden_state=hidden)
-        return FakeOutput(hidden_states=[FakeTensor(np.zeros_like(hidden.numpy())), hidden])
+        return FakeOutput(
+            hidden_states=[FakeTensor(np.zeros_like(hidden.numpy())), hidden]
+        )
 
 
 class FakeTokenizer:
@@ -144,10 +152,12 @@ class FakeTokenizer:
         seq_len = 3
         input_ids = FakeTensor(np.arange(batch * seq_len).reshape(batch, seq_len))
         attention_mask = FakeTensor(np.ones((batch, seq_len)))
-        return FakeBatchEncoding({
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-        })
+        return FakeBatchEncoding(
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            }
+        )
 
 
 class FakeAutoModelForCausalLM:
@@ -220,7 +230,9 @@ def test_embed_mean_pools_hidden_states(llm2vec_fixture: dict[str, Any]) -> None
     base_dir = llm2vec_fixture["base_dir"]
     auto_model_cls = llm2vec_fixture["auto_model_cls"]
 
-    wrapper = llm_cls(base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False)
+    wrapper = llm_cls(
+        base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False
+    )
 
     embeddings = wrapper.embed(["alpha", "beta"])
     expected = auto_model_cls.last_created.last_hidden_data.mean(axis=1)
@@ -238,7 +250,9 @@ def test_embed_falls_back_to_base_model(llm2vec_fixture: dict[str, Any]) -> None
     auto_model_cls = llm2vec_fixture["auto_model_cls"]
     model_factory = llm2vec_fixture["model_factory"]
 
-    wrapper = llm_cls(base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False)
+    wrapper = llm_cls(
+        base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False
+    )
 
     primary = auto_model_cls.last_created
     fallback = model_factory()
@@ -252,12 +266,16 @@ def test_embed_falls_back_to_base_model(llm2vec_fixture: dict[str, Any]) -> None
     np.testing.assert_allclose(result.numpy(), expected)
 
 
-def test_embed_raises_for_missing_hidden_states(llm2vec_fixture: dict[str, Any]) -> None:
+def test_embed_raises_for_missing_hidden_states(
+    llm2vec_fixture: dict[str, Any],
+) -> None:
     llm_cls = llm2vec_fixture["LLM2Vec"]
     base_dir = llm2vec_fixture["base_dir"]
     auto_model_cls = llm2vec_fixture["auto_model_cls"]
 
-    wrapper = llm_cls(base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False)
+    wrapper = llm_cls(
+        base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False
+    )
 
     class BrokenOutput:
         hidden_states = None
@@ -278,7 +296,9 @@ def test_embed_rejects_empty_inputs(llm2vec_fixture: dict[str, Any]) -> None:
     llm_cls = llm2vec_fixture["LLM2Vec"]
     base_dir = llm2vec_fixture["base_dir"]
 
-    wrapper = llm_cls(base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False)
+    wrapper = llm_cls(
+        base_dir=base_dir, prefer_merged=True, device="cpu", load_in_4bit=False
+    )
 
     with pytest.raises(ValueError):
         wrapper.embed([])
