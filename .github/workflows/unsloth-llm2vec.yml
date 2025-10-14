@@ -187,11 +187,11 @@ jobs:
             echo "nvidia-smi not found (ensure GPU runners expose NVIDIA tooling)" >&2
           fi
           python - <<'PY'
-import torch
-print("torch version", torch.__version__)
-print("cuda available", torch.cuda.is_available())
-print("cuda device count", torch.cuda.device_count())
-PY
+          import torch
+          print("torch version", torch.__version__)
+          print("cuda available", torch.cuda.is_available())
+          print("cuda device count", torch.cuda.device_count())
+          PY
 
       - name: Resolve training paths
         id: paths
