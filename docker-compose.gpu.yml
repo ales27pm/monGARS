@@ -1,5 +1,16 @@
 services:
+  migrations:
+    image: ${MONGARS_GPU_IMAGE:-mongars-app:gpu}
+    build:
+      dockerfile: Dockerfile.gpu
+      args:
+        PYTORCH_IMAGE: ${PYTORCH_IMAGE_GPU:-pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime}
   api:
+    image: ${MONGARS_GPU_IMAGE:-mongars-app:gpu}
+    build:
+      dockerfile: Dockerfile.gpu
+      args:
+        PYTORCH_IMAGE: ${PYTORCH_IMAGE_GPU:-pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime}
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
@@ -12,6 +23,7 @@ services:
               capabilities: [gpu]
 
   ray-head:
+    image: ${RAY_HEAD_IMAGE_GPU:-rayproject/ray:2.9.3-py311-cu121}
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
@@ -24,6 +36,15 @@ services:
               capabilities: [gpu]
 
   rayserve:
+    image: ${RAY_SERVE_GPU_IMAGE:-mongars-rayserve:gpu}
+    build:
+      dockerfile: Dockerfile.rayserve.gpu
+      args:
+        RAY_IMAGE: ${RAY_IMAGE_GPU:-rayproject/ray:2.9.3-py311-cu121}
+        TORCH_WHEEL_INDEX: ${TORCH_WHEEL_INDEX_GPU:-https://download.pytorch.org/whl/cu121}
+        TORCH_VERSION: ${TORCH_VERSION_GPU:-2.3.0+cu121}
+        RAY_SERVE_VERSION: ${RAY_SERVE_VERSION_GPU:-2.9.3}
+        VLLM_VERSION: ${VLLM_VERSION_GPU:-0.4.2}
     environment:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
@@ -34,6 +55,27 @@ services:
             - driver: nvidia
               count: ${NVIDIA_DEVICE_COUNT:-all}
               capabilities: [gpu]
+
+  webapp-migrations:
+    image: ${MONGARS_GPU_IMAGE:-mongars-app:gpu}
+    build:
+      dockerfile: Dockerfile.gpu
+      args:
+        PYTORCH_IMAGE: ${PYTORCH_IMAGE_GPU:-pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime}
+
+  webapp:
+    image: ${MONGARS_GPU_IMAGE:-mongars-app:gpu}
+    build:
+      dockerfile: Dockerfile.gpu
+      args:
+        PYTORCH_IMAGE: ${PYTORCH_IMAGE_GPU:-pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime}
+
+  unsloth-trainer:
+    image: ${MONGARS_GPU_IMAGE:-mongars-app:gpu}
+    build:
+      dockerfile: Dockerfile.gpu
+      args:
+        PYTORCH_IMAGE: ${PYTORCH_IMAGE_GPU:-pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime}
 
   ollama:
     environment:

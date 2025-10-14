@@ -189,11 +189,15 @@ docker compose -f docker-compose.yml --project-name mongars up -d
 The refreshed Compose topology keeps the same service names but now uses
 anchors to share environment blocks, consistent health checks, and optional
 profiles for inference (`ollama`) and distributed serving (`ray-head`,
-`rayserve`). Base images are still built from
-`pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` with Git, Git LFS, FFmpeg, the
-`fr_core_news_sm` spaCy model, and transformer tooling preinstalled so
-containers can pull adapters, process multimedia context, and invoke LLMs out
-of the box.
+`rayserve`). Application images default to
+`pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime`, but the Dockerfiles accept a
+`PYTORCH_IMAGE` build argument so you can bump CUDA/PyTorch releases without
+editing manifests. The GPU overlay sets `PYTORCH_IMAGE_GPU` to
+`pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` and publishes the build under
+`MONGARS_GPU_IMAGE` to avoid clobbering CPU-only tags. Both variants ship with
+Git, Git LFS, FFmpeg, the `fr_core_news_sm` spaCy model, and transformer tooling
+preinstalled so containers can pull adapters, process multimedia context, and
+invoke LLMs out of the box.
 
 ### Django Operator Console
 ```bash
@@ -216,6 +220,9 @@ user/token.
 | `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
 | `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8000/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. When `DJANGO_ALLOWED_HOSTS` is unset the console now trusts `localhost`, loopback addresses, `0.0.0.0`, and Compose provided `WEBAPP_HOST`/`HOST` values automatically. `DJANGO_DEBUG_HOSTS` appends comma-separated hostnames/IPs that should be trusted automatically when `DJANGO_DEBUG=true`. |
+| `MONGARS_IMAGE` / `MONGARS_GPU_IMAGE` | Tags applied to the CPU and GPU application builds. Using distinct values prevents rebuilds for one profile from overwriting the other. |
+| `PYTORCH_IMAGE` / `PYTORCH_IMAGE_GPU` | Base images consumed by the Dockerfiles; override to align with local CUDA driver stacks without editing manifests. |
+| `RAY_HEAD_IMAGE`, `RAY_HEAD_IMAGE_GPU`, `RAY_SERVE_IMAGE`, `RAY_SERVE_GPU_IMAGE` | Control the Ray head/Serve container tags for CPU and GPU deployments. Pair with the new build args to align with cluster driver versions. |
 | `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). |
 | `LLM_MODELS_CONFIG_PATH` | Path to the JSON manifest listing model profiles and download preferences. |
 | `LLM_MODELS_PROFILE` | Name of the profile within `LLM_MODELS_CONFIG_PATH` used for inference defaults. |

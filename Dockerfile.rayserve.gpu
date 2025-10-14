@@ -1,6 +1,13 @@
 # syntax=docker/dockerfile:1.6
-# Ray image with CUDA 12.1 userland libs
-FROM rayproject/ray:2.35.0-py312-cu124
+
+ARG RAY_IMAGE=rayproject/ray:2.9.3-py311-cu121
+ARG TORCH_WHEEL_INDEX=https://download.pytorch.org/whl/cu121
+ARG TORCH_VERSION=2.3.0+cu121
+ARG RAY_SERVE_VERSION=2.9.3
+ARG VLLM_VERSION=0.4.2
+
+# Ray image with CUDA userland libs (override build args to bump versions).
+FROM ${RAY_IMAGE}
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=1200
@@ -29,16 +36,18 @@ RUN git lfs install --system
 # dependency resolver rejecting newer releases required by Ray Serve adapters.
 COPY vendor/llm2vec_monGARS /tmp/llm2vec_monGARS
 
-# Faster, resilient installs (cache + retries) with CUDA 12.1 wheels bundled
-# directly in the PyTorch wheel to avoid long dependency chains.
+# Faster, resilient installs (cache + retries) with CUDA wheels bundled directly
+# in the PyTorch wheel to avoid long dependency chains.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U --retries 5 pip \
-    && pip install --retries 5 --extra-index-url https://download.pytorch.org/whl/cu121 \
-        torch==2.1.2+cu121 \
-        "ray[serve]==2.9.3" \
+    && pip install --retries 5 --extra-index-url ${TORCH_WHEEL_INDEX} \
+        torch==${TORCH_VERSION} \
+        "ray[serve]==${RAY_SERVE_VERSION}" \
         "accelerate>=0.33.0" \
         "peft>=0.13.2" \
         "sentencepiece>=0.2.0" \
+        "vllm==${VLLM_VERSION}" \
+        "xformers==0.0.26.post1" \
         "transformers>=4.44.2" \
     && pip install --retries 5 /tmp/llm2vec_monGARS \
     && rm -rf /tmp/llm2vec_monGARS
