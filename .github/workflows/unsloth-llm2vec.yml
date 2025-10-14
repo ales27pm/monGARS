@@ -98,11 +98,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PIP_CACHE_DIR }}
-          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}
+          key: "pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}"
           restore-keys: |
             pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
 
       - name: Install OS dependencies
+        shell: bash
         run: |
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update
@@ -113,6 +114,7 @@ jobs:
           fi
 
       - name: Install Python dependencies
+        shell: bash
         env:
           PIP_CACHE_DIR: ${{ env.PIP_CACHE_DIR }}
         run: |
