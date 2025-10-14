@@ -119,32 +119,76 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Inspect CUDA availability
-        shell: bash
+      - name: Inspect accelerator availability
+        id: accelerator
+        shell: python
         run: |
-          set -euo pipefail
-          if command -v nvidia-smi >/dev/null 2>&1; then
-            nvidia-smi
-          else
-            echo "nvidia-smi not found (ensure GPU runners expose NVIDIA tooling)" >&2
-            exit 1
-          fi
-          python - <<'PY'
-            import sys
-            try:
-                import torch
-            except Exception as exc:
-                print(f"torch check failed: {exc}", file=sys.stderr)
-                sys.exit(1)
-            print("torch version", torch.__version__)
-            cuda_available = torch.cuda.is_available()
-            device_count = torch.cuda.device_count()
-            print("cuda available", cuda_available)
-            print("cuda device count", device_count)
-            if not cuda_available or device_count == 0:
-                print("ERROR: No CUDA GPU detected. Failing workflow.", file=sys.stderr)
-                sys.exit(1)
-          PY
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          def emit(level: str, message: str) -> None:
+              print(f"::{level}::{message}")
+
+          accelerator = "gpu"
+          cuda_available = False
+          device_count = 0
+
+          nvidia_smi = shutil.which("nvidia-smi")
+          if nvidia_smi:
+              try:
+                  subprocess.run([nvidia_smi], check=True)
+              except subprocess.CalledProcessError as exc:
+                  emit(
+                      "warning",
+                      f"nvidia-smi exited with {exc.returncode}; continuing with CPU fallback",
+                  )
+                  accelerator = "cpu"
+          else:
+              emit("warning", "nvidia-smi not found; continuing with CPU fallback")
+              accelerator = "cpu"
+
+          try:
+              import torch  # type: ignore[import-not-found]
+          except Exception as exc:  # pragma: no cover - defensive logging in CI
+              emit("error", f"Failed to import torch: {exc}")
+              raise SystemExit(1) from exc
+
+          print(f"torch version {torch.__version__}")
+
+          try:
+              cuda_available = bool(torch.cuda.is_available())
+          except Exception as exc:  # pragma: no cover - CUDA probing edge case
+              emit(
+                  "warning",
+                  f"torch.cuda.is_available() raised {exc}; assuming CPU fallback",
+              )
+              accelerator = "cpu"
+          else:
+              try:
+                  device_count = int(torch.cuda.device_count()) if cuda_available else 0
+              except Exception as exc:  # pragma: no cover - CUDA probing edge case
+                  emit(
+                      "warning",
+                      f"torch.cuda.device_count() raised {exc}; switching to CPU fallback",
+                  )
+                  accelerator = "cpu"
+                  cuda_available = False
+
+          print(f"cuda available {cuda_available}")
+          print(f"cuda device count {device_count}")
+
+          if not cuda_available or device_count <= 0:
+              if accelerator != "cpu":
+                  emit("warning", "CUDA device not detected; running fine-tune on CPU fallback")
+              accelerator = "cpu"
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as handle:
+              handle.write(f"accelerator={accelerator}\n")
+              handle.write(f"cuda_available={'true' if cuda_available else 'false'}\n")
+              handle.write(f"cuda_device_count={device_count}\n")
 
       - name: Resolve training paths
         id: paths
@@ -312,10 +356,15 @@ jobs:
           SKIP_SMOKE_TESTS: ${{ steps.overrides.outputs.skip_smoke_tests }}
           SKIP_METADATA: ${{ steps.overrides.outputs.skip_metadata }}
           SKIP_MERGE: ${{ steps.overrides.outputs.skip_merge }}
+          ACCELERATOR: ${{ steps.accelerator.outputs.accelerator }}
         shell: bash
         run: |
           set -euxo pipefail
           extra_args=()
+          if [ "$ACCELERATOR" = "cpu" ]; then
+            export CUDA_VISIBLE_DEVICES=""
+            echo "::warning::GPU unavailable; running fine-tuning on CPU fallback"
+          fi
           if [ -n "$DATASET_ID" ]; then
             extra_args+=("--dataset-id" "$DATASET_ID")
           fi
