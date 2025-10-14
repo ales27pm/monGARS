@@ -252,7 +252,7 @@ services:
     profiles:
       - ray
     command: >-
-      bash -lc "ray stop --force || true; ray start --head
+      bash -lc "python -m ray.scripts.scripts stop --force || true; python -m ray.scripts.scripts start --head
         --dashboard-host=0.0.0.0
         --dashboard-port=${RAY_DASHBOARD_PORT:-8265}
         --ray-client-server-port=10001
