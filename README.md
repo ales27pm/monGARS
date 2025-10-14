@@ -164,7 +164,10 @@ service, and destroy the stack. Additional tooling now:
 - Lets you toggle optional profiles before startup. Enable the Ollama profile
   to launch the local LLM runtime or the Ray profile to expose the Ray head
   node (`${RAY_DASHBOARD_PORT:-8265}`), Ray Client API
-  (`${RAY_CLIENT_PORT:-10001}`), and Serve HTTP gateway (`${RAY_HTTP_PORT:-8005}`).
+  (`${RAY_CLIENT_PORT:-10001}`), Serve HTTP gateway (`${RAY_HTTP_PORT:-8005}`),
+  and a dedicated worker port range (`${RAY_MIN_WORKER_PORT:-20000}`-
+  `${RAY_MAX_WORKER_PORT:-20100}`) that avoids collisions with the Ray client
+  endpoint by default.
 - Provides guided diagnostics (`option 12`) that optionally auto-remediate
   missing `.env` entries, weak secrets, stale ports, and Compose syntax issues
   before you deploy.
@@ -209,6 +212,7 @@ user/token.
 | `SECRET_KEY` | Required for JWT signing and Fernet encryption. Never leave empty. |
 | `API_PORT` / `WEBAPP_PORT` | Host ports exposed for the FastAPI service and Django operator console. |
 | `POSTGRES_PORT`, `REDIS_PORT`, `MLFLOW_PORT`, `VAULT_PORT`, `OLLAMA_PORT`, `RAY_HTTP_PORT`, `RAY_DASHBOARD_PORT`, `RAY_CLIENT_PORT` | Host bindings for stateful and optional services managed by Compose. |
+| `RAY_MIN_WORKER_PORT`, `RAY_MAX_WORKER_PORT` | Lower/upper bounds for the Ray head worker port range. Defaults prevent overlaps with `RAY_CLIENT_PORT`. |
 | `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
 | `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8000/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. When `DJANGO_ALLOWED_HOSTS` is unset the console now trusts `localhost`, loopback addresses, `0.0.0.0`, and Compose provided `WEBAPP_HOST`/`HOST` values automatically. `DJANGO_DEBUG_HOSTS` appends comma-separated hostnames/IPs that should be trusted automatically when `DJANGO_DEBUG=true`. |
