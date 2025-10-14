@@ -1,0 +1,67 @@
+{
+  "index": {
+    "monGARS_llm_20251014": 1
+  },
+  "latest_version": 1,
+  "versions": [
+    {
+      "compliance": {
+        "checked_at": "2025-10-14T06:20:09.313893+00:00",
+        "metadata": {
+          "expires_at": "2025-11-13T06:10:28.808802+00:00",
+          "export_window_days": 7,
+          "export_window_ends_at": "2025-10-21T06:10:28.808802+00:00",
+          "provenance": "self-training",
+          "record_count": 704,
+          "retention_days": 30,
+          "reviewed_at": "2025-10-14T06:10:28.808802+00:00",
+          "reviewed_by": "self-training-automation",
+          "run_id": "monGARS_llm_20251014",
+          "sensitivity": "restricted",
+          "tags": [
+            "rag",
+            "curated"
+          ]
+        },
+        "status": "approved",
+        "violations": []
+      },
+      "created_at": "2025-10-14T06:10:28.808802+00:00",
+      "dataset_dir": "datasets/monGARS_llm",
+      "dataset_file": "datasets/monGARS_llm/monGARS_llm_dataset.jsonl",
+      "extra": {
+        "category_distribution": {
+          "alignment": 12,
+          "api": 48,
+          "architecture": 18,
+          "module_reference": 608,
+          "operations": 18
+        },
+        "split_counts": {
+          "train": 634,
+          "val": 70
+        }
+      },
+      "governance": {
+        "expires_at": "2025-11-13T06:10:28.808802+00:00",
+        "export_window_days": 7,
+        "export_window_ends_at": "2025-10-21T06:10:28.808802+00:00",
+        "provenance": "self-training",
+        "record_count": 704,
+        "retention_days": 30,
+        "reviewed_at": "2025-10-14T06:10:28.808802+00:00",
+        "reviewed_by": "self-training-automation",
+        "run_id": "monGARS_llm_20251014",
+        "sensitivity": "restricted",
+        "tags": [
+          "rag",
+          "curated"
+        ]
+      },
+      "quarantined": false,
+      "record_count": 704,
+      "run_id": "monGARS_llm_20251014",
+      "version": 1
+    }
+  ]
+}

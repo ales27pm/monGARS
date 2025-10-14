@@ -7,6 +7,8 @@ import argparse
 import logging
 from pathlib import Path
 
+from modules.neurons.registry import update_manifest
+from monGARS.mlops.artifacts import build_adapter_summary
 from monGARS.mlops.code_analysis import (
     render_usage_report,
     scan_llm_usage,
@@ -85,6 +87,9 @@ def cmd_module_dataset(args: argparse.Namespace) -> None:
 def cmd_finetune(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir).resolve()
     dataset_path = Path(args.dataset_path).resolve() if args.dataset_path else None
+    eval_dataset_path = (
+        Path(args.eval_dataset_path).resolve() if args.eval_dataset_path else None
+    )
     if args.dataset_id is None and dataset_path is None:
         raise SystemExit("--dataset-id or --dataset-path must be supplied for finetune")
     results = run_unsloth_finetune(
@@ -103,6 +108,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
+        train_fraction=args.train_fraction,
+        eval_dataset_id=args.eval_dataset_id,
+        eval_dataset_path=eval_dataset_path,
+        eval_batch_size=args.eval_batch_size,
         run_smoke_tests=not args.skip_smoke_tests,
         write_metadata=not args.skip_metadata,
         merge_to_fp16=not args.skip_merge,
@@ -111,6 +120,57 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         "Fine-tuning completed",
         extra={key: str(value) for key, value in results.items()},
     )
+
+    if args.registry_path:
+        registry_path = Path(args.registry_path).resolve()
+        metrics = {
+            "dataset_size": results.get("dataset_size"),
+            "eval_dataset_size": results.get("eval_dataset_size"),
+        }
+        eval_metrics = results.get("evaluation_metrics") or {}
+        if eval_metrics:
+            metrics["evaluation"] = eval_metrics
+        summary = build_adapter_summary(
+            adapter_dir=results["chat_lora_dir"],
+            weights_path=None,
+            wrapper_dir=results.get("wrapper_dir"),
+            status="success",
+            labels={"pipeline": "unsloth_llm2vec"},
+            metrics={k: v for k, v in metrics.items() if v is not None},
+            training={
+                "model_id": args.model_id,
+                "dataset_id": args.dataset_id,
+                "dataset_path": str(dataset_path) if dataset_path else None,
+                "eval_dataset_id": args.eval_dataset_id,
+                "eval_dataset_path": (
+                    str(eval_dataset_path) if eval_dataset_path else None
+                ),
+                "max_seq_len": args.max_seq_len,
+                "batch_size": args.batch_size,
+                "grad_accum": args.grad_accum,
+                "learning_rate": args.learning_rate,
+                "epochs": args.epochs,
+                "max_steps": args.max_steps,
+                "lora_rank": args.lora_rank,
+                "lora_alpha": args.lora_alpha,
+                "lora_dropout": args.lora_dropout,
+                "train_fraction": args.train_fraction,
+                "eval_batch_size": args.eval_batch_size,
+            },
+        )
+        artifacts = summary.setdefault("artifacts", {})
+        merged_dir = results.get("merged_dir")
+        if merged_dir:
+            artifacts["merged_fp16"] = str(merged_dir)
+        try:
+            manifest = update_manifest(registry_path, summary)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.warning("Failed to update adapter manifest", exc_info=True)
+            raise SystemExit(f"Adapter manifest update failed: {exc}")
+        LOGGER.info(
+            "Adapter manifest refreshed",
+            extra={"manifest_path": str(manifest.path)},
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -217,6 +277,14 @@ def build_parser() -> argparse.ArgumentParser:
     finetune.add_argument("--lora-rank", type=int, default=32)
     finetune.add_argument("--lora-alpha", type=int, default=32)
     finetune.add_argument("--lora-dropout", type=float, default=0.0)
+    finetune.add_argument("--train-fraction", type=float)
+    finetune.add_argument("--eval-dataset-id")
+    finetune.add_argument("--eval-dataset-path")
+    finetune.add_argument("--eval-batch-size", type=int)
+    finetune.add_argument(
+        "--registry-path",
+        help="Optional adapter registry directory for manifest updates",
+    )
     finetune.add_argument(
         "--skip-smoke-tests",
         action="store_true",

@@ -1,0 +1,17 @@
+{
+  "generated_at": "2025-10-14T06:10:28.808802+00:00",
+  "record_count": 704,
+  "category_distribution": {
+    "module_reference": 608,
+    "architecture": 18,
+    "operations": 18,
+    "alignment": 12,
+    "api": 48
+  },
+  "git_revision": "81cc58db598d83d2da14b453f199532b99b354a7",
+  "split_counts": {
+    "train": 634,
+    "val": 70
+  },
+  "val_ratio": 0.1
+}

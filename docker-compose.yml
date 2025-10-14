@@ -115,6 +115,10 @@ services:
         WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
       restart: "no"
       working_dir: /app
+      volumes:
+        - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+        - ./models/datasets/curated:/app/models/datasets/curated
+        - ./models/encoders:/app/models/encoders
       init: true
       networks:
         - backend
@@ -191,6 +195,42 @@ services:
         condition: service_started
       webapp-migrations:
         condition: service_completed_successfully
+
+  unsloth-trainer:
+    <<: *app-service
+    profiles: [training]
+    environment:
+      <<: *app-environment
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+      - ./models/datasets/curated:/app/models/datasets/curated
+      - ./models/encoders:/app/models/encoders
+    command: >-
+      bash -lc "python scripts/run_mongars_llm_pipeline.py finetune
+        --model-id ${UNSLOTH_MODEL_ID:-dphn/Dolphin3.0-Llama3.1-8B}
+        --dataset-path ${UNSLOTH_DATASET_PATH:-/app/datasets/monGARS_llm/monGARS_llm_train.jsonl}
+        --eval-dataset-path ${UNSLOTH_EVAL_DATASET_PATH:-/app/datasets/monGARS_llm/monGARS_llm_val.jsonl}
+        --output-dir ${UNSLOTH_OUTPUT_DIR:-/app/models/encoders/monGARS_unsloth/run}
+        --registry-path ${UNSLOTH_REGISTRY_PATH:-/app/models/encoders/monGARS_unsloth}
+        --max-seq-len ${UNSLOTH_MAX_SEQ_LEN:-2048}
+        --vram-budget-mb ${UNSLOTH_VRAM_BUDGET_MB:-8192}
+        --activation-buffer-mb ${UNSLOTH_ACTIVATION_BUFFER_MB:-1024}
+        --batch-size ${UNSLOTH_BATCH_SIZE:-1}
+        --grad-accum ${UNSLOTH_GRAD_ACCUM:-8}
+        --learning-rate ${UNSLOTH_LR:-2e-4}
+        --epochs ${UNSLOTH_EPOCHS:-1}
+        --max-steps ${UNSLOTH_MAX_STEPS:--1}
+        --lora-rank ${UNSLOTH_LORA_RANK:-32}
+        --lora-alpha ${UNSLOTH_LORA_ALPHA:-32}
+        --lora-dropout ${UNSLOTH_LORA_DROPOUT:-0.05}
+        --eval-batch-size ${UNSLOTH_EVAL_BATCH_SIZE:-1}
+        $${UNSLOTH_TRAIN_FRACTION:+--train-fraction $$UNSLOTH_TRAIN_FRACTION}
+        $${UNSLOTH_EVAL_DATASET_ID:+--eval-dataset-id $$UNSLOTH_EVAL_DATASET_ID}
+        $${UNSLOTH_DATASET_ID:+--dataset-id $$UNSLOTH_DATASET_ID}
+        $${UNSLOTH_SKIP_SMOKE_TESTS:+--skip-smoke-tests}
+        $${UNSLOTH_SKIP_METADATA:+--skip-metadata}
+        $${UNSLOTH_SKIP_MERGE:+--skip-merge}"
 
   ollama:
     image: ollama/ollama:0.3.12
