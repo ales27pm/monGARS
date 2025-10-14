@@ -1,5 +1,9 @@
+# syntax=docker/dockerfile:1.6
+
+ARG PYTORCH_IMAGE=pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+
 # --- Build Stage ---
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime AS builder
+FROM ${PYTORCH_IMAGE} AS builder
 ENV PATH="/opt/conda/bin:${PATH}"
 ARG JOBS=1
 ENV MAKEFLAGS="-j${JOBS}"
@@ -14,7 +18,6 @@ RUN apt-get update \
         ffmpeg \
         git \
         git-lfs \
-        python3-venv \
         libffi-dev \
         libgl1 \
         libjpeg-dev \
@@ -23,6 +26,7 @@ RUN apt-get update \
         libxml2-dev \
         libxslt1-dev \
         pkg-config \
+        python3-venv \
         unzip \
         wget \
     && rm -rf /var/lib/apt/lists/*
@@ -40,7 +44,8 @@ RUN python -m venv /opt/venv \
 COPY . /app
 
 # --- Final Stage ---
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime AS runtime
+ARG PYTORCH_IMAGE
+FROM ${PYTORCH_IMAGE} AS runtime
 ENV PATH="/opt/conda/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -54,14 +59,14 @@ RUN apt-get update \
         ffmpeg \
         git \
         git-lfs \
-        python3-venv \
-        libffi7 \
+        libffi-dev \
         libgl1 \
-        libjpeg-turbo8 \
+        libjpeg-dev \
         libpq5 \
-        libssl1.1 \
+        libssl-dev \
         libxml2 \
         libxslt1.1 \
+        python3-venv \
         unzip \
         wget \
     && rm -rf /var/lib/apt/lists/*
