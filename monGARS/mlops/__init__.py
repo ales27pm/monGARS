@@ -9,11 +9,14 @@ from .artifacts import (
 )
 from .code_analysis import (
     LLMUsage,
+    ModuleInteraction,
     build_strategy_recommendation,
     render_usage_report,
     scan_llm_usage,
+    scan_module_interactions,
 )
 from .dataset import (
+    build_module_interaction_dataset,
     build_mongars_strategy_dataset,
     prepare_instruction_dataset,
     prepare_local_instruction_dataset,
@@ -54,10 +57,13 @@ __all__ = [
     "prepare_instruction_dataset",
     "prepare_local_instruction_dataset",
     "build_mongars_strategy_dataset",
+    "build_module_interaction_dataset",
     "scan_llm_usage",
+    "scan_module_interactions",
     "render_usage_report",
     "build_strategy_recommendation",
     "LLMUsage",
+    "ModuleInteraction",
     "export_gguf",
     "merge_lora_adapters",
     "run_generation_smoke_test",

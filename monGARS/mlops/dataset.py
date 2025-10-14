@@ -12,6 +12,7 @@ from transformers import PreTrainedTokenizerBase
 from datasets import Dataset, DatasetDict, load_dataset
 from monGARS.mlops.code_analysis import (
     LLMUsage,
+    ModuleInteraction,
     build_strategy_recommendation,
 )
 
@@ -225,6 +226,100 @@ def build_mongars_strategy_dataset(
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     logger.info(
         "Wrote monGARS strategy dataset",
+        extra={"path": str(output_path), "examples": len(records)},
+    )
+    return output_path
+
+
+def _summarise_interaction(interaction: ModuleInteraction) -> str:
+    imports = ", ".join(interaction.import_names) or "the module surface"
+    base = (
+        f"{interaction.source_module} depends on {interaction.target_module} via "
+        f"a {interaction.kind} import of {imports}. "
+        "Document how the source coordinates with the imported module "
+        "to keep responsibilities well factored and observable."
+    )
+    target = interaction.target_module
+    if "dataset" in target:
+        extra = (
+            " Emphasise dataset shaping, tokenisation boundaries, and how prompts feed"
+            " downstream training jobs."
+        )
+    elif "code_analysis" in target or "analysis" in target:
+        extra = (
+            " Show how static analysis insights inform data curation and guardrail"
+            " selection for fine-tuning."
+        )
+    elif "pipelines" in target or "unsloth" in target:
+        extra = (
+            " Outline the training orchestration expectations, paying attention to"
+            " metadata capture and wrapper export routines."
+        )
+    elif "evolution_engine" in target:
+        extra = (
+            " Call out coordination with the evolution orchestrator and how artefact"
+            " metadata flows across stages."
+        )
+    elif "core" in target:
+        extra = (
+            " Reference shared persistence, caching, or validation helpers exposed"
+            " through the core package."
+        )
+    else:
+        extra = (
+            " Highlight logging, error handling, and contract boundaries so future"
+            " refactors preserve behaviour."
+        )
+    return base + extra
+
+
+def build_module_interaction_dataset(
+    interactions: Sequence[ModuleInteraction],
+    output_path: Path,
+    *,
+    metadata_path: Path | None = None,
+    min_examples: int = 8,
+) -> Path:
+    """Create a JSONL dataset derived from module dependency edges."""
+
+    if len(interactions) < min_examples:
+        raise ValueError(
+            "Insufficient module interactions to build a dataset; "
+            f"need at least {min_examples}, got {len(interactions)}"
+        )
+
+    records = []
+    for interaction in interactions:
+        imports = ", ".join(interaction.import_names) or "<module>"
+        prompt = (
+            "Describe how these monGARS modules collaborate.\n"
+            f"Source module: {interaction.source_module}\n"
+            f"Imported module: {interaction.target_module}\n"
+            f"Imported names: {imports}\n"
+            f"Import kind: {interaction.kind}\n"
+            f"Location: {interaction.source_path}:{interaction.line}\n"
+            f"Snippet:\n{interaction.snippet}\n"
+        )
+        completion = _summarise_interaction(interaction)
+        records.append({"prompt": prompt, "completion": completion})
+
+    output_path = output_path.resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    if metadata_path is not None:
+        metadata = {
+            "num_examples": len(records),
+            "unique_targets": sorted({item.target_module for item in interactions}),
+            "generated_from": str(output_path),
+        }
+        metadata_path = metadata_path.resolve()
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    logger.info(
+        "Wrote monGARS module interaction dataset",
         extra={"path": str(output_path), "examples": len(records)},
     )
     return output_path

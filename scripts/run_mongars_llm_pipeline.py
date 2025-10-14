@@ -7,8 +7,15 @@ import argparse
 import logging
 from pathlib import Path
 
-from monGARS.mlops.code_analysis import render_usage_report, scan_llm_usage
-from monGARS.mlops.dataset import build_mongars_strategy_dataset
+from monGARS.mlops.code_analysis import (
+    render_usage_report,
+    scan_llm_usage,
+    scan_module_interactions,
+)
+from monGARS.mlops.dataset import (
+    build_module_interaction_dataset,
+    build_mongars_strategy_dataset,
+)
 from monGARS.mlops.pipelines import run_unsloth_finetune
 
 LOGGER = logging.getLogger("monGARS.llm_pipeline")
@@ -48,6 +55,29 @@ def cmd_dataset(args: argparse.Namespace) -> None:
         extra={
             "dataset_path": str(dataset_path),
             "metadata_path": str(metadata_path) if metadata_path else None,
+        },
+    )
+
+
+def cmd_module_dataset(args: argparse.Namespace) -> None:
+    root = Path(args.root).resolve()
+    interactions = scan_module_interactions(
+        root, packages=tuple(args.packages), ignore_parts=tuple(args.ignore_parts)
+    )
+    dataset_path = Path(args.output).resolve()
+    metadata_path = Path(args.metadata).resolve() if args.metadata else None
+    build_module_interaction_dataset(
+        interactions,
+        dataset_path,
+        metadata_path=metadata_path,
+        min_examples=args.min_examples,
+    )
+    LOGGER.info(
+        "Generated module interaction dataset",
+        extra={
+            "dataset_path": str(dataset_path),
+            "metadata_path": str(metadata_path) if metadata_path else None,
+            "interactions": len(interactions),
         },
     )
 
@@ -121,6 +151,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum number of callsites required to create the dataset",
     )
     dataset.set_defaults(func=cmd_dataset)
+
+    module_dataset = subparsers.add_parser(
+        "module-dataset",
+        help="Build a dataset describing module-to-module dependencies",
+    )
+    module_dataset.add_argument(
+        "--output",
+        required=True,
+        help="Destination JSONL dataset path",
+    )
+    module_dataset.add_argument(
+        "--metadata",
+        help="Optional metadata JSON path to describe the dataset",
+    )
+    module_dataset.add_argument(
+        "--min-examples",
+        type=int,
+        default=8,
+        help="Minimum number of interactions required to create the dataset",
+    )
+    module_dataset.add_argument(
+        "--packages",
+        nargs="+",
+        default=["monGARS", "modules"],
+        help="Root packages considered when scanning for interactions",
+    )
+    module_dataset.add_argument(
+        "--ignore-parts",
+        nargs="+",
+        default=[".venv", "tests", "build", "dist", "__pycache__"],
+        help="Directory names to ignore while scanning",
+    )
+    module_dataset.set_defaults(func=cmd_module_dataset)
 
     finetune = subparsers.add_parser(
         "finetune", help="Execute the Unsloth fine-tuning workflow"
