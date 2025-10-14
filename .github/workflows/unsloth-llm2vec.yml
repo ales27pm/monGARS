@@ -130,21 +130,21 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-import sys
-try:
-    import torch
-except Exception as exc:
-    print(f"torch check failed: {exc}", file=sys.stderr)
-    sys.exit(1)
-print("torch version", torch.__version__)
-cuda_available = torch.cuda.is_available()
-device_count = torch.cuda.device_count()
-print("cuda available", cuda_available)
-print("cuda device count", device_count)
-if not cuda_available or device_count == 0:
-    print("ERROR: No CUDA GPU detected. Failing workflow.", file=sys.stderr)
-    sys.exit(1)
-PY
+            import sys
+            try:
+                import torch
+            except Exception as exc:
+                print(f"torch check failed: {exc}", file=sys.stderr)
+                sys.exit(1)
+            print("torch version", torch.__version__)
+            cuda_available = torch.cuda.is_available()
+            device_count = torch.cuda.device_count()
+            print("cuda available", cuda_available)
+            print("cuda device count", device_count)
+            if not cuda_available or device_count == 0:
+                print("ERROR: No CUDA GPU detected. Failing workflow.", file=sys.stderr)
+                sys.exit(1)
+          PY
 
       - name: Resolve training paths
         id: paths
