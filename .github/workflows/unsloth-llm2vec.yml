@@ -119,81 +119,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-        - name: Inspect accelerator availability
-          id: accelerator
-          shell: bash
-          run: |
-            set -euo pipefail
-            python <<'PY'
-import os
-import shutil
-import subprocess
-from pathlib import Path
-
-
-def emit(level: str, message: str) -> None:
-    print(f"::{level}::{message}")
-
-
-accelerator = "gpu"
-cuda_available = False
-device_count = 0
-
-nvidia_smi = shutil.which("nvidia-smi")
-if nvidia_smi:
-    try:
-        subprocess.run([nvidia_smi], check=True)
-    except subprocess.CalledProcessError as exc:
-        emit(
-            "warning",
-            f"nvidia-smi exited with {exc.returncode}; continuing with CPU fallback",
-        )
-        accelerator = "cpu"
-else:
-    emit("warning", "nvidia-smi not found; continuing with CPU fallback")
-    accelerator = "cpu"
-
-try:
-    import torch  # type: ignore[import-not-found]
-except Exception as exc:  # pragma: no cover - defensive logging in CI
-    emit("error", f"Failed to import torch: {exc}")
-    raise SystemExit(1) from exc
-
-print(f"torch version {torch.__version__}")
-
-try:
-    cuda_available = bool(torch.cuda.is_available())
-except Exception as exc:  # pragma: no cover - CUDA probing edge case
-    emit(
-        "warning",
-        f"torch.cuda.is_available() raised {exc}; assuming CPU fallback",
-    )
-    accelerator = "cpu"
-else:
-    try:
-        device_count = int(torch.cuda.device_count()) if cuda_available else 0
-    except Exception as exc:  # pragma: no cover - CUDA probing edge case
-        emit(
-            "warning",
-            f"torch.cuda.device_count() raised {exc}; switching to CPU fallback",
-        )
-        accelerator = "cpu"
-        cuda_available = False
-
-print(f"cuda available {cuda_available}")
-print(f"cuda device count {device_count}")
-
-if not cuda_available or device_count <= 0:
-    if accelerator != "cpu":
-        emit("warning", "CUDA device not detected; running fine-tune on CPU fallback")
-    accelerator = "cpu"
-
-output_path = Path(os.environ["GITHUB_OUTPUT"])
-with output_path.open("a", encoding="utf-8") as handle:
-    handle.write(f"accelerator={accelerator}\n")
-    handle.write(f"cuda_available={'true' if cuda_available else 'false'}\n")
-    handle.write(f"cuda_device_count={device_count}\n")
-PY
+      - name: Inspect accelerator availability
+        id: accelerator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/inspect_accelerator.py
 
       - name: Resolve training paths
         id: paths
