@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from packaging.version import Version
 
 from monGARS.mlops import model as model_module
 
@@ -26,7 +27,7 @@ class _DummyTokenizer:
 @pytest.fixture(autouse=True)
 def _patch_tokenizer(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_tokenizer_from_pretrained(
-        model_id: str, use_fast: bool = True
+        model_id: str, use_fast: bool = True, **__: Any
     ) -> Any:  # noqa: ARG001
         return _DummyTokenizer()
 
@@ -54,6 +55,11 @@ def _patch_bitsandbytes(monkeypatch: pytest.MonkeyPatch) -> None:
             self.llm_int8_enable_fp32_cpu_offload = llm_int8_enable_fp32_cpu_offload
 
     monkeypatch.setattr(model_module, "BitsAndBytesConfig", _FakeBitsAndBytesConfig)
+
+
+@pytest.fixture(autouse=True)
+def _force_quantization_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: True)
 
 
 def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
@@ -201,7 +207,7 @@ def test_load_4bit_causal_lm_handles_legacy_bitsandbytes_kwargs(
 
     def _fake_from_pretrained(
         *_, quantization_config: Any, **__
-    ) -> Any:  # noqa: ANN002
+    ) -> Any:
         quant_configs.append(quantization_config)
         return _DummyModel()
 
@@ -230,3 +236,109 @@ def test_load_4bit_causal_lm_sets_tokenizer_pad_token(
     )
 
     assert tokenizer.pad_token == tokenizer.eos_token
+
+
+def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
+
+    recorded_kwargs: dict[str, Any] = {}
+
+    def _fake_from_pretrained(*_, **kwargs) -> Any:
+        recorded_kwargs.update(kwargs)
+        return _DummyModel()
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM, "from_pretrained", _fake_from_pretrained
+    )
+
+    model, tokenizer = model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
+
+    assert isinstance(model, _DummyModel)
+    assert isinstance(tokenizer, _DummyTokenizer)
+    assert recorded_kwargs.get("quantization_config") is None
+    assert recorded_kwargs.get("device_map") is None
+    assert recorded_kwargs.get("torch_dtype") is model_module.torch.float32
+
+
+def test_load_4bit_causal_lm_cpu_fallback_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
+
+    def _failing_from_pretrained(*_, **__):
+        raise RuntimeError("Simulated model loading failure")
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM, "from_pretrained", _failing_from_pretrained
+    )
+
+    with caplog.at_level("ERROR"):
+        with pytest.raises(RuntimeError, match="Simulated model loading failure"):
+            model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
+
+    assert any(
+        "Failed to load model on CPU fallback" in message for message in caplog.messages
+    )
+
+
+def test_build_model_kwargs_candidates_skips_unsupported() -> None:
+    def _loader(model_id: str, *, low_cpu_mem_usage: bool) -> Any:  # noqa: ARG001
+        return _DummyModel()
+
+    candidates = model_module._build_model_kwargs_candidates(
+        _loader,
+        base_kwargs={"low_cpu_mem_usage": True},
+        optional_kwargs=(
+            {"torch_dtype": model_module.torch.float32},
+            {"dtype": model_module.torch.float32},
+        ),
+    )
+
+    assert candidates == [{"low_cpu_mem_usage": True}]
+
+
+def test_build_model_kwargs_candidates_prefers_first_supported() -> None:
+    def _loader(
+        model_id: str,
+        *,
+        low_cpu_mem_usage: bool,
+        torch_dtype: Any = None,
+        dtype: Any = None,
+    ) -> Any:  # noqa: ARG001
+        return _DummyModel()
+
+    candidates = model_module._build_model_kwargs_candidates(
+        _loader,
+        base_kwargs={"low_cpu_mem_usage": True},
+        optional_kwargs=(
+            {"torch_dtype": model_module.torch.float16},
+            {"dtype": model_module.torch.float16},
+        ),
+    )
+
+    assert len(candidates) == 3
+    assert candidates[0]["torch_dtype"] is model_module.torch.float16
+    assert "dtype" not in candidates[0]
+    assert candidates[1]["dtype"] is model_module.torch.float16
+    assert candidates[2] == {"low_cpu_mem_usage": True}
+
+
+def test_get_min_bitsandbytes_version_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MONGARS_MIN_BITSANDBYTES_VERSION", "0.45.0")
+
+    assert model_module._get_min_bitsandbytes_version() == Version("0.45.0")
+
+
+def test_get_min_bitsandbytes_version_invalid_override(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("MONGARS_MIN_BITSANDBYTES_VERSION", "not-a-version")
+
+    with caplog.at_level("WARNING"):
+        resolved = model_module._get_min_bitsandbytes_version()
+
+    assert resolved == model_module._DEFAULT_MIN_BITSANDBYTES_VERSION
+    assert any(
+        "Invalid bitsandbytes minimum version override" in message
+        for message in caplog.messages
+    )
