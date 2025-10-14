@@ -101,8 +101,9 @@ implementation details.
   manifests so operators can run the stack on laptops or clusters.【F:Dockerfile†L1-L200】【F:build_native.sh†L1-L160】
 - External secret orchestration pulls runtime credentials from Vault using an
   `ExternalSecret`, eliminating raw `Secret` manifests in the repository.【F:k8s/secrets.yaml†L1-L52】
-- `scripts/deploy_docker.sh` automates profile selection, secret rotation, and
-  container lifecycle management to streamline developer onboarding.【F:scripts/deploy_docker.sh†L1-L200】
+- `scripts/docker_menu.py` provides an interactive orchestrator that rotates
+  secrets, resolves port collisions, and manages lifecycle tasks for local
+  onboarding.【F:scripts/docker_menu.py†L1-L260】
 
 ## Known Gaps & Risks
 

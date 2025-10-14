@@ -1,162 +1,26 @@
-version: "3.9"
-
-x-database-environment: &database-environment
-  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://mongars:${DB_PASSWORD:-changeme}@postgres:5432/mongars_db}
-  DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
-  DB_HOST: ${DB_HOST:-postgres}
-  DB_PORT: ${DB_PORT:-5432}
-  DB_USER: ${DB_USER:-mongars}
-  DB_PASSWORD: ${DB_PASSWORD:-changeme}
-  DB_NAME: ${DB_NAME:-mongars_db}
-  DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
-  DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
-
-x-app-environment: &app-environment
-  <<: *database-environment
-  ENV: production
-  HOST: 0.0.0.0
-  PORT: ${API_PORT:-8000}
-  USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
-  RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
-  REDIS_URL: redis://redis:6379/0
-  MLFLOW_TRACKING_URI: http://mlflow:5000
-  OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
-  VAULT_URL: http://vault:8200
-  VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
-  WS_ALLOWED_ORIGINS: '${WS_ALLOWED_ORIGINS:-["http://localhost:8000","http://localhost:8001"]}'
-
 services:
-  migrations:
-    image: ${MONGARS_IMAGE:-mongars-app:0.1.0}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    command: ["python", "init_db.py"]
-    restart: "no"
-    env_file:
-      - .env
-    environment:
-      <<: *app-environment
-    depends_on:
-      - postgres
-    networks:
-      - mongars
-
-  api:
-    image: ${MONGARS_IMAGE:-mongars-app:0.1.0}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    command: >-
-      bash -lc "python scripts/wait_for_database.py && uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000"
-    depends_on:
-      - migrations
-      - redis
-      - postgres
-    ports:
-      - "${API_PORT:-8000}:8000"
-    env_file:
-      - .env
-    environment:
-      <<: *app-environment
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - >-
-          python3 -c "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5);
-          c.request('GET','/healthz'); sys.exit(0 if c.getresponse().status==200 else 1)"
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - mongars
-
-  webapp-migrations:
-    image: ${MONGARS_IMAGE:-mongars-app:0.1.0}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    command: >-
-      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py migrate --noinput"
-    restart: "no"
-    depends_on:
-      - postgres
-      - migrations
-    env_file:
-      - .env
-    environment:
-      <<: *database-environment
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
-      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
-      FASTAPI_URL: http://api:8000
-      PYTHONUNBUFFERED: "1"
-    networks:
-      - mongars
-
-  webapp:
-    image: ${MONGARS_IMAGE:-mongars-app:0.1.0}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    command: >-
-      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py runserver 0.0.0.0:8001"
-    depends_on:
-      - api
-      - webapp-migrations
-    ports:
-      - "${WEBAPP_PORT:-8001}:8001"
-    env_file:
-      - .env
-    environment:
-      <<: *database-environment
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
-      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
-      FASTAPI_URL: http://api:8000
-      PYTHONUNBUFFERED: "1"
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - >-
-          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',8001,timeout=5);
-          conn.request('GET','/chat/login/');
-          sys.exit(0 if conn.getresponse().status == 200 else 1)"
-      interval: 45s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - mongars
-
   postgres:
     image: pgvector/pgvector:pg18
-    container_name: mongars-postgres
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-mongars}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
       POSTGRES_DB: ${DB_NAME:-mongars_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mongars} -d ${DB_NAME:-mongars_db}"]
       interval: 5s
       timeout: 5s
       retries: 20
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
+      - postgres-data:/var/lib/postgresql/data
     networks:
-      - mongars
+      - backend
 
   redis:
     image: redis/redis-stack-server:7.2.0-v10
-    container_name: mongars-redis
+    restart: unless-stopped
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -165,14 +29,13 @@ services:
       timeout: 3s
       retries: 10
     volumes:
-      - redisdata:/data
-    restart: unless-stopped
+      - redis-data:/data
     networks:
-      - mongars
+      - backend
 
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.16.2
-    container_name: mongars-mlflow
+    restart: unless-stopped
     command:
       - mlflow
       - server
@@ -186,51 +49,26 @@ services:
       - /mlruns
     ports:
       - "${MLFLOW_PORT:-5000}:5000"
-    volumes:
-      - mlflowdata:/mlflow
-      - mlruns:/mlruns
     healthcheck:
       test:
         - "CMD-SHELL"
-        - >-
-          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',5000,timeout=5);
-          conn.request('GET','/api/2.0/mlflow/experiments/list');
-          sys.exit(0 if conn.getresponse().status == 200 else 1)"
+        - |
+          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',5000,timeout=5); conn.request('GET','/api/2.0/mlflow/experiments/list'); sys.exit(0 if conn.getresponse().status == 200 else 1)"
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
-    networks:
-      - mongars
-
-  ollama:
-    image: ollama/ollama:0.3.12
-    container_name: mongars-ollama
-    profiles:
-      - inference
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    environment:
-      OLLAMA_KEEP_ALIVE: 24h
     volumes:
-      - ollamadata:/root/.ollama
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null"
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
+      - mlflow-data:/mlflow
+      - mlruns-data:/mlruns
     networks:
-      - mongars
+      - backend
 
   vault:
     image: hashicorp/vault:1.15.4
-    container_name: mongars-vault
+    restart: unless-stopped
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-dev-root-token}
-      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     cap_add:
       - IPC_LOCK
     ports:
@@ -242,44 +80,162 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
     networks:
-      - mongars
+      - backend
+
+  migrations:
+    <<: &app-service
+      image: ${MONGARS_IMAGE:-mongars-app:local}
+      build:
+        context: .
+        dockerfile: Dockerfile
+        target: runtime
+      env_file:
+        - .env
+      environment: &app-environment
+        DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://mongars:${DB_PASSWORD:-changeme}@postgres:5432/mongars_db}
+        DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
+        DB_HOST: ${DB_HOST:-postgres}
+        DB_PORT: ${DB_PORT:-5432}
+        DB_USER: ${DB_USER:-mongars}
+        DB_PASSWORD: ${DB_PASSWORD:-changeme}
+        DB_NAME: ${DB_NAME:-mongars_db}
+        DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
+        DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
+        ENV: ${APP_ENV:-production}
+        HOST: 0.0.0.0
+        PORT: ${API_PORT:-8000}
+        USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
+        RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
+        REDIS_URL: redis://redis:6379/0
+        MLFLOW_TRACKING_URI: http://mlflow:5000
+        OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+        VAULT_URL: http://vault:8200
+        VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+        WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-["http://localhost:8000","http://localhost:8001"]}
+      restart: "no"
+      working_dir: /app
+      init: true
+      networks:
+        - backend
+    command: ["python", "init_db.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app-service
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - |
+          python3 -c "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/healthz'); sys.exit(0 if c.getresponse().status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  webapp-migrations:
+    <<: *app-service
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py migrate --noinput"
+    restart: "no"
+    environment:
+      <<: *app-environment
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+      FASTAPI_URL: http://api:8000
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+  webapp:
+    <<: *app-service
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py runserver 0.0.0.0:8001"
+    ports:
+      - "${WEBAPP_PORT:-8001}:8001"
+    environment:
+      <<: *app-environment
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+      FASTAPI_URL: http://api:8000
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - |
+          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',8001,timeout=5); conn.request('GET','/chat/login/'); sys.exit(0 if conn.getresponse().status == 200 else 1)"
+      interval: 45s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      webapp-migrations:
+        condition: service_completed_successfully
+
+  ollama:
+    image: ollama/ollama:0.3.12
+    profiles: [inference]
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - backend
 
   ray-head:
     image: ${RAY_HEAD_IMAGE:-rayproject/ray:2.9.3-py311}
-    container_name: mongars-ray-head
-    profiles:
-      - ray
+    profiles: [ray]
     command: >-
-      bash -lc "python -m ray.scripts.scripts stop --force || true; python -m ray.scripts.scripts start --head
-        --dashboard-host=0.0.0.0
-        --dashboard-port=${RAY_DASHBOARD_PORT:-8265}
-        --ray-client-server-port=10001
-        --num-cpus=2
-        --block"
+      bash -lc "python -m ray.scripts.scripts stop --force || true; python -m ray.scripts.scripts start --head --dashboard-host=0.0.0.0 --dashboard-port=${RAY_DASHBOARD_PORT:-8265} --ray-client-server-port=${RAY_CLIENT_PORT:-10001} --num-cpus=2 --block"
     ports:
       - "${RAY_DASHBOARD_PORT:-8265}:8265"
       - "${RAY_CLIENT_PORT:-10001}:10001"
-    shm_size: "2g"
+    shm_size: 2g
     restart: unless-stopped
     networks:
-      - mongars
+      - backend
 
   rayserve:
+    <<: *app-service
+    profiles: [ray]
     build:
       context: .
       dockerfile: Dockerfile.rayserve
-    image: mongars-rayserve:0.1.0
-    container_name: mongars-rayserve
-    profiles:
-      - ray
-    depends_on:
-      ray-head:
-        condition: service_started
+    image: ${RAY_SERVE_IMAGE:-mongars-rayserve:local}
     environment:
-      - PYTHONUNBUFFERED=1
-      - RAY_ADDRESS=ray://ray-head:10001
+      <<: *app-environment
+      PYTHONUNBUFFERED: "1"
+      RAY_ADDRESS: ray://ray-head:10001
     command: >-
       bash -lc "serve start --address=ray://ray-head:10001 --http-host=0.0.0.0 --http-port=8000"
     ports:
@@ -290,20 +246,18 @@ services:
       timeout: 3s
       retries: 30
     restart: unless-stopped
-    networks:
-      - mongars
+    depends_on:
+      ray-head:
+        condition: service_started
 
 networks:
-  mongars:
-    name: ${COMPOSE_PROJECT_NAME:-mongars-1}_mongars
+  backend:
+    name: ${COMPOSE_PROJECT_NAME:-mongars}_backend
     driver: bridge
-    driver_opts:
-      com.docker.network.enable_ipv4: "true"
-      com.docker.network.enable_ipv6: "false"
 
 volumes:
-  pgdata:
-  redisdata:
-  mlflowdata:
-  mlruns:
-  ollamadata:
+  postgres-data:
+  redis-data:
+  mlflow-data:
+  mlruns-data:
+  ollama-data:
