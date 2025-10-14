@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PIP_CACHE_DIR }}
-          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt','pyproject.toml') }}
+          key: "pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}"
           restore-keys: |
             pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
 
@@ -186,83 +186,12 @@ jobs:
 
       - name: Resolve pipeline overrides
         id: overrides
-        shell: python
+        shell: bash
         env:
           RAW_OVERRIDES: ${{ inputs.pipeline_overrides }}
         run: |
-          import json
-          import os
-          from pathlib import Path
-
-          defaults = {
-              "max_seq_len": "2048",
-              "vram_budget_mb": "8192",
-              "activation_buffer_mb": "1024",
-              "batch_size": "1",
-              "grad_accum": "8",
-              "learning_rate": "2e-4",
-              "epochs": "1",
-              "max_steps": "-1",
-              "lora_rank": "32",
-              "lora_alpha": "32",
-              "lora_dropout": "0.05",
-              "train_fraction": "",
-              "eval_batch_size": "",
-              "retention_days": "14",
-              "skip_smoke_tests": False,
-              "skip_metadata": False,
-              "skip_merge": False,
-          }
-
-          boolean_keys = {"skip_smoke_tests", "skip_metadata", "skip_merge"}
-          raw = os.environ.get("RAW_OVERRIDES", "").strip()
-          overrides: dict[str, object] = {}
-
-          if raw:
-              try:
-                  parsed = json.loads(raw)
-              except json.JSONDecodeError:
-                  pieces = [token.strip() for token in raw.replace("\n", ",").split(",")]
-                  for token in pieces:
-                      if not token:
-                          continue
-                      if "=" not in token:
-                          print(f"::error::Invalid override entry '{token}'. Use key=value or JSON object.")
-                          raise SystemExit(1)
-                      key, value = token.split("=", 1)
-                      overrides[key.strip()] = value.strip()
-              else:
-                  if not isinstance(parsed, dict):
-                      print("::error::pipeline_overrides must decode to a JSON object.")
-                      raise SystemExit(1)
-                  overrides = parsed
-
-          merged = defaults.copy()
-          truthy_values = {True, "true", "True", "TRUE", "1", 1, "yes", "YES", "Yes", "on", "ON", "On", "t", "T"}
-          for key, value in overrides.items():
-              if key not in merged:
-                  print(f"::error::Unknown override key '{key}'. Allowed keys: {sorted(merged.keys())}")
-                  raise SystemExit(1)
-              if key in boolean_keys:
-                  merged[key] = value in truthy_values
-              else:
-                  if value is None:
-                      merged[key] = ""
-                  else:
-                      merged[key] = str(value)
-
-          output_path = Path(os.environ["GITHUB_OUTPUT"])
-          with output_path.open("a", encoding="utf-8") as handle:
-              for key, value in merged.items():
-                  if key in boolean_keys:
-                      rendered = "true" if bool(value) else "false"
-                  else:
-                      rendered = value
-                  handle.write(f"{key}={rendered}\n")
-
-          print("Resolved pipeline overrides:")
-          for key in sorted(merged):
-              print(f"- {key}: {merged[key]}")
+          set -euo pipefail
+          python scripts/resolve_pipeline_overrides.py
 
       - name: Run Unsloth fine-tuning pipeline
         id: finetune
@@ -408,43 +337,12 @@ jobs:
           retention-days: ${{ steps.overrides.outputs.retention_days }}
 
       - name: Publish summary
-        shell: python
+        shell: bash
         env:
           OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
           REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
           SUMMARY_PATH: ${{ github.step_summary }}
           HF_TOKEN_SOURCE: ${{ steps.resolve-hf.outputs.source }}
         run: |
-          import json
-          import os
-          from pathlib import Path
-
-          output_dir = Path(os.environ["OUTPUT_DIR"])
-          registry_path = Path(os.environ["REGISTRY_PATH"])
-          summary_path = Path(os.environ["SUMMARY_PATH"])
-          hf_source = os.environ.get("HF_TOKEN_SOURCE", "none")
-
-          lines = [
-              "## Unsloth fine-tune summary",
-              f"- Output directory: `{output_dir}`",
-              f"- Registry path: `{registry_path}`",
-              f"- Hugging Face token source: `{hf_source}`",
-          ]
-
-          metadata_path = output_dir / "run_metadata.json"
-          if metadata_path.exists():
-              try:
-                  data = json.loads(metadata_path.read_text(encoding="utf-8"))
-              except Exception as exc:  # pragma: no cover - defensive
-                  lines.append(f"- Failed to parse run_metadata.json: {exc}")
-              else:
-                  payload = json.dumps(data, indent=2).splitlines()
-                  lines.append("")
-                  lines.append("### run_metadata.json (first 200 lines)")
-                  lines.append("```json")
-                  lines.extend(payload[:200])
-                  if len(payload) > 200:
-                      lines.append("... truncated ...")
-                  lines.append("```")
-
-          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          set -euo pipefail
+          python scripts/publish_unsloth_summary.py
