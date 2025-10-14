@@ -54,7 +54,7 @@ jobs:
   finetune:
     name: Run Unsloth pipeline
     runs-on: [ubuntu-latest]
-    mtimeout-minutes: 720
+    timeout-minutes: 720
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
