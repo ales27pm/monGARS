@@ -56,6 +56,11 @@ def _patch_bitsandbytes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(model_module, "BitsAndBytesConfig", _FakeBitsAndBytesConfig)
 
 
+@pytest.fixture(autouse=True)
+def _force_quantization_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: True)
+
+
 def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
@@ -230,3 +235,25 @@ def test_load_4bit_causal_lm_sets_tokenizer_pad_token(
     )
 
     assert tokenizer.pad_token == tokenizer.eos_token
+
+
+def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
+
+    recorded_kwargs: dict[str, Any] = {}
+
+    def _fake_from_pretrained(*_, **kwargs) -> Any:  # noqa: ANN002
+        recorded_kwargs.update(kwargs)
+        return _DummyModel()
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM, "from_pretrained", _fake_from_pretrained
+    )
+
+    model, tokenizer = model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
+
+    assert isinstance(model, _DummyModel)
+    assert isinstance(tokenizer, _DummyTokenizer)
+    assert recorded_kwargs.get("quantization_config") is None
+    assert recorded_kwargs.get("device_map") is None
+    assert recorded_kwargs.get("torch_dtype") is model_module.torch.float32

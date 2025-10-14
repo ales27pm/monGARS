@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import torch
+from packaging.version import InvalidVersion, Version
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 logger = logging.getLogger(__name__)
@@ -50,13 +52,26 @@ def load_4bit_causal_lm(
     compute_dtype: Optional[torch.dtype] = None,
     attention_implementation: str | None = None,
 ) -> tuple[Any, Any]:
-    """Load a causal LM in 4-bit precision while keeping ``lm_head`` on CPU."""
+    """Load a causal LM with 4-bit quantization when possible.
+
+    When CUDA or a compatible bitsandbytes build is unavailable, the loader
+    gracefully falls back to a CPU execution path so CI can still exercise the
+    fine-tuning pipeline.
+    """
 
     offload_path = Path(offload_dir)
     offload_path.mkdir(parents=True, exist_ok=True)
 
     target_dtype = dtype or torch.float16
     compute_dtype = compute_dtype or target_dtype
+
+    if not _is_quantization_available():
+        return _load_cpu_causal_lm(
+            model_id,
+            trust_remote_code=trust_remote_code,
+            dtype=dtype,
+            attention_implementation=attention_implementation,
+        )
 
     bnb_common: dict[str, Any] = {
         "load_in_4bit": True,
@@ -83,7 +98,7 @@ def load_4bit_causal_lm(
     max_memory = {0: f"{weight_budget_mb}MiB", "cpu": "64GiB"}
 
     logger.info(
-        "Loading base model",
+        "Loading base model with 4-bit quantization",
         extra={
             "model": model_id,
             "vram_budget_mb": vram_budget_mb,
@@ -176,3 +191,115 @@ def detach_sequences(sequences: Iterable[Any]) -> list[Any]:
                     break
         detached.append(current)
     return detached
+
+
+_MIN_BITSANDBYTES_VERSION = Version("0.44.1")
+
+
+@lru_cache(maxsize=1)
+def _resolve_bitsandbytes_version() -> Version | None:
+    """Return the installed bitsandbytes version if available."""
+
+    try:
+        import bitsandbytes as bnb  # type: ignore[import-not-found]
+    except ImportError:
+        logger.warning(
+            "bitsandbytes not installed; falling back to CPU execution",
+            extra={"package": "bitsandbytes"},
+        )
+        return None
+
+    raw_version = getattr(bnb, "__version__", "")
+    try:
+        return Version(raw_version)
+    except InvalidVersion:
+        logger.warning(
+            "Unable to parse bitsandbytes version; disabling 4-bit quantization",
+            extra={"package": "bitsandbytes", "version": raw_version},
+        )
+        return None
+
+
+def _is_quantization_available() -> bool:
+    """Return ``True`` when 4-bit quantization requirements are satisfied."""
+
+    if not torch.cuda.is_available():
+        logger.warning(
+            "CUDA unavailable; using CPU execution without 4-bit quantization",
+            extra={"cuda_available": False},
+        )
+        return False
+
+    version_info = _resolve_bitsandbytes_version()
+    if version_info is None:
+        return False
+
+    if version_info < _MIN_BITSANDBYTES_VERSION:
+        logger.warning(
+            "bitsandbytes upgrade required for 4-bit quantization",
+            extra={
+                "detected_version": str(version_info),
+                "required_version": str(_MIN_BITSANDBYTES_VERSION),
+            },
+        )
+        return False
+
+    return True
+
+
+def _load_cpu_causal_lm(
+    model_id: str,
+    *,
+    trust_remote_code: bool,
+    dtype: Optional[torch.dtype],
+    attention_implementation: str | None,
+) -> tuple[Any, Any]:
+    """Load a causal LM directly on CPU when quantization is unavailable."""
+
+    cpu_dtype = dtype or torch.float32
+    if cpu_dtype == torch.float16:
+        logger.info(
+            "Promoting float16 dtype to float32 for CPU execution",
+            extra={"requested_dtype": "float16", "resolved_dtype": "float32"},
+        )
+        cpu_dtype = torch.float32
+
+    logger.info(
+        "Loading base model on CPU fallback",
+        extra={"model": model_id, "dtype": str(cpu_dtype)},
+    )
+
+    cpu_kwargs: dict[str, Any] = {
+        "trust_remote_code": trust_remote_code,
+        "low_cpu_mem_usage": True,
+    }
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, **cpu_kwargs, torch_dtype=cpu_dtype
+        )
+    except TypeError:
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id, **cpu_kwargs, dtype=cpu_dtype
+            )
+        except TypeError:
+            model = AutoModelForCausalLM.from_pretrained(model_id, **cpu_kwargs)
+
+    try:  # pragma: no cover - defensive cleanup for limited builds
+        model.to("cpu")
+    except Exception:
+        logger.debug("Unable to move model to CPU", exc_info=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model.config.use_cache = False
+    attn_impl = attention_implementation or "eager"
+    for attr in ("attn_impl", "attn_implementation"):
+        try:  # pragma: no cover - depends on HF version
+            setattr(model.config, attr, attn_impl)
+        except Exception:
+            continue
+
+    return model, tokenizer
