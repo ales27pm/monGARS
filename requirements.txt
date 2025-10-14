@@ -32,6 +32,7 @@ torch>=2.7.1
 transformers>=4.45.0
 sentence-transformers>=3.0.1
 peft>=0.13.2
+accelerate>=0.30.0
 git+https://github.com/unslothai/unsloth.git
 trafilatura>=2.0.0
 uvicorn>=0.35.0

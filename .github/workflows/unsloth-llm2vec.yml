@@ -38,6 +38,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 env:
   PYTHON_VERSION: "3.11"
@@ -80,6 +81,7 @@ jobs:
             source="secrets.HUGGINGFACE_TOKEN"
           fi
           if [ -n "$token" ]; then
+            echo "::add-mask::$token"
             echo "token=$token" >> "$GITHUB_OUTPUT"
             echo "source=$source" >> "$GITHUB_OUTPUT"
           else
@@ -102,9 +104,13 @@ jobs:
 
       - name: Install OS dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git-lfs
-          git lfs install --local
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git-lfs
+          fi
+          if command -v git >/dev/null 2>&1; then
+            git lfs install --local || true
+          fi
 
       - name: Install Python dependencies
         env:
@@ -121,13 +127,24 @@ jobs:
             nvidia-smi
           else
             echo "nvidia-smi not found (ensure GPU runners expose NVIDIA tooling)" >&2
+            exit 1
           fi
           python - <<'PY'
-          import torch
-          print("torch version", torch.__version__)
-          print("cuda available", torch.cuda.is_available())
-          print("cuda device count", torch.cuda.device_count())
-          PY
+import sys
+try:
+    import torch
+except Exception as exc:
+    print(f"torch check failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+print("torch version", torch.__version__)
+cuda_available = torch.cuda.is_available()
+device_count = torch.cuda.device_count()
+print("cuda available", cuda_available)
+print("cuda device count", device_count)
+if not cuda_available or device_count == 0:
+    print("ERROR: No CUDA GPU detected. Failing workflow.", file=sys.stderr)
+    sys.exit(1)
+PY
 
       - name: Resolve training paths
         id: paths
@@ -167,16 +184,16 @@ jobs:
           mkdir -p "$registry_path"
 
           if [ -z "$dataset_path" ] && [ -z "${INPUT_DATASET_ID}" ]; then
-            echo "::error ::dataset_path or dataset_id must be provided" >&2
+            echo "::error::dataset_path or dataset_id must be provided" >&2
             exit 1
           fi
 
           if [ -n "$dataset_path" ] && [ ! -f "$dataset_path" ]; then
-            echo "::error ::Dataset not found at $dataset_path" >&2
+            echo "::error::Dataset not found at $dataset_path" >&2
             exit 1
           fi
           if [ -n "$eval_dataset_path" ] && [ ! -f "$eval_dataset_path" ]; then
-            echo "::error ::Eval dataset not found at $eval_dataset_path" >&2
+            echo "::error::Eval dataset not found at $eval_dataset_path" >&2
             exit 1
           fi
 
@@ -228,13 +245,13 @@ jobs:
                       if not token:
                           continue
                       if "=" not in token:
-                          print(f"::error ::Invalid override entry '{token}'. Use key=value or JSON object.")
+                          print(f"::error::Invalid override entry '{token}'. Use key=value or JSON object.")
                           raise SystemExit(1)
                       key, value = token.split("=", 1)
                       overrides[key.strip()] = value.strip()
               else:
                   if not isinstance(parsed, dict):
-                      print("::error ::pipeline_overrides must decode to a JSON object.")
+                      print("::error::pipeline_overrides must decode to a JSON object.")
                       raise SystemExit(1)
                   overrides = parsed
 
@@ -242,7 +259,7 @@ jobs:
           truthy_values = {True, "true", "True", "TRUE", "1", 1, "yes", "YES", "Yes", "on", "ON", "On", "t", "T"}
           for key, value in overrides.items():
               if key not in merged:
-                  print(f"::error ::Unknown override key '{key}'. Allowed keys: {sorted(merged.keys())}")
+                  print(f"::error::Unknown override key '{key}'. Allowed keys: {sorted(merged.keys())}")
                   raise SystemExit(1)
               if key in boolean_keys:
                   merged[key] = value in truthy_values
