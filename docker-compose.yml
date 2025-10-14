@@ -216,7 +216,7 @@ services:
     image: ${RAY_HEAD_IMAGE:-rayproject/ray:2.9.3-py311}
     profiles: [ray]
     command: >-
-      bash -lc "python -m ray.scripts.scripts stop --force || true; python -m ray.scripts.scripts start --head --dashboard-host=0.0.0.0 --dashboard-port=${RAY_DASHBOARD_PORT:-8265} --ray-client-server-port=${RAY_CLIENT_PORT:-10001} --num-cpus=2 --block"
+      bash -lc "python -m ray.scripts.scripts stop --force || true; python -m ray.scripts.scripts start --head --dashboard-host=0.0.0.0 --dashboard-port=${RAY_DASHBOARD_PORT:-8265} --ray-client-server-port=${RAY_CLIENT_PORT:-10001} --min-worker-port=${RAY_MIN_WORKER_PORT:-20000} --max-worker-port=${RAY_MAX_WORKER_PORT:-20100} --num-cpus=2 --block"
     ports:
       - "${RAY_DASHBOARD_PORT:-8265}:8265"
       - "${RAY_CLIENT_PORT:-10001}:10001"

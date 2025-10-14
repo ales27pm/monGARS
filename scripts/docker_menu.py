@@ -213,6 +213,8 @@ class DockerMenu:
             PortSpec("RAY_HTTP_PORT", 8005, "Ray Serve HTTP endpoint"),
             PortSpec("RAY_DASHBOARD_PORT", 8265, "Ray dashboard"),
             PortSpec("RAY_CLIENT_PORT", 10001, "Ray client"),
+            PortSpec("RAY_MIN_WORKER_PORT", 20000, "Ray worker port range (min)"),
+            PortSpec("RAY_MAX_WORKER_PORT", 20100, "Ray worker port range (max)"),
         ]
 
     def _find_available_port(self, start: int, reserved: set[int]) -> int:
