@@ -831,7 +831,7 @@ def parse_arguments(
     parser.add_argument(
         "--base-model-id",
         type=str,
-        default="cognitivecomputations/Dolphin3.0-Llama3.1-8B",
+        default="dphn/Dolphin3.0-Llama3.1-8B",
         help="Base Hugging Face model identifier to fine-tune.",
     )
     parser.add_argument(

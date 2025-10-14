@@ -32,7 +32,7 @@ from monGARS.mlops.utils import (
     ensure_directory,
 )
 
-MODEL_ID = os.environ.get("MODEL_ID", "cognitivecomputations/Dolphin3.0-Llama3.1-8B")
+MODEL_ID = os.environ.get("MODEL_ID", "dphn/Dolphin3.0-Llama3.1-8B")
 DATASET_ID = os.environ.get("DATASET_ID", "yahma/alpaca-cleaned")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "outputs_dolphin8b"))
 OFFLOAD_DIR = Path(os.environ.get("OFFLOAD_DIR", "./offload"))

@@ -139,7 +139,7 @@ else:  # pragma: no cover - torch optional in tests
 
 ATTENTION_IMPLEMENTATION = (ovr("attention_implementation", None) or "").strip() or None
 
-MODEL_ID = os.environ.get("MODEL_ID", "cognitivecomputations/Dolphin3.0-Llama3.1-8B")
+MODEL_ID = os.environ.get("MODEL_ID", "dphn/Dolphin3.0-Llama3.1-8B")
 DATASET_NAME = os.environ.get("DATASET", "yahma/alpaca-cleaned")
 TRAIN_FRACTION = float(os.environ.get("TRAIN_FRACTION", "0.10"))
 DEFAULT_MAX_SEQ_LEN = int(os.environ.get("MAX_SEQ_LEN", "1024"))

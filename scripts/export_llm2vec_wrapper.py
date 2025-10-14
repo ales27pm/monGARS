@@ -54,7 +54,7 @@ class LLM2Vec:
             adapter_dir = self.base_dir / "lora_adapter"
             if not adapter_dir.exists():
                 raise FileNotFoundError("LoRA adapter not found; run training before exporting the wrapper.")
-            base_model = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+            base_model = "dphn/Dolphin3.0-Llama3.1-8B"
             self.model = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 load_in_4bit=load_in_4bit,

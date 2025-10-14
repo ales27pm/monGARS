@@ -67,9 +67,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--reasoning-model-id",
-        default="cognitivecomputations/Dolphin3.0-Llama3.1-8B",
+        default="dphn/Dolphin3.0-Llama3.1-8B",
         help=(
-            "Model identifier to load when preparing the reasoning slot (default: cognitivecomputations/Dolphin3.0-Llama3.1-8B)."
+            "Model identifier to load when preparing the reasoning slot (default: dphn/Dolphin3.0-Llama3.1-8B)."
         ),
     )
     parser.add_argument(
@@ -182,7 +182,7 @@ async def _prepare_reasoning_assets(args: argparse.Namespace) -> dict[str, Any]:
 
     slot_name = getattr(args, "reasoning_slot", "reasoning-grpo")
     model_id = getattr(
-        args, "reasoning_model_id", "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+        args, "reasoning_model_id", "dphn/Dolphin3.0-Llama3.1-8B"
     )
     max_seq = max(1, int(getattr(args, "reasoning_max_seq", 2048)))
 
