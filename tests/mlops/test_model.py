@@ -207,7 +207,7 @@ def test_load_4bit_causal_lm_handles_legacy_bitsandbytes_kwargs(
 
     def _fake_from_pretrained(
         *_, quantization_config: Any, **__
-    ) -> Any:  # noqa: ANN002
+    ) -> Any:
         quant_configs.append(quantization_config)
         return _DummyModel()
 
@@ -243,7 +243,7 @@ def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> No
 
     recorded_kwargs: dict[str, Any] = {}
 
-    def _fake_from_pretrained(*_, **kwargs) -> Any:  # noqa: ANN002
+    def _fake_from_pretrained(*_, **kwargs) -> Any:
         recorded_kwargs.update(kwargs)
         return _DummyModel()
 
@@ -265,7 +265,7 @@ def test_load_4bit_causal_lm_cpu_fallback_error(
 ) -> None:
     monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
 
-    def _failing_from_pretrained(*_, **__):  # noqa: ANN002
+    def _failing_from_pretrained(*_, **__):
         raise RuntimeError("Simulated model loading failure")
 
     monkeypatch.setattr(
