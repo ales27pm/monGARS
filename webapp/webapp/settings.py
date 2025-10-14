@@ -170,6 +170,13 @@ if _explicit_allowed_hosts:
 else:
     ALLOWED_HOSTS = list(_DEFAULT_ALLOWED_HOSTS)
 
+# Ensure Docker/compose health checks using the 0.0.0.0 host do not trip
+# Django's `DisallowedHost` safeguard when explicit hosts are provided via the
+# environment. Docker compose defaults omit 0.0.0.0, so normalise here to keep
+# developer ergonomics while still respecting custom host lists.
+if "0.0.0.0" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("0.0.0.0")
+
 if DEBUG:
     for debug_host in _iter_debug_hosts():
         if debug_host not in ALLOWED_HOSTS:
