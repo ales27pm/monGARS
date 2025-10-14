@@ -922,13 +922,17 @@ def get_settings() -> Settings:
                 object.__setattr__(settings, "__pydantic_extra__", extra)
             if "SECRET_KEY" in updates:
                 object.__setattr__(settings, "_secret_key_origin", "vault")
-        if (
-            re.fullmatch(r"HS\d+", settings.JWT_ALGORITHM.strip().upper())
-            and not settings.SECRET_KEY
-        ):
-            raise ValueError(
-                "Symmetric JWT algorithms require SECRET_KEY to be configured."
+
+        requires_secret = re.fullmatch(
+            r"HS\d+", settings.JWT_ALGORITHM.strip().upper()
+        )
+        if requires_secret and not settings.SECRET_KEY:
+            log.critical(
+                "Vault configured but SECRET_KEY unavailable after fetch; "
+                "generating fallback secret and persisting locally."
             )
+            settings = _persist_secret_key(settings)
+
         validate_jwt_configuration(settings)
         configure_telemetry(settings)
         return settings

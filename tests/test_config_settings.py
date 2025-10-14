@@ -90,6 +90,32 @@ def test_get_settings_warns_when_env_file_read_only(monkeypatch, tmp_path, caplo
     assert "SECRET_KEY=" not in env_file.read_text(encoding="utf-8")
 
 
+def test_get_settings_falls_back_when_vault_missing_secret(
+    monkeypatch, tmp_path, caplog
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEBUG=false\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEBUG", "false")
+    monkeypatch.setenv("VAULT_URL", "https://vault.example")
+    monkeypatch.setenv("VAULT_TOKEN", "unit-test-token")
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    def _fail_fetch(settings):
+        return {}
+
+    monkeypatch.setattr(config, "fetch_secrets_from_vault", _fail_fetch)
+
+    with caplog.at_level("INFO"):
+        settings = config.get_settings()
+
+    assert settings.SECRET_KEY
+    assert settings._secret_key_origin in {"generated", "persisted"}
+    assert (
+        "Vault configured but SECRET_KEY unavailable after fetch" in caplog.text
+    )
+
+
 def test_settings_defers_secret_when_vault_configured(monkeypatch):
     monkeypatch.delenv("SECRET_KEY", raising=False)
 
