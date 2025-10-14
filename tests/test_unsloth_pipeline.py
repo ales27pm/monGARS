@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,12 +13,22 @@ from monGARS.mlops.pipelines import unsloth as unsloth_mod
 
 
 class FakeTrainer:
-    def __init__(self, model: Any) -> None:
+    def __init__(self, model: Any, extra_args: dict[str, Any] | None = None) -> None:
         self.model = model
+        self.extra_args = extra_args or {}
+        self.train_calls = 0
+        self.evaluate_inputs: list[Any] = []
+
+    def train(self) -> None:
+        self.train_calls += 1
+
+    def evaluate(self, dataset: Any) -> dict[str, float]:
+        self.evaluate_inputs.append(dataset)
+        return {"eval_loss": 0.123, "eval_runtime": 1.5}
 
 
 @pytest.fixture()
-def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
     output_root = tmp_path / "outputs"
 
     monkeypatch.setattr(unsloth_mod, "configure_cuda_allocator", lambda: None)
@@ -47,12 +61,48 @@ def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         unsloth_mod, "prepare_lora_model_light", lambda model, *a, **k: model
     )
     monkeypatch.setattr(unsloth_mod, "_activate_unsloth", lambda model: (model, True))
-    monkeypatch.setattr(unsloth_mod, "_load_dataset", lambda **k: object())
-    monkeypatch.setattr(
-        unsloth_mod,
-        "train_qlora",
-        lambda model, dataset, config: FakeTrainer(model),
-    )
+
+    class DummyDataset:
+        def __init__(self, name: str, size: int) -> None:
+            self.name = name
+            self._size = size
+
+        def __len__(self) -> int:
+            return self._size
+
+    dataset_calls: list[tuple[str, int]] = []
+
+    def fake_load_dataset(**kwargs: Any) -> DummyDataset:
+        dataset_path = kwargs.get("dataset_path")
+        dataset_id = kwargs.get("dataset_id")
+        identifier = (
+            Path(dataset_path).name if dataset_path else str(dataset_id or "train")
+        )
+        if "val" in identifier:
+            size = 16
+        else:
+            size = 128
+        dataset_calls.append((identifier, size))
+        return DummyDataset(identifier, size)
+
+    monkeypatch.setattr(unsloth_mod, "_load_dataset", fake_load_dataset)
+
+    trainer_instances: list[FakeTrainer] = []
+
+    def fake_train_qlora(
+        model: Any,
+        dataset: Any,
+        *,
+        config: Any,
+        extra_args: dict[str, Any] | None = None,
+        trainer_cls: Any | None = None,
+    ) -> FakeTrainer:
+        trainer = FakeTrainer(model, extra_args)
+        trainer_instances.append(trainer)
+        trainer.train()
+        return trainer
+
+    monkeypatch.setattr(unsloth_mod, "train_qlora", fake_train_qlora)
     monkeypatch.setattr(
         unsloth_mod,
         "save_lora_artifacts",
@@ -63,7 +113,7 @@ def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(
         unsloth_mod, "disable_training_mode", lambda model: model.eval()
     )
-    monkeypatch.setattr(unsloth_mod, "merge_lora_adapters", lambda *a, **k: None)
+    monkeypatch.setattr(unsloth_mod, "merge_lora_adapters", lambda *a, **k: True)
     monkeypatch.setattr(
         unsloth_mod, "run_embedding_smoke_test", lambda encoder, texts: (len(texts), 3)
     )
@@ -93,17 +143,45 @@ def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
     monkeypatch.setattr(unsloth_mod, "write_wrapper_bundle", fake_write_wrapper_bundle)
 
-    return output_root
+    return SimpleNamespace(
+        output_root=output_root,
+        dataset_calls=dataset_calls,
+        trainers=trainer_instances,
+    )
 
 
-def test_run_unsloth_finetune_generates_wrapper(patch_unsloth: Path) -> None:
+def test_run_unsloth_finetune_generates_wrapper(patch_unsloth: SimpleNamespace) -> None:
     results = unsloth_mod.run_unsloth_finetune(
         model_id="hf/test",
-        output_dir=patch_unsloth,
+        output_dir=patch_unsloth.output_root,
         dataset_id="hf/dataset",
         run_smoke_tests=True,
     )
 
     assert results["chat_lora_dir"].exists()
-    assert (patch_unsloth / "run_metadata.json").exists()
+    assert (patch_unsloth.output_root / "run_metadata.json").exists()
     assert results["wrapper_module"].name == "project_wrapper.py"
+    assert results["merged_dir"] is not None
+    assert patch_unsloth.trainers[0].train_calls == 1
+
+
+def test_run_unsloth_finetune_records_eval_metrics(
+    patch_unsloth: SimpleNamespace,
+) -> None:
+    results = unsloth_mod.run_unsloth_finetune(
+        model_id="hf/test",
+        output_dir=patch_unsloth.output_root,
+        dataset_path=Path("monGARS_llm_train.jsonl"),
+        eval_dataset_path=Path("monGARS_llm_val.jsonl"),
+        eval_batch_size=2,
+        run_smoke_tests=False,
+        merge_to_fp16=False,
+    )
+
+    assert patch_unsloth.trainers[0].extra_args["per_device_eval_batch_size"] == 2
+    assert patch_unsloth.trainers[0].evaluate_inputs
+    metadata = json.loads((patch_unsloth.output_root / "run_metadata.json").read_text())
+    assert metadata["dataset_size"] == 128
+    assert metadata["eval_dataset_size"] == 16
+    assert metadata["evaluation_metrics"]["eval_loss"] == pytest.approx(0.123)
+    assert results["evaluation_metrics"]["eval_runtime"] == pytest.approx(1.5)

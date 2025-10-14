@@ -86,12 +86,42 @@ def _load_dataset(
     dataset_path: Path | None,
     tokenizer: object,
     max_seq_len: int,
+    train_fraction: float | None = None,
 ):
     if dataset_path is not None:
         return prepare_local_instruction_dataset(dataset_path, tokenizer, max_seq_len)
     if not dataset_id:
         raise ValueError("Either dataset_id or dataset_path must be provided")
-    return prepare_instruction_dataset(dataset_id, tokenizer, max_seq_len)
+    options: dict[str, float] = {}
+    if train_fraction is not None:
+        options["train_fraction"] = float(train_fraction)
+    return prepare_instruction_dataset(dataset_id, tokenizer, max_seq_len, **options)
+
+
+def _normalise_metrics(metrics: Mapping[str, object] | None) -> dict[str, object]:
+    if not metrics:
+        return {}
+
+    normalised: dict[str, object] = {}
+    for key, value in metrics.items():
+        if isinstance(value, (str, bool)) or value is None:
+            normalised[key] = value
+            continue
+        if isinstance(value, (int, float)):
+            normalised[key] = value
+            continue
+        item = getattr(value, "item", None)
+        if callable(item):
+            try:
+                normalised[key] = item()  # type: ignore[assignment]
+                continue
+            except Exception:  # pragma: no cover - defensive guard
+                logger.debug("Unable to coerce metric via item()", exc_info=True)
+        try:
+            normalised[key] = float(value)  # type: ignore[arg-type]
+        except Exception:  # pragma: no cover - fallback to string
+            normalised[key] = str(value)
+    return normalised
 
 
 def run_unsloth_finetune(
@@ -111,6 +141,10 @@ def run_unsloth_finetune(
     lora_rank: int = 32,
     lora_alpha: int = 32,
     lora_dropout: float = 0.0,
+    train_fraction: float | None = None,
+    eval_dataset_id: str | None = None,
+    eval_dataset_path: Path | None = None,
+    eval_batch_size: int | None = None,
     run_smoke_tests: bool = True,
     write_metadata: bool = True,
     merge_to_fp16: bool = True,
@@ -143,7 +177,9 @@ def run_unsloth_finetune(
         dataset_path=dataset_path,
         tokenizer=tokenizer,
         max_seq_len=max_seq_len,
+        train_fraction=train_fraction,
     )
+    dataset_size = len(dataset) if hasattr(dataset, "__len__") else None
 
     trainer = train_qlora(
         model,
@@ -156,6 +192,9 @@ def run_unsloth_finetune(
             epochs=epochs,
             max_steps=max_steps,
         ),
+        extra_args={
+            "per_device_eval_batch_size": eval_batch_size or batch_size,
+        },
     )
 
     chat_lora_dir = output_dir / "chat_lora"
@@ -163,11 +202,33 @@ def run_unsloth_finetune(
     disable_training_mode(trainer.model)
 
     merged_dir = output_dir / "merged_fp16"
+    merged = False
     if merge_to_fp16:
         try:
-            merge_lora_adapters(model_id, output_dir, output_dir=merged_dir)
+            merged = merge_lora_adapters(model_id, output_dir, output_dir=merged_dir)
         except Exception:  # pragma: no cover - defensive guard
             logger.warning("Failed to merge adapters to FP16", exc_info=True)
+
+    evaluation_metrics: dict[str, object] | None = None
+    eval_dataset_size: int | None = None
+    if eval_dataset_id or eval_dataset_path:
+        try:
+            eval_dataset = _load_dataset(
+                dataset_id=eval_dataset_id,
+                dataset_path=eval_dataset_path,
+                tokenizer=tokenizer,
+                max_seq_len=max_seq_len,
+            )
+            eval_dataset_size = (
+                len(eval_dataset) if hasattr(eval_dataset, "__len__") else None
+            )
+            evaluation_metrics = _normalise_metrics(trainer.evaluate(eval_dataset))
+            logger.info(
+                "Evaluation metrics computed",
+                extra={"metrics": evaluation_metrics, "eval_size": eval_dataset_size},
+            )
+        except Exception:  # pragma: no cover - evaluation best-effort
+            logger.warning("Evaluation failed", exc_info=True)
 
     if run_smoke_tests and LLM2Vec is not None:
         encoder = LLM2Vec(trainer.model, tokenizer, pooling_mode="mean")
@@ -195,6 +256,12 @@ def run_unsloth_finetune(
             "unsloth_active": unsloth_active,
             "max_seq_len": max_seq_len,
             "vram_budget_mb": vram_budget_mb,
+            "train_fraction": train_fraction,
+            "dataset_size": dataset_size,
+            "eval_dataset_id": eval_dataset_id,
+            "eval_dataset_path": str(eval_dataset_path) if eval_dataset_path else None,
+            "eval_dataset_size": eval_dataset_size,
+            "evaluation_metrics": evaluation_metrics,
         }
         (output_dir / "run_metadata.json").write_text(
             json.dumps(metadata, indent=2),
@@ -206,6 +273,11 @@ def run_unsloth_finetune(
         "chat_lora_dir": chat_lora_dir,
         "wrapper_module": wrapper_paths["module"],
         "wrapper_config": wrapper_paths["config"],
+        "wrapper_dir": wrapper_paths["module"].parent,
+        "merged_dir": merged_dir if merged else None,
+        "dataset_size": dataset_size,
+        "eval_dataset_size": eval_dataset_size,
+        "evaluation_metrics": evaluation_metrics,
     }
 
 
