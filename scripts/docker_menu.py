@@ -793,7 +793,11 @@ class DockerMenu:
                 raw_state_lower = base.strip()
             state[service] = {
                 "state": raw_state_lower.strip(),
-                "health": health_value.strip() if isinstance(health_value, str) else health_value,
+                "health": (
+                    health_value.strip()
+                    if isinstance(health_value, str)
+                    else health_value
+                ),
             }
         return state
 
