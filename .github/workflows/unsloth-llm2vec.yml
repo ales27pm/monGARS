@@ -27,70 +27,6 @@ on:
         description: "Directory for adapter manifest updates"
         type: string
         default: "outputs/unsloth_registry"
-      max_seq_len:
-        description: "Maximum sequence length"
-        type: string
-        default: "2048"
-      vram_budget_mb:
-        description: "VRAM budget in MiB"
-        type: string
-        default: "8192"
-      activation_buffer_mb:
-        description: "Activation offload budget in MiB"
-        type: string
-        default: "1024"
-      batch_size:
-        description: "Per-device batch size"
-        type: string
-        default: "1"
-      grad_accum:
-        description: "Gradient accumulation steps"
-        type: string
-        default: "8"
-      learning_rate:
-        description: "Learning rate"
-        type: string
-        default: "2e-4"
-      epochs:
-        description: "Number of epochs"
-        type: string
-        default: "1"
-      max_steps:
-        description: "Max optimiser steps (-1 disables)"
-        type: string
-        default: "-1"
-      lora_rank:
-        description: "LoRA rank"
-        type: string
-        default: "32"
-      lora_alpha:
-        description: "LoRA alpha"
-        type: string
-        default: "32"
-      lora_dropout:
-        description: "LoRA dropout"
-        type: string
-        default: "0.05"
-      train_fraction:
-        description: "Optional train split fraction (0-1)"
-        type: string
-        default: ""
-      eval_batch_size:
-        description: "Evaluation batch size (defaults to batch_size)"
-        type: string
-        default: ""
-      skip_smoke_tests:
-        description: "Skip LLM2Vec smoke test"
-        type: boolean
-        default: false
-      skip_metadata:
-        description: "Skip writing run_metadata.json"
-        type: boolean
-        default: false
-      skip_merge:
-        description: "Skip FP16 adapter merge"
-        type: boolean
-        default: false
       hf_token:
         description: "Override Hugging Face token (falls back to secrets)"
         type: string
@@ -99,6 +35,10 @@ on:
         description: "Artifact retention window"
         type: string
         default: "14"
+      pipeline_overrides:
+        description: "JSON or key=value pairs overriding defaults (e.g. {\"max_seq_len\": 4096, \"skip_merge\": true})"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -249,6 +189,85 @@ jobs:
           echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
           echo "registry_path=$registry_path" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve pipeline overrides
+        id: overrides
+        shell: python
+        env:
+          RAW_OVERRIDES: ${{ inputs.pipeline_overrides }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          defaults = {
+              "max_seq_len": "2048",
+              "vram_budget_mb": "8192",
+              "activation_buffer_mb": "1024",
+              "batch_size": "1",
+              "grad_accum": "8",
+              "learning_rate": "2e-4",
+              "epochs": "1",
+              "max_steps": "-1",
+              "lora_rank": "32",
+              "lora_alpha": "32",
+              "lora_dropout": "0.05",
+              "train_fraction": "",
+              "eval_batch_size": "",
+              "skip_smoke_tests": False,
+              "skip_metadata": False,
+              "skip_merge": False,
+          }
+
+          boolean_keys = {"skip_smoke_tests", "skip_metadata", "skip_merge"}
+          raw = os.environ.get("RAW_OVERRIDES", "").strip()
+          overrides: dict[str, object] = {}
+
+          if raw:
+              try:
+                  parsed = json.loads(raw)
+              except json.JSONDecodeError:
+                  pieces = [token.strip() for token in raw.replace("\n", ",").split(",")]
+                  for token in pieces:
+                      if not token:
+                          continue
+                      if "=" not in token:
+                          print(f"::error ::Invalid override entry '{token}'. Use key=value or JSON object.")
+                          raise SystemExit(1)
+                      key, value = token.split("=", 1)
+                      overrides[key.strip()] = value.strip()
+              else:
+                  if not isinstance(parsed, dict):
+                      print("::error ::pipeline_overrides must decode to a JSON object.")
+                      raise SystemExit(1)
+                  overrides = parsed
+
+          merged = defaults.copy()
+          truthy_values = {True, "true", "True", "TRUE", "1", 1, "yes", "YES", "Yes", "on", "ON", "On", "t", "T"}
+          for key, value in overrides.items():
+              if key not in merged:
+                  print(f"::error ::Unknown override key '{key}'. Allowed keys: {sorted(merged.keys())}")
+                  raise SystemExit(1)
+              if key in boolean_keys:
+                  merged[key] = value in truthy_values
+              else:
+                  if value is None:
+                      merged[key] = ""
+                  else:
+                      merged[key] = str(value)
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as handle:
+              for key, value in merged.items():
+                  if key in boolean_keys:
+                      rendered = "true" if bool(value) else "false"
+                  else:
+                      rendered = value
+                  handle.write(f"{key}={rendered}\n")
+
+          print("Resolved pipeline overrides:")
+          for key in sorted(merged):
+              print(f"- {key}: {merged[key]}")
+
       - name: Run Unsloth fine-tuning pipeline
         id: finetune
         env:
@@ -258,27 +277,27 @@ jobs:
           EVAL_DATASET_PATH: ${{ steps.paths.outputs.eval_dataset_path }}
           OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
           REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
-          MAX_SEQ_LEN: ${{ inputs.max_seq_len }}
-          VRAM_BUDGET_MB: ${{ inputs.vram_budget_mb }}
-          ACTIVATION_BUFFER_MB: ${{ inputs.activation_buffer_mb }}
-          BATCH_SIZE: ${{ inputs.batch_size }}
-          GRAD_ACCUM: ${{ inputs.grad_accum }}
-          LEARNING_RATE: ${{ inputs.learning_rate }}
-          EPOCHS: ${{ inputs.epochs }}
-          MAX_STEPS: ${{ inputs.max_steps }}
-          LORA_RANK: ${{ inputs.lora_rank }}
-          LORA_ALPHA: ${{ inputs.lora_alpha }}
-          LORA_DROPOUT: ${{ inputs.lora_dropout }}
-          TRAIN_FRACTION: ${{ inputs.train_fraction }}
-          EVAL_BATCH_SIZE: ${{ inputs.eval_batch_size }}
+          MAX_SEQ_LEN: ${{ steps.overrides.outputs.max_seq_len }}
+          VRAM_BUDGET_MB: ${{ steps.overrides.outputs.vram_budget_mb }}
+          ACTIVATION_BUFFER_MB: ${{ steps.overrides.outputs.activation_buffer_mb }}
+          BATCH_SIZE: ${{ steps.overrides.outputs.batch_size }}
+          GRAD_ACCUM: ${{ steps.overrides.outputs.grad_accum }}
+          LEARNING_RATE: ${{ steps.overrides.outputs.learning_rate }}
+          EPOCHS: ${{ steps.overrides.outputs.epochs }}
+          MAX_STEPS: ${{ steps.overrides.outputs.max_steps }}
+          LORA_RANK: ${{ steps.overrides.outputs.lora_rank }}
+          LORA_ALPHA: ${{ steps.overrides.outputs.lora_alpha }}
+          LORA_DROPOUT: ${{ steps.overrides.outputs.lora_dropout }}
+          TRAIN_FRACTION: ${{ steps.overrides.outputs.train_fraction }}
+          EVAL_BATCH_SIZE: ${{ steps.overrides.outputs.eval_batch_size }}
           HF_TOKEN: ${{ steps.resolve-hf.outputs.token }}
           HUGGINGFACE_TOKEN: ${{ steps.resolve-hf.outputs.token }}
           WANDB_MODE: offline
           HF_HOME: ${{ env.HF_HOME }}
           TRANSFORMERS_CACHE: ${{ env.TRANSFORMERS_CACHE }}
-          SKIP_SMOKE_TESTS: ${{ inputs.skip_smoke_tests }}
-          SKIP_METADATA: ${{ inputs.skip_metadata }}
-          SKIP_MERGE: ${{ inputs.skip_merge }}
+          SKIP_SMOKE_TESTS: ${{ steps.overrides.outputs.skip_smoke_tests }}
+          SKIP_METADATA: ${{ steps.overrides.outputs.skip_metadata }}
+          SKIP_MERGE: ${{ steps.overrides.outputs.skip_merge }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -333,16 +352,57 @@ jobs:
           set -euo pipefail
           find "$OUTPUT_DIR" -maxdepth 2 -type f | sort || true
 
+      - name: Collect artifact paths
+        id: artifact-paths
+        shell: bash
+        env:
+          OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
+          REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
+        run: |
+          set -euo pipefail
+          add_if_exists() {
+            local candidate="$1"
+            if [ -e "$candidate" ]; then
+              echo "$candidate"
+            fi
+            return 0
+          }
+
+          collect_paths() {
+            add_if_exists "$OUTPUT_DIR/chat_lora"
+            add_if_exists "$OUTPUT_DIR/wrapper"
+            add_if_exists "$OUTPUT_DIR/run_metadata.json"
+            add_if_exists "$OUTPUT_DIR/merged_fp16"
+            add_if_exists "$REGISTRY_PATH/adapter_manifest.json"
+          }
+
+          if mapfile -t cleaned < <(collect_paths | sed '/^$/d'); then
+            :
+          else
+            cleaned=()
+          fi
+
+          if [ "${#cleaned[@]}" -eq 0 ]; then
+            {
+              echo "has_files=false"
+              echo "paths="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "has_files=true"
+            echo "paths<<'EOF'"
+            printf '%s\n' "${cleaned[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Upload training outputs
         uses: actions/upload-artifact@v4
+        if: steps.artifact-paths.outputs.has_files == 'true'
         with:
           name: unsloth-llm2vec-artifacts
-          path: |
-            ${{ steps.paths.outputs.output_dir }}/chat_lora
-            ${{ steps.paths.outputs.output_dir }}/wrapper
-            ${{ steps.paths.outputs.output_dir }}/run_metadata.json
-            ${{ steps.paths.outputs.output_dir }}/merged_fp16
-            ${{ steps.paths.outputs.registry_path }}/adapter_manifest.json
+          path: ${{ steps.artifact-paths.outputs.paths }}
           if-no-files-found: warn
           retention-days: ${{ inputs.retention_days }}
 
