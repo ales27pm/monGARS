@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 
 from modules.neurons.registry import update_manifest
+from monGARS.mlops.artifacts import build_adapter_summary
 from monGARS.mlops.code_analysis import (
     render_usage_report,
     scan_llm_usage,
@@ -17,7 +18,6 @@ from monGARS.mlops.dataset import (
     build_module_interaction_dataset,
     build_mongars_strategy_dataset,
 )
-from monGARS.mlops.artifacts import build_adapter_summary
 from monGARS.mlops.pipelines import run_unsloth_finetune
 
 LOGGER = logging.getLogger("monGARS.llm_pipeline")
