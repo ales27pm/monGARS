@@ -181,9 +181,7 @@ async def _prepare_reasoning_assets(args: argparse.Namespace) -> dict[str, Any]:
         return summary
 
     slot_name = getattr(args, "reasoning_slot", "reasoning-grpo")
-    model_id = getattr(
-        args, "reasoning_model_id", "dphn/Dolphin3.0-Llama3.1-8B"
-    )
+    model_id = getattr(args, "reasoning_model_id", "dphn/Dolphin3.0-Llama3.1-8B")
     max_seq = max(1, int(getattr(args, "reasoning_max_seq", 2048)))
 
     def _warm_slot() -> None:
