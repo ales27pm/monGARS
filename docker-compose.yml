@@ -76,7 +76,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "curl -fsS http://127.0.0.1:8200/v1/sys/health >/dev/null"
+        - "vault status -address=http://127.0.0.1:8200 >/dev/null 2>&1"
       interval: 30s
       timeout: 10s
       retries: 5
@@ -112,7 +112,7 @@ services:
         OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
         VAULT_URL: http://vault:8200
         VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
-        WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-["http://localhost:8000","http://localhost:8001"]}
+        WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
       restart: "no"
       working_dir: /app
       init: true

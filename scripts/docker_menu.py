@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -87,8 +88,11 @@ class DockerMenu:
         capture_output: bool = True,
         check: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        safe_command = [str(arg) for arg in command]
+        if not safe_command:
+            raise ValueError("Command sequence must contain at least one argument")
         return subprocess.run(
-            command,
+            safe_command,
             text=True,
             capture_output=capture_output,
             check=check,
@@ -162,9 +166,9 @@ class DockerMenu:
                         lines.append(raw)
                 else:
                     lines.append(raw)
-        for key, value in updates.items():
-            if key not in seen:
-                lines.append(f"{key}={value}")
+        lines.extend(
+            f"{key}={value}" for key, value in updates.items() if key not in seen
+        )
         self.env_file.write_text("\n".join(lines).rstrip() + "\n")
 
     # ------------------------------------------------------------------
@@ -182,8 +186,12 @@ class DockerMenu:
             else:
                 try:
                     candidate = int(value)
-                except ValueError as exc:
-                    raise ValueError(f"Invalid port '{value}' for {spec.key}") from exc
+                except ValueError:
+                    self.log(
+                        f"Invalid port '{value}' for {spec.key}; falling back to {spec.default}",
+                        error=True,
+                    )
+                    candidate = spec.default
 
             candidate = self._find_available_port(candidate, reserved)
             reserved.add(candidate)
@@ -253,7 +261,7 @@ class DockerMenu:
         if result.returncode != 0:
             return False
 
-        target = str(int(port))
+        target = str(port)
         for line in result.stdout.splitlines():
             line = line.strip()
             if not line:
@@ -281,13 +289,13 @@ class DockerMenu:
         webapp_port = env_values.get("WEBAPP_PORT", "8001")
         existing = env_values.get("WS_ALLOWED_ORIGINS", "")
 
-        origins: list[str]
+        origins: list[str] = []
         if existing:
             try:
                 parsed = json.loads(existing)
             except json.JSONDecodeError:
                 parsed = [
-                    entry.strip()
+                    entry.strip().strip("'\"")
                     for entry in existing.strip("[]").split(",")
                     if entry.strip()
                 ]
@@ -296,19 +304,16 @@ class DockerMenu:
                     [str(item) for item in parsed] if isinstance(parsed, list) else []
                 )
             origins = parsed
-        else:
-            origins = []
 
-        def ensure(entry: str) -> None:
-            if entry not in origins:
-                origins.append(entry)
+        candidates = [
+            f"http://localhost:{api_port}",
+            f"http://127.0.0.1:{api_port}",
+            f"http://localhost:{webapp_port}",
+            f"http://127.0.0.1:{webapp_port}",
+        ]
+        deduped = list(dict.fromkeys([*origins, *candidates]))
 
-        ensure(f"http://localhost:{api_port}")
-        ensure(f"http://127.0.0.1:{api_port}")
-        ensure(f"http://localhost:{webapp_port}")
-        ensure(f"http://127.0.0.1:{webapp_port}")
-
-        self._write_env_updates({"WS_ALLOWED_ORIGINS": json.dumps(origins)})
+        self._write_env_updates({"WS_ALLOWED_ORIGINS": json.dumps(deduped)})
 
     # ------------------------------------------------------------------
     # Compose command helpers
@@ -348,9 +353,11 @@ class DockerMenu:
             *args,
         ]
 
-        self.log(f"Executing: {' '.join(cmd)}")
+        safe_cmd = [str(arg) for arg in cmd]
+
+        self.log(f"Executing: {' '.join(safe_cmd)}")
         result = subprocess.run(
-            cmd,
+            safe_cmd,
             text=True,
             capture_output=capture_output,
             check=False,
@@ -364,7 +371,7 @@ class DockerMenu:
 
         if check and result.returncode != 0:
             raise ComposeError(
-                f"Command {' '.join(cmd)} failed with exit code {result.returncode}",
+                f"Command {' '.join(safe_cmd)} failed with exit code {result.returncode}",
                 stdout=result.stdout or "",
                 stderr=result.stderr or "",
             )
@@ -449,7 +456,7 @@ class DockerMenu:
                     "{{json .ServerVersion}}",
                 ]
             )
-        except FileNotFoundError as exc:
+        except FileNotFoundError:
             return DiagnosticResult(
                 "Docker CLI",
                 False,
@@ -466,9 +473,7 @@ class DockerMenu:
                 "Ensure the Docker daemon is running and your user has permission to access it.",
             )
 
-        version = (result.stdout or "").strip().strip('"')
-        if not version:
-            version = "unknown"
+        version = (result.stdout or "").strip().strip('"') or "unknown"
         return DiagnosticResult(
             "Docker daemon",
             True,
@@ -500,8 +505,7 @@ class DockerMenu:
         auto_fixed = False
 
         if missing and auto_remediate:
-            updates = {key: template_values[key] for key in missing}
-            if updates:
+            if updates := {key: template_values[key] for key in missing}:
                 self._write_env_updates(updates)
                 env_values = self._read_env_file()
                 missing = sorted(
@@ -517,12 +521,11 @@ class DockerMenu:
                 "Regenerate your .env from .env.example or rerun the menu's Deploy option.",
             )
 
-        weak = [
+        if weak := [
             key
             for key, defaults in WEAK_SECRET_DEFAULTS.items()
             if env_values.get(key, "") in defaults
-        ]
-        if weak:
+        ]:
             if auto_remediate:
                 self._refresh_secret_defaults()
                 return DiagnosticResult(
@@ -656,7 +659,8 @@ class DockerMenu:
 
     def logs(self) -> None:
         services = self._prompt_services()
-        tail = input("Tail how many lines? [200]: ").strip() or "200"
+        tail_raw = input("Tail how many lines? [200]: ").strip() or "200"
+        tail = tail_raw if tail_raw.isdigit() else "200"
         args = ["logs", "-f", "--tail", tail]
         args.extend(services)
         try:
@@ -682,7 +686,12 @@ class DockerMenu:
             self.log("No service selected.", error=True)
             return
         command = input("Command to run inside container [bash]: ").strip() or "bash"
-        self.compose("exec", services[0], command, capture_output=False)
+        try:
+            cmd_args = shlex.split(command)
+        except ValueError:
+            self.log("Invalid command syntax.", error=True)
+            return
+        self.compose("exec", services[0], *cmd_args, capture_output=False)
 
     def config(self) -> None:
         self.compose("config")
@@ -696,8 +705,7 @@ class DockerMenu:
     def auto_heal(self) -> None:
         self.log("Initiating auto-heal workflow...")
         results = self.run_diagnostics(auto_remediate=True)
-        unresolved = [result for result in results if not result.passed]
-        if unresolved:
+        if unresolved := [result for result in results if not result.passed]:
             self.log(
                 "Some diagnostics require manual intervention before auto-heal can continue:",
                 error=True,
@@ -738,9 +746,10 @@ class DockerMenu:
                 error=True,
             )
             return
-        summary_lines = []
-        for key in sorted(env_values):
-            summary_lines.append(f"{key}={self._mask_env_value(key, env_values[key])}")
+        summary_lines = [
+            f"{key}={self._mask_env_value(key, env_values[key])}"
+            for key in sorted(env_values)
+        ]
         self.log_block("Environment snapshot", summary_lines)
 
     def _collect_service_state(self) -> Dict[str, Dict[str, str]]:
@@ -805,8 +814,6 @@ class DockerMenu:
     def _mask_env_value(key: str, value: str) -> str:
         lowered = key.lower()
         if any(token in lowered for token in ("secret", "password", "token")):
-            if not value:
-                return "<empty>"
             if len(value) <= 6:
                 return "***"
             return f"{value[:4]}…{value[-2:]}"

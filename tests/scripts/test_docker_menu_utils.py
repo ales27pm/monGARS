@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +14,12 @@ def test_extract_compose_version_handles_various_formats():
     )
     assert docker_menu.DockerMenu._extract_compose_version("v2.5.1") == "2.5.1"
     assert docker_menu.DockerMenu._extract_compose_version("2.0.0") == "2.0.0"
+    assert docker_menu.DockerMenu._extract_compose_version("version vv2.3.1") == "2.3.1"
+    assert docker_menu.DockerMenu._extract_compose_version("") == ""
+    assert (
+        docker_menu.DockerMenu._extract_compose_version("Docker version without digits")
+        == "Docker version without digits"
+    )
 
 
 def test_mask_env_value_redacts_sensitive_tokens():
@@ -23,6 +28,21 @@ def test_mask_env_value_redacts_sensitive_tokens():
     )
     assert docker_menu.DockerMenu._mask_env_value("PASSWORD", "short") == "***"
     assert docker_menu.DockerMenu._mask_env_value("PORT", "8000") == "8000"
+    assert (
+        docker_menu.DockerMenu._mask_env_value("TOKEN", "tokensecretvalue") == "toke…ue"
+    )
+    assert (
+        docker_menu.DockerMenu._mask_env_value("DB_PASSWORD", "dbpass1234") == "dbpa…34"
+    )
+    assert (
+        docker_menu.DockerMenu._mask_env_value("Api_Token", "mixedcasevalue")
+        == "mixe…ue"
+    )
+    assert docker_menu.DockerMenu._mask_env_value("ACCESS_TOKEN", "xy") == "***"
+    assert docker_menu.DockerMenu._mask_env_value("SECRET_KEY", "") == "***"
+    assert docker_menu.DockerMenu._mask_env_value("USERNAME", "") == ""
+    assert docker_menu.DockerMenu._mask_env_value("TOKEN", "abcdef") == "***"
+    assert docker_menu.DockerMenu._mask_env_value("TOKEN", "abcdefg") == "abcd…fg"
 
 
 @pytest.mark.parametrize(
@@ -43,6 +63,40 @@ def test_mask_env_value_redacts_sensitive_tokens():
                     "status": "exited (1)",
                     "ports": "",
                 },
+            ],
+        ),
+        ("", []),
+        (
+            """\nNAME SERVICE STATUS PORTS\napp redis running 0.0.0.0:6379->6379/tcp\n""",
+            [
+                {
+                    "name": "app",
+                    "service": "redis",
+                    "status": "running",
+                    "ports": "0.0.0.0:6379->6379/tcp",
+                }
+            ],
+        ),
+        (
+            """\nNAME SERVICE STATUS PORTS\napp redis restarting (1) 0.0.0.0:6379->6379/tcp\n""",
+            [
+                {
+                    "name": "app",
+                    "service": "redis",
+                    "status": "restarting (1)",
+                    "ports": "0.0.0.0:6379->6379/tcp",
+                }
+            ],
+        ),
+        (
+            """\nNAME SERVICE STATUS PORTS\napp redis running\n""",
+            [
+                {
+                    "name": "app",
+                    "service": "redis",
+                    "status": "running",
+                    "ports": "",
+                }
             ],
         ),
     ],
