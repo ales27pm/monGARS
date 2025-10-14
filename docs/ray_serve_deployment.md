@@ -36,6 +36,12 @@ specific CUDA stacks. Without those overrides Docker will surface `could not
 select device driver "" with capabilities: [[gpu]]` errors because the default
 engine cannot satisfy the GPU reservation that Ray previously required.
 
+> **Note:** Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+> and ensure the host driver matches the CUDA minor version you select. Without
+> the toolkit or compatible drivers Docker cannot attach GPU devices and will
+> emit the same `could not select device driver` error even when the compose
+> overlay is configured correctly.
+
 For Kubernetes deployments, reuse the manifests/Helm chart produced from
 `modules/ray_service.py` so replica configuration matches the application.
 

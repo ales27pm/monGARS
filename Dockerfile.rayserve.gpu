@@ -5,6 +5,7 @@ ARG TORCH_WHEEL_INDEX=https://download.pytorch.org/whl/cu121
 ARG TORCH_VERSION=2.3.0+cu121
 ARG RAY_SERVE_VERSION=2.9.3
 ARG VLLM_VERSION=0.4.2
+ARG XFORMERS_VERSION=0.0.26.post1
 
 # Ray image with CUDA userland libs (override build args to bump versions).
 FROM ${RAY_IMAGE}
@@ -40,14 +41,14 @@ COPY vendor/llm2vec_monGARS /tmp/llm2vec_monGARS
 # in the PyTorch wheel to avoid long dependency chains.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U --retries 5 pip \
-    && pip install --retries 5 --extra-index-url ${TORCH_WHEEL_INDEX} \
+    && pip install --no-cache-dir --retries 5 --extra-index-url ${TORCH_WHEEL_INDEX} \
         torch==${TORCH_VERSION} \
         "ray[serve]==${RAY_SERVE_VERSION}" \
         "accelerate>=0.33.0" \
         "peft>=0.13.2" \
         "sentencepiece>=0.2.0" \
         "vllm==${VLLM_VERSION}" \
-        "xformers==0.0.26.post1" \
+        "xformers==${XFORMERS_VERSION}" \
         "transformers>=4.44.2" \
     && pip install --retries 5 /tmp/llm2vec_monGARS \
     && rm -rf /tmp/llm2vec_monGARS
