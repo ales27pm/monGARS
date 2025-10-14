@@ -53,7 +53,7 @@ concurrency:
 jobs:
   finetune:
     name: Run Unsloth pipeline
-    runs-on: [gpu, linux]
+    runs-on: [linux]
     timeout-minutes: 720
     steps:
       - name: Checkout repository
