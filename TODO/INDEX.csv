@@ -740,12 +740,12 @@ vendor/llm2vec_monGARS/llm2vec/models/bidirectional_mistral.py,239,MistralBiForM
 vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,28,ModifiedQwen2Attention.__init__,"def __init__(self, *args, **kwargs):",generated
 vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,34,ModifiedQwen2FlashAttention2.__init__,"def __init__(self, *args, **kwargs):",generated
 vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,40,ModifiedQwen2SdpaAttention.__init__,"def __init__(self, *args, **kwargs):",generated
-vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,53,ModifiedQwen2DecoderLayer.__init__,"def __init__(self, config: Qwen2Config, layer_idx: int):",generated
-vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,70,ModifiedQwen2DecoderLayer.__init__,"def __init__(self, config: Qwen2Config, layer_idx: int):",generated
-vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,94,Qwen2BiForMNTP.__init__,"def __init__(self, config):",generated
-vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,104,Qwen2BiForMNTP.get_model_for_peft,def get_model_for_peft(self):,generated
-vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,108,Qwen2BiForMNTP.set_model_for_peft,"def set_model_for_peft(self, model: PeftModel):",generated
-vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,112,Qwen2BiForMNTP.save_peft_model,"def save_peft_model(self, path):",generated
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,53,ModifiedQwen2DecoderLayer.__init__,"def __init__(self, config: Qwen2Config, layer_idx: int):",completed
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,70,ModifiedQwen2DecoderLayer.__init__,"def __init__(self, config: Qwen2Config, layer_idx: int):",completed
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,94,Qwen2BiForMNTP.__init__,"def __init__(self, config):",completed
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,104,Qwen2BiForMNTP.get_model_for_peft,def get_model_for_peft(self):,completed
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,108,Qwen2BiForMNTP.set_model_for_peft,"def set_model_for_peft(self, model: PeftModel):",completed
+vendor/llm2vec_monGARS/llm2vec/models/bidirectional_qwen2.py,112,Qwen2BiForMNTP.save_peft_model,"def save_peft_model(self, path):",completed
 vendor/llm2vec_monGARS/llm2vec/models/utils.py,5,??,??,generated
 webapp/chat/decorators.py,4,??,??,generated
 webapp/chat/services.py,112,??,??,generated
@@ -756,4 +756,4 @@ webapp/webapp/settings.py,74,??,??,generated
 webapp/webapp/settings.py,102,??,??,generated
 webapp/webapp/settings.py,228,??,??,generated
 webapp/webapp/settings.py,307,??,??,generated
-webapp/webapp/settings.py,350,??,??,generated
+webapp/webapp/settings.py,350,??,??,completed

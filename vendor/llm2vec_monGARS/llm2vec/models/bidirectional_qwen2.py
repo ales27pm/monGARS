@@ -1,3 +1,5 @@
+from os import PathLike
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -51,18 +53,20 @@ QWEN2_ATTENTION_CLASSES = {
 
 class ModifiedQwen2DecoderLayer(Qwen2DecoderLayer):
     def __init__(self, config: Qwen2Config, layer_idx: int):
-        nn.Module.__init__(self)
-        self.hidden_size = config.hidden_size
+        """Initialise a decoder layer that disables causal masking."""
 
-        self.self_attn = QWEN2_ATTENTION_CLASSES[config._attn_implementation](
-            config=config, layer_idx=layer_idx
-        )
+        super().__init__(config, layer_idx)
 
-        self.mlp = Qwen2MLP(config)
-        self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen2RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        try:
+            attention_cls = QWEN2_ATTENTION_CLASSES[config._attn_implementation]
+        except KeyError as exc:  # pragma: no cover - defensive guard
+            supported = ", ".join(sorted(QWEN2_ATTENTION_CLASSES))
+            raise ValueError(
+                f"Unsupported attention implementation: {config._attn_implementation!r}. "
+                f"Supported implementations are: {supported}."
+            ) from exc
+
+        self.self_attn = attention_cls(config=config, layer_idx=layer_idx)
 
 
 class Qwen2BiModel(Qwen2Model):
@@ -92,7 +96,15 @@ class Qwen2BiModel(Qwen2Model):
 
 class Qwen2BiForMNTP(Qwen2ForCausalLM):
     def __init__(self, config):
+        """Initialise the bidirectional MNTP head around the Qwen2 backbone."""
+
         Qwen2PreTrainedModel.__init__(self, config)
+
+        if not isinstance(
+            config, Qwen2Config
+        ):  # pragma: no cover - defensive type check
+            raise TypeError("config must be an instance of Qwen2Config")
+
         self.model = Qwen2BiModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
@@ -101,13 +113,35 @@ class Qwen2BiForMNTP(Qwen2ForCausalLM):
         self.post_init()
 
     # getter for PEFT model
-    def get_model_for_peft(self):
+    def get_model_for_peft(self) -> nn.Module:
+        """Return the model instance that adapters should wrap."""
+
+        if getattr(self, "model", None) is None:
+            raise RuntimeError("PEFT model has not been initialised")
         return self.model
 
     # setter for PEFT model
-    def set_model_for_peft(self, model: PeftModel):
+    def set_model_for_peft(self, model: PeftModel) -> None:
+        """Attach a PEFT-adapted model, validating it exposes the expected API."""
+
+        if not isinstance(model, nn.Module):
+            raise TypeError("model must be a torch.nn.Module instance")
+        save_fn = getattr(model, "save_pretrained", None)
+        if not callable(save_fn):
+            raise TypeError("model must expose a callable save_pretrained method")
+
         self.model = model
 
     # save the PEFT model
-    def save_peft_model(self, path):
-        self.model.save_pretrained(path)
+    def save_peft_model(self, path: Union[str, PathLike[str]]) -> None:
+        """Persist the currently attached PEFT model to ``path``."""
+
+        target_path = Path(path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        model = self.get_model_for_peft()
+        save_fn = getattr(model, "save_pretrained", None)
+        if not callable(save_fn):
+            raise RuntimeError("Attached model does not support save_pretrained")
+
+        save_fn(str(target_path))
