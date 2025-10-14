@@ -31,12 +31,8 @@ on:
         description: "Override Hugging Face token (falls back to secrets)"
         type: string
         default: ""
-      retention_days:
-        description: "Artifact retention window"
-        type: string
-        default: "14"
       pipeline_overrides:
-        description: "JSON or key=value pairs overriding defaults (e.g. {\"max_seq_len\": 4096, \"skip_merge\": true})"
+        description: "JSON or key=value pairs overriding defaults (e.g. {\"max_seq_len\": 4096, \"retention_days\": 21})"
         type: string
         default: ""
 
@@ -213,6 +209,7 @@ jobs:
               "lora_dropout": "0.05",
               "train_fraction": "",
               "eval_batch_size": "",
+              "retention_days": "14",
               "skip_smoke_tests": False,
               "skip_metadata": False,
               "skip_merge": False,
@@ -404,7 +401,7 @@ jobs:
           name: unsloth-llm2vec-artifacts
           path: ${{ steps.artifact-paths.outputs.paths }}
           if-no-files-found: warn
-          retention-days: ${{ inputs.retention_days }}
+          retention-days: ${{ steps.overrides.outputs.retention_days }}
 
       - name: Publish summary
         shell: python
