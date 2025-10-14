@@ -1,4 +1,6 @@
+import sys
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 
@@ -120,3 +122,87 @@ def test_parse_env_file_ignores_comments(tmp_path: Path):
     env_file.write_text("""# comment\nKEY=value\nEMPTY=\n#ANOTHER=\n""")
     parsed = docker_menu.DockerMenu._parse_env_file(env_file)
     assert parsed == {"KEY": "value", "EMPTY": ""}
+
+
+def test_generate_base_model_bundle_invokes_pipeline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda self: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+
+    dataset_file = tmp_path / "dataset.jsonl"
+    dataset_file.write_text('{"prompt": "p", "completion": "c"}\n')
+    install_root = tmp_path / "install"
+
+    monkeypatch.setattr(menu, "_default_dataset_path", lambda: dataset_file)
+    monkeypatch.setattr(menu, "_model_install_dir", lambda: install_root)
+
+    inputs = iter(["", "hf/test-model"])
+    monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+    recorded = {}
+
+    def fake_run(
+        command, *, capture_output: bool, check: bool
+    ) -> CompletedProcess[str]:
+        recorded["command"] = command
+        install_root.mkdir(parents=True, exist_ok=True)
+        (install_root / "wrapper").mkdir(parents=True, exist_ok=True)
+        (install_root / "chat_lora").mkdir(parents=True, exist_ok=True)
+        return CompletedProcess(command, 0)
+
+    monkeypatch.setattr(menu, "_run_command", fake_run)
+
+    logs: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        menu, "log", lambda message, error=False: logs.append((message, error))
+    )
+    blocks: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        menu,
+        "log_block",
+        lambda heading, lines: blocks.append((heading, list(lines))),
+    )
+
+    menu.generate_base_model_bundle()
+
+    command = recorded["command"]
+    assert command[0] == sys.executable
+    assert command[1].endswith("run_mongars_llm_pipeline.py")
+    assert "--dataset-path" in command
+    assert "--output-dir" in command
+    assert "--skip-smoke-tests" in command
+    assert "--skip-merge" in command
+    assert blocks[-1][0] == "Base model + wrapper installation complete"
+
+
+def test_generate_base_model_bundle_validates_dataset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda self: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+
+    missing_dataset = tmp_path / "missing.jsonl"
+    monkeypatch.setattr(menu, "_default_dataset_path", lambda: missing_dataset)
+    monkeypatch.setattr("builtins.input", lambda *_args: "")
+
+    logs: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        menu, "log", lambda message, error=False: logs.append((message, error))
+    )
+
+    menu.generate_base_model_bundle()
+
+    assert logs
+    assert any(error for _, error in logs)
+    assert "Dataset not found" in logs[-1][0]
