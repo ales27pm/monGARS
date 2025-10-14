@@ -1,3 +1,4 @@
+import json
 import os
 import socket
 from ipaddress import ip_address, ip_network
@@ -380,6 +381,41 @@ def _default_postgres_settings() -> dict[str, Any]:
     conn_max_age = _database_conn_max_age(config["ENGINE"])
     if conn_max_age:
         config["CONN_MAX_AGE"] = conn_max_age
+
+    options: dict[str, Any] = {}
+
+    sslmode = (
+        os.environ.get("DATABASE_SSLMODE")
+        or os.environ.get("DB_SSLMODE")
+        or os.environ.get("POSTGRES_SSLMODE")
+    )
+    if sslmode:
+        options["sslmode"] = sslmode
+
+    target_session_attrs = (
+        os.environ.get("DATABASE_TARGET_SESSION_ATTRS")
+        or os.environ.get("DB_TARGET_SESSION_ATTRS")
+        or os.environ.get("POSTGRES_TARGET_SESSION_ATTRS")
+    )
+    if target_session_attrs:
+        options["target_session_attrs"] = target_session_attrs
+
+    raw_options = (
+        os.environ.get("DATABASE_OPTIONS_JSON")
+        or os.environ.get("DB_OPTIONS_JSON")
+        or os.environ.get("POSTGRES_OPTIONS_JSON")
+    )
+    if raw_options:
+        try:
+            parsed_options = json.loads(raw_options)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("DATABASE_OPTIONS_JSON must be valid JSON") from exc
+        if not isinstance(parsed_options, dict):
+            raise RuntimeError("DATABASE_OPTIONS_JSON must decode to an object")
+        options.update({str(key): value for key, value in parsed_options.items()})
+
+    if options:
+        config["OPTIONS"] = options
 
     return config
 

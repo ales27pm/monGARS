@@ -50,7 +50,7 @@ from .persistence import PersistenceManager
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL_ID = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+_DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
 _TARGET_MODULES: tuple[str, ...] = (
     "q_proj",
     "k_proj",

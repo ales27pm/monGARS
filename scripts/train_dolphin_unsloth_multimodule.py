@@ -35,7 +35,7 @@ from datasets import load_dataset
 
 LOGGER = logging.getLogger("unsloth_multimodule")
 
-BASE_MODEL = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
 
 
 def _setup_logging():
@@ -220,7 +220,7 @@ class LLM2Vec:
                 device_map="auto",
             )
         else:
-            base_model = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+            base_model = "dphn/Dolphin3.0-Llama3.1-8B"
             self.model = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 load_in_4bit=load_in_4bit,

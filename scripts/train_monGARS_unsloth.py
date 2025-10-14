@@ -16,7 +16,7 @@ from unsloth import FastLanguageModel
 
 from datasets import load_dataset
 
-BASE_MODEL = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
 SYSTEM_PROMPT = (
     "You are monGARS internal assistant. Follow the module contract indicated by "
     "tags like [MOD=...]."

@@ -51,7 +51,7 @@ from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
 DEFAULT_REGISTRY_PATH = Path("models/encoders")
 DEFAULT_CONFIG_PATH = Path("configs/training/mntp_dolphin_config.json")
 TRAINING_SUMMARY_FILENAME = "training_summary.json"
