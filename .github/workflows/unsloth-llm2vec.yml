@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PIP_CACHE_DIR }}
-          key: "pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}"
+          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt','pyproject.toml') }}
           restore-keys: |
             pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
 
@@ -393,7 +393,7 @@ jobs:
 
           {
             echo "has_files=true"
-            echo "paths<<'EOF'"
+            echo "paths<<EOF"
             printf '%s\n' "${cleaned[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -444,7 +444,7 @@ jobs:
                   lines.append("```json")
                   lines.extend(payload[:200])
                   if len(payload) > 200:
-                      lines.append("… truncated …")
+                      lines.append("... truncated ...")
                   lines.append("```")
 
           summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
