@@ -7,7 +7,20 @@ from .artifacts import (
     render_wrapper_readme,
     write_wrapper_bundle,
 )
-from .dataset import prepare_instruction_dataset
+from .code_analysis import (
+    LLMUsage,
+    ModuleInteraction,
+    build_strategy_recommendation,
+    render_usage_report,
+    scan_llm_usage,
+    scan_module_interactions,
+)
+from .dataset import (
+    build_module_interaction_dataset,
+    build_mongars_strategy_dataset,
+    prepare_instruction_dataset,
+    prepare_local_instruction_dataset,
+)
 from .exporters import export_gguf, merge_lora_adapters, run_generation_smoke_test
 from .model import (
     detach_sequences,
@@ -15,6 +28,7 @@ from .model import (
     move_to_cpu,
     summarise_device_map,
 )
+from .pipelines import run_unsloth_finetune
 from .training import (
     LoraHyperParams,
     TrainerConfig,
@@ -41,6 +55,15 @@ __all__ = [
     "training_workflow",
     "write_wrapper_bundle",
     "prepare_instruction_dataset",
+    "prepare_local_instruction_dataset",
+    "build_mongars_strategy_dataset",
+    "build_module_interaction_dataset",
+    "scan_llm_usage",
+    "scan_module_interactions",
+    "render_usage_report",
+    "build_strategy_recommendation",
+    "LLMUsage",
+    "ModuleInteraction",
     "export_gguf",
     "merge_lora_adapters",
     "run_generation_smoke_test",
@@ -56,6 +79,7 @@ __all__ = [
     "disable_training_mode",
     "save_lora_artifacts",
     "run_embedding_smoke_test",
+    "run_unsloth_finetune",
     "configure_cuda_allocator",
     "ensure_dependencies",
     "describe_environment",

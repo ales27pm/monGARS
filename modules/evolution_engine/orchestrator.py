@@ -96,7 +96,21 @@ class InlineWorkflowBackend:
     def ensure_schedule(
         self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]
     ) -> None:
-        self.last_schedule = {"flow": flow, "parameters": dict(parameters)}
+        """Record the most recent schedule registration for observability."""
+
+        if not callable(flow):  # pragma: no cover - defensive guard
+            raise TypeError("flow must be callable")
+        if not isinstance(parameters, Mapping):  # pragma: no cover - defensive guard
+            raise TypeError("parameters must be a mapping")
+
+        parameters_copy = dict(parameters)
+        flow_name = getattr(flow, "__name__", flow.__class__.__name__)
+        self.last_schedule = {
+            "flow": flow,
+            "flow_name": flow_name,
+            "parameters": parameters_copy,
+            "registered_at": datetime.now(timezone.utc),
+        }
 
     def run(self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]) -> Any:
         return flow(**parameters)

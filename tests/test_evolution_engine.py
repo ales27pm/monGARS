@@ -5,7 +5,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import json
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -14,7 +14,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from modules.evolution_engine.hardware import HardwareProfile
-from modules.evolution_engine.orchestrator import EvolutionOrchestrator
+from modules.evolution_engine.orchestrator import (
+    EvolutionOrchestrator,
+    InlineWorkflowBackend,
+)
 from modules.evolution_engine.sustainability import CarbonAwareDecision
 from monGARS.config import HardwareHeuristics, get_settings
 from monGARS.core.evolution_engine import EvolutionEngine, PerformanceIssue
@@ -44,6 +47,41 @@ class DummyWorkflowBackend:
     def run(self, flow: Callable[..., Any], *, parameters: dict[str, Any]) -> Any:
         self.run_parameters.append(dict(parameters))
         return flow(**parameters)
+
+
+def test_inline_backend_records_schedule_metadata() -> None:
+    backend = InlineWorkflowBackend()
+
+    def _flow(*, force: bool) -> str:
+        return "ok" if force else "skip"
+
+    parameters = {"force": True}
+    backend.ensure_schedule(_flow, parameters=parameters)
+
+    # Mutate the original parameters to verify the backend stores an independent copy.
+    parameters["force"] = False
+
+    record = backend.last_schedule
+    assert record is not None
+    assert record["flow"] is _flow
+    assert record["flow_name"] == "_flow"
+    assert record["parameters"] == {"force": True}
+    assert record["parameters"] is not parameters
+
+    registered_at = record["registered_at"]
+    assert isinstance(registered_at, datetime)
+    assert registered_at.tzinfo is not None
+    assert registered_at.utcoffset() == timedelta(0)
+
+
+def test_inline_backend_rejects_invalid_inputs() -> None:
+    backend = InlineWorkflowBackend()
+
+    with pytest.raises(TypeError):
+        backend.ensure_schedule(object(), parameters={})
+
+    with pytest.raises(TypeError):
+        backend.ensure_schedule(lambda: None, parameters=[])  # type: ignore[arg-type]
 
 
 def _mock_idle(monkeypatch: pytest.MonkeyPatch) -> None:

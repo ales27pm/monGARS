@@ -97,21 +97,57 @@ class LLM2Vec:
             batch_texts = list(texts)
         if not batch_texts:
             raise ValueError("texts must not be empty")
+
         encoded = self.tokenizer(
             batch_texts,
             return_tensors="pt",
             padding=True,
             truncation=True,
         ).to(self.device)
-        model = self.model
-        outputs = model(
+
+        forward_kwargs = {
             **encoded,
-            output_hidden_states=True,
-            use_cache=False,
-        )
-        last_hidden = outputs.hidden_states[-1]
+            "output_hidden_states": True,
+            "use_cache": False,
+            "return_dict": True,
+        }
+
+        candidates = [self.model]
+        for attr in ("model", "base_model", "transformer"):
+            candidate = getattr(self.model, attr, None)
+            if candidate is not None:
+                candidates.append(candidate)
+
+        seen: list[object] = []
+        final_hidden = None
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.append(candidate)
+            try:
+                outputs = candidate(**forward_kwargs)
+            except TypeError:
+                continue
+            except AttributeError:
+                continue
+
+            hidden_states = getattr(outputs, "hidden_states", None)
+            if hidden_states is not None:
+                final_hidden = hidden_states[-1]
+                break
+
+            last_hidden_state = getattr(outputs, "last_hidden_state", None)
+            if last_hidden_state is not None:
+                final_hidden = last_hidden_state
+                break
+
+        if final_hidden is None:
+            raise RuntimeError(
+                "model does not expose hidden states required for embedding"
+            )
+
         mask = encoded["attention_mask"].unsqueeze(-1)
-        summed = (last_hidden * mask).sum(dim=1)
+        summed = (final_hidden * mask).sum(dim=1)
         counts = mask.sum(dim=1).clamp(min=1)
         embeddings = summed / counts
         return embeddings.cpu()

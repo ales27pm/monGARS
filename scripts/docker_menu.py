@@ -79,6 +79,29 @@ class DockerMenu:
             self.log(f"  {line}")
 
     # ------------------------------------------------------------------
+    # Path helpers
+    # ------------------------------------------------------------------
+    def _model_install_dir(self) -> Path:
+        """Return the canonical location for wrapper artefacts."""
+
+        return self.project_root / "models" / "encoders" / "chat_and_embed"
+
+    def _default_dataset_path(self) -> Path:
+        """Return the default dataset path used for fine-tuning."""
+
+        return self.project_root / "datasets" / "formatted_dataset 2.jsonl"
+
+    def _resolve_path(self, raw_path: str) -> Path:
+        """Resolve ``raw_path`` relative to the project root."""
+
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = (self.project_root / path).resolve()
+        else:
+            path = path.resolve()
+        return path
+
+    # ------------------------------------------------------------------
     # Subprocess helpers
     # ------------------------------------------------------------------
     @staticmethod
@@ -754,6 +777,101 @@ class DockerMenu:
         ]
         self.log_block("Environment snapshot", summary_lines)
 
+    def generate_base_model_bundle(self) -> None:
+        """Run the LLM pipeline to fine-tune and install the project wrapper."""
+
+        script_path = self.project_root / "scripts" / "run_mongars_llm_pipeline.py"
+        if not script_path.exists():
+            self.log(
+                f"LLM pipeline script missing at {script_path}.",
+                error=True,
+            )
+            return
+
+        default_dataset = self._default_dataset_path()
+        dataset_prompt = input(
+            f"Instruction dataset JSONL [{default_dataset}]: "
+        ).strip()
+        if dataset_prompt:
+            dataset_path = self._resolve_path(dataset_prompt)
+        else:
+            dataset_path = default_dataset
+
+        if not dataset_path.exists():
+            self.log(
+                f"Dataset not found at {dataset_path}. Provide a valid JSONL dataset.",
+                error=True,
+            )
+            return
+
+        install_root = self._model_install_dir()
+        install_root.parent.mkdir(parents=True, exist_ok=True)
+        if install_root.exists():
+            if not self._prompt_yes_no(
+                f"Existing artefacts detected at {install_root}. Overwrite?",
+                default=False,
+            ):
+                self.log("Aborted base model generation.")
+                return
+            shutil.rmtree(install_root)
+
+        model_default = "dphn/Dolphin3.0-Llama3.1-8B"
+        model_id = (
+            input(f"Base model identifier [{model_default}]: ").strip() or model_default
+        )
+
+        command = [
+            sys.executable,
+            str(script_path),
+            "finetune",
+            "--model-id",
+            model_id,
+            "--dataset-path",
+            str(dataset_path),
+            "--output-dir",
+            str(install_root),
+            "--skip-smoke-tests",
+            "--skip-merge",
+        ]
+
+        summary = [
+            f"Model: {model_id}",
+            f"Dataset: {dataset_path}",
+            f"Output: {install_root}",
+        ]
+        self.log_block("Launching fine-tuning pipeline", summary)
+
+        try:
+            result = self._run_command(command, capture_output=False, check=False)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.log(f"Failed to launch fine-tuning pipeline: {exc}", error=True)
+            return
+
+        if result.returncode != 0:
+            self.log(
+                "Fine-tuning pipeline failed. Inspect the logs above for details.",
+                error=True,
+            )
+            return
+
+        wrapper_dir = install_root / "wrapper"
+        if not wrapper_dir.exists():
+            self.log(
+                f"Pipeline completed but wrapper bundle missing at {wrapper_dir}.",
+                error=True,
+            )
+            return
+
+        chat_lora_dir = install_root / "chat_lora"
+        self.log_block(
+            "Base model + wrapper installation complete",
+            [
+                f"Wrapper: {wrapper_dir}",
+                f"LoRA adapters: {chat_lora_dir if chat_lora_dir.exists() else 'pending'}",
+                "Smoke tests skipped; rerun pipeline without --skip-smoke-tests if desired.",
+            ],
+        )
+
     def _collect_service_state(self) -> Dict[str, Dict[str, str]]:
         state: Dict[str, Dict[str, str]] = {}
         result = self.compose(
@@ -893,6 +1011,10 @@ class DockerMenu:
             "12": ("Run diagnostics & auto-remediation checks", self.diagnostics),
             "13": ("Auto-heal unhealthy services", self.auto_heal),
             "14": ("Show environment variable summary", self.show_environment_summary),
+            "15": (
+                "Fine-tune base model and install wrapper",
+                self.generate_base_model_bundle,
+            ),
             "0": ("Exit", None),
         }
 
