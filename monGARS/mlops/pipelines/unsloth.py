@@ -148,7 +148,7 @@ def run_unsloth_finetune(
     run_smoke_tests: bool = True,
     write_metadata: bool = True,
     merge_to_fp16: bool = True,
-) -> Mapping[str, Path]:
+) -> Mapping[str, object]:
     """Execute a deterministic Unsloth-oriented fine-tuning pipeline."""
 
     configure_cuda_allocator()
@@ -205,7 +205,7 @@ def run_unsloth_finetune(
     merged = False
     if merge_to_fp16:
         try:
-            merged = merge_lora_adapters(model_id, output_dir, output_dir=merged_dir)
+            merged = merge_lora_adapters(model_id, chat_lora_dir, output_dir=merged_dir)
         except Exception:  # pragma: no cover - defensive guard
             logger.warning("Failed to merge adapters to FP16", exc_info=True)
 

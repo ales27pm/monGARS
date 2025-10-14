@@ -202,6 +202,10 @@ services:
     environment:
       <<: *app-environment
       PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+      - ./models/datasets/curated:/app/models/datasets/curated
+      - ./models/encoders:/app/models/encoders
     command: >-
       bash -lc "python scripts/run_mongars_llm_pipeline.py finetune
         --model-id ${UNSLOTH_MODEL_ID:-dphn/Dolphin3.0-Llama3.1-8B}
@@ -221,12 +225,12 @@ services:
         --lora-alpha ${UNSLOTH_LORA_ALPHA:-32}
         --lora-dropout ${UNSLOTH_LORA_DROPOUT:-0.05}
         --eval-batch-size ${UNSLOTH_EVAL_BATCH_SIZE:-1}
-        ${UNSLOTH_TRAIN_FRACTION:+--train-fraction ${UNSLOTH_TRAIN_FRACTION}}
-        ${UNSLOTH_EVAL_DATASET_ID:+--eval-dataset-id ${UNSLOTH_EVAL_DATASET_ID}}
-        ${UNSLOTH_DATASET_ID:+--dataset-id ${UNSLOTH_DATASET_ID}}
-        ${UNSLOTH_SKIP_SMOKE_TESTS:+--skip-smoke-tests}
-        ${UNSLOTH_SKIP_METADATA:+--skip-metadata}
-        ${UNSLOTH_SKIP_MERGE:+--skip-merge}"
+        $${UNSLOTH_TRAIN_FRACTION:+--train-fraction $$UNSLOTH_TRAIN_FRACTION}
+        $${UNSLOTH_EVAL_DATASET_ID:+--eval-dataset-id $$UNSLOTH_EVAL_DATASET_ID}
+        $${UNSLOTH_DATASET_ID:+--dataset-id $$UNSLOTH_DATASET_ID}
+        $${UNSLOTH_SKIP_SMOKE_TESTS:+--skip-smoke-tests}
+        $${UNSLOTH_SKIP_METADATA:+--skip-metadata}
+        $${UNSLOTH_SKIP_MERGE:+--skip-merge}"
 
   ollama:
     image: ollama/ollama:0.3.12

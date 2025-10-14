@@ -107,7 +107,9 @@ def _load_python_module(path: Path) -> ModuleSummary | None:
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             level_prefix = "." * node.level
-            imports.append(f"{level_prefix}{module}".strip("."))
+            target = f"{level_prefix}{module}"
+            if target:
+                imports.append(target)
 
     module_path = str(path.relative_to(repo_root()))
     normalised_imports = sorted({imp for imp in imports if imp})
