@@ -38,6 +38,7 @@ highlights the non-negotiable guardrails and shared context.
 - Run `pytest` before raising a pull request; record skipped suites and why.
 - Document architecture, configuration, and operator workflows in `docs/` or the README when behaviour
     changes.
+- ✅ Run `isort --check --diff .` and `black --check .` locally before committing to avoid CI formatting failures.
 
 ## Observability & Security
 

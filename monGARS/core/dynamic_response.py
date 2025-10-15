@@ -184,9 +184,7 @@ class AdaptiveResponseGenerator:
         try:
             traits = await self.get_personality_traits(user_id, interactions_list)
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.exception(
-                "Failed to estimate personality for %s: %s", user_id, exc
-            )
+            logger.exception("Failed to estimate personality for %s: %s", user_id, exc)
             return {}
 
         return traits
