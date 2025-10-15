@@ -134,6 +134,63 @@ class AdaptiveResponseGenerator:
 
         return dict(normalized_traits)
 
+    async def estimate_personality(
+        self,
+        user_id: str,
+        interactions: Sequence[Mapping[str, Any]] | None = None,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, float]:
+        """Return the latest personality traits for ``user_id``.
+
+        Parameters
+        ----------
+        user_id:
+            Identifier of the user whose personality needs to be estimated.
+        interactions:
+            Optional interaction history to analyse. When omitted, the most
+            recent history observed for ``user_id`` is reused so callers can
+            request another estimate without rehydrating chat transcripts.
+        force_refresh:
+            When ``True`` the cached entry (if any) is invalidated prior to
+            running a fresh analysis. This allows callers to bypass the
+            time-based cache when they know that the interaction history has
+            materially changed.
+
+        Returns
+        -------
+        dict[str, float]
+            The normalised trait mapping provided by
+            :class:`PersonalityEngine`.
+        """
+
+        interactions_list: list[Mapping[str, Any]]
+        if interactions is None:
+            interactions_list = list(self._recent_histories.get(user_id, []))
+        else:
+            interactions_list = list(interactions)
+
+        fingerprint = _fingerprint_interactions(interactions_list)
+        cache_key = self._cache_key(user_id, fingerprint)
+
+        if force_refresh:
+            async with self._lock:
+                self._pending.pop(cache_key, None)
+                if self._cache_ttl < 0 and self._permanent_cache is not None:
+                    self._permanent_cache.pop(cache_key, None)
+                if self._ttl_cache is not None:
+                    self._ttl_cache.pop(cache_key, None)
+
+        try:
+            traits = await self.get_personality_traits(user_id, interactions_list)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception(
+                "Failed to estimate personality for %s: %s", user_id, exc
+            )
+            return {}
+
+        return traits
+
     def generate_adaptive_response(
         self,
         text: str,
