@@ -122,6 +122,7 @@ def test_default_profile_exposes_reasoning_role(tmp_path):
     reasoning = manager.get_model_definition("reasoning")
     assert reasoning.name == "dolphin3"
     assert reasoning.adapters
+    assert len(reasoning.adapters) >= 1, "Expected at least one adapter"
     assert reasoning.adapters[0].target == "dolphin3/reasoning/baseline"
 
 
@@ -170,11 +171,14 @@ async def test_adapter_artifacts_copied_into_registry(monkeypatch, tmp_path):
 
     report = await manager.ensure_models_installed(["general"], force=True)
     adapter_status = next(
-        status for status in report.statuses if status.provider == "adapter"
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
     )
+    assert adapter_status is not None, "Expected adapter status in report"
     assert adapter_status.action == "installed"
     installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
     assert installed_file.exists()
+    assert installed_file.read_bytes() == b"stub", "File content should match source"
 
 
 @pytest.mark.asyncio
@@ -190,8 +194,9 @@ async def test_adapter_downloads_remote_payload(monkeypatch, tmp_path):
         def __exit__(self, exc_type, exc, tb):  # pragma: no cover - context protocol
             self.close()
 
-    def fake_urlopen(url):
+    def fake_urlopen(url, *, timeout=None):
         assert url == remote_url
+        assert timeout == 30
         return FakeResponse(remote_payload)
 
     monkeypatch.setattr(adapter_provisioner, "urlopen", fake_urlopen)
@@ -233,8 +238,10 @@ async def test_adapter_downloads_remote_payload(monkeypatch, tmp_path):
 
     report = await manager.ensure_models_installed(["general"], force=True)
     adapter_status = next(
-        status for status in report.statuses if status.provider == "adapter"
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
     )
+    assert adapter_status is not None, "Expected adapter status in report"
     assert adapter_status.action == "installed"
     installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
     assert installed_file.exists()
@@ -322,8 +329,10 @@ async def test_adapter_provision_missing_source(monkeypatch, tmp_path):
 
     report = await manager.ensure_models_installed(["general"], force=True)
     adapter_status = next(
-        status for status in report.statuses if status.provider == "adapter"
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
     )
+    assert adapter_status is not None, "Expected adapter status in report"
     assert adapter_status.action == "error"
     assert adapter_status.detail == "source_missing"
 
@@ -374,8 +383,10 @@ async def test_adapter_provision_checksum_mismatch(monkeypatch, tmp_path):
 
     report = await manager.ensure_models_installed(["general"], force=True)
     adapter_status = next(
-        status for status in report.statuses if status.provider == "adapter"
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
     )
+    assert adapter_status is not None, "Expected adapter status in report"
     assert adapter_status.action == "error"
     assert adapter_status.detail == "checksum_mismatch"
 
@@ -422,7 +433,7 @@ async def test_adapter_provision_extraction_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())
 
-    def fail_install(self, source_path, target_path):
+    def fail_install(_self, _source_path, _target_path):
         raise RuntimeError("Extraction failed")
 
     monkeypatch.setattr(
@@ -433,7 +444,66 @@ async def test_adapter_provision_extraction_failure(monkeypatch, tmp_path):
 
     report = await manager.ensure_models_installed(["general"], force=True)
     adapter_status = next(
-        status for status in report.statuses if status.provider == "adapter"
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
     )
+    assert adapter_status is not None, "Expected adapter status in report"
     assert adapter_status.action == "error"
     assert adapter_status.detail == "adapter_install_failed"
+
+
+@pytest.mark.asyncio
+async def test_force_does_not_delete_frozen_adapter(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts" / "adapter"
+    source_dir.mkdir(parents=True)
+    (source_dir / "adapter_model.safetensors").write_bytes(b"frozen")
+    registry_path = tmp_path / "registry"
+    installed_path = registry_path / "custom" / "general"
+    installed_path.mkdir(parents=True, exist_ok=True)
+    installed_file = installed_path / "adapter_model.safetensors"
+    installed_file.write_bytes(b"frozen")
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(source_dir),
+                                "target": "custom/general",
+                                "auto_update": False,
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "exists"
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == b"frozen"

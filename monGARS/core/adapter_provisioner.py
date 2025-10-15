@@ -5,14 +5,18 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
 from urllib.parse import urlparse
 from urllib.request import urlopen
+
+if TYPE_CHECKING:  # pragma: no cover - for static analysis only
+    from monGARS.core.model_manager import AdapterDefinition
 
 
 @dataclass(slots=True, frozen=True)
@@ -40,14 +44,11 @@ class AdapterProvisioner:
         allow_download: bool,
     ) -> AdapterSyncResult:
         target_path = adapter.resolved_target(self._registry_root)
-        action, detail = self._sync_adapter(
-            role, adapter, target_path, force, allow_download
-        )
+        action, detail = self._sync_adapter(adapter, target_path, force, allow_download)
         return AdapterSyncResult(action=action, detail=detail, path=target_path)
 
     def _sync_adapter(
         self,
-        role: str,
         adapter: "AdapterDefinition",
         target_path: Path,
         force: bool,
@@ -60,9 +61,6 @@ class AdapterProvisioner:
             and target_path.exists()
             and local_source.resolve() == target_path.resolve()
         )
-        if target_exists and force and not same_location:
-            self._remove_path(target_path)
-            target_exists = False
 
         existing_digest = None
         if target_exists and adapter.checksum:
@@ -84,6 +82,10 @@ class AdapterProvisioner:
             if target_exists:
                 return "exists", target_path.as_posix()
             raise FileNotFoundError(adapter.name)
+
+        if target_exists and force and not same_location:
+            self._remove_path(target_path)
+            target_exists = False
 
         action = "updated" if target_exists else "installed"
         self._materialise_adapter_from_source(adapter, target_path, local_source)
@@ -141,7 +143,10 @@ class AdapterProvisioner:
 
     def _download_remote_file(self, url: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with urlopen(url) as response, destination.open("wb") as handle:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("unsupported_url_scheme")
+        with urlopen(url, timeout=30) as response, destination.open("wb") as handle:
             shutil.copyfileobj(response, handle)
 
     def _install_from_filesystem(self, source_path: Path, target_path: Path) -> None:
@@ -173,15 +178,49 @@ class AdapterProvisioner:
 
     def _safe_extract_zip(self, zip_file: zipfile.ZipFile, destination: Path) -> None:
         destination.mkdir(parents=True, exist_ok=True)
-        members = [destination / info.filename for info in zip_file.infolist()]
+        safe_infos: list[zipfile.ZipInfo] = []
+        members: list[Path] = []
+        for info in zip_file.infolist():
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                raise ValueError("archive_contains_links")
+            member_path = destination / info.filename
+            safe_infos.append(info)
+            members.append(member_path)
         self._validate_archive_targets(destination, members)
-        zip_file.extractall(destination)
+        for info in safe_infos:
+            member_path = destination / info.filename
+            if info.is_dir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            with zip_file.open(info) as source, member_path.open("wb") as target:
+                shutil.copyfileobj(source, target)
 
     def _safe_extract_tar(self, tar_file: tarfile.TarFile, destination: Path) -> None:
         destination.mkdir(parents=True, exist_ok=True)
-        members = [destination / member.name for member in tar_file.getmembers()]
+        safe_members: list[tarfile.TarInfo] = []
+        members: list[Path] = []
+        for member in tar_file.getmembers():
+            if member.issym() or member.islnk():
+                raise ValueError("archive_contains_links")
+            member_path = destination / member.name
+            safe_members.append(member)
+            members.append(member_path)
         self._validate_archive_targets(destination, members)
-        tar_file.extractall(destination)
+        for member in safe_members:
+            member_path = destination / member.name
+            if member.isdir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise ValueError("unsupported_archive_entry")
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            extracted = tar_file.extractfile(member)
+            if extracted is None:
+                raise ValueError("invalid_archive_entry")
+            with extracted, member_path.open("wb") as target:
+                shutil.copyfileobj(extracted, target)
 
     def _validate_archive_targets(
         self, destination: Path, members: Iterable[Path]
@@ -197,11 +236,12 @@ class AdapterProvisioner:
 
     @staticmethod
     def _is_tar_archive(suffixes: list[str]) -> bool:
-        if ".tar" in suffixes:
-            return True
-        if ".tgz" in suffixes:
-            return True
-        return ".tar" in suffixes and ".gz" in suffixes
+        suffix_set = set(suffixes)
+        return (
+            ".tgz" in suffix_set
+            or ".tar" in suffix_set
+            or {".tar", ".gz"}.issubset(suffix_set)
+        )
 
     @staticmethod
     def _is_within_directory(directory: Path, target: Path) -> bool:
@@ -222,7 +262,12 @@ class AdapterProvisioner:
     def _populate_directory_from_source(self, source: Path, destination: Path) -> None:
         if destination.exists():
             self._remove_path(destination)
+        if source.is_symlink():
+            raise ValueError("archive_contains_links")
         if source.is_dir():
+            for path in source.rglob("*"):
+                if path.is_symlink():
+                    raise ValueError("archive_contains_links")
             destination.mkdir(parents=True, exist_ok=True)
             for child in sorted(source.iterdir()):
                 target = destination / child.name

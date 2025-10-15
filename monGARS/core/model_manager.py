@@ -665,6 +665,10 @@ class LLMModelManager:
             or payload.get("install_path")
         )
         path_value = payload.get("path")
+        # The ``path`` field is treated as a flexible fallback: first acting as
+        # ``source`` when one is not supplied, otherwise providing the
+        # ``target`` installation directory when the source is available but no
+        # explicit destination is configured.
         if source_value is None and path_value is not None:
             source_value = path_value
         elif target_value is None and path_value is not None:
