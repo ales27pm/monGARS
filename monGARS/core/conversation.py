@@ -2,6 +2,7 @@ import logging
 import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from hashlib import blake2s
 from typing import Any, Optional
 
 from monGARS.config import get_settings
@@ -143,15 +144,13 @@ async def generate_response(
     required_hooks = ("update_profile", "adapt_response_style")
     missing_hooks = [hook for hook in required_hooks if not hasattr(mimicry_impl, hook)]
     if missing_hooks:
-        raise TypeError(
-            "mimicry component must expose update_profile and adapt_response_style"
-        )
+        raise TypeError("mimicry component missing required hooks")
 
     response = await llm_impl.generate_response(
         prompt, task_type="general", response_hints=None
     )
     if not isinstance(response, Mapping):
-        raise ValueError("LLM implementations must return a mapping payload")
+        raise TypeError("LLM must return a mapping")
 
     text = response.get("text", "")
     try:
@@ -160,23 +159,48 @@ async def generate_response(
         )
         styled_text = await mimicry_impl.adapt_response_style(text, "legacy-user")
     except Exception as exc:  # pragma: no cover - defensive; surfaced to caller
-        raise ValueError("mimicry adapter failed to post-process response") from exc
+        raise ValueError("mimicry post-processing failed") from exc
 
     if not isinstance(styled_text, str):
-        raise ValueError("mimicry adapter must return textual responses")
+        raise TypeError("mimicry must return str")
 
     enriched_response = dict(response)
     enriched_response["text"] = styled_text
 
     if hasattr(persistence_impl, "save_interaction"):
         try:
+            confidence_value = enriched_response.get("confidence")
+            try:
+                confidence = (
+                    float(confidence_value) if confidence_value is not None else 0.0
+                )
+            except (TypeError, ValueError):
+                confidence = 0.0
+
+            interaction = Interaction(
+                user_id="legacy-user",
+                session_id=None,
+                input_data={"prompt": prompt},
+                output_data={"response": enriched_response},
+                message=prompt,
+                response=styled_text,
+                personality={},
+                context={},
+                meta_data=None,
+                confidence=confidence,
+                processing_time=enriched_response.get("processing_time"),
+            )
             await persistence_impl.save_interaction(
-                {"prompt": prompt, "response": enriched_response},
+                interaction,
                 history_query=prompt,
                 history_response=styled_text,
             )
         except Exception:  # pragma: no cover - diagnostics for legacy hook
-            logger.exception("conversation.legacy_persistence_failed")
+            prompt_hash = blake2s(prompt.encode("utf-8"), digest_size=4).hexdigest()
+            logger.exception(
+                "conversation.legacy_persistence_failed",
+                extra={"prompt_hash": f"p:{prompt_hash}"},
+            )
 
     return enriched_response
 
