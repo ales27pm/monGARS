@@ -9,7 +9,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 
 from monGARS.api.dependencies import get_hippocampus
 from monGARS.api.ws_ticket import verify_ws_ticket
@@ -396,8 +403,17 @@ async def ws_chat(ws: WebSocket, ticket: str = Query(..., alias="t")) -> None:
 
     try:
         user_id = verify_ws_ticket(ticket)
+    except HTTPException as exc:
+        close_code = 4401 if exc.status_code == status.HTTP_401_UNAUTHORIZED else 4403
+        log.warning(
+            "ws_manager.ticket_rejected",
+            extra={"status_code": exc.status_code},
+        )
+        await ws.close(code=close_code)
+        return
     except Exception:
-        await ws.close(code=4401)
+        log.exception("ws_manager.ticket_verification_failed")
+        await ws.close(code=1011)
         return
 
     state = await ws_manager.connect(ws, user_id)

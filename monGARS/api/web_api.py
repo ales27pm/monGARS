@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -80,6 +83,15 @@ app.include_router(rag_routes.router)
 
 conversation_module: ConversationalModule | None = None
 ws_manager = _ws_manager
+
+
+def _redact_user_id(user_id: str) -> str:
+    """Return a short, stable identifier suitable for logs."""
+
+    if not isinstance(user_id, str) or not user_id:
+        return "u:unknown"
+    digest = hashlib.blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
+    return f"u:{digest}"
 
 
 def _get_adaptive_response_generator_for_personality(
@@ -209,8 +221,13 @@ async def conversation_history(
     try:
         return await store.history(user_id, limit=limit)
     except Exception as exc:  # pragma: no cover - unexpected errors
+        logger.exception(
+            "conversation.history_failed",
+            extra={"user": _redact_user_id(user_id), "limit": limit},
+        )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to load conversation history",
         ) from exc
 
 
@@ -224,9 +241,9 @@ async def chat(
     try:
         data = validate_user_input({"user_id": user_id, "query": chat.message})
     except ValueError as exc:
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "web_api.chat_invalid_input",
-            extra={"user": user_id, "detail": str(exc)},
+            extra={"user": _redact_user_id(user_id), "detail": str(exc)},
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
@@ -235,8 +252,26 @@ async def chat(
         result = await conv.generate_response(
             user_id, data["query"], session_id=chat.session_id
         )
+    except asyncio.TimeoutError as exc:
+        logger.warning(
+            "web_api.chat_inference_timeout",
+            extra={"user": _redact_user_id(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Chat response timed out",
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception(
+            "web_api.chat_inference_failed",
+            extra={"user": _redact_user_id(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate chat response",
+        ) from exc
     response_payload = {
         "query": data["query"],
         "response": result.get("text", ""),
@@ -251,7 +286,10 @@ async def chat(
         )
         await event_bus().publish(event)
     except Exception:  # pragma: no cover - defensive logging
-        logging.getLogger(__name__).exception("web_api.chat_event_publish_failed")
+        logger.exception(
+            "web_api.chat_event_publish_failed",
+            extra={"user": _redact_user_id(user_id)},
+        )
     return ChatResponse(
         response=response_payload["response"],
         confidence=result.get("confidence", 0.0),
@@ -269,8 +307,21 @@ async def peer_message(
     """Receive an encrypted message from a peer."""
     try:
         data = communicator.decode(message.payload)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "peer.message_invalid_payload",
+            extra={"detail": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid peer payload",
+        ) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.exception("peer.message_decode_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process peer payload",
+        ) from exc
     return {"status": "received", "data": data}
 
 
