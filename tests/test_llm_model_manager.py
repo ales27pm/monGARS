@@ -111,6 +111,70 @@ async def test_model_manager_installs_missing_model(monkeypatch, tmp_path):
     assert fake.pulled == ["custom/general"]
 
 
+def test_default_profile_exposes_reasoning_role(tmp_path):
+    settings = _build_settings(
+        llm_adapter_registry_path=tmp_path / "registry",
+    )
+    manager = LLMModelManager(settings)
+
+    reasoning = manager.get_model_definition("reasoning")
+    assert reasoning.name == "dolphin3"
+    assert reasoning.adapters
+    assert reasoning.adapters[0].target == "dolphin3/reasoning/baseline"
+
+
+@pytest.mark.asyncio
+async def test_adapter_artifacts_copied_into_registry(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts" / "adapter"
+    source_dir.mkdir(parents=True)
+    (source_dir / "adapter_model.safetensors").write_bytes(b"stub")
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(source_dir),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def __init__(self) -> None:
+            self.models: set[str] = set()
+
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:
+            self.models.add(name)
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        status for status in report.statuses if status.provider == "adapter"
+    )
+    assert adapter_status.action == "installed"
+    installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
+    assert installed_file.exists()
+
+
 @pytest.mark.asyncio
 async def test_model_manager_skips_download_when_auto_disabled(monkeypatch, tmp_path):
     config_data = {

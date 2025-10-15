@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
+import shutil
+import tarfile
+import tempfile
+import zipfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 from monGARS.config import Settings, get_settings
 
@@ -20,6 +28,41 @@ except ImportError:  # pragma: no cover - allow lightweight deployments without 
 
 
 @dataclass(slots=True, frozen=True)
+class AdapterDefinition:
+    """Description of a LoRA/adapter artifact backing a logical model role."""
+
+    name: str
+    source: str | None = None
+    target: str | None = None
+    checksum: str | None = None
+    auto_update: bool = True
+    description: str | None = None
+
+    def resolved_target(self, registry_root: Path) -> Path:
+        """Return the destination path for the adapter within the registry."""
+
+        if self.target:
+            target_path = Path(self.target).expanduser()
+        else:
+            target_path = Path(self.name)
+        if target_path.is_absolute():
+            return target_path
+        return (registry_root / target_path).resolve()
+
+    def to_payload(self) -> dict[str, Any]:
+        """Serialise the adapter definition for API responses or logging."""
+
+        return {
+            "name": self.name,
+            "source": self.source,
+            "target": self.target,
+            "checksum": self.checksum,
+            "auto_update": self.auto_update,
+            "description": self.description,
+        }
+
+
+@dataclass(slots=True, frozen=True)
 class ModelDefinition:
     """Description of a single logical model role."""
 
@@ -29,6 +72,7 @@ class ModelDefinition:
     parameters: Mapping[str, Any] = field(default_factory=dict)
     auto_download: bool = True
     description: str | None = None
+    adapters: tuple[AdapterDefinition, ...] = ()
 
     def merge_parameters(self, base: Mapping[str, Any]) -> dict[str, Any]:
         """Merge model-specific overrides on top of ``base`` options."""
@@ -56,6 +100,7 @@ class ModelDefinition:
             "parameters": dict(self.parameters),
             "auto_download": self.auto_download,
             "description": self.description,
+            "adapters": [adapter.to_payload() for adapter in self.adapters],
         }
 
 
@@ -148,11 +193,20 @@ class LLMModelManager:
             config_path
             if config_path is not None
             else self._settings.llm_models_config_path
-        )
+        ).expanduser()
+        if not self._config_path.is_absolute():
+            self._config_path = self._config_path.resolve()
+        self._config_dir = self._config_path.parent
         self._profile_name = (
             profile or self._settings.llm_models_profile
         ).strip() or "default"
         self._auto_download = bool(self._settings.llm_models_auto_download)
+        self._adapter_registry_path = Path(
+            self._settings.llm_adapter_registry_path
+        ).expanduser()
+        if not self._adapter_registry_path.is_absolute():
+            self._adapter_registry_path = self._adapter_registry_path.resolve()
+        self._adapter_registry_path.mkdir(parents=True, exist_ok=True)
         self._profiles = self._load_profiles(self._config_path)
         base_profile = self._select_profile(self._profile_name)
         self._profile = self._apply_overrides(base_profile)
@@ -231,9 +285,13 @@ class LLMModelManager:
                         )
                     )
                     continue
-                status = await self._ensure_provider(definition)
-                statuses.append(status)
-                if status.action in {"exists", "installed"}:
+                role_statuses = await self._ensure_provider(definition, force=force)
+                statuses.extend(role_statuses)
+                if any(
+                    status.role == definition.role
+                    and status.action in {"exists", "installed", "updated"}
+                    for status in role_statuses
+                ):
                     self._ensured_roles.add(role)
         return ModelProvisionReport(statuses=statuses)
 
@@ -242,25 +300,31 @@ class LLMModelManager:
         return sorted(roles)
 
     async def _ensure_provider(
-        self, definition: ModelDefinition
-    ) -> ModelProvisionStatus:
+        self, definition: ModelDefinition, *, force: bool
+    ) -> list[ModelProvisionStatus]:
         provider = definition.provider.lower()
+        statuses: list[ModelProvisionStatus] = []
         if provider == "ollama":
-            return await self._ensure_ollama_model(definition)
-        logger.info(
-            "llm.models.provider.skipped",
-            extra={"provider": definition.provider, "role": definition.role},
-        )
-        return ModelProvisionStatus(
-            role=definition.role,
-            name=definition.name,
-            provider=definition.provider,
-            action="skipped",
-            detail="unsupported_provider",
-        )
+            statuses.append(await self._ensure_ollama_model(definition, force=force))
+        else:
+            logger.info(
+                "llm.models.provider.skipped",
+                extra={"provider": definition.provider, "role": definition.role},
+            )
+            statuses.append(
+                ModelProvisionStatus(
+                    role=definition.role,
+                    name=definition.name,
+                    provider=definition.provider,
+                    action="skipped",
+                    detail="unsupported_provider",
+                )
+            )
+        statuses.extend(await self._ensure_role_adapters(definition, force=force))
+        return statuses
 
     async def _ensure_ollama_model(
-        self, definition: ModelDefinition
+        self, definition: ModelDefinition, *, force: bool
     ) -> ModelProvisionStatus:
         if not ollama:
             logger.warning(
@@ -289,7 +353,7 @@ class LLMModelManager:
                 action="error",
                 detail="list_failed",
             )
-        if definition.name in existing:
+        if definition.name in existing and not force:
             logger.info(
                 "llm.models.present",
                 extra={"role": definition.role, "model": definition.name},
@@ -317,6 +381,9 @@ class LLMModelManager:
                 action="skipped",
                 detail="auto_download_disabled",
             )
+        action = "installed"
+        if definition.name in existing:
+            action = "updated"
         try:
             await asyncio.to_thread(ollama.pull, definition.name)
         except Exception as exc:  # pragma: no cover - unexpected provider failure
@@ -334,14 +401,314 @@ class LLMModelManager:
             )
         logger.info(
             "llm.models.download.completed",
-            extra={"role": definition.role, "model": definition.name},
+            extra={"role": definition.role, "model": definition.name, "action": action},
         )
         return ModelProvisionStatus(
             role=definition.role,
             name=definition.name,
             provider=definition.provider,
-            action="installed",
+            action=action,
         )
+
+    async def _ensure_role_adapters(
+        self, definition: ModelDefinition, *, force: bool
+    ) -> list[ModelProvisionStatus]:
+        if not definition.adapters:
+            return []
+        statuses: list[ModelProvisionStatus] = []
+        for adapter in definition.adapters:
+            statuses.append(
+                await self._ensure_adapter(definition.role, adapter, force=force)
+            )
+        return statuses
+
+    async def _ensure_adapter(
+        self, role: str, adapter: AdapterDefinition, *, force: bool
+    ) -> ModelProvisionStatus:
+        target_path = adapter.resolved_target(self._adapter_registry_path)
+        allow_download = self._auto_download and adapter.auto_update
+        try:
+            action, detail = await asyncio.to_thread(
+                self._sync_adapter,
+                role,
+                adapter,
+                target_path,
+                force,
+                allow_download,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "llm.models.adapter.missing_source",
+                extra={
+                    "role": role,
+                    "adapter": adapter.name,
+                    "source": adapter.source,
+                },
+            )
+            return ModelProvisionStatus(
+                role=f"{role}:{adapter.name}",
+                name=adapter.name,
+                provider="adapter",
+                action="error",
+                detail="source_missing",
+            )
+        except ValueError as exc:
+            logger.warning(
+                "llm.models.adapter.invalid",
+                extra={
+                    "role": role,
+                    "adapter": adapter.name,
+                    "target": str(target_path),
+                },
+                exc_info=exc,
+            )
+            return ModelProvisionStatus(
+                role=f"{role}:{adapter.name}",
+                name=adapter.name,
+                provider="adapter",
+                action="error",
+                detail=str(exc) or "invalid_adapter",
+            )
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.warning(
+                "llm.models.adapter.failed",
+                extra={
+                    "role": role,
+                    "adapter": adapter.name,
+                    "target": str(target_path),
+                },
+                exc_info=exc,
+            )
+            return ModelProvisionStatus(
+                role=f"{role}:{adapter.name}",
+                name=adapter.name,
+                provider="adapter",
+                action="error",
+                detail="adapter_install_failed",
+            )
+        logger.info(
+            "llm.models.adapter.status",
+            extra={
+                "role": role,
+                "adapter": adapter.name,
+                "target": str(target_path),
+                "action": action,
+            },
+        )
+        return ModelProvisionStatus(
+            role=f"{role}:{adapter.name}",
+            name=adapter.name,
+            provider="adapter",
+            action=action,
+            detail=detail,
+        )
+
+    def _sync_adapter(
+        self,
+        role: str,
+        adapter: AdapterDefinition,
+        target_path: Path,
+        force: bool,
+        allow_download: bool,
+    ) -> tuple[str, str | None]:
+        target_exists = target_path.exists()
+        local_source = self._resolve_adapter_source_path(adapter)
+        same_location = (
+            local_source is not None
+            and target_path.exists()
+            and local_source.resolve() == target_path.resolve()
+        )
+        if target_exists and force and not same_location:
+            self._remove_path(target_path)
+            target_exists = False
+
+        existing_digest = None
+        if target_exists and adapter.checksum:
+            existing_digest = self._hash_path(target_path)
+
+        if target_exists and not force:
+            if adapter.checksum and existing_digest == adapter.checksum:
+                return "exists", target_path.as_posix()
+            if not allow_download or not adapter.auto_update:
+                return "exists", target_path.as_posix()
+
+        if target_exists and not allow_download:
+            return "exists", target_path.as_posix()
+
+        if not target_exists and not allow_download:
+            return "skipped", "auto_download_disabled"
+
+        if adapter.source is None:
+            if target_exists:
+                return "exists", target_path.as_posix()
+            raise FileNotFoundError(adapter.name)
+
+        action = "installed" if not target_exists else "updated"
+        self._materialise_adapter_from_source(adapter, target_path, local_source)
+        if adapter.checksum:
+            digest = self._hash_path(target_path)
+            if digest != adapter.checksum:
+                raise ValueError("checksum_mismatch")
+        return action, target_path.as_posix()
+
+    def _resolve_adapter_source_path(self, adapter: AdapterDefinition) -> Path | None:
+        source = adapter.source
+        if source is None:
+            return None
+        parsed = urlparse(source)
+        if parsed.scheme in {"http", "https"}:
+            return None
+        if parsed.scheme == "file":
+            source_path = Path(os.path.join(parsed.netloc, parsed.path))
+        else:
+            source_path = Path(source)
+        source_path = source_path.expanduser()
+        if not source_path.is_absolute():
+            source_path = (self._config_dir / source_path).resolve()
+        else:
+            source_path = source_path.resolve()
+        return source_path
+
+    def _materialise_adapter_from_source(
+        self,
+        adapter: AdapterDefinition,
+        target_path: Path,
+        local_source: Path | None,
+    ) -> None:
+        source = adapter.source
+        if source is None:
+            raise FileNotFoundError(adapter.name)
+        parsed = urlparse(source)
+        if parsed.scheme in {"http", "https"}:
+            with tempfile.TemporaryDirectory(prefix="adapter_dl_") as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                filename = Path(parsed.path).name or adapter.name
+                download_path = tmp_path / filename
+                self._download_remote_file(source, download_path)
+                self._install_from_filesystem(download_path, target_path)
+            return
+        source_path = local_source or self._resolve_adapter_source_path(adapter)
+        if source_path is None:
+            raise FileNotFoundError(adapter.name)
+        if source_path.resolve() == target_path.resolve():
+            # Nothing to copy; ensure the directory exists.
+            target_path.mkdir(parents=True, exist_ok=True)
+            return
+        if not source_path.exists():
+            raise FileNotFoundError(str(source_path))
+        self._install_from_filesystem(source_path, target_path)
+
+    def _download_remote_file(self, url: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with urlopen(url) as response, destination.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+
+    def _install_from_filesystem(self, source_path: Path, target_path: Path) -> None:
+        suffixes = "".join(source_path.suffixes).lower()
+        if source_path.is_dir():
+            self._populate_directory_from_source(source_path, target_path)
+            return
+        if suffixes.endswith(".zip"):
+            self._extract_zip(source_path, target_path)
+            return
+        if (
+            suffixes.endswith(".tar")
+            or suffixes.endswith(".tar.gz")
+            or suffixes.endswith(".tgz")
+        ):
+            self._extract_tar(source_path, target_path)
+            return
+        # Fallback: treat as single file payload.
+        self._populate_directory_from_source(source_path, target_path)
+
+    def _extract_zip(self, archive_path: Path, target_path: Path) -> None:
+        with tempfile.TemporaryDirectory(prefix="adapter_zip_") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            with zipfile.ZipFile(archive_path) as zip_file:
+                self._safe_extract_zip(zip_file, tmp_path)
+            root = self._discover_content_root(tmp_path)
+            self._populate_directory_from_source(root, target_path)
+
+    def _extract_tar(self, archive_path: Path, target_path: Path) -> None:
+        with tempfile.TemporaryDirectory(prefix="adapter_tar_") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            with tarfile.open(archive_path) as tar_file:
+                self._safe_extract_tar(tar_file, tmp_path)
+            root = self._discover_content_root(tmp_path)
+            self._populate_directory_from_source(root, target_path)
+
+    def _safe_extract_zip(self, zip_file: zipfile.ZipFile, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        for member in zip_file.infolist():
+            extracted_path = destination / member.filename
+            if not self._is_within_directory(destination, extracted_path):
+                raise ValueError("zip_path_traversal")
+        zip_file.extractall(destination)
+
+    def _safe_extract_tar(self, tar_file: tarfile.TarFile, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        for member in tar_file.getmembers():
+            member_path = destination / member.name
+            if not self._is_within_directory(destination, member_path):
+                raise ValueError("tar_path_traversal")
+        tar_file.extractall(destination)
+
+    @staticmethod
+    def _is_within_directory(directory: Path, target: Path) -> bool:
+        try:
+            directory = directory.resolve()
+            target = target.resolve()
+        except FileNotFoundError:
+            return str(target).startswith(str(directory))
+        return os.path.commonpath([str(directory)]) == os.path.commonpath(
+            [str(directory), str(target)]
+        )
+
+    def _discover_content_root(self, directory: Path) -> Path:
+        entries = [
+            child for child in sorted(directory.iterdir()) if child.name != "__MACOSX"
+        ]
+        if len(entries) == 1:
+            return entries[0]
+        return directory
+
+    def _populate_directory_from_source(self, source: Path, destination: Path) -> None:
+        if destination.exists():
+            self._remove_path(destination)
+        if source.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            for child in sorted(source.iterdir()):
+                target = destination / child.name
+                if child.is_dir():
+                    shutil.copytree(child, target)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(child, target)
+        else:
+            destination.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination / source.name)
+
+    def _remove_path(self, path: Path) -> None:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists():
+            path.unlink()
+
+    def _hash_path(self, path: Path) -> str:
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        digest = hashlib.sha256()
+        if path.is_file():
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        for file_path in sorted(p for p in path.rglob("*") if p.is_file()):
+            digest.update(file_path.relative_to(path).as_posix().encode("utf-8"))
+            with file_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
 
     def _ollama_list_models(self) -> set[str]:
         response = ollama.list()
@@ -448,6 +815,18 @@ class LLMModelManager:
         else:
             auto_download_flag = bool(auto_download)
         description = payload.get("description")
+        adapters_payload = payload.get("adapters") or payload.get("adapter")
+        if isinstance(adapters_payload, (list, tuple)):
+            adapters_iterable = adapters_payload
+        elif adapters_payload is None:
+            adapters_iterable = []
+        else:
+            adapters_iterable = [adapters_payload]
+        adapters: list[AdapterDefinition] = []
+        for adapter_payload in adapters_iterable:
+            adapter_definition = self._parse_adapter_definition(role, adapter_payload)
+            if adapter_definition:
+                adapters.append(adapter_definition)
         return ModelDefinition(
             role=role.lower(),
             name=str(name_value),
@@ -455,6 +834,61 @@ class LLMModelManager:
             parameters=parameters,
             auto_download=auto_download_flag,
             description=str(description) if description else None,
+            adapters=tuple(adapters),
+        )
+
+    def _parse_adapter_definition(
+        self, role: str, payload: Any
+    ) -> AdapterDefinition | None:
+        if isinstance(payload, str):
+            name = Path(payload).stem or payload
+            return AdapterDefinition(name=name, source=str(payload))
+        if not isinstance(payload, Mapping):
+            return None
+        name_value = (
+            payload.get("name")
+            or payload.get("id")
+            or payload.get("adapter")
+            or payload.get("target")
+            or f"{role}-adapter"
+        )
+        auto_update_value = payload.get("auto_update")
+        if auto_update_value is None:
+            auto_update_flag = True
+        elif isinstance(auto_update_value, str):
+            auto_update_flag = auto_update_value.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "on",
+            }
+        else:
+            auto_update_flag = bool(auto_update_value)
+        source_value = (
+            payload.get("source")
+            or payload.get("url")
+            or payload.get("location")
+            or payload.get("download")
+        )
+        target_value = (
+            payload.get("target")
+            or payload.get("destination")
+            or payload.get("install_path")
+        )
+        path_value = payload.get("path")
+        if source_value is None and path_value is not None:
+            source_value = path_value
+        elif target_value is None and path_value is not None:
+            target_value = path_value
+        checksum_value = payload.get("checksum")
+        description_value = payload.get("description")
+        return AdapterDefinition(
+            name=str(name_value),
+            source=str(source_value) if source_value else None,
+            target=str(target_value) if target_value else None,
+            checksum=str(checksum_value) if checksum_value else None,
+            auto_update=auto_update_flag,
+            description=str(description_value) if description_value else None,
         )
 
     def _select_profile(self, name: str) -> ModelProfile:
@@ -489,6 +923,7 @@ class LLMModelManager:
 
 __all__ = [
     "LLMModelManager",
+    "AdapterDefinition",
     "ModelDefinition",
     "ModelProfile",
     "ModelProvisionReport",
