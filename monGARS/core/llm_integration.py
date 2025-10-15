@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlparse
@@ -113,6 +113,46 @@ class AsyncTTLCache:
 
 
 _RESPONSE_CACHE = AsyncTTLCache()
+
+
+def _sanitize_slot_generation_options(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Map Ollama-style generation options to HuggingFace ``generate`` kwargs."""
+
+    sanitized: dict[str, Any] = {}
+
+    num_predict = options.get("num_predict") if isinstance(options, Mapping) else None
+    if isinstance(num_predict, int) and num_predict > 0:
+        sanitized["max_new_tokens"] = num_predict
+    else:
+        sanitized["max_new_tokens"] = 512
+
+    temperature = options.get("temperature") if isinstance(options, Mapping) else None
+    if isinstance(temperature, (int, float)):
+        sanitized["temperature"] = float(temperature)
+        sanitized["do_sample"] = float(temperature) > 0
+
+    top_p = options.get("top_p") if isinstance(options, Mapping) else None
+    if isinstance(top_p, (int, float)) and top_p > 0:
+        sanitized["top_p"] = float(top_p)
+        sanitized.setdefault("do_sample", True)
+
+    top_k = options.get("top_k") if isinstance(options, Mapping) else None
+    if isinstance(top_k, (int, float)) and top_k >= 0:
+        sanitized["top_k"] = int(top_k)
+        sanitized.setdefault("do_sample", True)
+
+    repetition_penalty = None
+    if isinstance(options, Mapping):
+        repetition_penalty = options.get("repetition_penalty")
+        if repetition_penalty is None:
+            repetition_penalty = options.get("repeat_penalty")
+    if isinstance(repetition_penalty, (int, float)):
+        sanitized["repetition_penalty"] = float(repetition_penalty)
+
+    if "do_sample" not in sanitized:
+        sanitized["do_sample"] = False
+
+    return sanitized
 
 
 _UNSLOTH_INIT_LOCK = threading.Lock()
@@ -590,7 +630,10 @@ class LLMIntegration:
         if not ollama:
             logger.error("llm.ollama.unavailable")
             fallback = await self._slot_model_fallback(
-                prompt, task_type, reason="ollama_missing"
+                prompt,
+                task_type,
+                reason="ollama_missing",
+                definition=model_definition,
             )
             if fallback is not None:
                 return fallback
@@ -601,7 +644,10 @@ class LLMIntegration:
         except OllamaNotAvailableError:
             logger.exception("llm.ollama.unavailable")
             fallback = await self._slot_model_fallback(
-                prompt, task_type, reason="ollama_not_available"
+                prompt,
+                task_type,
+                reason="ollama_not_available",
+                definition=model_definition,
             )
             if fallback is not None:
                 return fallback
@@ -612,7 +658,10 @@ class LLMIntegration:
                 extra={"model_name": model_name, "task_type": task_type},
             )
             fallback = await self._slot_model_fallback(
-                prompt, task_type, reason="retry_exhausted"
+                prompt,
+                task_type,
+                reason="retry_exhausted",
+                definition=model_definition,
             )
             if fallback is not None:
                 return fallback
@@ -623,7 +672,10 @@ class LLMIntegration:
                 extra={"model_name": model_name, "task_type": task_type},
             )
             fallback = await self._slot_model_fallback(
-                prompt, task_type, reason="circuit_open"
+                prompt,
+                task_type,
+                reason="circuit_open",
+                definition=model_definition,
             )
             if fallback is not None:
                 return fallback
@@ -634,7 +686,10 @@ class LLMIntegration:
                 extra={"model_name": model_name, "task_type": task_type},
             )
             fallback = await self._slot_model_fallback(
-                prompt, task_type, reason="exception"
+                prompt,
+                task_type,
+                reason="exception",
+                definition=model_definition,
             )
             if fallback is not None:
                 return fallback
@@ -643,12 +698,19 @@ class LLMIntegration:
             ) from exc
 
     async def _slot_model_fallback(
-        self, prompt: str, task_type: str, *, reason: str
+        self,
+        prompt: str,
+        task_type: str,
+        *,
+        reason: str,
+        definition: ModelDefinition | None = None,
     ) -> dict[str, Any] | None:
         """Attempt to satisfy a request using the slot-managed local model."""
 
         try:
-            response = await self._generate_with_model_slot(prompt, task_type)
+            response = await self._generate_with_model_slot(
+                prompt, task_type, definition=definition
+            )
         except self.LocalProviderError:
             return None
         logger.info(
@@ -658,7 +720,11 @@ class LLMIntegration:
         return response
 
     async def _generate_with_model_slot(
-        self, prompt: str, task_type: str
+        self,
+        prompt: str,
+        task_type: str,
+        *,
+        definition: ModelDefinition | None = None,
     ) -> dict[str, Any]:
         """Generate a response using the Unsloth-backed model slot."""
 
@@ -666,6 +732,11 @@ class LLMIntegration:
             raise self.LocalProviderError(
                 "Local slot fallback requires PyTorch. Install torch to enable this path."
             ) from _TORCH_IMPORT_ERROR
+
+        model_definition = definition or self._model_manager.get_model_definition(
+            task_type
+        )
+        slot_generation_kwargs = self._slot_generation_kwargs(model_definition)
 
         def _run_generation() -> dict[str, Any]:
             assert torch is not None  # noqa: S101 - guarded above
@@ -676,14 +747,8 @@ class LLMIntegration:
                 device = getattr(model, "device", None)
                 if device is not None:
                     inputs = {k: v.to(device) for k, v in inputs.items()}
-                generation_kwargs = {
-                    "max_new_tokens": 512,
-                    "temperature": float(self._settings.AI_MODEL_TEMPERATURE),
-                    "top_p": 0.9,
-                    "do_sample": True,
-                }
                 with torch.inference_mode():
-                    output = model.generate(**inputs, **generation_kwargs)
+                    output = model.generate(**inputs, **slot_generation_kwargs)
                 if hasattr(output, "sequences"):
                     output_ids = output.sequences[0]
                 else:
@@ -699,6 +764,17 @@ class LLMIntegration:
                 extra={"task_type": task_type},
             )
             raise self.LocalProviderError("Local model generation failed.") from exc
+
+    def _slot_generation_kwargs(self, definition: ModelDefinition) -> dict[str, Any]:
+        """Derive HuggingFace generation kwargs from the model definition."""
+
+        options = self._build_ollama_options(definition)
+        sanitized = _sanitize_slot_generation_options(options)
+
+        if sanitized.get("do_sample") and "top_p" not in sanitized:
+            sanitized["top_p"] = 0.9
+
+        return sanitized
 
     async def generate_response(
         self,
