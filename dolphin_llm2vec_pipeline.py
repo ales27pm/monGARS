@@ -121,13 +121,59 @@ def main() -> None:
         source_dir = merged_dir if merged else OUTPUT_DIR
         export_gguf(source_dir, gguf_dir=GGUF_DIR, quantization_method=GGUF_METHOD)
 
+    tokenizer_config = {
+        "name_or_path": getattr(tokenizer, "name_or_path", MODEL_ID),
+        "cls_token": getattr(tokenizer, "cls_token", None),
+        "pad_token": tokenizer.pad_token,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token": tokenizer.eos_token,
+        "model_max_length": getattr(tokenizer, "model_max_length", None),
+        "additional_special_tokens": getattr(
+            tokenizer, "additional_special_tokens", None
+        ),
+    }
+
     wrapper_config = {
         "base_model_id": MODEL_ID,
         "adapters_dir": str(OUTPUT_DIR),
+        "tokenizer": tokenizer_config,
         "quantization": "bnb-4bit nf4 double-quant fp16 compute",
         "max_seq_len": MAX_SEQ_LEN,
         "activation_buffer_mb": ACTIVATION_BUFFER_MB,
-        "notes": "Reload base in 4-bit, then load PEFT adapters and wrap with LLM2Vec.",
+        "chat_backend": {
+            "provider": "ollama",
+            "model": "dolphin3",
+            "parameters": {
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "num_predict": min(512, MAX_SEQ_LEN),
+            },
+        },
+        "embedding_backend": "huggingface",
+        "embedding_options": {
+            "pooling_mode": "mean",
+            "normalise": False,
+            "attention_mask_weighting": "mean",
+            "dtype": "float32",
+            "do_sample": False,
+            "top_p": 1.0,
+            "max_length": min(512, MAX_SEQ_LEN),
+        },
+        "generation_defaults": {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_new_tokens": min(512, MAX_SEQ_LEN),
+        },
+        "artifacts": {
+            "tokenizer_dir": str(OUTPUT_DIR / "tokenizer"),
+            "adapter_subdir": "lora_adapter",
+            "merged_subdir": "merged_fp16",
+            "wrapper_config_path": str(OUTPUT_DIR / "wrapper_config.json"),
+        },
+        "notes": (
+            "Reload the Dolphin3.0 base in 4-bit, apply PEFT adapters, and wrap with "
+            "LLM2Vec for deterministic embedding extraction."
+        ),
     }
     (OUTPUT_DIR / "wrapper_config.json").write_text(
         json.dumps(wrapper_config, indent=2)
