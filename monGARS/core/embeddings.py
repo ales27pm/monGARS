@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import math
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -41,6 +45,8 @@ class LLM2VecEmbedder:
         self._manager_lock = asyncio.Lock()
         concurrency = max(1, int(self._settings.llm2vec_max_concurrency))
         self._semaphore = asyncio.Semaphore(concurrency)
+        self._fallback_cache_size = 256
+        self._fallback_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
 
     async def encode_batch(
         self, texts: Sequence[str], *, instruction: str | None = None
@@ -66,32 +72,67 @@ class LLM2VecEmbedder:
             chunk = cleaned[start : start + batch_size]
             chunk_used_fallback = False
 
-            try:
-                async with self._semaphore:
-                    raw_vectors = await asyncio.to_thread(manager.encode, chunk, prompt)
-            except Exception as exc:  # pragma: no cover - unexpected backend errors
-                logger.exception(
-                    "llm2vec.encode.failed", extra={"chunk_size": len(chunk)}
-                )
-                raise EmbeddingBackendError("LLM2Vec encode failed") from exc
+            # Prepare placeholders so we can short-circuit empty payloads and
+            # maintain ordering even when the backend only receives a subset of
+            # the chunk.
+            chunk_vectors: list[list[float] | None] = [None] * len(chunk)
+            backend_indices: list[int] = []
+            backend_payloads: list[str] = []
 
-            # Normalise vectors while preserving ordering and chunk length.
-            normalised_vectors: list[list[float]] = []
-            for raw_vector in list(raw_vectors or [])[: len(chunk)]:
-                prepared = self._normalise_dimensions(raw_vector)
+            for index, text in enumerate(chunk):
+                if not text.strip():
+                    chunk_used_fallback = True
+                    chunk_vectors[index] = self._fallback_vector(prompt, text)
+                else:
+                    backend_indices.append(index)
+                    backend_payloads.append(text)
+
+            raw_sequence: Sequence[Sequence[float]] | None = None
+
+            if backend_payloads:
+                if not manager.is_ready:
+                    chunk_used_fallback = True
+                    for relative_index, index in enumerate(backend_indices):
+                        original = chunk[index]
+                        chunk_vectors[index] = self._fallback_vector(prompt, original)
+                else:
+                    try:
+                        async with self._semaphore:
+                            raw_sequence = await asyncio.to_thread(
+                                manager.encode, backend_payloads, prompt
+                            )
+                    except (
+                        Exception
+                    ) as exc:  # pragma: no cover - unexpected backend errors
+                        logger.exception(
+                            "llm2vec.encode.failed",
+                            extra={
+                                "chunk_size": len(chunk),
+                                "backend_size": len(backend_payloads),
+                            },
+                        )
+                        raise EmbeddingBackendError("LLM2Vec encode failed") from exc
+
+            prepared_sequence = list(raw_sequence or [])
+            for relative_index, index in enumerate(backend_indices):
+                candidate = (
+                    prepared_sequence[relative_index]
+                    if relative_index < len(prepared_sequence)
+                    else None
+                )
+                prepared = self._normalise_dimensions(candidate)
                 if prepared is None:
                     chunk_used_fallback = True
-                    normalised_vectors.append([])
+                    chunk_vectors[index] = self._fallback_vector(prompt, chunk[index])
                 else:
-                    normalised_vectors.append(prepared)
+                    chunk_vectors[index] = prepared
 
-            if len(normalised_vectors) < len(chunk):
-                chunk_used_fallback = True
-                normalised_vectors.extend(
-                    [] for _ in range(len(chunk) - len(normalised_vectors))
-                )
+            for index, vector in enumerate(chunk_vectors):
+                if vector is None:
+                    chunk_used_fallback = True
+                    chunk_vectors[index] = self._fallback_vector(prompt, chunk[index])
 
-            aggregate_vectors.extend(normalised_vectors)
+            aggregate_vectors.extend(chunk_vectors)  # type: ignore[arg-type]
             used_fallback = used_fallback or chunk_used_fallback or not manager.is_ready
 
         if used_fallback:
@@ -146,12 +187,36 @@ class LLM2VecEmbedder:
         if not values:
             return None
 
+        if any(not math.isfinite(component) for component in values):
+            return None
+
         dimensions = int(self._settings.llm2vec_vector_dimensions)
         if len(values) > dimensions:
             values = values[:dimensions]
         elif len(values) < dimensions:
             values.extend(0.0 for _ in range(dimensions - len(values)))
         return values
+
+    def _fallback_vector(self, instruction: str, text: str) -> list[float]:
+        cache_key = (instruction, text)
+        cached = self._fallback_cache.get(cache_key)
+        if cached is not None:
+            self._fallback_cache.move_to_end(cache_key)
+            return list(cached)
+
+        dimensions = max(1, int(self._settings.llm2vec_vector_dimensions))
+        serialized = json.dumps(cache_key, ensure_ascii=False, separators=(",", ":"))
+        digest = hashlib.sha256(serialized.encode("utf-8")).digest()
+        repeated = (digest * ((dimensions // len(digest)) + 1))[:dimensions]
+        values = [(byte / 255.0) * 2 - 1 for byte in repeated]
+        magnitude = math.sqrt(sum(component * component for component in values))
+        if magnitude == 0:
+            return [0.0] * dimensions
+        normalised = [component / magnitude for component in values]
+        self._fallback_cache[cache_key] = list(normalised)
+        if len(self._fallback_cache) > self._fallback_cache_size:
+            self._fallback_cache.popitem(last=False)
+        return normalised
 
 
 @lru_cache(maxsize=1)
