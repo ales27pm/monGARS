@@ -186,6 +186,24 @@ For automated pipelines you can continue to call Docker Compose directly:
 docker compose -f docker-compose.yml --project-name mongars up -d
 ```
 
+#### Docker Compose v1 compatibility
+
+Docker Engine 27+ removes the legacy `ContainerConfig` field that Compose v1
+(`docker-compose` 1.29.x) relied on when reconciling named volumes. If you see
+errors such as `'ContainerConfig'` while recreating services like Postgres,
+Redis, Vault, or MLflow, run the compatibility wrapper included with the
+repository:
+
+```bash
+scripts/compose_up.sh up -d
+```
+
+The script pins `DOCKER_API_VERSION=1.43` so the engine exposes the legacy
+schema, disables BuildKit for parity with Compose v1 expectations, and
+auto-detects whether the modern `docker compose` plugin is available before
+falling back to the classic binary. You can pass any Compose arguments through
+unchanged, for example `scripts/compose_up.sh down --volumes`.
+
 The refreshed Compose topology keeps the same service names but now uses
 anchors to share environment blocks, consistent health checks, and optional
 profiles for inference (`ollama`) and distributed serving (`ray-head`,
