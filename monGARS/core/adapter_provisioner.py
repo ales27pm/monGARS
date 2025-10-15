@@ -79,6 +79,10 @@ class AdapterProvisioner:
     ) -> tuple[str, str | None]:
         target_exists = target_path.exists()
         local_source = self._resolve_adapter_source_path(adapter)
+        parsed_source = urlparse(adapter.source) if adapter.source else None
+        is_remote_source = (
+            parsed_source is not None and parsed_source.scheme in {"http", "https"}
+        )
         same_location = (
             local_source is not None
             and target_path.exists()
@@ -100,7 +104,7 @@ class AdapterProvisioner:
                     },
                 )
                 return "exists", target_path.as_posix()
-            if not allow_download or not adapter.auto_update:
+            if (is_remote_source and not allow_download) or not adapter.auto_update:
                 logger.info(
                     "llm.adapters.ensure.noop",
                     extra={
@@ -111,7 +115,7 @@ class AdapterProvisioner:
                 )
                 return "exists", target_path.as_posix()
 
-        if target_exists and not allow_download:
+        if target_exists and is_remote_source and not allow_download:
             logger.info(
                 "llm.adapters.ensure.noop",
                 extra={
@@ -122,7 +126,7 @@ class AdapterProvisioner:
             )
             return "exists", target_path.as_posix()
 
-        if not target_exists and not allow_download:
+        if not target_exists and is_remote_source and not allow_download:
             logger.info(
                 "llm.adapters.ensure.skipped",
                 extra={
@@ -132,6 +136,17 @@ class AdapterProvisioner:
                 },
             )
             return "skipped", "auto_download_disabled"
+
+        if target_exists and force and not adapter.auto_update:
+            logger.info(
+                "llm.adapters.ensure.noop",
+                extra={
+                    "adapter": adapter.name,
+                    "target": str(target_path),
+                    "reason": "updates_disabled_force",
+                },
+            )
+            return "exists", target_path.as_posix()
 
         if adapter.source is None:
             if target_exists:

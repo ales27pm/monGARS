@@ -249,6 +249,63 @@ async def test_adapter_downloads_remote_payload(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_local_adapter_installs_when_downloads_disabled(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts" / "adapter"
+    source_dir.mkdir(parents=True)
+    (source_dir / "adapter_model.safetensors").write_bytes(b"offline")
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "offline-adapter",
+                                "source": str(source_dir),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+        llm_models_auto_download=False,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "installed"
+
+    installed_file = (
+        registry_path / "custom" / "general" / "adapter_model.safetensors"
+    )
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == b"offline"
+
+
+@pytest.mark.asyncio
 async def test_model_manager_skips_download_when_auto_disabled(monkeypatch, tmp_path):
     config_data = {
         "profiles": {

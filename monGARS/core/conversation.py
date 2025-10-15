@@ -94,7 +94,7 @@ class _StubPersistence:
         *,
         history_query: str | None = None,
         history_response: str | None = None,
-    ) -> Interaction:
+    ) -> None:
         self.saved_interactions.append(
             {
                 "interaction": interaction,
@@ -102,7 +102,6 @@ class _StubPersistence:
                 "history_response": history_response,
             }
         )
-        return interaction
 
 
 class _StubMimicry:
@@ -113,9 +112,10 @@ class _StubMimicry:
         self.style_requests: list[tuple[str, str]] = []
 
     async def update_profile(
-        self, user_id: str, payload: Mapping[str, Any]
-    ) -> None:  # pragma: no cover - simple recorder
-        self.profile_updates.append((user_id, payload))
+        self, user_id: str, interaction: dict
+    ) -> dict:  # pragma: no cover - simple recorder
+        self.profile_updates.append((user_id, interaction))
+        return interaction
 
     async def adapt_response_style(self, text: str, user_id: str) -> str:
         self.style_requests.append((text, user_id))
