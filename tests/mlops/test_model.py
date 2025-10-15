@@ -307,7 +307,7 @@ def test_load_4bit_causal_lm_cpu_fallback_error(
 ) -> None:
     monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
 
-    def _failing_from_pretrained(*_, **__):  # noqa: ANN002
+    def _failing_from_pretrained(*_, **__):
         raise RuntimeError("Simulated model loading failure")
 
     monkeypatch.setattr(
