@@ -207,7 +207,7 @@ def test_load_4bit_causal_lm_handles_legacy_bitsandbytes_kwargs(
 
     def _fake_from_pretrained(
         *_, quantization_config: Any, **__
-    ) -> Any:  # noqa: ANN002
+    ) -> Any:
         quant_configs.append(quantization_config)
         return _DummyModel()
 
