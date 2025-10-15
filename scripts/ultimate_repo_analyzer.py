@@ -3,11 +3,14 @@
 import csv
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 OUT = Path("data/ultimate")
 RAW = OUT / "raw_texts"
@@ -47,7 +50,11 @@ def is_text(p):
     try:
         with p.open("rb") as f:
             return b"\x00" not in f.read(4096)
-    except:
+    except OSError as exc:
+        logger.debug(
+            "ultimate_repo_analyzer.read_failed",
+            extra={"path": str(p), "error": str(exc)},
+        )
         return False
 
 
@@ -63,8 +70,11 @@ if (root / ".git").exists():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(p.read_bytes())
                 files.append(dst)
-    except:
-        pass
+    except (OSError, subprocess.CalledProcessError) as exc:
+        logger.warning(
+            "ultimate_repo_analyzer.git_ls_failed",
+            extra={"error": str(exc)},
+        )
 if not files:
     for p in root.rglob("*"):
         if (
@@ -100,7 +110,11 @@ prov = []
 for f in files:
     try:
         text = f.read_text(encoding="utf-8", errors="ignore")
-    except:
+    except OSError as exc:
+        logger.warning(
+            "ultimate_repo_analyzer.read_text_failed",
+            extra={"path": str(f), "error": str(exc)},
+        )
         continue
     lines = text.splitlines()
 
@@ -273,8 +287,11 @@ with DOT.open("w", encoding="utf-8") as f:
     f.write("}\n")
 try:
     subprocess.run(["dot", "-Tpng", str(DOT), "-o", str(PNG)], check=True)
-except:
-    pass
+except (OSError, subprocess.CalledProcessError) as exc:
+    logger.warning(
+        "ultimate_repo_analyzer.graphviz_failed",
+        extra={"error": str(exc)},
+    )
 
 print(f"OK: SFT={len(sft_rows)} AGENT={len(ag_rows)} EMB={len(emb_rows)}")
 print("OUT:", SFT, AGT, EMB, PROV, DOT, PNG if PNG.exists() else "(no PNG)")
