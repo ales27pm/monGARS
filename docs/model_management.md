@@ -78,13 +78,11 @@ pipelines.
   runtime settings pulled from `monGARS.config.get_settings()`.
 - `LLMModelManager` currently only instantiates Ollama-backed definitions. Any
   manifest entry referencing an unsupported provider is skipped, and a warning
-  is logged so operators can reconcile the mismatch before traffic is routed to
-  that role.
-- During request handling, `LLMIntegration` invokes `ollama.chat` through
+  is logged so operators can reconcile the mismatch before traffic is routed to that role.
+  During request handling, `LLMIntegration` invokes `ollama.chat` through
   `_ollama_call`. User prompts are sent as chat messages, and Ollama receives
   the consolidated generation options from the model definition and global
-  settings. Responses stream back as text, which is surfaced to the caller and
-  emitted on the UI event bus.
+  settings. Responses stream back as text, which is surfaced to the caller and emitted on the UI event bus.
 - If Ollama is unavailable—because the socket connection fails or the client is
   missing—the integration falls back to a local PyTorch slot via
   `ModelSlotManager`. The slot loads the configured HuggingFace-compatible
