@@ -71,6 +71,16 @@ class ConversationalModule:
     ) -> tuple[str, Mapping[str, Any]]:
         result = await self.reasoner.reason(query, user_id)
         if not isinstance(result, Mapping):
+            from hashlib import blake2s
+
+            redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
+            logger.warning(
+                "conversation.reasoner.invalid_result",
+                extra={
+                    "user": f"u:{redacted}",
+                    "result_type": type(result).__name__,
+                },
+            )
             result = {}
         refined = f"{query} {result['result']}" if "result" in result else query
         return refined, result

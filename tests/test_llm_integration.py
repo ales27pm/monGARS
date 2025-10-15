@@ -335,6 +335,71 @@ def test_infer_task_type_detects_coding(
         )
         == "coding"
     )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "function greet() {\n    return 'hello';\n}"
+        )
+        == "coding"
+    )
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("", "general"),
+        ("   \n", "general"),
+        ("Steps:\n    - item one\n    - item two", "general"),
+        ("Please return soon", "general"),
+        ("Importantly, we should regroup", "general"),
+        (
+            "Traceback (most recent call last):\n  File 'app.py', line 1\n"
+            "NameError: name 'main' is not defined. This is a python error.",
+            "coding",
+        ),
+        (
+            "In JavaScript, console.log throws ReferenceError: please help",
+            "coding",
+        ),
+        (
+            "Linker output: undefined reference to std::cout in this C++ build",
+            "coding",
+        ),
+        (
+            "Discuss classifying imports and exports", "general"
+        ),
+    ],
+)
+def test_infer_task_type_edge_cases(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+    prompt: str,
+    expected: str,
+) -> None:
+    assert stubbed_llm_integration.infer_task_type(prompt) == expected
+
+
+def test_infer_task_type_requires_multiple_signals(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+) -> None:
+    """Single keyword references should not force the coding route."""
+
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Can you explain what a function is in mathematics?"
+        )
+        == "general"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Talk about the Rust belt economy"
+        )
+        == "general"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Share the agenda:\n    This indented paragraph describes outcomes."
+        )
+        == "general"
+    )
 
 
 @pytest.mark.asyncio

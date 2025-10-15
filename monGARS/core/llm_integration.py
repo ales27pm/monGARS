@@ -9,7 +9,8 @@ import os
 import re
 import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlparse
@@ -290,6 +291,29 @@ class CircuitBreaker:
             return result
 
 
+@dataclass(frozen=True)
+class _TaskTypeRule:
+    """Compiled heuristic used to determine prompt routing."""
+
+    name: str
+    weight: int
+    min_matches: int
+    short_circuit_matches: int | None
+    matcher: Callable[[str, str], int]
+
+    def evaluate(self, text: str, lowered: str) -> tuple[int, bool]:
+        """Return the weight contribution and short-circuit flag."""
+
+        hits = self.matcher(text, lowered)
+        if hits >= self.min_matches:
+            short_circuit = (
+                self.short_circuit_matches is not None
+                and hits >= self.short_circuit_matches
+            )
+            return self.weight, short_circuit
+        return 0, False
+
+
 class LLMIntegration:
     """Adapter responsible for generating responses via local or remote LLMs."""
 
@@ -297,29 +321,36 @@ class LLMIntegration:
     FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
     _CODE_BLOCK_PATTERN = re.compile(r"```")
     _CODE_DECLARATION_PATTERN = re.compile(
-        r"\b(class|def|function|public\s+static|#include|template\s*<)\b",
+        r"\b("
+        r"class\s+\w+"
+        r"|def\s+\w+"
+        r"|function\s+\w+\s*\("
+        r"|public\s+static"
+        r"|#include"
+        r"|template\s*<"
+        r")",
         re.IGNORECASE,
     )
-    _CODE_KEYWORDS = {
-        "def ",
-        "class ",
-        "import ",
-        "from ",
-        "return ",
-        "function ",
+    _CODE_KEYWORDS = (
+        "def",
+        "class",
+        "import",
+        "from",
+        "return",
+        "function",
         "lambda",
-        "async ",
-        "await ",
+        "async",
+        "await",
         "println",
         "printf",
         "console.log",
         "#include",
-        "struct ",
-        "enum ",
-        "try:",
+        "struct",
+        "enum",
+        "try",
         "catch",
-    }
-    _CODE_LANGUAGES = {
+    )
+    _CODE_LANGUAGES = (
         "python",
         "javascript",
         "typescript",
@@ -333,16 +364,70 @@ class LLMIntegration:
         "shell",
         "powershell",
         "swift",
-    }
-    _CODE_SIGILS = {";", "{", "}", "=>", "->", "::"}
+    )
+    _CODE_SIGILS = (";", "{", "}", "=>", "->", "::")
     _STACK_TRACE_PATTERNS = {
         "traceback (most recent call last)",
         "stack trace:",
         "exception in thread",
         "undefined reference",
     }
+    _INDENTED_BLOCK_PATTERN = re.compile(r"\n\s{4,}(?![\-\*\d\.])\S")
+    _DEFAULT_TASK_TYPE_RULES: tuple[Mapping[str, object], ...] = (
+        {
+            "name": "code_fence",
+            "kind": "regex",
+            "pattern": _CODE_BLOCK_PATTERN,
+            "weight": 100,
+            "short_circuit_matches": 1,
+        },
+        {
+            "name": "code_declaration",
+            "kind": "regex",
+            "pattern": _CODE_DECLARATION_PATTERN,
+            "weight": 1,
+        },
+        {
+            "name": "code_keywords",
+            "kind": "keywords",
+            "values": _CODE_KEYWORDS,
+            "weight": 1,
+            "min_matches": 1,
+            "short_circuit_matches": 3,
+        },
+        {
+            "name": "language_mentions",
+            "kind": "keywords",
+            "values": _CODE_LANGUAGES,
+            "weight": 1,
+        },
+        {
+            "name": "code_sigils",
+            "kind": "substring",
+            "values": _CODE_SIGILS,
+            "weight": 1,
+            "case_sensitive": True,
+        },
+        {
+            "name": "indented_block",
+            "kind": "regex",
+            "pattern": _INDENTED_BLOCK_PATTERN,
+            "weight": 1,
+        },
+        {
+            "name": "stack_trace",
+            "kind": "substring",
+            "values": _STACK_TRACE_PATTERNS,
+            "weight": 1,
+        },
+    )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        task_type_rules: Sequence[Mapping[str, object] | _TaskTypeRule] | None = None,
+        coding_score_threshold: int | None = None,
+    ) -> None:
         self._settings = get_settings()
         self._unsloth_state = initialize_unsloth()
         self._model_manager = LLMModelManager(self._settings)
@@ -354,6 +439,10 @@ class LLMIntegration:
         self._models_ready = False
         self._metrics_enabled = bool(
             getattr(self._settings, "otel_metrics_enabled", False)
+        )
+        self._task_type_rules = self._compile_task_type_rules(task_type_rules)
+        self._coding_score_threshold = self._resolve_coding_score_threshold(
+            coding_score_threshold
         )
         use_ray_env = os.getenv("USE_RAY_SERVE")
         # Default to Ray Serve to activate distributed inference once configured.
@@ -947,54 +1036,173 @@ class LLMIntegration:
     def _failure_payload(self, message: str) -> dict[str, Any]:
         """Create a standardised failure payload for telemetry."""
 
-        return {"text": message, "confidence": 0.0, "tokens_used": 0}
+        return {
+            "text": message,
+            "confidence": 0.0,
+            "tokens_used": 0,
+            "source": "error",
+            "adapter_version": self._current_adapter_version,
+        }
 
     def infer_task_type(self, prompt: str, default: str = "general") -> str:
         """Infer the most suitable model role for ``prompt``.
 
         Heuristics err on the side of caution: switching to the coding pathway
         requires multiple independent signals such as fenced code blocks,
-        language keywords, structural markers, or stack traces. This prevents
-        casual references to programming from triggering specialised adapters
-        while still capturing genuine implementation requests.
+        language keywords, structural markers, or stack traces. Rules are
+        compiled up-front so operators can tune routing behaviour without
+        editing this method directly.
         """
 
         if not prompt:
             return default
 
         stripped = prompt.strip()
-        if not stripped:
+        if not stripped or not self._task_type_rules:
             return default
 
         lowered = stripped.lower()
+        score = 0
 
-        if self._CODE_BLOCK_PATTERN.search(stripped):
-            return "coding"
+        for rule in self._task_type_rules:
+            weight, short_circuit = rule.evaluate(stripped, lowered)
+            if weight:
+                score += weight
+                if short_circuit:
+                    return "coding"
 
-        heuristic_score = 0
+        return "coding" if score >= self._coding_score_threshold else default
 
-        if self._CODE_DECLARATION_PATTERN.search(stripped):
-            heuristic_score += 1
+    def _compile_task_type_rules(
+        self,
+        overrides: Sequence[Mapping[str, object] | _TaskTypeRule] | None,
+    ) -> tuple[_TaskTypeRule, ...]:
+        """Compile heuristic specifications into executable rules."""
 
-        keyword_hits = sum(1 for keyword in self._CODE_KEYWORDS if keyword in lowered)
-        if keyword_hits >= 3:
-            return "coding"
-        if keyword_hits:
-            heuristic_score += 1
+        candidate_rules: Sequence[Mapping[str, object] | _TaskTypeRule] | None = (
+            overrides
+        )
+        if candidate_rules is None:
+            configured = getattr(self._settings, "llm_task_type_rules", None)
+            if isinstance(configured, Sequence) and not isinstance(
+                configured, (str, bytes)
+            ):
+                candidate_rules = configured  # type: ignore[assignment]
+        if candidate_rules is None:
+            candidate_rules = self._DEFAULT_TASK_TYPE_RULES
 
-        if any(language in lowered for language in self._CODE_LANGUAGES):
-            heuristic_score += 1
+        compiled: list[_TaskTypeRule] = []
+        for raw_rule in candidate_rules:
+            if isinstance(raw_rule, _TaskTypeRule):
+                compiled.append(raw_rule)
+                continue
+            if not isinstance(raw_rule, Mapping):
+                logger.warning(
+                    "llm.task_type_rule.invalid_type",
+                    extra={"received_type": type(raw_rule).__name__},
+                )
+                continue
+            try:
+                compiled.append(self._build_task_type_rule(raw_rule))
+            except Exception:  # pragma: no cover - misconfiguration surfaced via logs
+                logger.exception(
+                    "llm.task_type_rule.compile_failed",
+                    extra={"rule_name": str(raw_rule.get("name", "unknown"))},
+                )
 
-        if any(sigil in stripped for sigil in self._CODE_SIGILS):
-            heuristic_score += 1
+        return tuple(compiled)
 
-        if re.search(r"\n\s{4,}\S", stripped):
-            heuristic_score += 1
+    def _build_task_type_rule(self, spec: Mapping[str, object]) -> _TaskTypeRule:
+        name = str(spec.get("name") or "rule")
+        kind = str(spec.get("kind", "regex")).lower()
+        weight = int(spec.get("weight", 1))
+        min_matches = max(1, int(spec.get("min_matches", 1)))
+        short_circuit_matches_raw = spec.get("short_circuit_matches")
+        short_circuit_matches: int | None
+        if short_circuit_matches_raw is None:
+            short_circuit_matches = None
+        else:
+            short_circuit_matches = max(1, int(short_circuit_matches_raw))
+        case_sensitive = bool(spec.get("case_sensitive", False))
 
-        if any(pattern in lowered for pattern in self._STACK_TRACE_PATTERNS):
-            heuristic_score += 1
+        matcher: Callable[[str, str], int]
+        if kind == "regex":
+            pattern_value = spec.get("pattern")
+            if isinstance(pattern_value, re.Pattern):
+                pattern = pattern_value
+            elif isinstance(pattern_value, str):
+                flags = 0 if case_sensitive else re.IGNORECASE
+                pattern = re.compile(pattern_value, flags)
+            else:  # pragma: no cover - configuration guardrail
+                raise ValueError("regex rule requires a 'pattern' entry")
 
-        return "coding" if heuristic_score >= 2 else default
+            def matcher(text: str, _lowered: str, pattern=pattern) -> int:
+                return len(pattern.findall(text))
+
+        elif kind == "keywords":
+            values = spec.get("values")
+            if values is None:
+                raise ValueError("keyword rule requires 'values'")
+            compiled_patterns = tuple(
+                self._compile_keyword_pattern(str(value), case_sensitive)
+                for value in values
+                if str(value).strip()
+            )
+            if not compiled_patterns:
+                raise ValueError("keyword rule produced no patterns")
+
+            def matcher(text: str, _lowered: str, patterns=compiled_patterns) -> int:
+                return sum(1 for pattern in patterns if pattern.search(text))
+
+        elif kind == "substring":
+            values = spec.get("values")
+            if values is None:
+                raise ValueError("substring rule requires 'values'")
+            tokens = tuple(str(value) for value in values if str(value))
+            if not tokens:
+                raise ValueError("substring rule produced no tokens")
+            if case_sensitive:
+
+                def matcher(text: str, _lowered: str, parts=tokens) -> int:
+                    return sum(1 for part in parts if part in text)
+
+            else:
+                lowered_tokens = tuple(part.lower() for part in tokens)
+
+                def matcher(_text: str, lowered: str, parts=lowered_tokens) -> int:
+                    return sum(1 for part in parts if part in lowered)
+
+        else:  # pragma: no cover - configuration guardrail
+            raise ValueError(f"unsupported task type rule kind: {kind}")
+
+        return _TaskTypeRule(
+            name=name,
+            weight=weight,
+            min_matches=min_matches,
+            short_circuit_matches=short_circuit_matches,
+            matcher=matcher,
+        )
+
+    @staticmethod
+    def _compile_keyword_pattern(keyword: str, case_sensitive: bool) -> re.Pattern[str]:
+        token = keyword.strip()
+        if not token:
+            raise ValueError("keyword cannot be empty")
+        prefix = r"\b" if (token[0].isalnum() or token[0] == "_") else r"(?<!\w)"
+        suffix = r"\b" if (token[-1].isalnum() or token[-1] == "_") else r"(?!\w)"
+        pattern = f"{prefix}{re.escape(token)}{suffix}"
+        flags = 0 if case_sensitive else re.IGNORECASE
+        return re.compile(pattern, flags)
+
+    def _resolve_coding_score_threshold(self, override: int | None) -> int:
+        if isinstance(override, int) and override > 0:
+            return override
+        settings_value = getattr(self._settings, "coding_task_score_threshold", None)
+        if isinstance(settings_value, int) and settings_value > 0:
+            return settings_value
+        if isinstance(settings_value, float) and settings_value > 0:
+            return int(settings_value)
+        return 2
 
     def _extract_text(self, raw_response: dict[str, Any]) -> str:
         """Normalise the text field across Ollama and Ray responses."""

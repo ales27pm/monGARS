@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -157,11 +158,12 @@ def _build_conversational_module(
     matches: list[VectorMatch],
     *,
     reasoner: object | None = None,
+    llm: _StubLLMIntegration | None = None,
 ) -> tuple[ConversationalModule, _StubLLMIntegration, _StubPersistenceRepository]:
-    llm = _StubLLMIntegration()
+    llm_instance = llm or _StubLLMIntegration()
     persistence = _StubPersistenceRepository(matches)
     module = ConversationalModule(
-        llm=llm,
+        llm=llm_instance,
         reasoner=reasoner or _StubReasoner(),
         curiosity=_StubCuriosityEngine(),
         dynamic=_StubDynamic(),
@@ -173,7 +175,7 @@ def _build_conversational_module(
         persistence=persistence,
     )
     module.evolution_engine = _StubEvolutionEngine()
-    return module, llm, persistence
+    return module, llm_instance, persistence
 
 
 @pytest.mark.asyncio
@@ -280,3 +282,60 @@ async def test_generate_response_sets_reasoning_hint(monkeypatch) -> None:
     assert llm.calls[0]["response_hints"] == {"reasoning": True}
     saved_interaction = persistence.saved[0][0]
     assert saved_interaction.input_data["llm_response_hints"] == {"reasoning": True}
+
+
+@pytest.mark.asyncio
+async def test_generate_response_warns_on_unexpected_reasoner_output(
+    monkeypatch, caplog
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    class _BadReasoner:
+        async def reason(self, query: str, user_id: str):  # type: ignore[override]
+            return 42
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    caplog.set_level(logging.WARNING)
+    module, llm, persistence = _build_conversational_module(
+        matches=[], reasoner=_BadReasoner()
+    )
+
+    response = await module.generate_response("user-19", "Summarise the logs")
+
+    assert response["text"].endswith("::styled")
+    assert any(
+        record.message == "conversation.reasoner.invalid_result"
+        for record in caplog.records
+    )
+    saved_interaction = persistence.saved[0][0]
+    assert saved_interaction.input_data["reasoning_metadata"] == {}
+    assert saved_interaction.input_data["llm_response_hints"] is None
+    assert llm.calls[0]["response_hints"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_propagates_llm_failures(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    class _FailingLLM(_StubLLMIntegration):
+        async def generate_response(  # type: ignore[override]
+            self, prompt: str, task_type: str = "general", *, response_hints=None
+        ):
+            raise RuntimeError("LLM failure")
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    failing_llm = _FailingLLM()
+    module, _, persistence = _build_conversational_module(
+        matches=[], llm=failing_llm
+    )
+
+    with pytest.raises(RuntimeError, match="LLM failure"):
+        await module.generate_response("user-23", "Trigger the failure path")
+
+    assert persistence.saved == []
