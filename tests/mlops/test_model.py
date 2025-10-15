@@ -67,6 +67,33 @@ def _force_quantization_available(
     monkeypatch.setattr(model_module, "_is_quantization_available", lambda: True)
 
 
+@pytest.fixture(autouse=True)
+def _patch_auto_config(monkeypatch: pytest.MonkeyPatch):
+    state = SimpleNamespace(dtype=None, alt_dtype=None, error=None)
+
+    class _FakeConfig:
+        def __init__(self) -> None:
+            self.torch_dtype = state.dtype
+            self.dtype = state.alt_dtype
+
+    def _from_pretrained(*_, **__):
+        if state.error is not None:
+            raise state.error
+        return _FakeConfig()
+
+    monkeypatch.setattr(
+        model_module,
+        "AutoConfig",
+        SimpleNamespace(from_pretrained=_from_pretrained),
+    )
+    return state
+
+
+@pytest.fixture()
+def auto_config_state(_patch_auto_config) -> SimpleNamespace:  # type: ignore[misc]
+    return _patch_auto_config
+
+
 @pytest.mark.no_quantization_patch
 def test_is_quantization_unavailable_due_to_cuda(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -298,13 +325,66 @@ def test_load_4bit_causal_lm_cpu_fallback_respects_requested_dtype(
         model_module.AutoModelForCausalLM, "from_pretrained", _fake_from_pretrained
     )
 
-    preferred_dtype = getattr(model_module.torch, "bfloat16", model_module.torch.float16)
-
-    model_module.load_4bit_causal_lm(
-        "meta-llama/Llama-2-7b-hf", dtype=preferred_dtype
+    preferred_dtype = getattr(
+        model_module.torch, "bfloat16", model_module.torch.float16
     )
 
+    model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf", dtype=preferred_dtype)
+
     assert recorded_kwargs.get("torch_dtype") is preferred_dtype
+
+
+def test_load_4bit_causal_lm_cpu_fallback_prefers_config_dtype(
+    monkeypatch: pytest.MonkeyPatch, auto_config_state: SimpleNamespace
+) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
+
+    bfloat16 = getattr(model_module.torch, "bfloat16", None)
+    if bfloat16 is None:
+        pytest.skip("torch build does not expose bfloat16")
+
+    auto_config_state.dtype = "bfloat16"
+
+    calls: list[dict[str, Any]] = []
+
+    def _maybe_fail_from_pretrained(*_, **kwargs):  # noqa: ANN002
+        calls.append(kwargs)
+        dtype = kwargs.get("torch_dtype") or kwargs.get("dtype")
+        if dtype is bfloat16:
+            raise RuntimeError("Simulated failure for config dtype")
+        return _DummyModel()
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM,
+        "from_pretrained",
+        _maybe_fail_from_pretrained,
+    )
+
+    model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
+
+    assert calls[0]["torch_dtype"] is bfloat16
+    assert calls[1]["torch_dtype"] is model_module.torch.float16
+
+
+def test_load_4bit_causal_lm_cpu_fallback_ignores_unknown_config_dtype(
+    monkeypatch: pytest.MonkeyPatch, auto_config_state: SimpleNamespace
+) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
+    auto_config_state.dtype = "fp8"
+
+    calls: list[dict[str, Any]] = []
+
+    def _capture_kwargs(*_, **kwargs):  # noqa: ANN002
+        calls.append(kwargs)
+        return _DummyModel()
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM, "from_pretrained", _capture_kwargs
+    )
+
+    model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
+
+    assert calls[0]["torch_dtype"] is model_module.torch.float16
 
 
 def test_load_4bit_causal_lm_cpu_fallback_tries_multiple_dtypes(
@@ -322,14 +402,19 @@ def test_load_4bit_causal_lm_cpu_fallback_tries_multiple_dtypes(
         return _DummyModel()
 
     monkeypatch.setattr(
-        model_module.AutoModelForCausalLM, "from_pretrained", _maybe_fail_from_pretrained
+        model_module.AutoModelForCausalLM,
+        "from_pretrained",
+        _maybe_fail_from_pretrained,
     )
 
     with caplog.at_level("WARNING"):
         model = model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")[0]
 
     assert calls[-1]["torch_dtype"] is model_module.torch.float32
-    assert any("CPU fallback load failed for dtype" in record.message for record in caplog.records)
+    assert any(
+        "CPU fallback load failed for dtype" in record.message
+        for record in caplog.records
+    )
     assert getattr(model, "_mongars_quantized_4bit", None) is False
 
 
@@ -350,7 +435,23 @@ def test_load_4bit_causal_lm_cpu_fallback_error(
             model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
 
     assert any(
-        "Failed to load model on CPU fallback" in record.message for record in caplog.records
+        "Failed to load model on CPU fallback" in record.message
+        for record in caplog.records
+    )
+
+
+def test_resolve_config_dtype_handles_exceptions(
+    caplog: pytest.LogCaptureFixture, auto_config_state: SimpleNamespace
+) -> None:
+    auto_config_state.error = RuntimeError("boom")
+
+    with caplog.at_level("DEBUG"):
+        dtype = model_module._resolve_config_dtype("hf/test", trust_remote_code=True)
+
+    assert dtype is None
+    assert any(
+        "Unable to resolve model config dtype" in record.message
+        for record in caplog.records
     )
 
 
