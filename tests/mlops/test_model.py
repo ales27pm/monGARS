@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pytest import FixtureRequest
 from packaging.version import Version
 
 from monGARS.mlops import model as model_module
@@ -58,8 +59,27 @@ def _patch_bitsandbytes(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _force_quantization_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def _force_quantization_available(
+    monkeypatch: pytest.MonkeyPatch, request: FixtureRequest
+) -> None:
+    if request.node.get_closest_marker("no_quantization_patch"):
+        return
     monkeypatch.setattr(model_module, "_is_quantization_available", lambda: True)
+
+
+@pytest.mark.no_quantization_patch
+def test_is_quantization_unavailable_due_to_cuda(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(model_module.torch.cuda, "is_available", lambda: False)
+
+    with caplog.at_level("WARNING"):
+        assert model_module._is_quantization_available() is False
+
+    assert any(
+        "CUDA unavailable; using CPU execution without 4-bit quantization" in message
+        for message in caplog.messages
+    )
 
 
 def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
@@ -260,6 +280,28 @@ def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> No
     assert recorded_kwargs.get("torch_dtype") is model_module.torch.float32
 
 
+def test_load_4bit_causal_lm_cpu_fallback_promotes_float16(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_module, "_is_quantization_available", lambda: False)
+
+    recorded_kwargs: dict[str, Any] = {}
+
+    def _fake_from_pretrained(*_, **kwargs) -> Any:  # noqa: ANN002
+        recorded_kwargs.update(kwargs)
+        return _DummyModel()
+
+    monkeypatch.setattr(
+        model_module.AutoModelForCausalLM, "from_pretrained", _fake_from_pretrained
+    )
+
+    model_module.load_4bit_causal_lm(
+        "meta-llama/Llama-2-7b-hf", dtype=model_module.torch.float16
+    )
+
+    assert recorded_kwargs.get("torch_dtype") is model_module.torch.float32
+
+
 def test_load_4bit_causal_lm_cpu_fallback_error(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -295,6 +337,26 @@ def test_build_model_kwargs_candidates_skips_unsupported() -> None:
     )
 
     assert candidates == [{"low_cpu_mem_usage": True}]
+
+
+def test_build_model_kwargs_candidates_includes_all_for_kwargs_loader() -> None:
+    def _loader(model_id: str, **kwargs: Any) -> Any:  # noqa: ARG001
+        return _DummyModel()
+
+    candidates = model_module._build_model_kwargs_candidates(
+        _loader,
+        base_kwargs={"low_cpu_mem_usage": True},
+        optional_kwargs=(
+            {"torch_dtype": model_module.torch.float32},
+            {"dtype": model_module.torch.float32},
+        ),
+    )
+
+    assert candidates == [
+        {"low_cpu_mem_usage": True, "torch_dtype": model_module.torch.float32},
+        {"low_cpu_mem_usage": True, "dtype": model_module.torch.float32},
+        {"low_cpu_mem_usage": True},
+    ]
 
 
 def test_build_model_kwargs_candidates_prefers_first_supported() -> None:
