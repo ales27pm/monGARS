@@ -298,9 +298,7 @@ async def test_local_adapter_installs_when_downloads_disabled(monkeypatch, tmp_p
     assert adapter_status is not None, "Expected adapter status in report"
     assert adapter_status.action == "installed"
 
-    installed_file = (
-        registry_path / "custom" / "general" / "adapter_model.safetensors"
-    )
+    installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
     assert installed_file.exists()
     assert installed_file.read_bytes() == b"offline"
 

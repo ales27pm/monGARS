@@ -80,9 +80,10 @@ class AdapterProvisioner:
         target_exists = target_path.exists()
         local_source = self._resolve_adapter_source_path(adapter)
         parsed_source = urlparse(adapter.source) if adapter.source else None
-        is_remote_source = (
-            parsed_source is not None and parsed_source.scheme in {"http", "https"}
-        )
+        is_remote_source = parsed_source is not None and parsed_source.scheme in {
+            "http",
+            "https",
+        }
         same_location = (
             local_source is not None
             and target_path.exists()
