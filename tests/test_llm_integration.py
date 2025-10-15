@@ -364,9 +364,7 @@ def test_infer_task_type_detects_coding(
             "Linker output: undefined reference to std::cout in this C++ build",
             "coding",
         ),
-        (
-            "Discuss classifying imports and exports", "general"
-        ),
+        ("Discuss classifying imports and exports", "general"),
     ],
 )
 def test_infer_task_type_edge_cases(
@@ -389,9 +387,7 @@ def test_infer_task_type_requires_multiple_signals(
         == "general"
     )
     assert (
-        stubbed_llm_integration.infer_task_type(
-            "Talk about the Rust belt economy"
-        )
+        stubbed_llm_integration.infer_task_type("Talk about the Rust belt economy")
         == "general"
     )
     assert (

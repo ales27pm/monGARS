@@ -11,7 +11,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 from urllib.parse import urlparse
 from urllib.request import urlopen
 

@@ -244,7 +244,6 @@ async def test_generate_response_skips_semantic_context_when_disabled(
 
     await module.generate_response("user-42", "Summarise recent updates")
 
-@pytest.mark.asyncio
     assert len(llm.prompts) == 1
     assert "Archived interactions retrieved via semantic search" not in llm.prompts[0]
     assert not persistence.vector_queries
@@ -271,6 +270,7 @@ async def test_reasoning_stub_returns_unexpected_type(monkeypatch):
         )
     except Exception as e:
         assert isinstance(e, TypeError) or isinstance(e, ValueError)
+
 
 @pytest.mark.asyncio
 async def test_llm_integration_raises_exception(monkeypatch):
@@ -376,9 +376,7 @@ async def test_generate_response_propagates_llm_failures(monkeypatch) -> None:
     )
 
     failing_llm = _FailingLLM()
-    module, _, persistence = _build_conversational_module(
-        matches=[], llm=failing_llm
-    )
+    module, _, persistence = _build_conversational_module(matches=[], llm=failing_llm)
 
     with pytest.raises(RuntimeError, match="LLM failure"):
         await module.generate_response("user-23", "Trigger the failure path")
