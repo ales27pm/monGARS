@@ -314,3 +314,134 @@ async def test_generate_response_uses_slot_fallback_when_needed(
     assert result["text"] == "slot::hello::general"
     assert result["tokens_used"] == len(result["text"].split())
     assert call_counts == {"slot": 1}
+
+
+def test_infer_task_type_detects_coding(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+) -> None:
+    """Ensure the heuristic flips to the coding role for code-heavy prompts."""
+
+    assert (
+        stubbed_llm_integration.infer_task_type("Outline a plan for the weekend")
+        == "general"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type("```python\nprint('hi')\n```")
+        == "coding"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Create a Java class with a main function"
+        )
+        == "coding"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "function greet() {\n    return 'hello';\n}"
+        )
+        == "coding"
+    )
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("", "general"),
+        ("   \n", "general"),
+        ("Steps:\n    - item one\n    - item two", "general"),
+        ("Please return soon", "general"),
+        ("Importantly, we should regroup", "general"),
+        (
+            "Traceback (most recent call last):\n  File 'app.py', line 1\n"
+            "NameError: name 'main' is not defined. This is a python error.",
+            "coding",
+        ),
+        (
+            "In JavaScript, console.log throws ReferenceError: please help",
+            "coding",
+        ),
+        (
+            "Linker output: undefined reference to std::cout in this C++ build",
+            "coding",
+        ),
+        (
+            "Discuss classifying imports and exports", "general"
+        ),
+    ],
+)
+def test_infer_task_type_edge_cases(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+    prompt: str,
+    expected: str,
+) -> None:
+    assert stubbed_llm_integration.infer_task_type(prompt) == expected
+
+
+def test_infer_task_type_requires_multiple_signals(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+) -> None:
+    """Single keyword references should not force the coding route."""
+
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Can you explain what a function is in mathematics?"
+        )
+        == "general"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Talk about the Rust belt economy"
+        )
+        == "general"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Share the agenda:\n    This indented paragraph describes outcomes."
+        )
+        == "general"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_adapter_updates_version_for_reasoning(monkeypatch) -> None:
+    """Selecting the reasoning adapter should update the cached version."""
+
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setenv("USE_RAY_SERVE", "true")
+    monkeypatch.setenv("RAY_SERVE_URL", "http://ray/generate")
+
+    integration = llm_integration.LLMIntegration()
+
+    async def _fake_ensure_metadata():
+        integration._adapter_metadata = {"version": "baseline"}
+        integration._update_adapter_version("baseline")
+        return integration._adapter_metadata
+
+    monkeypatch.setattr(
+        integration,
+        "_ensure_adapter_metadata",
+        _fake_ensure_metadata,
+        raising=False,
+    )
+
+    def _fake_reasoning_payload():
+        return {
+            "version": "reasoning-v1",
+            "adapter_path": "/tmp/adapter.safetensors",
+            "weights_path": "/tmp/weights.safetensors",
+            "wrapper_path": "/tmp/wrapper.py",
+        }
+
+    monkeypatch.setattr(
+        integration,
+        "_load_reasoning_adapter_payload",
+        _fake_reasoning_payload,
+        raising=False,
+    )
+
+    payload = await integration._resolve_adapter_for_task(
+        "general", {"reasoning": True}
+    )
+
+    assert payload["version"] == "reasoning-v1"
+    assert integration._current_adapter_version == "reasoning-v1"
