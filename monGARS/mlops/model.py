@@ -261,52 +261,84 @@ def _load_cpu_causal_lm(
 ) -> tuple[Any, Any]:
     """Load a causal LM directly on CPU when quantization is unavailable."""
 
-    cpu_dtype = dtype or torch.float32
-    if cpu_dtype == torch.float16:
-        logger.info(
-            "Promoting float16 dtype to float32 for CPU execution",
-            extra={"requested_dtype": "float16", "resolved_dtype": "float32"},
-        )
-        cpu_dtype = torch.float32
-
-    logger.info(
-        "Loading base model on CPU fallback",
-        extra={"model": model_id, "dtype": str(cpu_dtype)},
-    )
-
+    candidate_dtypes = _cpu_dtype_candidates(dtype)
     cpu_kwargs: dict[str, Any] = {
         "trust_remote_code": trust_remote_code,
         "low_cpu_mem_usage": True,
     }
-    try:
-        model = _load_with_optional_kwargs(
-            AutoModelForCausalLM.from_pretrained,
-            model_id,
-            base_kwargs=cpu_kwargs,
-            optional_kwargs=(
-                {"torch_dtype": cpu_dtype},
-                {"dtype": cpu_dtype},
-            ),
+
+    last_error: Exception | None = None
+    tried: list[str] = []
+
+    for cpu_dtype in candidate_dtypes:
+        tried.append(str(cpu_dtype))
+        logger.info(
+            "Loading base model on CPU fallback",
+            extra={"model": model_id, "dtype": str(cpu_dtype)},
         )
-    except Exception:
-        logger.error(
-            "Failed to load model on CPU fallback",
-            extra={"model": model_id},
-            exc_info=True,
+        try:
+            model = _load_with_optional_kwargs(
+                AutoModelForCausalLM.from_pretrained,
+                model_id,
+                base_kwargs=cpu_kwargs,
+                optional_kwargs=(
+                    {"torch_dtype": cpu_dtype},
+                    {"dtype": cpu_dtype},
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - relies on runtime backends
+            last_error = exc
+            logger.warning(
+                "CPU fallback load failed for dtype",  #
+                extra={"model": model_id, "dtype": str(cpu_dtype)},
+                exc_info=True,
+            )
+            continue
+
+        try:  # pragma: no cover - defensive cleanup for limited builds
+            model.to("cpu")
+        except Exception:
+            logger.debug("Unable to move model to CPU", exc_info=True)
+
+        tokenizer = _initialise_tokenizer(
+            model_id, trust_remote_code=trust_remote_code
         )
-        raise
 
-    try:  # pragma: no cover - defensive cleanup for limited builds
-        model.to("cpu")
-    except Exception:
-        logger.debug("Unable to move model to CPU", exc_info=True)
+        _configure_model_post_load(
+            model, attention_implementation=attention_implementation
+        )
 
-    tokenizer = _initialise_tokenizer(model_id, trust_remote_code=trust_remote_code)
+        setattr(model, "_mongars_quantized_4bit", False)
+        return model, tokenizer
 
-    _configure_model_post_load(model, attention_implementation=attention_implementation)
+    logger.error(
+        "Failed to load model on CPU fallback",  #
+        extra={"model": model_id, "dtypes_tried": tried},
+        exc_info=last_error,
+    )
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Unable to load model on CPU fallback")
 
-    setattr(model, "_mongars_quantized_4bit", False)
-    return model, tokenizer
+
+def _cpu_dtype_candidates(requested: Optional[torch.dtype]) -> list[torch.dtype]:
+    """Return preferred CPU dtype candidates ordered by desirability."""
+
+    candidates: list[torch.dtype] = []
+
+    def _append(candidate: Optional[torch.dtype]) -> None:
+        if candidate is None or candidate in candidates:
+            return
+        candidates.append(candidate)
+
+    if requested is not None:
+        _append(requested)
+    else:
+        _append(torch.float16)
+        _append(getattr(torch, "bfloat16", None))
+
+    _append(torch.float32)
+    return candidates
 
 
 def _load_with_optional_kwargs(
