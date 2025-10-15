@@ -24,6 +24,163 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+class _StubLLM:
+    """Lightweight LLM double used in legacy unit tests."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(
+        self,
+        prompt: str,
+        *,
+        task_type: str = "general",
+        response_hints: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        call = {
+            "prompt": prompt,
+            "task_type": task_type,
+            "response_hints": response_hints,
+        }
+        self.calls.append(call)
+        return {
+            "text": "stub-response",
+            "confidence": 0.0,
+            "source": "stub",
+            "adapter_version": "test",
+        }
+
+    async def generate_response(
+        self,
+        prompt: str,
+        *,
+        task_type: str = "general",
+        response_hints: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.__call__(
+            prompt, task_type=task_type, response_hints=response_hints
+        )
+
+
+class _StubPersistence:
+    """Persistence façade that records interactions for inspection in tests."""
+
+    def __init__(self) -> None:
+        self.vector_queries: list[dict[str, Any]] = []
+        self.saved_interactions: list[dict[str, Any]] = []
+
+    async def vector_search_history(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        limit: int,
+        max_distance: float | None = None,
+    ) -> list[VectorMatch]:
+        self.vector_queries.append(
+            {
+                "user_id": user_id,
+                "query": query,
+                "limit": limit,
+                "max_distance": max_distance,
+            }
+        )
+        return []
+
+    async def save_interaction(
+        self,
+        interaction: Interaction,
+        *,
+        history_query: str | None = None,
+        history_response: str | None = None,
+    ) -> Interaction:
+        self.saved_interactions.append(
+            {
+                "interaction": interaction,
+                "history_query": history_query,
+                "history_response": history_response,
+            }
+        )
+        return interaction
+
+
+class _StubMimicry:
+    """Trivial mimicry adapter that echoes inputs for backwards compatibility tests."""
+
+    def __init__(self) -> None:
+        self.profile_updates: list[tuple[str, Mapping[str, Any]]] = []
+        self.style_requests: list[tuple[str, str]] = []
+
+    async def update_profile(
+        self, user_id: str, payload: Mapping[str, Any]
+    ) -> None:  # pragma: no cover - simple recorder
+        self.profile_updates.append((user_id, payload))
+
+    async def adapt_response_style(self, text: str, user_id: str) -> str:
+        self.style_requests.append((text, user_id))
+        return text
+
+
+async def generate_response(
+    *,
+    prompt: str,
+    llm: LLMIntegration | _StubLLM | None = None,
+    persistence: PersistenceRepository | _StubPersistence | None = None,
+    mimicry: MimicryModule | _StubMimicry | None = None,
+) -> Mapping[str, Any]:
+    """Legacy coroutine kept for backwards compatibility in older tests.
+
+    The newer orchestration flow uses :class:`ConversationalModule`. Some
+    integration tests still import this module-level helper directly, so we
+    preserve a lightweight version that validates the provided doubles and
+    funnels the call to the injected LLM implementation.
+    """
+
+    llm_impl = llm or _StubLLM()
+    persistence_impl = persistence or _StubPersistence()
+    mimicry_impl = mimicry or _StubMimicry()
+
+    required_hooks = ("update_profile", "adapt_response_style")
+    missing_hooks = [hook for hook in required_hooks if not hasattr(mimicry_impl, hook)]
+    if missing_hooks:
+        raise TypeError(
+            "mimicry component must expose update_profile and adapt_response_style"
+        )
+
+    response = await llm_impl.generate_response(
+        prompt, task_type="general", response_hints=None
+    )
+    if not isinstance(response, Mapping):
+        raise ValueError("LLM implementations must return a mapping payload")
+
+    text = response.get("text", "")
+    try:
+        await mimicry_impl.update_profile(
+            "legacy-user", {"message": prompt, "response": text}
+        )
+        styled_text = await mimicry_impl.adapt_response_style(text, "legacy-user")
+    except Exception as exc:  # pragma: no cover - defensive; surfaced to caller
+        raise ValueError("mimicry adapter failed to post-process response") from exc
+
+    if not isinstance(styled_text, str):
+        raise ValueError("mimicry adapter must return textual responses")
+
+    enriched_response = dict(response)
+    enriched_response["text"] = styled_text
+
+    if hasattr(persistence_impl, "save_interaction"):
+        try:
+            await persistence_impl.save_interaction(
+                {"prompt": prompt, "response": enriched_response},
+                history_query=prompt,
+                history_response=styled_text,
+            )
+        except Exception:  # pragma: no cover - diagnostics for legacy hook
+            logger.exception("conversation.legacy_persistence_failed")
+
+    return enriched_response
+
+
 class ConversationalModule:
     def __init__(
         self,
