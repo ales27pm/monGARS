@@ -14,7 +14,7 @@ from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
 from monGARS.core.neuro_symbolic.advanced_reasoner import AdvancedReasoner
 from monGARS.core.neurones import EmbeddingSystem
-from monGARS.core.persistence import PersistenceRepository
+from monGARS.core.persistence import PersistenceRepository, VectorMatch
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.services import MemoryService, SpeakerService
 
@@ -88,22 +88,103 @@ class ConversationalModule:
         styled = await self.mimicry.adapt_response_style(adaptive, user_id)
         return styled, personality
 
+    async def _semantic_context_matches(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        history_pairs: Sequence[tuple[str, str]],
+    ) -> list[dict[str, object]]:
+        """Retrieve semantically-related conversation history for prompt grounding."""
+
+        limit = max(int(getattr(settings, "llm2vec_context_limit", 0)), 0)
+        if limit == 0:
+            return []
+
+        trimmed_query = query.strip()
+        if not trimmed_query:
+            return []
+
+        if not hasattr(self.persistence, "vector_search_history"):
+            return []
+
+        distance_cutoff_setting = getattr(
+            settings, "llm2vec_context_max_distance", None
+        )
+        distance_cutoff: float | None
+        if (
+            isinstance(distance_cutoff_setting, (int, float))
+            and distance_cutoff_setting > 0
+        ):
+            distance_cutoff = float(distance_cutoff_setting)
+        else:
+            distance_cutoff = None
+
         try:
             matches = await self.persistence.vector_search_history(
                 user_id,
-                query,
+                trimmed_query,
                 limit=limit,
                 max_distance=distance_cutoff,
             )
         except Exception:  # pragma: no cover - persistence errors surfaced to logs
-            # Avoid logging raw identifiers; emit a short hash or omit entirely
             from hashlib import blake2s
+
             redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
             logger.exception(
                 "conversation.semantic_context.lookup_failed",
                 extra={"user": f"u:{redacted}"},
             )
             return []
+
+        if not matches:
+            return []
+
+        history_lookup = {
+            ((query_text or "").strip(), (response_text or "").strip())
+            for query_text, response_text in history_pairs
+        }
+
+        semantic_results: list[dict[str, object]] = []
+        seen_ids: set[object] = set()
+
+        for match in matches:
+            if not isinstance(match, VectorMatch):
+                continue
+            record = match.record
+            record_id = getattr(record, "id", None)
+            if record_id is not None:
+                if record_id in seen_ids:
+                    continue
+                seen_ids.add(record_id)
+
+            query_text = (getattr(record, "query", "") or "").strip()
+            response_text = (getattr(record, "response", "") or "").strip()
+            if not query_text and not response_text:
+                continue
+
+            if (query_text, response_text) in history_lookup:
+                continue
+
+            entry: dict[str, object] = {
+                "id": record_id,
+                "query": query_text,
+                "response": response_text,
+                "timestamp": getattr(record, "timestamp", None),
+            }
+
+            distance = getattr(match, "distance", None)
+            if isinstance(distance, (int, float)):
+                distance_value = float(distance)
+                entry["distance"] = distance_value
+                entry["similarity"] = max(0.0, min(1.0, 1.0 - distance_value))
+
+            semantic_results.append(entry)
+            if len(semantic_results) >= limit:
+                break
+
+        return semantic_results
+
     def _compose_prompt(
         self,
         refined_prompt: str,
