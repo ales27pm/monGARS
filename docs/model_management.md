@@ -69,6 +69,29 @@ pipelines.
 - Provisioning reports are cached per-role during a process lifetime to avoid
   redundant downloads when multiple requests arrive concurrently.
 
+### Inference Backend & Fallback Path
+
+- Model definitions are sourced from `configs/llm_models.json`. The default
+  profile declares two roles—`general` and `coding`—that both target the
+  Dolphin 3 family via the Ollama provider. Each entry includes provider
+  options (`temperature`, `top_p`, `num_predict`, etc.) that are merged with the
+  runtime settings pulled from `monGARS.config.get_settings()`.
+- `LLMModelManager` currently only instantiates Ollama-backed definitions. Any
+  manifest entry referencing an unsupported provider is skipped, and a warning
+  is logged so operators can reconcile the mismatch before traffic is routed to
+  that role.
+- During request handling, `LLMIntegration` invokes `ollama.chat` through
+  `_ollama_call`. User prompts are sent as chat messages, and Ollama receives
+  the consolidated generation options from the model definition and global
+  settings. Responses stream back as text, which is surfaced to the caller and
+  emitted on the UI event bus.
+- If Ollama is unavailable—because the socket connection fails or the client is
+  missing—the integration falls back to a local PyTorch slot via
+  `ModelSlotManager`. The slot loads the configured HuggingFace-compatible
+  checkpoint, applies the same temperature and nucleus sampling parameters, and
+  returns decoded text. Structured logs capture the transition so on-call teams
+  understand when the system is running on the degraded path.
+
 ### Unsloth Optimisations & VRAM Troubleshooting
 
 - Local fallback slots rely on Unsloth's `FastLanguageModel` to provide 4-bit
