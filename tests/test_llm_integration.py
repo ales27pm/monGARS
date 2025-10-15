@@ -146,8 +146,20 @@ def stubbed_llm_integration_with_ollama(
 ) -> llm_integration.LLMIntegration:
     """Return an integration configured with a stubbed Ollama client."""
 
-    fake_client = types.SimpleNamespace(chat=lambda **_kwargs: {"message": {}})
-    return _build_stubbed_llm_integration(monkeypatch, ollama_client=fake_client)
+    class _FakeOllamaClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def chat(self, **kwargs) -> dict[str, object]:
+            self.calls.append(kwargs)
+            return {"message": {"content": "ollama-text"}}
+
+    fake_client = _FakeOllamaClient()
+    integration = _build_stubbed_llm_integration(
+        monkeypatch, ollama_client=fake_client
+    )
+    setattr(integration, "_test_ollama_client", fake_client)
+    return integration
 
 
 @pytest.mark.asyncio
@@ -232,20 +244,25 @@ async def test_call_local_provider_prefers_ollama_when_available(
 
     call_sequence: list[str] = []
 
-    async def _fake_ollama(definition, prompt):
-        call_sequence.append("ollama")
-        assert definition.name == "general-model"
-        assert prompt == "hi"
-        return {"message": {"content": "ollama-text"}}
+    class _PassthroughBreaker:
+        async def call(self, func):
+            call_sequence.append("breaker")
+            return await func()
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        call_sequence.append("to_thread")
+        return func(*args, **kwargs)
+
+    fallback_calls: list[str] = []
 
     async def _fake_slot(*_args, **_kwargs):
-        call_sequence.append("slot")
+        fallback_calls.append("slot")
         return {"message": {"content": "slot"}}
 
     monkeypatch.setattr(
         stubbed_llm_integration_with_ollama,
-        "_ollama_call",
-        _fake_ollama,
+        "_ollama_cb",
+        _PassthroughBreaker(),
         raising=False,
     )
     monkeypatch.setattr(
@@ -254,13 +271,23 @@ async def test_call_local_provider_prefers_ollama_when_available(
         _fake_slot,
         raising=False,
     )
+    monkeypatch.setattr(
+        llm_integration.asyncio,
+        "to_thread",
+        _fake_to_thread,
+        raising=False,
+    )
 
     result = await stubbed_llm_integration_with_ollama._call_local_provider(
         "hi", "general"
     )
 
     assert result["message"]["content"] == "ollama-text"
-    assert call_sequence == ["ollama"], "Slot fallback should not execute"
+    assert fallback_calls == [], "Slot fallback should not execute"
+    assert call_sequence == ["breaker", "to_thread"]
+    fake_client = stubbed_llm_integration_with_ollama._test_ollama_client
+    assert fake_client.calls[0]["model"] == "general-model"
+    assert fake_client.calls[0]["messages"][0]["content"] == "hi"
 
 
 @pytest.mark.asyncio
