@@ -11,7 +11,12 @@ from typing import Any, Iterable, Optional
 
 import torch
 from packaging.version import InvalidVersion, Version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +73,14 @@ def load_4bit_causal_lm(
     compute_dtype = compute_dtype or target_dtype
 
     if not _is_quantization_available():
-        return _load_cpu_causal_lm(
+        model, tokenizer = _load_cpu_causal_lm(
             model_id,
             trust_remote_code=trust_remote_code,
             dtype=dtype,
             attention_implementation=attention_implementation,
         )
+        setattr(model, "_mongars_quantized_4bit", False)
+        return model, tokenizer
 
     bnb_common: dict[str, Any] = {
         "load_in_4bit": True,
@@ -148,6 +155,7 @@ def load_4bit_causal_lm(
     except Exception:  # pragma: no cover - best effort configuration
         pass
 
+    setattr(model, "_mongars_quantized_4bit", True)
     return model, tokenizer
 
 
@@ -258,51 +266,134 @@ def _load_cpu_causal_lm(
 ) -> tuple[Any, Any]:
     """Load a causal LM directly on CPU when quantization is unavailable."""
 
-    cpu_dtype = dtype or torch.float32
-    if cpu_dtype == torch.float16:
-        logger.info(
-            "Promoting float16 dtype to float32 for CPU execution",
-            extra={"requested_dtype": "float16", "resolved_dtype": "float32"},
-        )
-        cpu_dtype = torch.float32
-
-    logger.info(
-        "Loading base model on CPU fallback",
-        extra={"model": model_id, "dtype": str(cpu_dtype)},
-    )
-
+    config_dtype = _resolve_config_dtype(model_id, trust_remote_code=trust_remote_code)
+    candidate_dtypes = _cpu_dtype_candidates(requested=dtype, configured=config_dtype)
     cpu_kwargs: dict[str, Any] = {
         "trust_remote_code": trust_remote_code,
         "low_cpu_mem_usage": True,
     }
-    try:
-        model = _load_with_optional_kwargs(
-            AutoModelForCausalLM.from_pretrained,
-            model_id,
-            base_kwargs=cpu_kwargs,
-            optional_kwargs=(
-                {"torch_dtype": cpu_dtype},
-                {"dtype": cpu_dtype},
-            ),
+
+    last_error: Exception | None = None
+    tried: list[str] = []
+
+    for cpu_dtype in candidate_dtypes:
+        tried.append(str(cpu_dtype))
+        logger.info(
+            "Loading base model on CPU fallback",
+            extra={"model": model_id, "dtype": str(cpu_dtype)},
         )
-    except Exception:
-        logger.error(
-            "Failed to load model on CPU fallback",
+        try:
+            model = _load_with_optional_kwargs(
+                AutoModelForCausalLM.from_pretrained,
+                model_id,
+                base_kwargs=cpu_kwargs,
+                optional_kwargs=(
+                    {"torch_dtype": cpu_dtype},
+                    {"dtype": cpu_dtype},
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - relies on runtime backends
+            last_error = exc
+            logger.warning(
+                "CPU fallback load failed for dtype",  #
+                extra={"model": model_id, "dtype": str(cpu_dtype)},
+                exc_info=True,
+            )
+            continue
+
+        try:  # pragma: no cover - defensive cleanup for limited builds
+            model.to("cpu")
+        except Exception:
+            logger.debug("Unable to move model to CPU", exc_info=True)
+
+        tokenizer = _initialise_tokenizer(model_id, trust_remote_code=trust_remote_code)
+
+        _configure_model_post_load(
+            model, attention_implementation=attention_implementation
+        )
+
+        setattr(model, "_mongars_quantized_4bit", False)
+        return model, tokenizer
+
+    logger.error(
+        "Failed to load model on CPU fallback",  #
+        extra={"model": model_id, "dtypes_tried": tried},
+        exc_info=last_error,
+    )
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Unable to load model on CPU fallback")
+
+
+def _cpu_dtype_candidates(
+    *, requested: Optional[torch.dtype], configured: Optional[torch.dtype]
+) -> list[torch.dtype]:
+    """Return preferred CPU dtype candidates ordered by desirability."""
+
+    candidates: list[torch.dtype] = []
+
+    def _append(candidate: Optional[torch.dtype]) -> None:
+        if candidate is None or candidate in candidates:
+            return
+        candidates.append(candidate)
+
+    _append(requested)
+    _append(configured)
+    _append(torch.float16)
+    _append(getattr(torch, "bfloat16", None))
+    _append(torch.float32)
+    return candidates
+
+
+def _resolve_config_dtype(
+    model_id: str, *, trust_remote_code: bool
+) -> Optional[torch.dtype]:
+    """Return the dtype declared by the model config when available."""
+
+    try:
+        config = AutoConfig.from_pretrained(
+            model_id, trust_remote_code=trust_remote_code
+        )
+    except Exception:  # pragma: no cover - network/backends may be unavailable
+        logger.debug(
+            "Unable to resolve model config dtype; falling back to defaults",
             extra={"model": model_id},
             exc_info=True,
         )
-        raise
+        return None
 
-    try:  # pragma: no cover - defensive cleanup for limited builds
-        model.to("cpu")
-    except Exception:
-        logger.debug("Unable to move model to CPU", exc_info=True)
+    for attr in ("torch_dtype", "dtype"):
+        dtype = _normalise_torch_dtype(getattr(config, attr, None))
+        if dtype is not None:
+            logger.debug(
+                "Resolved model config dtype",
+                extra={"model": model_id, "dtype": str(dtype)},
+            )
+            return dtype
 
-    tokenizer = _initialise_tokenizer(model_id, trust_remote_code=trust_remote_code)
+    return None
 
-    _configure_model_post_load(model, attention_implementation=attention_implementation)
 
-    return model, tokenizer
+def _normalise_torch_dtype(value: Any) -> Optional[torch.dtype]:
+    """Normalise string or ``torch.dtype`` values into ``torch.dtype`` objects."""
+
+    if value is None:
+        return None
+    if isinstance(value, torch.dtype):
+        return value
+    if isinstance(value, str):
+        mapping = {
+            "float16": torch.float16,
+            "fp16": torch.float16,
+            "half": torch.float16,
+            "bfloat16": getattr(torch, "bfloat16", None),
+            "bf16": getattr(torch, "bfloat16", None),
+            "float32": torch.float32,
+            "fp32": torch.float32,
+        }
+        key = value.lower()
+        return mapping.get(key)
+    return None
 
 
 def _load_with_optional_kwargs(
