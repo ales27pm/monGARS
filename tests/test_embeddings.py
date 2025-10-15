@@ -11,7 +11,10 @@ from monGARS.core.embeddings import EmbeddingBackendError, LLM2VecEmbedder
 class _RecordingManager:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
-        self.is_ready = True
+        self._ready = True
+
+    def is_ready(self) -> bool:
+        return self._ready
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
         self.calls.append(list(texts))
@@ -21,7 +24,10 @@ class _RecordingManager:
 
 class _FailingManager:
     def __init__(self) -> None:
-        self.is_ready = True
+        self._ready = True
+
+    def is_ready(self) -> bool:
+        return self._ready
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
         raise RuntimeError("embedding backend unavailable")
@@ -29,7 +35,10 @@ class _FailingManager:
 
 class _PartialManager:
     def __init__(self) -> None:
-        self.is_ready = True
+        self._ready = True
+
+    def is_ready(self) -> bool:
+        return self._ready
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float] | None]:
         return [[], None]
@@ -37,8 +46,11 @@ class _PartialManager:
 
 class _NotReadyManager:
     def __init__(self) -> None:
-        self.is_ready = False
+        self._ready = False
         self.calls: int = 0
+
+    def is_ready(self) -> bool:
+        return self._ready
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
         self.calls += 1
@@ -47,10 +59,14 @@ class _NotReadyManager:
 
 class _NonFiniteManager:
     def __init__(self) -> None:
-        self.is_ready = True
+        self._ready = True
+        self.return_value = float("nan")
+
+    def is_ready(self) -> bool:
+        return self._ready
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
-        return [[float("nan"), 1.0, 2.0] for _ in texts]
+        return [[self.return_value, 1.0, 2.0] for _ in texts]
 
 
 @pytest.mark.asyncio
@@ -202,6 +218,7 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
         settings=settings, neuron_manager_factory=lambda: manager
     )
 
+    # Test fallback for NaN values
     batch = await embedder.encode_batch(["alpha"])
 
     assert batch.used_fallback is True
@@ -209,3 +226,27 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
     assert len(batch.vectors[0]) == 3
     magnitude = math.sqrt(sum(component * component for component in batch.vectors[0]))
     assert magnitude == pytest.approx(1.0)
+
+    # Test fallback for positive infinity values
+    manager.return_value = float("inf")
+    batch_inf = await embedder.encode_batch(["alpha"])
+
+    assert batch_inf.used_fallback is True
+    assert len(batch_inf.vectors) == 1
+    assert len(batch_inf.vectors[0]) == 3
+    magnitude_inf = math.sqrt(
+        sum(component * component for component in batch_inf.vectors[0])
+    )
+    assert magnitude_inf == pytest.approx(1.0)
+
+    # Test fallback for negative infinity values
+    manager.return_value = float("-inf")
+    batch_ninf = await embedder.encode_batch(["alpha"])
+
+    assert batch_ninf.used_fallback is True
+    assert len(batch_ninf.vectors) == 1
+    assert len(batch_ninf.vectors[0]) == 3
+    magnitude_ninf = math.sqrt(
+        sum(component * component for component in batch_ninf.vectors[0])
+    )
+    assert magnitude_ninf == pytest.approx(1.0)
