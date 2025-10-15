@@ -263,7 +263,7 @@ def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> No
 
     recorded_kwargs: dict[str, Any] = {}
 
-    def _fake_from_pretrained(*_, **kwargs) -> Any:  # noqa: ANN002
+    def _fake_from_pretrained(*_, **kwargs) -> Any:
         recorded_kwargs.update(kwargs)
         return _DummyModel()
 
