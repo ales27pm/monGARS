@@ -88,26 +88,6 @@ class ConversationalModule:
         styled = await self.mimicry.adapt_response_style(adaptive, user_id)
         return styled, personality
 
-    async def _semantic_context_matches(
-        self,
-        *,
-        user_id: str,
-        query: str,
-        history_pairs: Sequence[tuple[str, str]],
-    ) -> list[dict[str, object]]:
-        """Return semantically similar conversation snippets for ``query``."""
-
-        limit = getattr(settings, "llm2vec_context_limit", 0)
-        if limit <= 0:
-            return []
-
-        raw_distance = getattr(settings, "llm2vec_context_max_distance", None)
-        distance_cutoff: float | None
-        if isinstance(raw_distance, (int, float)) and float(raw_distance) > 0:
-            distance_cutoff = float(raw_distance)
-        else:
-            distance_cutoff = None
-
         try:
             matches = await self.persistence.vector_search_history(
                 user_id,
@@ -116,69 +96,14 @@ class ConversationalModule:
                 max_distance=distance_cutoff,
             )
         except Exception:  # pragma: no cover - persistence errors surfaced to logs
+            # Avoid logging raw identifiers; emit a short hash or omit entirely
+            from hashlib import blake2s
+            redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
             logger.exception(
                 "conversation.semantic_context.lookup_failed",
-                extra={"user_id": user_id},
+                extra={"user": f"u:{redacted}"},
             )
             return []
-
-        dedupe_pairs = {
-            (
-                (query_text or "").strip().lower(),
-                (response_text or "").strip().lower(),
-            )
-            for query_text, response_text in history_pairs
-        }
-
-        semantic_context: list[dict[str, object]] = []
-        for match in matches:
-            record = getattr(match, "record", None)
-            if record is None:
-                continue
-            query_text = (getattr(record, "query", "") or "").strip()
-            response_text = (getattr(record, "response", "") or "").strip()
-            if not query_text and not response_text:
-                continue
-
-            dedupe_key = (query_text.lower(), response_text.lower())
-            if dedupe_key in dedupe_pairs:
-                continue
-            dedupe_pairs.add(dedupe_key)
-
-            try:
-                distance_value = float(getattr(match, "distance", 0.0))
-            except (TypeError, ValueError):
-                distance_value = 0.0
-
-            similarity: float | None = None
-            if math.isfinite(distance_value):
-                similarity = max(0.0, 1.0 - min(distance_value, 1.0))
-
-            timestamp = getattr(record, "timestamp", None)
-            iso_timestamp: str | None = None
-            if isinstance(timestamp, datetime):
-                iso_timestamp = timestamp.astimezone().isoformat()
-
-            semantic_context.append(
-                {
-                    "query": query_text,
-                    "response": response_text,
-                    "distance": distance_value,
-                    "similarity": similarity,
-                    "timestamp": iso_timestamp,
-                    "record_id": getattr(record, "id", None),
-                }
-            )
-            if len(semantic_context) >= limit:
-                break
-
-        if semantic_context:
-            logger.debug(
-                "conversation.semantic_context.selected",
-                extra={"count": len(semantic_context)},
-            )
-        return semantic_context
-
     def _compose_prompt(
         self,
         refined_prompt: str,
