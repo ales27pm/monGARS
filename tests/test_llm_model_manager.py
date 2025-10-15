@@ -1,9 +1,11 @@
+import hashlib
+import io
 import json
 
 import pytest
 
 from monGARS.config import get_settings
-from monGARS.core import model_manager
+from monGARS.core import adapter_provisioner, model_manager
 from monGARS.core.model_manager import LLMModelManager
 
 
@@ -176,6 +178,70 @@ async def test_adapter_artifacts_copied_into_registry(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_adapter_downloads_remote_payload(monkeypatch, tmp_path):
+    remote_url = "https://example.com/adapter_model.safetensors"
+    remote_payload = b"remote-adapter"
+
+    class FakeResponse(io.BytesIO):
+        def __enter__(self):  # pragma: no cover - context protocol
+            self.seek(0)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # pragma: no cover - context protocol
+            self.close()
+
+    def fake_urlopen(url):
+        assert url == remote_url
+        return FakeResponse(remote_payload)
+
+    monkeypatch.setattr(adapter_provisioner, "urlopen", fake_urlopen)
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "remote-adapter",
+                                "source": remote_url,
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        status for status in report.statuses if status.provider == "adapter"
+    )
+    assert adapter_status.action == "installed"
+    installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == remote_payload
+
+
+@pytest.mark.asyncio
 async def test_model_manager_skips_download_when_auto_disabled(monkeypatch, tmp_path):
     config_data = {
         "profiles": {
@@ -215,3 +281,159 @@ async def test_model_manager_skips_download_when_auto_disabled(monkeypatch, tmp_
     assert status.action == "skipped"
     assert status.detail == "auto_download_disabled"
     assert fake.pull_called is False
+
+
+@pytest.mark.asyncio
+async def test_adapter_provision_missing_source(monkeypatch, tmp_path):
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(tmp_path / "missing" / "adapter.bin"),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        status for status in report.statuses if status.provider == "adapter"
+    )
+    assert adapter_status.action == "error"
+    assert adapter_status.detail == "source_missing"
+
+
+@pytest.mark.asyncio
+async def test_adapter_provision_checksum_mismatch(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts"
+    source_dir.mkdir(parents=True)
+    adapter_path = source_dir / "adapter_model.safetensors"
+    adapter_path.write_bytes(b"valid")
+    bad_checksum = hashlib.sha256(b"invalid").hexdigest()
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(adapter_path),
+                                "checksum": bad_checksum,
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        status for status in report.statuses if status.provider == "adapter"
+    )
+    assert adapter_status.action == "error"
+    assert adapter_status.detail == "checksum_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_adapter_provision_extraction_failure(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts"
+    source_dir.mkdir(parents=True)
+    adapter_path = source_dir / "adapter_model.safetensors"
+    adapter_path.write_bytes(b"valid")
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(adapter_path),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    def fail_install(self, source_path, target_path):
+        raise RuntimeError("Extraction failed")
+
+    monkeypatch.setattr(
+        adapter_provisioner.AdapterProvisioner,
+        "_install_from_filesystem",
+        fail_install,
+    )
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        status for status in report.statuses if status.provider == "adapter"
+    )
+    assert adapter_status.action == "error"
+    assert adapter_status.detail == "adapter_install_failed"
