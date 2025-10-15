@@ -636,11 +636,12 @@ class LLMIntegration:
                 definition=model_definition,
             )
             if fallback is not None:
-                return fallback
+                return self._validate_provider_response(fallback)
             raise self.LocalProviderError("Ollama client is not available.")
 
         try:
-            return await self._ollama_call(model_definition, prompt)
+            response = await self._ollama_call(model_definition, prompt)
+            return self._validate_provider_response(response)
         except OllamaNotAvailableError:
             logger.exception("llm.ollama.unavailable")
             fallback = await self._slot_model_fallback(
@@ -650,7 +651,7 @@ class LLMIntegration:
                 definition=model_definition,
             )
             if fallback is not None:
-                return fallback
+                return self._validate_provider_response(fallback)
             raise self.LocalProviderError("Ollama client is not available.")
         except RetryError:
             logger.exception(
@@ -664,7 +665,7 @@ class LLMIntegration:
                 definition=model_definition,
             )
             if fallback is not None:
-                return fallback
+                return self._validate_provider_response(fallback)
             raise self.LocalProviderError("Unable to generate response at this time.")
         except CircuitBreakerOpenError:
             logger.error(
@@ -678,7 +679,7 @@ class LLMIntegration:
                 definition=model_definition,
             )
             if fallback is not None:
-                return fallback
+                return self._validate_provider_response(fallback)
             raise self.LocalProviderError("Ollama circuit is temporarily open.")
         except Exception as exc:
             logger.exception(
@@ -692,10 +693,19 @@ class LLMIntegration:
                 definition=model_definition,
             )
             if fallback is not None:
-                return fallback
+                return self._validate_provider_response(fallback)
             raise self.LocalProviderError(
                 "An error occurred while generating the response."
             ) from exc
+
+    def _validate_provider_response(self, response: Any) -> dict[str, Any]:
+        """Ensure provider responses adhere to the expected mapping contract."""
+
+        if not isinstance(response, Mapping):
+            raise self.LocalProviderError(
+                "Local provider returned an unexpected payload type."
+            )
+        return dict(response)
 
     async def _slot_model_fallback(
         self,
