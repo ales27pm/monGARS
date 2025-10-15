@@ -129,7 +129,7 @@ def load_4bit_causal_lm(
                 {"dtype": target_dtype},
             ),
         )
-    except Exception:
+    except TypeError:
         logger.error(
             "Failed to load model with 4-bit quantization",
             extra={"model": model_id},
@@ -139,11 +139,7 @@ def load_4bit_causal_lm(
 
     tokenizer = _initialise_tokenizer(model_id, trust_remote_code=trust_remote_code)
 
-    model.config.use_cache = False
-    attn_impl = attention_implementation or "eager"
-    for attr in ("attn_impl", "attn_implementation"):
-        if hasattr(model.config, attr):
-            setattr(model.config, attr, attn_impl)
+    _configure_model_post_load(model, attention_implementation=attention_implementation)
 
     try:  # pragma: no cover - depends on torch build
         torch.backends.cuda.enable_flash_sdp(False)
@@ -304,11 +300,7 @@ def _load_cpu_causal_lm(
 
     tokenizer = _initialise_tokenizer(model_id, trust_remote_code=trust_remote_code)
 
-    model.config.use_cache = False
-    attn_impl = attention_implementation or "eager"
-    for attr in ("attn_impl", "attn_implementation"):
-        if hasattr(model.config, attr):
-            setattr(model.config, attr, attn_impl)
+    _configure_model_post_load(model, attention_implementation=attention_implementation)
 
     return model, tokenizer
 
@@ -367,9 +359,7 @@ def _build_model_kwargs_candidates(
 
     if accepts_var_kw:
         for extras in extras_sequence:
-            candidate = dict(base_kwargs)
-            candidate.update(extras)
-            candidates.append(candidate)
+            candidates.append(base_kwargs | extras)
         candidates.append(dict(base_kwargs))
         return candidates
 
@@ -385,9 +375,7 @@ def _build_model_kwargs_candidates(
         supported = {key: value for key, value in extras.items() if key in allowed_keys}
         rejected.update(key for key in extras if key not in allowed_keys)
         if supported:
-            candidate = dict(base_kwargs)
-            candidate.update(supported)
-            candidates.append(candidate)
+            candidates.append(base_kwargs | supported)
 
     if rejected:
         logger.debug(
@@ -400,6 +388,18 @@ def _build_model_kwargs_candidates(
 
     candidates.append(dict(base_kwargs))
     return candidates
+
+
+def _configure_model_post_load(
+    model: Any, *, attention_implementation: str | None
+) -> None:
+    """Apply shared configuration to models loaded for fine-tuning."""
+
+    model.config.use_cache = False
+    attn_impl = attention_implementation or "eager"
+    for attr in ("attn_impl", "attn_implementation"):
+        if hasattr(model.config, attr):
+            setattr(model.config, attr, attn_impl)
 
 
 def _initialise_tokenizer(model_id: str, *, trust_remote_code: bool) -> Any:
