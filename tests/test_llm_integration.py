@@ -17,6 +17,15 @@ def reset_unsloth_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(llm_integration, "_UNSLOTH_STATE", None, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def reset_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the shared response cache between tests for hermetic behaviour."""
+
+    monkeypatch.setattr(
+        llm_integration, "_RESPONSE_CACHE", llm_integration.AsyncTTLCache()
+    )
+
+
 def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate that Unsloth can be loaded and promises expected optimisations.
 
@@ -81,11 +90,12 @@ class _StubProvisionReport:
         return {status.role: status.action for status in self.statuses}
 
 
-@pytest.fixture
-def stubbed_llm_integration(
+def _build_stubbed_llm_integration(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    ollama_client: object | None,
 ) -> llm_integration.LLMIntegration:
-    """Return an :class:`LLMIntegration` wired with lightweight collaborators."""
+    """Helper to provision a deterministic :class:`LLMIntegration` instance."""
 
     monkeypatch.setattr(
         llm_integration,
@@ -104,9 +114,10 @@ def stubbed_llm_integration(
         async def ensure_models_installed(
             self, roles, *, force: bool = False
         ) -> _StubProvisionReport:
-            normalized = [role.lower() for role in (roles or [])]
-            if not normalized:
-                normalized = ["general", "coding"]
+            normalized = [role.lower() for role in (roles or [])] or [
+                "general",
+                "coding",
+            ]
             self.ensured_roles.append(normalized)
             statuses = [
                 _StubProvisionStatus(role=role, name=f"{role}-model")
@@ -115,9 +126,28 @@ def stubbed_llm_integration(
             return _StubProvisionReport(statuses)
 
     monkeypatch.setattr(llm_integration, "LLMModelManager", _StubModelManager)
-    monkeypatch.setattr(llm_integration, "ollama", None, raising=False)
+    monkeypatch.setattr(llm_integration, "ollama", ollama_client, raising=False)
 
     return llm_integration.LLMIntegration()
+
+
+@pytest.fixture
+def stubbed_llm_integration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> llm_integration.LLMIntegration:
+    """Return a fallback-only LLM integration instance for testing."""
+
+    return _build_stubbed_llm_integration(monkeypatch, ollama_client=None)
+
+
+@pytest.fixture
+def stubbed_llm_integration_with_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> llm_integration.LLMIntegration:
+    """Return an integration configured with a stubbed Ollama client."""
+
+    fake_client = types.SimpleNamespace(chat=lambda **_kwargs: {"message": {}})
+    return _build_stubbed_llm_integration(monkeypatch, ollama_client=fake_client)
 
 
 @pytest.mark.asyncio
@@ -142,7 +172,7 @@ async def test_call_local_provider_uses_slot_fallback(
 
     result = await stubbed_llm_integration._call_local_provider("hi", "general")
 
-    assert result is fallback_response
+    assert result == fallback_response
     assert stubbed_llm_integration._model_manager.ensured_roles[-1] == [
         "general",
         "coding",
@@ -168,3 +198,94 @@ async def test_call_local_provider_errors_when_slot_unavailable(
 
     with pytest.raises(llm_integration.LLMIntegration.LocalProviderError):
         await stubbed_llm_integration._call_local_provider("hello", "general")
+
+
+@pytest.mark.asyncio
+async def test_call_local_provider_handles_unexpected_slot_fallback_type(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure malformed slot fallbacks raise a provider error."""
+
+    async def _unexpected_slot(*_args, **_kwargs):
+        return "unexpected_string"
+
+    monkeypatch.setattr(
+        stubbed_llm_integration,
+        "_slot_model_fallback",
+        _unexpected_slot,
+        raising=False,
+    )
+
+    with pytest.raises(llm_integration.LLMIntegration.LocalProviderError) as exc_info:
+        await stubbed_llm_integration._call_local_provider("hey", "general")
+
+    assert "unexpected payload" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_call_local_provider_prefers_ollama_when_available(
+    stubbed_llm_integration_with_ollama: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify Ollama is used when available and slot fallback is bypassed."""
+
+    call_sequence: list[str] = []
+
+    async def _fake_ollama(definition, prompt):
+        call_sequence.append("ollama")
+        assert definition.name == "general-model"
+        assert prompt == "hi"
+        return {"message": {"content": "ollama-text"}}
+
+    async def _fake_slot(*_args, **_kwargs):
+        call_sequence.append("slot")
+        return {"message": {"content": "slot"}}
+
+    monkeypatch.setattr(
+        stubbed_llm_integration_with_ollama,
+        "_ollama_call",
+        _fake_ollama,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stubbed_llm_integration_with_ollama,
+        "_slot_model_fallback",
+        _fake_slot,
+        raising=False,
+    )
+
+    result = await stubbed_llm_integration_with_ollama._call_local_provider(
+        "hi", "general"
+    )
+
+    assert result["message"]["content"] == "ollama-text"
+    assert call_sequence == ["ollama"], "Slot fallback should not execute"
+
+
+@pytest.mark.asyncio
+async def test_generate_response_uses_slot_fallback_when_needed(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public API should surface slot fallbacks transparently."""
+
+    call_counts = {"slot": 0}
+
+    async def _fake_slot(prompt: str, task_type: str, **kwargs):
+        call_counts["slot"] += 1
+        assert kwargs["reason"] == "ollama_missing"
+        return {"message": {"content": f"slot::{prompt}::{task_type}"}}
+
+    monkeypatch.setattr(
+        stubbed_llm_integration,
+        "_slot_model_fallback",
+        _fake_slot,
+        raising=False,
+    )
+
+    result = await stubbed_llm_integration.generate_response("hello", "general")
+
+    assert result["text"] == "slot::hello::general"
+    assert result["tokens_used"] == len(result["text"].split())
+    assert call_counts == {"slot": 1}
