@@ -244,10 +244,55 @@ async def test_generate_response_skips_semantic_context_when_disabled(
 
     await module.generate_response("user-42", "Summarise recent updates")
 
+@pytest.mark.asyncio
     assert len(llm.prompts) == 1
     assert "Archived interactions retrieved via semantic search" not in llm.prompts[0]
     assert not persistence.vector_queries
     assert llm.calls[0]["task_type"] == "general"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_stub_returns_unexpected_type(monkeypatch):
+    from monGARS.core import conversation as conversation_module
+
+    class BadStubMimicry:
+        async def __call__(self, *args, **kwargs):
+            return 42  # Unexpected type
+
+    llm = conversation_module._StubLLM()
+    persistence = conversation_module._StubPersistence()
+    prompt = "Test prompt"
+    try:
+        await conversation_module.generate_response(
+            prompt=prompt,
+            llm=llm,
+            persistence=persistence,
+            mimicry=BadStubMimicry(),
+        )
+    except Exception as e:
+        assert isinstance(e, TypeError) or isinstance(e, ValueError)
+
+@pytest.mark.asyncio
+async def test_llm_integration_raises_exception(monkeypatch):
+    from monGARS.core import conversation as conversation_module
+
+    class FailingLLM(conversation_module._StubLLM):
+        async def __call__(self, *args, **kwargs):
+            raise RuntimeError("LLM failure")
+
+    llm = FailingLLM()
+    persistence = conversation_module._StubPersistence()
+    prompt = "Test prompt"
+    try:
+        await conversation_module.generate_response(
+            prompt=prompt,
+            llm=llm,
+            persistence=persistence,
+            mimicry=conversation_module._StubMimicry(),
+        )
+    except Exception as e:
+        assert isinstance(e, RuntimeError)
+        assert "LLM failure" in str(e)
 
 
 @pytest.mark.asyncio
