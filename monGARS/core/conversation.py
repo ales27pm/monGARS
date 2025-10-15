@@ -1,4 +1,6 @@
 import logging
+import math
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Optional
 
@@ -86,6 +88,150 @@ class ConversationalModule:
         styled = await self.mimicry.adapt_response_style(adaptive, user_id)
         return styled, personality
 
+    async def _semantic_context_matches(
+        self,
+        *,
+        user_id: str,
+        query: str,
+        history_pairs: Sequence[tuple[str, str]],
+    ) -> list[dict[str, object]]:
+        """Return semantically similar conversation snippets for ``query``."""
+
+        limit = getattr(settings, "llm2vec_context_limit", 0)
+        if limit <= 0:
+            return []
+
+        raw_distance = getattr(settings, "llm2vec_context_max_distance", None)
+        distance_cutoff: float | None
+        if isinstance(raw_distance, (int, float)) and float(raw_distance) > 0:
+            distance_cutoff = float(raw_distance)
+        else:
+            distance_cutoff = None
+
+        try:
+            matches = await self.persistence.vector_search_history(
+                user_id,
+                query,
+                limit=limit,
+                max_distance=distance_cutoff,
+            )
+        except Exception:  # pragma: no cover - persistence errors surfaced to logs
+            logger.exception(
+                "conversation.semantic_context.lookup_failed",
+                extra={"user_id": user_id},
+            )
+            return []
+
+        dedupe_pairs = {
+            (
+                (query_text or "").strip().lower(),
+                (response_text or "").strip().lower(),
+            )
+            for query_text, response_text in history_pairs
+        }
+
+        semantic_context: list[dict[str, object]] = []
+        for match in matches:
+            record = getattr(match, "record", None)
+            if record is None:
+                continue
+            query_text = (getattr(record, "query", "") or "").strip()
+            response_text = (getattr(record, "response", "") or "").strip()
+            if not query_text and not response_text:
+                continue
+
+            dedupe_key = (query_text.lower(), response_text.lower())
+            if dedupe_key in dedupe_pairs:
+                continue
+            dedupe_pairs.add(dedupe_key)
+
+            try:
+                distance_value = float(getattr(match, "distance", 0.0))
+            except (TypeError, ValueError):
+                distance_value = 0.0
+
+            similarity: float | None = None
+            if math.isfinite(distance_value):
+                similarity = max(0.0, 1.0 - min(distance_value, 1.0))
+
+            timestamp = getattr(record, "timestamp", None)
+            iso_timestamp: str | None = None
+            if isinstance(timestamp, datetime):
+                iso_timestamp = timestamp.astimezone().isoformat()
+
+            semantic_context.append(
+                {
+                    "query": query_text,
+                    "response": response_text,
+                    "distance": distance_value,
+                    "similarity": similarity,
+                    "timestamp": iso_timestamp,
+                    "record_id": getattr(record, "id", None),
+                }
+            )
+            if len(semantic_context) >= limit:
+                break
+
+        if semantic_context:
+            logger.debug(
+                "conversation.semantic_context.selected",
+                extra={"count": len(semantic_context)},
+            )
+        return semantic_context
+
+    def _compose_prompt(
+        self,
+        refined_prompt: str,
+        *,
+        history_pairs: Sequence[tuple[str, str]],
+        semantic_context: Sequence[dict[str, object]],
+    ) -> str:
+        """Render the final prompt combining history and semantic recall."""
+
+        sections: list[str] = []
+
+        if history_pairs:
+            history_lines: list[str] = []
+            for idx, (query_text, response_text) in enumerate(history_pairs, start=1):
+                user_line = (query_text or "").strip()
+                assistant_line = (response_text or "").strip()
+                history_lines.append(
+                    f"[{idx}] User: {user_line}\n    Assistant: {assistant_line}"
+                )
+            sections.append(
+                "Recent conversation turns (most recent first):\n"
+                + "\n".join(history_lines)
+            )
+
+        if semantic_context:
+            semantic_lines: list[str] = []
+            for idx, entry in enumerate(semantic_context, start=1):
+                similarity = entry.get("similarity")
+                similarity_text = (
+                    f" (similarity {similarity:.3f})"
+                    if isinstance(similarity, float)
+                    else ""
+                )
+                query_text = (entry.get("query") or "").strip()
+                response_text = (entry.get("response") or "").strip()
+                semantic_lines.append(
+                    f"[{idx}]{similarity_text} User: {query_text}\n    Assistant: {response_text}"
+                )
+            sections.append(
+                "Archived interactions retrieved via semantic search:\n"
+                + "\n".join(semantic_lines)
+            )
+
+        instructions = (
+            "Leverage the provided context to craft an accurate and concise reply. "
+            "If the context is unrelated, continue with your best effort response. "
+            "Current user request:\n"
+            f"{refined_prompt}"
+        )
+        sections.append(instructions)
+
+        return "\n\n".join(section for section in sections if section.strip())
+
     async def generate_response(
         self,
         user_id: str,
@@ -104,7 +250,18 @@ class ConversationalModule:
         )
         refined = await self._refine_query(augmented_query, user_id)
 
-        llm_out = await self.llm.generate_response(refined)
+        semantic_context = await self._semantic_context_matches(
+            user_id=user_id,
+            query=augmented_query,
+            history_pairs=history_pairs,
+        )
+        prompt = self._compose_prompt(
+            refined,
+            history_pairs=history_pairs,
+            semantic_context=semantic_context,
+        )
+
+        llm_out = await self.llm.generate_response(prompt)
         recent_interactions = [
             {"message": query_text, "response": response_text}
             for query_text, response_text in history_pairs
@@ -130,6 +287,8 @@ class ConversationalModule:
                     "with_image": query_with_image,
                     "augmented_query": augmented_query,
                     "refined_prompt": refined,
+                    "semantic_context": semantic_context,
+                    "semantic_prompt": prompt,
                 },
                 output_data={
                     "raw_llm": llm_out,
@@ -139,7 +298,10 @@ class ConversationalModule:
                 message=augmented_query,
                 response=final,
                 personality=personality_traits,
-                context={"history": history_pairs},
+                context={
+                    "history": history_pairs,
+                    "semantic_matches": semantic_context,
+                },
                 meta_data="",
                 confidence=llm_out.get("confidence", 0.0),
                 processing_time=processing_time,

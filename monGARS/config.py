@@ -440,6 +440,20 @@ class Settings(BaseSettings):
         ge=1,
         description="Embedding dimensionality expected from LLM2Vec fallbacks and pgvector schema.",
     )
+    llm2vec_context_limit: int = Field(
+        default=3,
+        ge=0,
+        le=12,
+        description="Maximum number of semantic recall snippets injected into conversation prompts.",
+    )
+    llm2vec_context_max_distance: float | None = Field(
+        default=0.4,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Optional cosine distance cutoff applied to semantic recall candidates; set to 0 to disable the filter."
+        ),
+    )
     llm2vec_fallback_candidate_window: int = Field(
         default=64,
         ge=1,
