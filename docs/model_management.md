@@ -90,6 +90,31 @@ pipelines.
   returns decoded text. Structured logs capture the transition so on-call teams
   understand when the system is running on the degraded path.
 
+### Embedding Strategy
+
+- Embeddings reuse the same Dolphin 3.0 checkpoint that powers chat. The
+  `dolphin_llm2vec_pipeline.py` workflow saves LoRA adapters, exports an
+  LLM2Vec-compatible wrapper, and annotates deterministic embedding options so
+  downstream services can reload the weights without guessing parameters.
+  Operators should consult the wrapper metadata before adjusting pooling or
+  token limits to keep search vectors aligned with chat behaviour.【F:dolphin_llm2vec_pipeline.py†L40-L139】
+- The training pipeline persists tokenizer metadata, preferred chat sampling
+  defaults, and artifact layout (tokenizer directory, adapter subdirectory, and
+  merged FP16 snapshot) in `wrapper_config.json`. The exporter deep-merges those
+  details into `wrapper/config.json`, stamps a manifest version, and lets
+  operators override the base model identifier when publishing to external
+  registries.【F:dolphin_llm2vec_pipeline.py†L88-L139】【F:scripts/export_llm2vec_wrapper.py†L1-L229】
+- The generated wrapper module exposes `generate` and `embed` helpers via
+  Hugging Face Transformers, ensuring the same tokenizer and hidden-state layout
+  drive both conversational and retrieval workloads. The embedding path uses
+  mean pooling with deterministic attention-mask weighting and optional
+  normalisation configured by the manifest.【F:scripts/export_llm2vec_wrapper.py†L57-L168】
+- `scripts/run_llm2vec_service.py` wraps the wrapper in a FastAPI server so the
+  embeddings can be consumed over HTTP. Launch options include toggling merged
+  weight loading, forcing 4-bit inference, or pinning the device, which makes it
+  straightforward to co-locate the embedding endpoint next to Ollama without
+  duplicating checkpoints.【F:scripts/run_llm2vec_service.py†L1-L204】
+
 ### Unsloth Optimisations & VRAM Troubleshooting
 
 - Local fallback slots rely on Unsloth's `FastLanguageModel` to provide 4-bit

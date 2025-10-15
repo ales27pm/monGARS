@@ -322,6 +322,7 @@ can be extended to register additional Ollama models or alternate providers.
 | Ray Serve deployment | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
 | Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
 | RAG context enrichment | [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md) |
+| Dolphin 3 chat/embedding reuse & service runbook | [docs/dolphin3_chat_embeddings.md](docs/dolphin3_chat_embeddings.md) |
 | API specification & clients | [docs/api/](docs/api/README.md) |
 | SDK overview & reference clients | [docs/sdk-overview.md](docs/sdk-overview.md) |
 | SDK release guide | [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |

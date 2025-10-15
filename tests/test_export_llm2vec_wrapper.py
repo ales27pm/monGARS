@@ -215,7 +215,8 @@ def llm2vec_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     base_dir = tmp_path / "model"
     (base_dir / "tokenizer").mkdir(parents=True)
-    (base_dir / "merged").mkdir(parents=True)
+    (base_dir / "lora_adapter").mkdir(parents=True)
+    (base_dir / "merged_fp16").mkdir(parents=True)
 
     return {
         "LLM2Vec": llm_cls,
