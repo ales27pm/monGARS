@@ -10,7 +10,16 @@
             "top_p": 0.9,
             "num_predict": 512
           },
-          "description": "Dolphin 3.0 Llama 3.1 8B chat checkpoint."
+          "description": "Dolphin 3.0 Llama 3.1 8B chat checkpoint.",
+          "adapters": [
+            {
+              "name": "dolphin3-chat-baseline",
+              "source": "../models/encoders/monGARS_unsloth",
+              "target": "dolphin3/chat/baseline",
+              "auto_update": true,
+              "description": "Baseline chat adapter snapshot distributed with monGARS."
+            }
+          ]
         },
         "coding": {
           "name": "dolphin3-llm2vec",
@@ -20,7 +29,35 @@
             "top_p": 0.9,
             "num_predict": 512
           },
-          "description": "LLM2Vec-wrapped Dolphin 3.0 build tuned for coding and embeddings."
+          "description": "LLM2Vec-wrapped Dolphin 3.0 build tuned for coding and embeddings.",
+          "adapters": [
+            {
+              "name": "dolphin3-coding-baseline",
+              "source": "../models/encoders/monGARS_unsloth",
+              "target": "dolphin3/coding/baseline",
+              "auto_update": true,
+              "description": "Shared adapter stub providing deterministic embeddings."
+            }
+          ]
+        },
+        "reasoning": {
+          "name": "dolphin3",
+          "provider": "ollama",
+          "auto_download": true,
+          "parameters": {
+            "top_p": 0.85,
+            "num_predict": 768
+          },
+          "description": "Reasoning-focused Dolphin 3 role backed by curated adapters.",
+          "adapters": [
+            {
+              "name": "dolphin3-reasoning-baseline",
+              "source": "../models/encoders/monGARS_unsloth",
+              "target": "dolphin3/reasoning/baseline",
+              "auto_update": true,
+              "description": "Placeholder reasoning adapter synced from the local registry."
+            }
+          ]
         }
       }
     }
