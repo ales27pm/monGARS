@@ -1,8 +1,8 @@
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from monGARS.config import get_settings
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
@@ -66,9 +66,39 @@ class ConversationalModule:
             return f"{query} {gap.get('additional_context', '')}"
         return query
 
-    async def _refine_query(self, query: str, user_id: str) -> str:
+    async def _refine_query(
+        self, query: str, user_id: str
+    ) -> tuple[str, Mapping[str, Any]]:
         result = await self.reasoner.reason(query, user_id)
-        return f"{query} {result['result']}" if "result" in result else query
+        if not isinstance(result, Mapping):
+            result = {}
+        refined = f"{query} {result['result']}" if "result" in result else query
+        return refined, result
+
+    def _build_response_hints(
+        self, reasoning: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Translate reasoning metadata into LLM response hints."""
+
+        if not isinstance(reasoning, Mapping):
+            return None
+
+        detail = reasoning.get("result")
+        if isinstance(detail, str) and detail.strip():
+            return {"reasoning": True}
+
+        return None
+
+    def _determine_task_type(self, original_query: str) -> str:
+        """Route prompts to specialised model roles when appropriate."""
+
+        infer = getattr(self.llm, "infer_task_type", None)
+        if callable(infer):
+            try:
+                return infer(original_query)
+            except Exception:  # pragma: no cover - defensive guardrail
+                logger.exception("conversation.task_type_inference_failed")
+        return "general"
 
     async def _adapt_response(
         self,
@@ -254,7 +284,9 @@ class ConversationalModule:
         augmented_query = await self._augment_with_curiosity(
             query_with_image, history_pairs
         )
-        refined = await self._refine_query(augmented_query, user_id)
+        refined_prompt, reasoning_metadata = await self._refine_query(
+            augmented_query, user_id
+        )
 
         semantic_context = await self._semantic_context_matches(
             user_id=user_id,
@@ -262,12 +294,18 @@ class ConversationalModule:
             history_pairs=history_pairs,
         )
         prompt = self._compose_prompt(
-            refined,
+            refined_prompt,
             history_pairs=history_pairs,
             semantic_context=semantic_context,
         )
+        response_hints = self._build_response_hints(reasoning_metadata)
+        task_type = self._determine_task_type(original_query)
 
-        llm_out = await self.llm.generate_response(prompt)
+        llm_out = await self.llm.generate_response(
+            prompt,
+            task_type=task_type,
+            response_hints=response_hints,
+        )
         recent_interactions = [
             {"message": query_text, "response": response_text}
             for query_text, response_text in history_pairs
@@ -292,14 +330,19 @@ class ConversationalModule:
                     "original_query": original_query,
                     "with_image": query_with_image,
                     "augmented_query": augmented_query,
-                    "refined_prompt": refined,
+                    "refined_prompt": refined_prompt,
+                    "reasoning_metadata": dict(reasoning_metadata),
                     "semantic_context": semantic_context,
                     "semantic_prompt": prompt,
+                    "llm_task_type": task_type,
+                    "llm_response_hints": response_hints,
                 },
                 output_data={
                     "raw_llm": llm_out,
                     "adapted_text": final,
                     "speech_turn": speech_turn.to_payload(),
+                    "llm_source": llm_out.get("source"),
+                    "llm_adapter_version": llm_out.get("adapter_version"),
                 },
                 message=augmented_query,
                 response=final,

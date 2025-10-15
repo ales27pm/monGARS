@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -294,6 +295,52 @@ class LLMIntegration:
 
     SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists", "skipped"})
     FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
+    _CODE_BLOCK_PATTERN = re.compile(r"```")
+    _CODE_DECLARATION_PATTERN = re.compile(
+        r"\b(class|def|function|public\s+static|#include|template\s*<)\b",
+        re.IGNORECASE,
+    )
+    _CODE_KEYWORDS = {
+        "def ",
+        "class ",
+        "import ",
+        "from ",
+        "return ",
+        "function ",
+        "lambda",
+        "async ",
+        "await ",
+        "println",
+        "printf",
+        "console.log",
+        "#include",
+        "struct ",
+        "enum ",
+        "try:",
+        "catch",
+    }
+    _CODE_LANGUAGES = {
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "c++",
+        "c#",
+        "go",
+        "rust",
+        "ruby",
+        "bash",
+        "shell",
+        "powershell",
+        "swift",
+    }
+    _CODE_SIGILS = {";", "{", "}", "=>", "->", "::"}
+    _STACK_TRACE_PATTERNS = {
+        "traceback (most recent call last)",
+        "stack trace:",
+        "exception in thread",
+        "undefined reference",
+    }
 
     def __init__(self) -> None:
         self._settings = get_settings()
@@ -475,6 +522,7 @@ class LLMIntegration:
 
         payload = await asyncio.to_thread(self._load_reasoning_adapter_payload)
         if payload:
+            self._update_adapter_version(payload.get("version"))
             logger.info(
                 "llm.adapter.reasoning_selected",
                 extra={
@@ -890,6 +938,8 @@ class LLMIntegration:
             "text": generated_text,
             "confidence": confidence,
             "tokens_used": tokens_used,
+            "source": response_source,
+            "adapter_version": self._current_adapter_version,
         }
         await _RESPONSE_CACHE.set(cache_key, result, ttl=300)
         return result
@@ -898,6 +948,53 @@ class LLMIntegration:
         """Create a standardised failure payload for telemetry."""
 
         return {"text": message, "confidence": 0.0, "tokens_used": 0}
+
+    def infer_task_type(self, prompt: str, default: str = "general") -> str:
+        """Infer the most suitable model role for ``prompt``.
+
+        Heuristics err on the side of caution: switching to the coding pathway
+        requires multiple independent signals such as fenced code blocks,
+        language keywords, structural markers, or stack traces. This prevents
+        casual references to programming from triggering specialised adapters
+        while still capturing genuine implementation requests.
+        """
+
+        if not prompt:
+            return default
+
+        stripped = prompt.strip()
+        if not stripped:
+            return default
+
+        lowered = stripped.lower()
+
+        if self._CODE_BLOCK_PATTERN.search(stripped):
+            return "coding"
+
+        heuristic_score = 0
+
+        if self._CODE_DECLARATION_PATTERN.search(stripped):
+            heuristic_score += 1
+
+        keyword_hits = sum(1 for keyword in self._CODE_KEYWORDS if keyword in lowered)
+        if keyword_hits >= 3:
+            return "coding"
+        if keyword_hits:
+            heuristic_score += 1
+
+        if any(language in lowered for language in self._CODE_LANGUAGES):
+            heuristic_score += 1
+
+        if any(sigil in stripped for sigil in self._CODE_SIGILS):
+            heuristic_score += 1
+
+        if re.search(r"\n\s{4,}\S", stripped):
+            heuristic_score += 1
+
+        if any(pattern in lowered for pattern in self._STACK_TRACE_PATTERNS):
+            heuristic_score += 1
+
+        return "coding" if heuristic_score >= 2 else default
 
     def _extract_text(self, raw_response: dict[str, Any]) -> str:
         """Normalise the text field across Ollama and Ray responses."""

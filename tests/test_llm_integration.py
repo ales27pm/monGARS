@@ -314,3 +314,69 @@ async def test_generate_response_uses_slot_fallback_when_needed(
     assert result["text"] == "slot::hello::general"
     assert result["tokens_used"] == len(result["text"].split())
     assert call_counts == {"slot": 1}
+
+
+def test_infer_task_type_detects_coding(
+    stubbed_llm_integration: llm_integration.LLMIntegration,
+) -> None:
+    """Ensure the heuristic flips to the coding role for code-heavy prompts."""
+
+    assert (
+        stubbed_llm_integration.infer_task_type("Outline a plan for the weekend")
+        == "general"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type("```python\nprint('hi')\n```")
+        == "coding"
+    )
+    assert (
+        stubbed_llm_integration.infer_task_type(
+            "Create a Java class with a main function"
+        )
+        == "coding"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_adapter_updates_version_for_reasoning(monkeypatch) -> None:
+    """Selecting the reasoning adapter should update the cached version."""
+
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setenv("USE_RAY_SERVE", "true")
+    monkeypatch.setenv("RAY_SERVE_URL", "http://ray/generate")
+
+    integration = llm_integration.LLMIntegration()
+
+    async def _fake_ensure_metadata():
+        integration._adapter_metadata = {"version": "baseline"}
+        integration._update_adapter_version("baseline")
+        return integration._adapter_metadata
+
+    monkeypatch.setattr(
+        integration,
+        "_ensure_adapter_metadata",
+        _fake_ensure_metadata,
+        raising=False,
+    )
+
+    def _fake_reasoning_payload():
+        return {
+            "version": "reasoning-v1",
+            "adapter_path": "/tmp/adapter.safetensors",
+            "weights_path": "/tmp/weights.safetensors",
+            "wrapper_path": "/tmp/wrapper.py",
+        }
+
+    monkeypatch.setattr(
+        integration,
+        "_load_reasoning_adapter_payload",
+        _fake_reasoning_payload,
+        raising=False,
+    )
+
+    payload = await integration._resolve_adapter_for_task(
+        "general", {"reasoning": True}
+    )
+
+    assert payload["version"] == "reasoning-v1"
+    assert integration._current_adapter_version == "reasoning-v1"
