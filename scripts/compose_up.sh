@@ -15,7 +15,7 @@ if [ "${DOCKER_API_VERSION:-}" = "" ]; then
 fi
 
 if [ "${COMPOSE_DOCKER_CLI_BUILD:-}" = "" ]; then
-  export COMPOSE_DOCKER_CLI_BUILD=0
+  export COMPOSE_DOCKER_CLI_BUILD=1
 fi
 
 if [ "${DOCKER_BUILDKIT:-}" = "" ]; then
