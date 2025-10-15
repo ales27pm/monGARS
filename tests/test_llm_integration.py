@@ -155,9 +155,7 @@ def stubbed_llm_integration_with_ollama(
             return {"message": {"content": "ollama-text"}}
 
     fake_client = _FakeOllamaClient()
-    integration = _build_stubbed_llm_integration(
-        monkeypatch, ollama_client=fake_client
-    )
+    integration = _build_stubbed_llm_integration(monkeypatch, ollama_client=fake_client)
     setattr(integration, "_test_ollama_client", fake_client)
     return integration
 
