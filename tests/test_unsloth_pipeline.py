@@ -25,6 +25,12 @@ class FakeTrainer:
         return {"eval_loss": 0.123, "eval_runtime": 1.5}
 
 
+def _initialise_model_with_quant_state(model_cls: type, state: SimpleNamespace) -> Any:
+    model = model_cls()
+    setattr(model, "_mongars_quantized_4bit", state.value)
+    return model
+
+
 @pytest.fixture()
 def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
     output_root = tmp_path / "outputs"
@@ -49,10 +55,15 @@ def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleName
         pad_token_id = 0
         eos_token_id = 0
 
+    quantized_state = SimpleNamespace(value=True)
+
     monkeypatch.setattr(
         unsloth_mod,
         "load_4bit_causal_lm",
-        lambda *a, **k: (Model(), Tokenizer()),
+        lambda *a, **k: (
+            _initialise_model_with_quant_state(Model, quantized_state),
+            Tokenizer(),
+        ),
     )
     monkeypatch.setattr(unsloth_mod, "summarise_device_map", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -111,7 +122,13 @@ def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleName
     monkeypatch.setattr(
         unsloth_mod, "disable_training_mode", lambda model: model.eval()
     )
-    monkeypatch.setattr(unsloth_mod, "merge_lora_adapters", lambda *a, **k: True)
+    merge_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def _record_merge(*args: Any, **kwargs: Any) -> bool:
+        merge_calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(unsloth_mod, "merge_lora_adapters", _record_merge)
     monkeypatch.setattr(
         unsloth_mod, "run_embedding_smoke_test", lambda encoder, texts: (len(texts), 3)
     )
@@ -145,6 +162,8 @@ def patch_unsloth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleName
         output_root=output_root,
         dataset_calls=dataset_calls,
         trainers=trainer_instances,
+        quantized_state=quantized_state,
+        merge_calls=merge_calls,
     )
 
 
@@ -161,6 +180,8 @@ def test_run_unsloth_finetune_generates_wrapper(patch_unsloth: SimpleNamespace) 
     assert results["wrapper_module"].name == "project_wrapper.py"
     assert results["merged_dir"] is not None
     assert patch_unsloth.trainers[0].train_calls == 1
+    assert len(patch_unsloth.merge_calls) == 1
+    assert results["quantized_4bit"] is True
 
 
 def test_run_unsloth_finetune_records_eval_metrics(
@@ -183,3 +204,24 @@ def test_run_unsloth_finetune_records_eval_metrics(
     assert metadata["eval_dataset_size"] == 16
     assert metadata["evaluation_metrics"]["eval_loss"] == pytest.approx(0.123)
     assert results["evaluation_metrics"]["eval_runtime"] == pytest.approx(1.5)
+    assert metadata["quantized_4bit"] is True
+    assert results["quantized_4bit"] is True
+
+
+def test_run_unsloth_finetune_skips_merge_when_quantization_disabled(
+    patch_unsloth: SimpleNamespace,
+) -> None:
+    patch_unsloth.quantized_state.value = False
+
+    results = unsloth_mod.run_unsloth_finetune(
+        model_id="hf/test",
+        output_dir=patch_unsloth.output_root,
+        dataset_id="hf/dataset",
+        run_smoke_tests=False,
+    )
+
+    assert patch_unsloth.merge_calls == []
+    assert results["merged_dir"] is None
+    assert results["quantized_4bit"] is False
+    metadata = json.loads((patch_unsloth.output_root / "run_metadata.json").read_text())
+    assert metadata["quantized_4bit"] is False

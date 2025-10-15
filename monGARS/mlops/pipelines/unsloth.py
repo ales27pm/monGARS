@@ -164,6 +164,7 @@ def run_unsloth_finetune(
         activation_buffer_mb=activation_buffer_mb,
         offload_dir=offload_dir,
     )
+    quantized_4bit = bool(getattr(model, "_mongars_quantized_4bit", True))
     summarise_device_map(model)
 
     model, unsloth_active = _activate_unsloth(model)
@@ -203,11 +204,15 @@ def run_unsloth_finetune(
 
     merged_dir = output_dir / "merged_fp16"
     merged = False
-    if merge_to_fp16:
+    if merge_to_fp16 and quantized_4bit:
         try:
             merged = merge_lora_adapters(model_id, chat_lora_dir, output_dir=merged_dir)
         except Exception:  # pragma: no cover - defensive guard
             logger.warning("Failed to merge adapters to FP16", exc_info=True)
+    elif merge_to_fp16:
+        logger.info(
+            "Skipping FP16 merge because the base model is running without 4-bit quantization"
+        )
 
     evaluation_metrics: dict[str, object] | None = None
     eval_dataset_size: int | None = None
@@ -244,7 +249,7 @@ def run_unsloth_finetune(
         vram_budget_mb=vram_budget_mb,
         offload_dir=offload_dir,
         activation_buffer_mb=activation_buffer_mb,
-        quantized_4bit=True,
+        quantized_4bit=quantized_4bit,
     )
     wrapper_paths = write_wrapper_bundle(wrapper_config, output_dir)
 
@@ -254,6 +259,7 @@ def run_unsloth_finetune(
             "dataset_id": dataset_id,
             "dataset_path": str(dataset_path) if dataset_path else None,
             "unsloth_active": unsloth_active,
+            "quantized_4bit": quantized_4bit,
             "max_seq_len": max_seq_len,
             "vram_budget_mb": vram_budget_mb,
             "train_fraction": train_fraction,
@@ -278,6 +284,7 @@ def run_unsloth_finetune(
         "dataset_size": dataset_size,
         "eval_dataset_size": eval_dataset_size,
         "evaluation_metrics": evaluation_metrics,
+        "quantized_4bit": quantized_4bit,
     }
 
 

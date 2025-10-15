@@ -68,12 +68,14 @@ def load_4bit_causal_lm(
     compute_dtype = compute_dtype or target_dtype
 
     if not _is_quantization_available():
-        return _load_cpu_causal_lm(
+        model, tokenizer = _load_cpu_causal_lm(
             model_id,
             trust_remote_code=trust_remote_code,
             dtype=dtype,
             attention_implementation=attention_implementation,
         )
+        setattr(model, "_mongars_quantized_4bit", False)
+        return model, tokenizer
 
     bnb_common: dict[str, Any] = {
         "load_in_4bit": True,
@@ -148,6 +150,7 @@ def load_4bit_causal_lm(
     except Exception:  # pragma: no cover - best effort configuration
         pass
 
+    setattr(model, "_mongars_quantized_4bit", True)
     return model, tokenizer
 
 
@@ -302,6 +305,7 @@ def _load_cpu_causal_lm(
 
     _configure_model_post_load(model, attention_implementation=attention_implementation)
 
+    setattr(model, "_mongars_quantized_4bit", False)
     return model, tokenizer
 
 

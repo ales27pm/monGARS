@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pytest import FixtureRequest
 from packaging.version import Version
+from pytest import FixtureRequest
 
 from monGARS.mlops import model as model_module
 
@@ -126,6 +126,7 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
         recorded_kwargs["quantization_config"].llm_int8_enable_fp32_cpu_offload is True
     )
     assert recorded_kwargs["max_memory"][0] == "5308MiB"
+    assert getattr(model, "_mongars_quantized_4bit", None) is True
 
 
 def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
@@ -153,11 +154,14 @@ def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
         model_module.AutoModelForCausalLM, "from_pretrained", _legacy_from_pretrained
     )
 
-    model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf", offload_dir=tmp_path)
+    model = model_module.load_4bit_causal_lm(
+        "meta-llama/Llama-2-7b-hf", offload_dir=tmp_path
+    )[0]
 
     assert len(calls) == 2
     assert calls[0]["torch_dtype"] is model_module.torch.float16
     assert calls[1]["dtype"] is model_module.torch.float16
+    assert getattr(model, "_mongars_quantized_4bit", None) is True
 
 
 def test_load_4bit_causal_lm_reserves_activation_buffer(
@@ -225,9 +229,7 @@ def test_load_4bit_causal_lm_handles_legacy_bitsandbytes_kwargs(
 
     monkeypatch.setattr(model_module, "BitsAndBytesConfig", _LegacyBitsAndBytesConfig)
 
-    def _fake_from_pretrained(
-        *_, quantization_config: Any, **__
-    ) -> Any:
+    def _fake_from_pretrained(*_, quantization_config: Any, **__) -> Any:
         quant_configs.append(quantization_config)
         return _DummyModel()
 
@@ -278,6 +280,7 @@ def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> No
     assert recorded_kwargs.get("quantization_config") is None
     assert recorded_kwargs.get("device_map") is None
     assert recorded_kwargs.get("torch_dtype") is model_module.torch.float32
+    assert getattr(model, "_mongars_quantized_4bit", None) is False
 
 
 def test_load_4bit_causal_lm_cpu_fallback_promotes_float16(
