@@ -326,13 +326,10 @@ def test_infer_task_type_detects_coding(
         == "general"
     )
     assert (
-        fake_llm_integration.infer_task_type("```python\nprint('hi')\n```")
-        == "coding"
+        fake_llm_integration.infer_task_type("```python\nprint('hi')\n```") == "coding"
     )
     assert (
-        fake_llm_integration.infer_task_type(
-            "Create a Java class with a main function"
-        )
+        fake_llm_integration.infer_task_type("Create a Java class with a main function")
         == "coding"
     )
     assert (

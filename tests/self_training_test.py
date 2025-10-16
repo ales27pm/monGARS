@@ -74,7 +74,9 @@ async def test_run_training_cycle_creates_version(
     assert version["summary"]["metrics"]["training_examples"] == 1
     dataset_file = version["dataset"]["dataset_file"]
     assert Path(dataset_file).exists()
-    assert trainer_double.runs and trainer_double.runs[0][0]["text_preview"] == "trainable"
+    assert (
+        trainer_double.runs and trainer_double.runs[0][0]["text_preview"] == "trainable"
+    )
     assert version["dataset"]["version"] == 1
     assert version["dataset"]["quarantined"] is False
     compliance = version["dataset"]["compliance"]
