@@ -36,10 +36,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
+from monGARS.core.constants import (
+    DEFAULT_EMBEDDING_BACKEND,
+    SUPPORTED_EMBEDDING_BACKENDS,
+)
+from monGARS.core.embedding_backends import normalise_embedding_backend
 from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
 log = logging.getLogger(__name__)
+
+
+EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(sorted(SUPPORTED_EMBEDDING_BACKENDS))
+"""Supported embedding backends exposed to runtime configuration."""
+
+EmbeddingBackend = Literal[*EMBEDDING_BACKEND_CHOICES]
 
 
 # --- helpers (top-level) ---
@@ -403,8 +414,8 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the code-focused model.",
     )
-    embedding_backend: Literal["huggingface", "ollama"] = Field(
-        default="huggingface",
+    embedding_backend: EmbeddingBackend = Field(
+        default=DEFAULT_EMBEDDING_BACKEND,
         description="Embedding backend provider used for semantic vector generation.",
     )
     ollama_host: AnyUrl | None = Field(
@@ -422,14 +433,11 @@ class Settings(BaseSettings):
     @field_validator("embedding_backend", mode="before")
     @classmethod
     def _normalise_embedding_backend(cls, value: Any) -> str:
-        if value is None:
-            return "huggingface"
-        normalised = str(value).strip().lower()
-        allowed = {"huggingface", "ollama"}
-        if normalised not in allowed:
-            options = ", ".join(sorted(allowed))
-            raise ValueError(f"embedding_backend must be one of: {options}")
-        return normalised
+        return normalise_embedding_backend(
+            value,
+            default=DEFAULT_EMBEDDING_BACKEND,
+            strict=True,
+        )
 
     llm2vec_base_model: str = Field(
         default="nomic-ai/llm2vec-large",
