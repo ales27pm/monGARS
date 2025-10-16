@@ -528,6 +528,324 @@ export function createChatUi({ elements, timelineStore }) {
     return `<div class="${classes.join(" ")}">${content}${metaHtml}</div>`;
   }
 
+  function normaliseNumeric(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function formatNumeric(value) {
+    if (!Number.isFinite(value)) {
+      return "—";
+    }
+    if (value === 0) {
+      return "0";
+    }
+    const abs = Math.abs(value);
+    if (abs >= 1000 || abs < 0.001) {
+      return value.toExponential(4);
+    }
+    const fixed = value.toFixed(6);
+    return fixed.replace(/\.0+$/, "").replace(/0+$/, "");
+  }
+
+  function summariseVector(vector, index) {
+    if (!Array.isArray(vector)) {
+      return null;
+    }
+    const preview = [];
+    let count = 0;
+    let sum = 0;
+    let squares = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < vector.length; i += 1) {
+      const value = normaliseNumeric(vector[i]);
+      if (value === null) {
+        continue;
+      }
+      if (preview.length < 8) {
+        preview.push(value);
+      }
+      count += 1;
+      sum += value;
+      squares += value * value;
+      if (value < min) {
+        min = value;
+      }
+      if (value > max) {
+        max = value;
+      }
+    }
+    const magnitude = count > 0 ? Math.sqrt(squares) : null;
+    const mean = count > 0 ? sum / count : null;
+    return {
+      index,
+      count,
+      sum,
+      squares,
+      magnitude,
+      mean,
+      min: count > 0 ? min : null,
+      max: count > 0 ? max : null,
+      preview,
+    };
+  }
+
+  function createVectorStatsTable(stats) {
+    const table = document.createElement("table");
+    table.className =
+      "table table-sm table-striped embedding-details-table mb-0";
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    [
+      "Vecteur",
+      "Composantes",
+      "Magnitude",
+      "Moyenne",
+      "Min",
+      "Max",
+      "Aperçu",
+    ].forEach((label) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = label;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    stats.forEach((stat) => {
+      const row = document.createElement("tr");
+      const cells = [
+        stat.index + 1,
+        stat.count,
+        formatNumeric(stat.magnitude),
+        formatNumeric(stat.mean),
+        formatNumeric(stat.min),
+        formatNumeric(stat.max),
+        stat.preview.length
+          ? stat.preview.map((value) => formatNumeric(value)).join(", ")
+          : "—",
+      ];
+      cells.forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = String(value);
+        row.appendChild(td);
+      });
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function attachEmbeddingDetails(row, embeddingData = {}, metadata = {}) {
+    if (!row) {
+      return;
+    }
+    const bubble = row.querySelector(".chat-bubble");
+    if (!bubble) {
+      return;
+    }
+    bubble
+      .querySelectorAll(".embedding-details")
+      .forEach((node) => node.remove());
+
+    const vectors = Array.isArray(embeddingData.vectors)
+      ? embeddingData.vectors.filter((vector) => Array.isArray(vector))
+      : [];
+    if (vectors.length === 0) {
+      return;
+    }
+
+    const stats = vectors
+      .map((vector, index) => summariseVector(vector, index))
+      .filter((entry) => entry && entry.count >= 0);
+    if (stats.length === 0) {
+      return;
+    }
+
+    const details = document.createElement("div");
+    details.className = "embedding-details card mt-3";
+
+    const cardBody = document.createElement("div");
+    cardBody.className = "card-body p-3";
+    details.appendChild(cardBody);
+
+    const header = document.createElement("div");
+    header.className = "d-flex flex-wrap align-items-center gap-2 mb-3";
+
+    const title = document.createElement("h5");
+    title.className = "card-title mb-0";
+    title.textContent = "Analyse des embeddings";
+    header.appendChild(title);
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.type = "button";
+    downloadBtn.className = "btn btn-sm btn-outline-primary ms-auto";
+    downloadBtn.textContent = "Télécharger le JSON";
+    downloadBtn.addEventListener("click", () => {
+      try {
+        const payload =
+          typeof embeddingData.raw === "object" && embeddingData.raw !== null
+            ? embeddingData.raw
+            : {
+                backend: embeddingData.backend ?? metadata.backend ?? null,
+                model: embeddingData.model ?? metadata.model ?? null,
+                dims:
+                  embeddingData.dims ??
+                  metadata.dims ??
+                  stats[0]?.count ??
+                  null,
+                normalised:
+                  typeof embeddingData.normalised !== "undefined"
+                    ? Boolean(embeddingData.normalised)
+                    : Boolean(metadata.normalised),
+                count: vectors.length,
+                vectors,
+              };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], {
+          type: "application/json",
+        });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const slugSource = (
+          embeddingData.model ||
+          metadata.model ||
+          "embedding"
+        )
+          .toString()
+          .toLowerCase();
+        const slug = slugSource
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60);
+        link.href = url;
+        link.download = `embedding-${slug || "result"}-${Date.now()}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.setTimeout(() => {
+          window.URL.revokeObjectURL(url);
+        }, 1000);
+      } catch (err) {
+        console.warn("Unable to download embedding payload", err);
+        announceConnection(
+          "Impossible de télécharger le résultat d'embedding.",
+          "danger",
+        );
+      }
+    });
+    header.appendChild(downloadBtn);
+    cardBody.appendChild(header);
+
+    const dimsCandidate = Number(embeddingData.dims ?? metadata.dims);
+    const dims = Number.isFinite(dimsCandidate)
+      ? Number(dimsCandidate)
+      : Array.isArray(vectors[0])
+        ? vectors[0].length
+        : null;
+    const validMagnitudeStats = stats.filter(
+      (stat) =>
+        typeof stat.magnitude === "number" && !Number.isNaN(stat.magnitude),
+    );
+    const totalMagnitude = validMagnitudeStats.reduce(
+      (acc, stat) => acc + stat.magnitude,
+      0,
+    );
+    const avgMagnitude =
+      validMagnitudeStats.length > 0
+        ? totalMagnitude / validMagnitudeStats.length
+        : null;
+
+    let componentCount = 0;
+    let componentSum = 0;
+    let componentSquares = 0;
+    let globalMin = null;
+    let globalMax = null;
+    stats.forEach((stat) => {
+      componentCount += stat.count;
+      componentSum += stat.sum;
+      componentSquares += stat.squares;
+      if (stat.count > 0) {
+        globalMin =
+          globalMin === null ? stat.min : Math.min(globalMin, stat.min);
+        globalMax =
+          globalMax === null ? stat.max : Math.max(globalMax, stat.max);
+      }
+    });
+    const aggregateMagnitude =
+      componentCount > 0 ? Math.sqrt(componentSquares) : null;
+    const aggregateMean =
+      componentCount > 0 ? componentSum / componentCount : null;
+
+    const metaList = document.createElement("dl");
+    metaList.className = "row g-2 mb-0";
+
+    const pushMeta = (label, value) => {
+      const dt = document.createElement("dt");
+      dt.className = "col-sm-4";
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.className = "col-sm-8";
+      dd.textContent = value;
+      metaList.appendChild(dt);
+      metaList.appendChild(dd);
+    };
+
+    if (embeddingData.backend || metadata.backend) {
+      pushMeta("Backend", String(embeddingData.backend || metadata.backend));
+    }
+    if (embeddingData.model || metadata.model) {
+      pushMeta("Modèle", String(embeddingData.model || metadata.model));
+    }
+    if (dims) {
+      pushMeta("Dimensions", String(dims));
+    }
+    pushMeta("Vecteurs", `${vectors.length}`);
+    if (componentCount) {
+      pushMeta("Composantes", `${componentCount}`);
+    }
+    pushMeta(
+      "Normalisation",
+      Boolean(
+        typeof embeddingData.normalised !== "undefined"
+          ? embeddingData.normalised
+          : metadata.normalised,
+      )
+        ? "Oui"
+        : "Non",
+    );
+    pushMeta("Magnitude moyenne", formatNumeric(avgMagnitude));
+    pushMeta("Magnitude agrégée", formatNumeric(aggregateMagnitude));
+    pushMeta("Moyenne globale", formatNumeric(aggregateMean));
+    pushMeta("Minimum global", formatNumeric(globalMin));
+    pushMeta("Maximum global", formatNumeric(globalMax));
+
+    cardBody.appendChild(metaList);
+
+    const table = createVectorStatsTable(stats);
+    table.classList.add("mt-3");
+    cardBody.appendChild(table);
+
+    const detailsWrapper = document.createElement("details");
+    detailsWrapper.className = "mt-3";
+    const summary = document.createElement("summary");
+    summary.textContent = "Afficher le JSON brut";
+    detailsWrapper.appendChild(summary);
+    const pre = document.createElement("pre");
+    pre.className = "mt-2 mb-0 overflow-auto";
+    pre.style.maxHeight = "240px";
+    pre.textContent = JSON.stringify(vectors, null, 2);
+    detailsWrapper.appendChild(pre);
+    cardBody.appendChild(detailsWrapper);
+
+    bubble.appendChild(details);
+  }
+
   function appendMessage(role, text, options = {}) {
     const {
       timestamp,
@@ -537,6 +855,7 @@ export function createChatUi({ elements, timelineStore }) {
       messageId,
       register = true,
       metadata,
+      embeddingData,
     } = options;
     const bubble = buildBubble({
       text,
@@ -552,6 +871,9 @@ export function createChatUi({ elements, timelineStore }) {
       register,
       metadata,
     });
+    if (role === "assistant" && embeddingData) {
+      attachEmbeddingDetails(row, embeddingData, metadata || {});
+    }
     setDiagnostics({ lastMessageAt: timestamp || nowISO() });
     return row;
   }
@@ -1199,6 +1521,9 @@ export function createChatUi({ elements, timelineStore }) {
     setVoiceSpeaking,
     setVoiceVoiceOptions,
     setMode,
+    renderEmbeddingDetails(row, embeddingData, metadata = {}) {
+      attachEmbeddingDetails(row, embeddingData, metadata);
+    },
     set diagnostics(value) {
       Object.assign(diagnostics, value);
     },
