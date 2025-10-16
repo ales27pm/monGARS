@@ -314,6 +314,10 @@ body.dark-mode .chat-actions-toolbar {
   font-variant-numeric: tabular-nums;
 }
 
+.chat-mode-toggle select {
+  min-width: 150px;
+}
+
 body.dark-mode .composer-meta {
   color: #b0b0b0;
 }

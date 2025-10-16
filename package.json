@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node webapp/static/js/build.mjs",
     "build:chat": "node webapp/static/js/build.mjs",
-    "lint": "eslint webapp/static/js/src --max-warnings=0"
+    "lint": "eslint webapp/static/js/src --max-warnings=0",
+    "test": "npm run lint"
   },
   "devDependencies": {
     "esbuild": "^0.21.5",

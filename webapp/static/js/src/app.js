@@ -16,6 +16,7 @@ function queryElements(doc) {
     composer: byId("composer"),
     prompt: byId("prompt"),
     send: byId("send"),
+    modeSelect: byId("chat-mode"),
     wsStatus: byId("ws-status"),
     quickActions: byId("quick-actions"),
     connection: byId("connection"),
@@ -102,6 +103,7 @@ export class ChatApp {
       elements: this.elements,
       timelineStore: this.timelineStore,
     });
+    this.mode = this.ui.mode || "chat";
     this.auth = createAuthService(this.config);
     this.http = createHttpService({ config: this.config, auth: this.auth });
     this.exporter = createExporter({
@@ -137,6 +139,7 @@ export class ChatApp {
   registerUiHandlers() {
     this.ui.on("submit", async ({ text }) => {
       const value = (text || "").trim();
+      const requestMode = this.mode === "embed" ? "embed" : "chat";
       if (!value) {
         this.ui.setComposerStatus(
           "Saisissez un message avant d’envoyer.",
@@ -149,24 +152,41 @@ export class ChatApp {
       const submittedAt = nowISO();
       this.ui.appendMessage("user", value, {
         timestamp: submittedAt,
-        metadata: { submitted: true },
+        metadata: { submitted: true, mode: requestMode },
       });
       if (this.elements.prompt) {
         this.elements.prompt.value = "";
       }
       this.ui.updatePromptMetrics();
       this.ui.autosizePrompt();
-      this.ui.setComposerStatus("Message envoyé…", "info");
+      if (requestMode === "embed") {
+        this.ui.setComposerStatus("Calcul de l'embedding…", "info");
+      } else {
+        this.ui.setComposerStatus("Message envoyé…", "info");
+      }
       this.ui.scheduleComposerIdle(4000);
       this.ui.setBusy(true);
-      this.ui.applyQuickActionOrdering(["code", "summarize", "explain"]);
+      if (requestMode === "chat") {
+        this.ui.applyQuickActionOrdering(["code", "summarize", "explain"]);
+      }
 
       try {
-        await this.http.postChat(value);
-        if (this.elements.prompt) {
-          this.elements.prompt.focus();
+        if (requestMode === "embed") {
+          const response = await this.http.postEmbed(value);
+          if (this.elements.prompt) {
+            this.elements.prompt.focus();
+          }
+          this.ui.setBusy(false);
+          this.presentEmbeddingResult(response);
+          this.ui.setComposerStatus("Vecteur généré.", "success");
+          this.ui.scheduleComposerIdle(4000);
+        } else {
+          await this.http.postChat(value);
+          if (this.elements.prompt) {
+            this.elements.prompt.focus();
+          }
+          this.ui.startStream();
         }
-        this.ui.startStream();
       } catch (err) {
         this.ui.setBusy(false);
         const message = err instanceof Error ? err.message : String(err);
@@ -174,13 +194,42 @@ export class ChatApp {
         this.ui.appendMessage("system", message, {
           variant: "error",
           allowMarkdown: false,
-          metadata: { stage: "submit" },
+          metadata: { stage: "submit", mode: requestMode },
         });
-        this.ui.setComposerStatus(
-          "Envoi impossible. Vérifiez la connexion.",
-          "danger",
-        );
+        if (requestMode === "embed") {
+          this.ui.setComposerStatus(
+            "Génération d'embedding impossible. Vérifiez la connexion.",
+            "danger",
+          );
+        } else {
+          this.ui.setComposerStatus(
+            "Envoi impossible. Vérifiez la connexion.",
+            "danger",
+          );
+        }
         this.ui.scheduleComposerIdle(6000);
+      }
+    });
+
+    this.ui.on("mode-change", ({ mode }) => {
+      const nextMode = mode === "embed" ? "embed" : "chat";
+      if (this.mode === nextMode) {
+        return;
+      }
+      this.mode = nextMode;
+      this.ui.setMode(nextMode);
+      if (nextMode === "embed") {
+        this.ui.setComposerStatus(
+          "Mode Embedding activé. Les requêtes renvoient des vecteurs.",
+          "info",
+        );
+        this.ui.scheduleComposerIdle(5000);
+      } else {
+        this.ui.setComposerStatus(
+          "Mode Chat activé. Les réponses seront générées par le LLM.",
+          "info",
+        );
+        this.ui.scheduleComposerIdle(4000);
       }
     });
 
@@ -264,9 +313,13 @@ export class ChatApp {
       }
       return {
         autoSend:
-          typeof parsed.autoSend === "boolean" ? parsed.autoSend : fallback.autoSend,
+          typeof parsed.autoSend === "boolean"
+            ? parsed.autoSend
+            : fallback.autoSend,
         playback:
-          typeof parsed.playback === "boolean" ? parsed.playback : fallback.playback,
+          typeof parsed.playback === "boolean"
+            ? parsed.playback
+            : fallback.playback,
         voiceURI:
           typeof parsed.voiceURI === "string" && parsed.voiceURI.length > 0
             ? parsed.voiceURI
@@ -302,7 +355,9 @@ export class ChatApp {
   }
 
   setupVoiceFeatures() {
-    const docLang = (this.doc?.documentElement?.getAttribute("lang") || "").trim();
+    const docLang = (
+      this.doc?.documentElement?.getAttribute("lang") || ""
+    ).trim();
     const navigatorLang =
       typeof navigator !== "undefined" && navigator.language
         ? navigator.language
@@ -417,7 +472,10 @@ export class ChatApp {
     if (listening) {
       this.ui.setVoiceListening(true);
       this.ui.setVoiceTranscript("", { state: "idle" });
-      this.ui.setVoiceStatus("En écoute… Parlez lorsque vous êtes prêt.", "info");
+      this.ui.setVoiceStatus(
+        "En écoute… Parlez lorsque vous êtes prêt.",
+        "info",
+      );
       return;
     }
     this.ui.setVoiceListening(false);
@@ -450,7 +508,8 @@ export class ChatApp {
   }
 
   handleVoiceTranscript(payload = {}) {
-    const transcript = typeof payload.transcript === "string" ? payload.transcript : "";
+    const transcript =
+      typeof payload.transcript === "string" ? payload.transcript : "";
     const isFinal = Boolean(payload.isFinal);
     const confidence =
       typeof payload.confidence === "number" ? payload.confidence : null;
@@ -478,7 +537,9 @@ export class ChatApp {
     if (this.voicePrefs.autoSend) {
       this.voiceState.awaitingResponse = true;
       const confidencePct =
-        confidence !== null ? Math.round(Math.max(0, Math.min(1, confidence)) * 100) : null;
+        confidence !== null
+          ? Math.round(Math.max(0, Math.min(1, confidence)) * 100)
+          : null;
       if (confidencePct !== null) {
         this.ui.setVoiceStatus(
           `Envoi du message dicté (${confidencePct}% de confiance)…`,
@@ -494,10 +555,7 @@ export class ChatApp {
       }
       this.ui.updatePromptMetrics();
       this.ui.autosizePrompt();
-      this.ui.setVoiceStatus(
-        "Message dicté. Vérifiez avant l'envoi.",
-        "info",
-      );
+      this.ui.setVoiceStatus("Message dicté. Vérifiez avant l'envoi.", "info");
       this.ui.scheduleVoiceStatusIdle(4500);
       this.voiceState.enabled = false;
     }
@@ -525,7 +583,11 @@ export class ChatApp {
       this.ui.setVoiceStatus("Lecture de la réponse…", "info");
       return;
     }
-    if (this.voicePrefs.autoSend && this.voiceState.enabled && !this.voiceState.awaitingResponse) {
+    if (
+      this.voicePrefs.autoSend &&
+      this.voiceState.enabled &&
+      !this.voiceState.awaitingResponse
+    ) {
       this.maybeRestartVoiceListening(800);
     }
     this.ui.scheduleVoiceStatusIdle(3500);
@@ -695,6 +757,124 @@ export class ChatApp {
     return "";
   }
 
+  formatEmbeddingResponse(result) {
+    const safeInline = (value) => {
+      if (value === null || typeof value === "undefined" || value === "") {
+        return "—";
+      }
+      return `\`${String(value).replace(/`/g, "\\`")}\``;
+    };
+    const vectors = Array.isArray(result?.vectors) ? result.vectors : [];
+    const dimsCandidate =
+      typeof result?.dims === "number" ? result.dims : Number(result?.dims);
+    const dims = Number.isFinite(dimsCandidate)
+      ? Number(dimsCandidate)
+      : Array.isArray(vectors[0])
+        ? vectors[0].length
+        : 0;
+    const countCandidate =
+      typeof result?.count === "number" ? result.count : Number(result?.count);
+    const count = Number.isFinite(countCandidate)
+      ? Number(countCandidate)
+      : vectors.length;
+    const normalised = Boolean(result?.normalised);
+    const summaryLines = [
+      `- **Backend :** ${safeInline(result?.backend ?? "inconnu")}`,
+      `- **Modèle :** ${safeInline(result?.model ?? "inconnu")}`,
+      `- **Dimensions :** ${dims || 0}`,
+      `- **Vecteurs générés :** ${count}`,
+      `- **Normalisation appliquée :** ${normalised ? "Oui" : "Non"}`,
+    ];
+
+    const vectorSections = [];
+    vectors.forEach((vector, index) => {
+      if (!Array.isArray(vector)) {
+        return;
+      }
+      const previewLength = Math.min(12, vector.length);
+      const previewValues = vector.slice(0, previewLength).map((value) => {
+        const numeric = typeof value === "number" ? value : Number(value);
+        if (Number.isFinite(numeric)) {
+          return Number.parseFloat(numeric.toFixed(6));
+        }
+        return value;
+      });
+      const previewJson = JSON.stringify(previewValues, null, 2);
+      let section = [
+        `**${vectors.length > 1 ? `Vecteur ${index + 1}` : "Vecteur"}**`,
+        "```json",
+        `${previewJson}${vector.length > previewLength ? "\n// …" : ""}`,
+        "```",
+      ].join("\n");
+      if (vector.length > previewLength) {
+        const fullVector = vector.map((value) => {
+          const numeric = typeof value === "number" ? value : Number(value);
+          return Number.isFinite(numeric) ? numeric : value;
+        });
+        section += `\n\n<details><summary>Vecteur complet ${index + 1}</summary>\n\n\`\`\`json\n${JSON.stringify(
+          fullVector,
+          null,
+          2,
+        )}\n\`\`\`\n\n</details>`;
+      }
+      vectorSections.push(section);
+    });
+
+    const sections = ["### Résultat d'embedding", summaryLines.join("\n")];
+    if (vectorSections.length > 0) {
+      sections.push(vectorSections.join("\n\n"));
+    } else {
+      sections.push("**Aucune composante d'embedding n'a été renvoyée.**");
+    }
+    return sections.join("\n\n");
+  }
+
+  presentEmbeddingResult(result) {
+    const vectors = Array.isArray(result?.vectors) ? result.vectors : [];
+    const dimsCandidate =
+      typeof result?.dims === "number" ? result.dims : Number(result?.dims);
+    const dims = Number.isFinite(dimsCandidate)
+      ? Number(dimsCandidate)
+      : Array.isArray(vectors[0])
+        ? vectors[0].length
+        : 0;
+    const countCandidate =
+      typeof result?.count === "number" ? result.count : Number(result?.count);
+    const count = Number.isFinite(countCandidate)
+      ? Number(countCandidate)
+      : vectors.length;
+    const normalised = Boolean(result?.normalised);
+    const metaBits = ["Embedding"];
+    if (dims) {
+      metaBits.push(`${dims} dims`);
+    }
+    if (count) {
+      metaBits.push(`${count} vecteur${count > 1 ? "s" : ""}`);
+    }
+    if (normalised) {
+      metaBits.push("Normalisé");
+    }
+    const message = this.formatEmbeddingResponse(result);
+    this.ui.appendMessage("assistant", message, {
+      timestamp: nowISO(),
+      metaSuffix: metaBits.join(" • "),
+      metadata: {
+        mode: "embed",
+        dims,
+        backend:
+          typeof result?.backend === "string" && result.backend
+            ? result.backend
+            : null,
+        model:
+          typeof result?.model === "string" && result.model
+            ? result.model
+            : null,
+        count,
+        normalised,
+      },
+    });
+  }
+
   handleVoiceAssistantCompletion() {
     if (!this.voicePrefs) {
       return;
@@ -706,7 +886,11 @@ export class ChatApp {
       this.maybeRestartVoiceListening(800);
       return;
     }
-    if (this.voicePrefs.playback && this.speech && this.speech.isSynthesisSupported()) {
+    if (
+      this.voicePrefs.playback &&
+      this.speech &&
+      this.speech.isSynthesisSupported()
+    ) {
       this.ui.setVoiceStatus("Lecture de la réponse…", "info");
       const utterance = this.speech.speak(latest, {
         lang: this.voicePrefs.language,
