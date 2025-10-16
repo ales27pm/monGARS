@@ -927,6 +927,21 @@ export class ChatApp {
         count,
         normalised,
       },
+      embeddingData: {
+        backend:
+          typeof result?.backend === "string" && result.backend
+            ? result.backend
+            : null,
+        model:
+          typeof result?.model === "string" && result.model
+            ? result.model
+            : null,
+        dims,
+        count,
+        normalised,
+        vectors,
+        raw: result,
+      },
     });
   }
 
