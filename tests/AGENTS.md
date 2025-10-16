@@ -42,3 +42,5 @@ suites.
 
 Default command is `pytest`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1`
 for triage. Generate coverage with `pytest --cov=monGARS --cov=modules` when requested.
+Run suites from the repository root so module paths resolve (e.g. `pytest tests/test_embeddings.py`);
+avoid the `pytest monGARS/tests/...` form that failed in CI on 2025-10-16.
