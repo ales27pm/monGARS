@@ -90,7 +90,7 @@ def _collect_marker_violations() -> list[str]:
 
 
 def test_incomplete_logic_markers_absent() -> None:
-    """Ensure TODO/FIXME/XXX markers and unfinished stubs stay out of the repo."""
+    """Ensure TODO/FIXME/XXX markers and unfinished placeholders stay out of the repo."""
 
     violations = _collect_marker_violations()
     assert (

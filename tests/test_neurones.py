@@ -7,7 +7,7 @@ from monGARS.core import neurones
 
 
 @pytest.fixture(autouse=True)
-def stub_tiered_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+def fake_tiered_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyTieredCache:
         def __init__(self) -> None:
             self.time = 0.0
@@ -161,7 +161,7 @@ async def test_embedding_cache_expiry_and_recaching(
     assert fallback2 is False
     assert dummy_model.calls == []
 
-    # Advance the stub cache time to simulate expiry
+    # Advance the fake cache time to simulate expiry
     system._cache.time += 2  # type: ignore[attr-defined]
 
     dummy_model.calls.clear()

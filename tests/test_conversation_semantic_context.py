@@ -10,7 +10,7 @@ from monGARS.core.conversation import ConversationalModule
 from monGARS.core.persistence import VectorMatch
 
 
-class _StubLLMIntegration:
+class _FakeLLMIntegration:
     def __init__(self) -> None:
         self.prompts: list[str] = []
         self.calls: list[dict[str, object]] = []
@@ -25,9 +25,9 @@ class _StubLLMIntegration:
             }
         )
         return {
-            "text": "stub-response",
+            "text": "sample-response",
             "confidence": 0.73,
-            "source": "stub",
+            "source": "sample",
             "adapter_version": "baseline",
         }
 
@@ -38,12 +38,12 @@ class _StubLLMIntegration:
         return default
 
 
-class _StubCuriosityEngine:
+class _FakeCuriosityEngine:
     async def detect_gaps(self, context):  # type: ignore[override]
         return {"status": "sufficient_knowledge"}
 
 
-class _StubReasoner:
+class _FakeReasoner:
     async def reason(self, query: str, user_id: str):  # type: ignore[override]
         return {"result": ""}
 
@@ -53,7 +53,7 @@ class _ReasoningStub:
         return {"result": "Analyse en profondeur."}
 
 
-class _StubDynamic:
+class _FakeDynamic:
     async def get_personality_traits(self, user_id: str, interactions):  # type: ignore[override]
         return {"tone": "neutral"}
 
@@ -61,7 +61,7 @@ class _StubDynamic:
         return f"{text}::{user_id}"
 
 
-class _StubMimicry:
+class _FakeMimicry:
     async def update_profile(self, user_id: str, payload):  # type: ignore[override]
         return None
 
@@ -69,19 +69,19 @@ class _StubMimicry:
         return f"{text}::styled"
 
 
-class _StubPersonalityEngine:
-    async def profile(self, user_id: str):  # pragma: no cover - unused stub hook
+class _FakePersonalityEngine:
+    async def profile(self, user_id: str):  # pragma: no cover - unused hook
         return {}
 
 
-class _StubCaptioner:
+class _FakeCaptioner:
     async def generate_caption(
         self, image_data: bytes
     ):  # pragma: no cover - unused in tests
         return "caption"
 
 
-class _StubSpeechTurn:
+class _FakeSpeechTurn:
     def __init__(self, text: str) -> None:
         self.text = text
 
@@ -89,16 +89,16 @@ class _StubSpeechTurn:
         return {"text": self.text}
 
 
-class _StubSpeakerService:
+class _FakeSpeakerService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
 
     async def speak(self, text: str, *, session_id: str | None = None):  # type: ignore[override]
         self.calls.append((text, session_id))
-        return _StubSpeechTurn(text)
+        return _FakeSpeechTurn(text)
 
 
-class _StubMemoryService:
+class _FakeMemoryService:
     def __init__(self) -> None:
         self.store_calls: list[tuple[str, str, str]] = []
         base_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -125,7 +125,7 @@ class _StubMemoryService:
         )
 
 
-class _StubEvolutionEngine:
+class _FakeEvolutionEngine:
     def __init__(self) -> None:
         self.samples: list[dict[str, object]] = []
 
@@ -133,7 +133,7 @@ class _StubEvolutionEngine:
         self.samples.append(payload)
 
 
-class _StubPersistenceRepository:
+class _FakePersistenceRepository:
     def __init__(self, matches: list[VectorMatch]) -> None:
         self._matches = matches
         self.vector_queries: list[dict[str, object]] = []
@@ -158,23 +158,23 @@ def _build_conversational_module(
     matches: list[VectorMatch],
     *,
     reasoner: object | None = None,
-    llm: _StubLLMIntegration | None = None,
-) -> tuple[ConversationalModule, _StubLLMIntegration, _StubPersistenceRepository]:
-    llm_instance = llm or _StubLLMIntegration()
-    persistence = _StubPersistenceRepository(matches)
+    llm: _FakeLLMIntegration | None = None,
+) -> tuple[ConversationalModule, _FakeLLMIntegration, _FakePersistenceRepository]:
+    llm_instance = llm or _FakeLLMIntegration()
+    persistence = _FakePersistenceRepository(matches)
     module = ConversationalModule(
         llm=llm_instance,
-        reasoner=reasoner or _StubReasoner(),
-        curiosity=_StubCuriosityEngine(),
-        dynamic=_StubDynamic(),
-        mimicry=_StubMimicry(),
-        personality=_StubPersonalityEngine(),
-        captioner=_StubCaptioner(),
-        memory=_StubMemoryService(),
-        speaker=_StubSpeakerService(),
+        reasoner=reasoner or _FakeReasoner(),
+        curiosity=_FakeCuriosityEngine(),
+        dynamic=_FakeDynamic(),
+        mimicry=_FakeMimicry(),
+        personality=_FakePersonalityEngine(),
+        captioner=_FakeCaptioner(),
+        memory=_FakeMemoryService(),
+        speaker=_FakeSpeakerService(),
         persistence=persistence,
     )
-    module.evolution_engine = _StubEvolutionEngine()
+    module.evolution_engine = _FakeEvolutionEngine()
     return module, llm_instance, persistence
 
 
@@ -227,7 +227,7 @@ async def test_generate_response_injects_semantic_context(monkeypatch) -> None:
     assert llm.calls[0]["task_type"] == "general"
     assert llm.calls[0]["response_hints"] is None
     assert saved_interaction.input_data["llm_task_type"] == "general"
-    assert saved_interaction.output_data["llm_source"] == "stub"
+    assert saved_interaction.output_data["llm_source"] == "sample"
 
 
 @pytest.mark.asyncio
@@ -251,15 +251,15 @@ async def test_generate_response_skips_semantic_context_when_disabled(
 
 
 @pytest.mark.asyncio
-async def test_reasoning_stub_returns_unexpected_type(monkeypatch):
+async def test_reasoning_double_returns_unexpected_type(monkeypatch):
     from monGARS.core import conversation as conversation_module
 
     class BadStubMimicry:
         async def __call__(self, *args, **kwargs):
             return 42  # Unexpected type
 
-    llm = conversation_module._StubLLM()
-    persistence = conversation_module._StubPersistence()
+    llm = conversation_module._FakeLLM()
+    persistence = conversation_module._FakePersistence()
     prompt = "Test prompt"
     try:
         await conversation_module.generate_response(
@@ -276,19 +276,19 @@ async def test_reasoning_stub_returns_unexpected_type(monkeypatch):
 async def test_llm_integration_raises_exception(monkeypatch):
     from monGARS.core import conversation as conversation_module
 
-    class FailingLLM(conversation_module._StubLLM):
+    class FailingLLM(conversation_module._FakeLLM):
         async def __call__(self, *args, **kwargs):
             raise RuntimeError("LLM failure")
 
     llm = FailingLLM()
-    persistence = conversation_module._StubPersistence()
+    persistence = conversation_module._FakePersistence()
     prompt = "Test prompt"
     try:
         await conversation_module.generate_response(
             prompt=prompt,
             llm=llm,
             persistence=persistence,
-            mimicry=conversation_module._StubMimicry(),
+            mimicry=conversation_module._FakeMimicry(),
         )
     except Exception as e:
         assert isinstance(e, RuntimeError)
@@ -365,7 +365,7 @@ async def test_generate_response_warns_on_unexpected_reasoner_output(
 async def test_generate_response_propagates_llm_failures(monkeypatch) -> None:
     from monGARS.core import conversation as conversation_module
 
-    class _FailingLLM(_StubLLMIntegration):
+    class _FailingLLM(_FakeLLMIntegration):
         async def generate_response(  # type: ignore[override]
             self, prompt: str, task_type: str = "general", *, response_hints=None
         ):

@@ -16,7 +16,7 @@ os.environ.setdefault("SECRET_KEY", "export-secret")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 
-def _install_kubernetes_stub() -> None:
+def _install_kubernetes_shim() -> None:
     exceptions = types.SimpleNamespace(ApiException=Exception)
     client = types.SimpleNamespace(AppsV1Api=object, exceptions=exceptions)
     config = types.SimpleNamespace(
@@ -32,8 +32,8 @@ def _install_kubernetes_stub() -> None:
 
 
 def _ensure_lightweight_kubernetes() -> None:
-    force_stub = os.environ.get("MON_GARS_FORCE_KUBE_STUB", "1") == "1"
-    if not force_stub:
+    force_shim = os.environ.get("MON_GARS_FORCE_KUBE_SHIM", "1") == "1"
+    if not force_shim:
         try:
             import kubernetes  # type: ignore  # noqa: F401
 
@@ -41,7 +41,7 @@ def _ensure_lightweight_kubernetes() -> None:
         except Exception:
             pass
     if "kubernetes" not in sys.modules:
-        _install_kubernetes_stub()
+        _install_kubernetes_shim()
 
 
 def _generate_schema() -> dict[str, Any]:

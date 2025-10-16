@@ -11,7 +11,7 @@ import pytest
 
 
 class FakeTensor:
-    """Minimal tensor stub supporting the ops used by the wrapper."""
+    """Minimal tensor double supporting the ops used by the wrapper."""
 
     __array_priority__ = 1000
 

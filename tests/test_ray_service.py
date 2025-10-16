@@ -49,7 +49,7 @@ def _make_success_trainer(*, suffix: str) -> type:
             try:
                 config_payload = json.loads(Path(training_config_path).read_text())
             except FileNotFoundError:
-                config_payload = {"model_name_or_path": "stub"}
+                config_payload = {"model_name_or_path": "sample-model"}
             (self.output_dir / "training_config.json").write_text(
                 json.dumps(config_payload)
             )
@@ -76,7 +76,7 @@ def _make_success_trainer(*, suffix: str) -> type:
             (wrapper_dir / "config.json").write_text(
                 json.dumps(
                     {
-                        "base_model_id": "stub-base",
+                        "base_model_id": "sample-base",
                         "lora_dir": adapter_dir.as_posix(),
                         "max_seq_len": 512,
                         "quantized_4bit": True,

@@ -526,7 +526,7 @@ class CuriosityEngine:
 
         Neo4j's async driver exposes several shapes depending on how results are
         consumed (``result.data()``, ``result.records()`` or async iteration).
-        Tests also exercise lightweight stubs that mimic a subset of that
+        Tests also exercise lightweight fakes that mimic a subset of that
         interface. To keep the engine decoupled from a specific driver, this
         helper attempts the common access patterns in order and coerces each row
         into a mapping.

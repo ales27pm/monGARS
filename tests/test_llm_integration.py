@@ -57,7 +57,7 @@ def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> No
     assert "dolphin" in result["reference_model"].lower()
 
 
-class _StubProvisionStatus:
+class _FakeProvisionStatus:
     """Lightweight status object used to exercise model provisioning paths."""
 
     __slots__ = ("role", "name", "provider", "action", "detail")
@@ -78,19 +78,19 @@ class _StubProvisionStatus:
         self.detail = detail
 
 
-class _StubProvisionReport:
+class _FakeProvisionReport:
     """Container mimicking :class:`ModelProvisionReport` for tests."""
 
     __slots__ = ("statuses",)
 
-    def __init__(self, statuses: list[_StubProvisionStatus]) -> None:
+    def __init__(self, statuses: list[_FakeProvisionStatus]) -> None:
         self.statuses = statuses
 
     def actions_by_role(self) -> dict[str, str]:
         return {status.role: status.action for status in self.statuses}
 
 
-def _build_stubbed_llm_integration(
+def _build_fake_llm_integration(
     monkeypatch: pytest.MonkeyPatch,
     *,
     ollama_client: object | None,
@@ -104,7 +104,7 @@ def _build_stubbed_llm_integration(
         raising=False,
     )
 
-    class _StubModelManager:
+    class _FakeModelManager:
         def __init__(self, _settings) -> None:
             self.ensured_roles: list[list[str]] = []
 
@@ -113,38 +113,38 @@ def _build_stubbed_llm_integration(
 
         async def ensure_models_installed(
             self, roles, *, force: bool = False
-        ) -> _StubProvisionReport:
+        ) -> _FakeProvisionReport:
             normalized = [role.lower() for role in (roles or [])] or [
                 "general",
                 "coding",
             ]
             self.ensured_roles.append(normalized)
             statuses = [
-                _StubProvisionStatus(role=role, name=f"{role}-model")
+                _FakeProvisionStatus(role=role, name=f"{role}-model")
                 for role in normalized
             ]
-            return _StubProvisionReport(statuses)
+            return _FakeProvisionReport(statuses)
 
-    monkeypatch.setattr(llm_integration, "LLMModelManager", _StubModelManager)
+    monkeypatch.setattr(llm_integration, "LLMModelManager", _FakeModelManager)
     monkeypatch.setattr(llm_integration, "ollama", ollama_client, raising=False)
 
     return llm_integration.LLMIntegration()
 
 
 @pytest.fixture
-def stubbed_llm_integration(
+def fake_llm_integration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> llm_integration.LLMIntegration:
     """Return a fallback-only LLM integration instance for testing."""
 
-    return _build_stubbed_llm_integration(monkeypatch, ollama_client=None)
+    return _build_fake_llm_integration(monkeypatch, ollama_client=None)
 
 
 @pytest.fixture
-def stubbed_llm_integration_with_ollama(
+def fake_llm_integration_with_ollama(
     monkeypatch: pytest.MonkeyPatch,
 ) -> llm_integration.LLMIntegration:
-    """Return an integration configured with a stubbed Ollama client."""
+    """Return an integration configured with a fake Ollama client."""
 
     class _FakeOllamaClient:
         def __init__(self) -> None:
@@ -155,14 +155,14 @@ def stubbed_llm_integration_with_ollama(
             return {"message": {"content": "ollama-text"}}
 
     fake_client = _FakeOllamaClient()
-    integration = _build_stubbed_llm_integration(monkeypatch, ollama_client=fake_client)
+    integration = _build_fake_llm_integration(monkeypatch, ollama_client=fake_client)
     setattr(integration, "_test_ollama_client", fake_client)
     return integration
 
 
 @pytest.mark.asyncio
 async def test_call_local_provider_uses_slot_fallback(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ensure slot fallback handles the absence of the Ollama client."""
@@ -174,16 +174,16 @@ async def test_call_local_provider_uses_slot_fallback(
         return fallback_response
 
     monkeypatch.setattr(
-        stubbed_llm_integration,
+        fake_llm_integration,
         "_slot_model_fallback",
         _fake_slot,
         raising=False,
     )
 
-    result = await stubbed_llm_integration._call_local_provider("hi", "general")
+    result = await fake_llm_integration._call_local_provider("hi", "general")
 
     assert result == fallback_response
-    assert stubbed_llm_integration._model_manager.ensured_roles[-1] == [
+    assert fake_llm_integration._model_manager.ensured_roles[-1] == [
         "general",
         "coding",
     ]
@@ -191,7 +191,7 @@ async def test_call_local_provider_uses_slot_fallback(
 
 @pytest.mark.asyncio
 async def test_call_local_provider_errors_when_slot_unavailable(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A missing slot fallback should surface a provider error."""
@@ -200,19 +200,19 @@ async def test_call_local_provider_errors_when_slot_unavailable(
         return None
 
     monkeypatch.setattr(
-        stubbed_llm_integration,
+        fake_llm_integration,
         "_slot_model_fallback",
         _no_slot,
         raising=False,
     )
 
     with pytest.raises(llm_integration.LLMIntegration.LocalProviderError):
-        await stubbed_llm_integration._call_local_provider("hello", "general")
+        await fake_llm_integration._call_local_provider("hello", "general")
 
 
 @pytest.mark.asyncio
 async def test_call_local_provider_handles_unexpected_slot_fallback_type(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ensure malformed slot fallbacks raise a provider error."""
@@ -221,21 +221,21 @@ async def test_call_local_provider_handles_unexpected_slot_fallback_type(
         return "unexpected_string"
 
     monkeypatch.setattr(
-        stubbed_llm_integration,
+        fake_llm_integration,
         "_slot_model_fallback",
         _unexpected_slot,
         raising=False,
     )
 
     with pytest.raises(llm_integration.LLMIntegration.LocalProviderError) as exc_info:
-        await stubbed_llm_integration._call_local_provider("hey", "general")
+        await fake_llm_integration._call_local_provider("hey", "general")
 
     assert "unexpected payload" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
 async def test_call_local_provider_prefers_ollama_when_available(
-    stubbed_llm_integration_with_ollama: llm_integration.LLMIntegration,
+    fake_llm_integration_with_ollama: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify Ollama is used when available and slot fallback is bypassed."""
@@ -258,13 +258,13 @@ async def test_call_local_provider_prefers_ollama_when_available(
         return {"message": {"content": "slot"}}
 
     monkeypatch.setattr(
-        stubbed_llm_integration_with_ollama,
+        fake_llm_integration_with_ollama,
         "_ollama_cb",
         _PassthroughBreaker(),
         raising=False,
     )
     monkeypatch.setattr(
-        stubbed_llm_integration_with_ollama,
+        fake_llm_integration_with_ollama,
         "_slot_model_fallback",
         _fake_slot,
         raising=False,
@@ -276,21 +276,21 @@ async def test_call_local_provider_prefers_ollama_when_available(
         raising=False,
     )
 
-    result = await stubbed_llm_integration_with_ollama._call_local_provider(
+    result = await fake_llm_integration_with_ollama._call_local_provider(
         "hi", "general"
     )
 
     assert result["message"]["content"] == "ollama-text"
     assert fallback_calls == [], "Slot fallback should not execute"
     assert call_sequence == ["breaker", "to_thread"]
-    fake_client = stubbed_llm_integration_with_ollama._test_ollama_client
+    fake_client = fake_llm_integration_with_ollama._test_ollama_client
     assert fake_client.calls[0]["model"] == "general-model"
     assert fake_client.calls[0]["messages"][0]["content"] == "hi"
 
 
 @pytest.mark.asyncio
 async def test_generate_response_uses_slot_fallback_when_needed(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The public API should surface slot fallbacks transparently."""
@@ -303,13 +303,13 @@ async def test_generate_response_uses_slot_fallback_when_needed(
         return {"message": {"content": f"slot::{prompt}::{task_type}"}}
 
     monkeypatch.setattr(
-        stubbed_llm_integration,
+        fake_llm_integration,
         "_slot_model_fallback",
         _fake_slot,
         raising=False,
     )
 
-    result = await stubbed_llm_integration.generate_response("hello", "general")
+    result = await fake_llm_integration.generate_response("hello", "general")
 
     assert result["text"] == "slot::hello::general"
     assert result["tokens_used"] == len(result["text"].split())
@@ -317,26 +317,23 @@ async def test_generate_response_uses_slot_fallback_when_needed(
 
 
 def test_infer_task_type_detects_coding(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
 ) -> None:
     """Ensure the heuristic flips to the coding role for code-heavy prompts."""
 
     assert (
-        stubbed_llm_integration.infer_task_type("Outline a plan for the weekend")
+        fake_llm_integration.infer_task_type("Outline a plan for the weekend")
         == "general"
     )
     assert (
-        stubbed_llm_integration.infer_task_type("```python\nprint('hi')\n```")
+        fake_llm_integration.infer_task_type("```python\nprint('hi')\n```") == "coding"
+    )
+    assert (
+        fake_llm_integration.infer_task_type("Create a Java class with a main function")
         == "coding"
     )
     assert (
-        stubbed_llm_integration.infer_task_type(
-            "Create a Java class with a main function"
-        )
-        == "coding"
-    )
-    assert (
-        stubbed_llm_integration.infer_task_type(
+        fake_llm_integration.infer_task_type(
             "function greet() {\n    return 'hello';\n}"
         )
         == "coding"
@@ -368,30 +365,30 @@ def test_infer_task_type_detects_coding(
     ],
 )
 def test_infer_task_type_edge_cases(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
     prompt: str,
     expected: str,
 ) -> None:
-    assert stubbed_llm_integration.infer_task_type(prompt) == expected
+    assert fake_llm_integration.infer_task_type(prompt) == expected
 
 
 def test_infer_task_type_requires_multiple_signals(
-    stubbed_llm_integration: llm_integration.LLMIntegration,
+    fake_llm_integration: llm_integration.LLMIntegration,
 ) -> None:
     """Single keyword references should not force the coding route."""
 
     assert (
-        stubbed_llm_integration.infer_task_type(
+        fake_llm_integration.infer_task_type(
             "Can you explain what a function is in mathematics?"
         )
         == "general"
     )
     assert (
-        stubbed_llm_integration.infer_task_type("Talk about the Rust belt economy")
+        fake_llm_integration.infer_task_type("Talk about the Rust belt economy")
         == "general"
     )
     assert (
-        stubbed_llm_integration.infer_task_type(
+        fake_llm_integration.infer_task_type(
             "Share the agenda:\n    This indented paragraph describes outcomes."
         )
         == "general"

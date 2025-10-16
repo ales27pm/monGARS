@@ -154,17 +154,17 @@ class _StubConversationalModule:
                 "session_id": session_id,
             }
         )
-        await hippocampus.store(user_id, query, "stubbed-response")
+        await hippocampus.store(user_id, query, "sampled-response")
         speech_turn = {
             "turn_id": "turn-1",
-            "text": "stubbed-response",
+            "text": "sampled-response",
             "created_at": datetime.now(UTC).isoformat(),
             "segments": [],
             "average_words_per_second": 2.0,
             "tempo": 1.0,
         }
         return {
-            "text": "stubbed-response",
+            "text": "sampled-response",
             "confidence": 0.75,
             "processing_time": 0.2,
             "speech_turn": speech_turn,
@@ -210,7 +210,7 @@ async def test_services_roundtrip_against_fastapi(
         result = await services.post_chat_message(
             "u1", token, "hi<script>alert(1)</script>"
         )
-        assert result["response"] == "stubbed-response"
+        assert result["response"] == "sampled-response"
         assert "error" not in result
         assert result["confidence"] == pytest.approx(0.75)
         assert result["processing_time"] == pytest.approx(0.2)
@@ -224,7 +224,7 @@ async def test_services_roundtrip_against_fastapi(
         assert history
         latest = history[0]
         assert latest["query"] == "hialert(1)"
-        assert latest["response"] == "stubbed-response"
+        assert latest["response"] == "sampled-response"
     finally:
         await app.router.shutdown()
         app.dependency_overrides.pop(get_persistence_repository, None)

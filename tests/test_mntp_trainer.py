@@ -11,7 +11,7 @@ from models.datasets.catalog import DatasetCatalog
 from modules.neurons.training.mntp_trainer import MNTPTrainer
 
 
-class _CounterStub:
+class _CounterRecorder:
     def __init__(self) -> None:
         self.calls: list[tuple[int | float, dict[str, Any]]] = []
 
@@ -41,7 +41,7 @@ class _FakeCuda:
         return 2 * 1024**3
 
 
-class _TorchStub:
+class _TorchShim:
     def __init__(self) -> None:
         self.float32 = "float32"
         self.float16 = "float16"
@@ -71,7 +71,7 @@ class _DummyModel:
         path = Path(output_dir)
         path.mkdir(parents=True, exist_ok=True)
         (path / "adapter_config.json").write_text("{}", encoding="utf-8")
-        (path / "adapter_model.safetensors").write_bytes(b"stub")
+        (path / "adapter_model.safetensors").write_bytes(b"sample")
 
 
 class _DummyTokenizer:
@@ -174,8 +174,8 @@ def trainer_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_path.write_text(
         json.dumps(
             {
-                "model_name_or_path": "stub-model",
-                "dataset_name": "stub-dataset",
+                "model_name_or_path": "sample-model",
+                "dataset_name": "sample-dataset",
                 "max_seq_length": 64,
             }
         ),
@@ -184,14 +184,14 @@ def trainer_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     output_dir = tmp_path / "output"
     trainer = MNTPTrainer(str(config_path), str(output_dir))
     trainer.config = {
-        "model_name_or_path": "stub-model",
-        "dataset_name": "stub-dataset",
+        "model_name_or_path": "sample-model",
+        "dataset_name": "sample-dataset",
         "max_seq_length": 64,
     }
 
-    torch_stub = _TorchStub()
+    torch_shim = _TorchShim()
     monkeypatch.setattr(
-        "modules.neurons.training.mntp_trainer.torch", torch_stub, raising=False
+        "modules.neurons.training.mntp_trainer.torch", torch_shim, raising=False
     )
     monkeypatch.setattr(
         "modules.neurons.training.mntp_trainer.ModelSlotManager",
@@ -214,9 +214,9 @@ def trainer_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         raising=False,
     )
 
-    cycle_counter = _CounterStub()
-    failure_counter = _CounterStub()
-    token_counter = _CounterStub()
+    cycle_counter = _CounterRecorder()
+    failure_counter = _CounterRecorder()
+    token_counter = _CounterRecorder()
     monkeypatch.setattr(
         "modules.neurons.training.mntp_trainer.TRAINING_CYCLE_COUNTER",
         cycle_counter,
@@ -247,7 +247,7 @@ def trainer_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     return {
         "trainer": trainer,
-        "torch_stub": torch_stub,
+        "torch_shim": torch_shim,
         "cycle_counter": cycle_counter,
         "failure_counter": failure_counter,
         "token_counter": token_counter,
