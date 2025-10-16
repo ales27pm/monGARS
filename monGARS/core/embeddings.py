@@ -24,6 +24,10 @@ from monGARS.core.inference_utils import prepare_tokenizer_inputs
 logger = logging.getLogger(__name__)
 
 
+SUPPORTED_EMBEDDING_BACKENDS = frozenset({"huggingface", "ollama"})
+"""Backends available for LLM2Vec embedding generation."""
+
+
 @dataclass(slots=True)
 class EmbeddingBatch:
     """Container describing an embedding request outcome."""
@@ -42,12 +46,13 @@ class LLM2VecEmbedder:
     def __init__(
         self,
         *,
+        backend: str | None = None,
         settings: Settings | None = None,
         neuron_manager_factory: Callable[[], NeuronManager] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._backend = self._resolve_backend(
-            getattr(self._settings, "embedding_backend", "huggingface")
+            backend or getattr(self._settings, "embedding_backend", "huggingface")
         )
         self._manager_factory = neuron_manager_factory or self._default_manager_factory
         self._manager: NeuronManager | None = None
@@ -59,6 +64,12 @@ class LLM2VecEmbedder:
         self._ollama_module: Any | None = None
         self._ollama_client: Any | None = None
         self._ollama_client_lock = asyncio.Lock()
+
+    @property
+    def backend(self) -> str:
+        """Return the active embedding backend."""
+
+        return self._backend
 
     async def encode_batch(
         self, texts: Sequence[str], *, instruction: str | None = None
@@ -224,7 +235,7 @@ class LLM2VecEmbedder:
 
     def _resolve_backend(self, configured: str | None) -> str:
         value = (configured or "huggingface").strip().lower()
-        if value not in {"huggingface", "ollama"}:
+        if value not in SUPPORTED_EMBEDDING_BACKENDS:
             logger.warning(
                 "llm2vec.embedding_backend.invalid",
                 extra={"backend": configured},

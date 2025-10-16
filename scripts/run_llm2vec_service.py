@@ -18,7 +18,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from monGARS.config import Settings, get_settings
-from monGARS.core.embeddings import EmbeddingBackendError, LLM2VecEmbedder
+from monGARS.core.embeddings import (
+    SUPPORTED_EMBEDDING_BACKENDS,
+    EmbeddingBackendError,
+    LLM2VecEmbedder,
+)
 from scripts.export_llm2vec_wrapper import load_wrapper_config
 
 LOGGER = logging.getLogger("llm2vec.service")
@@ -48,6 +52,7 @@ class EmbeddingService:
         self,
         model_dir: Path | None,
         *,
+        backend: str | None = None,
         prefer_merged: bool = False,
         device: str | None = None,
         load_in_4bit: bool | None = None,
@@ -59,7 +64,9 @@ class EmbeddingService:
         self.device = device
         self.load_in_4bit = load_in_4bit
         self._settings = settings or get_settings()
-        self.backend = getattr(self._settings, "embedding_backend", "huggingface")
+        self.backend = self._normalise_backend(
+            backend or getattr(self._settings, "embedding_backend", "huggingface")
+        )
         self._wrapper_factory: Callable[[], Any] | None = None
         self._wrapper: Any | None = None
         self._embedder: LLM2VecEmbedder | None = None
@@ -67,18 +74,34 @@ class EmbeddingService:
             if self.model_dir is None:
                 raise ValueError("model_dir is required for the Hugging Face backend")
             self.config = load_wrapper_config(self.model_dir)
+            self.config.setdefault("embedding_backend", self.backend)
             self._wrapper_factory = wrapper_factory or self._load_wrapper
         else:
             self.config = {
                 "base_model_id": self._settings.ollama_embedding_model,
-                "embedding_backend": "ollama",
+                "embedding_backend": self.backend,
                 "embedding_options": {
                     "normalise": False,
                     "dimensions": int(self._settings.llm2vec_vector_dimensions),
                 },
             }
-            self._embedder = LLM2VecEmbedder(settings=self._settings)
+            self._embedder = LLM2VecEmbedder(
+                backend=self.backend, settings=self._settings
+            )
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _normalise_backend(candidate: str | None) -> str:
+        if candidate is None:
+            return "huggingface"
+        normalised = str(candidate).strip().lower()
+        if normalised not in SUPPORTED_EMBEDDING_BACKENDS:
+            LOGGER.warning(
+                "llm2vec.embedding.backend.unsupported",
+                extra={"backend": candidate},
+            )
+            return "huggingface"
+        return normalised
 
     def _load_wrapper(self) -> Any:
         if self.model_dir is None:
@@ -233,7 +256,7 @@ def create_app(service: EmbeddingService) -> FastAPI:
         payload = {
             "status": "ok",
             "model": service.config.get("base_model_id"),
-            "backend": service.config.get("embedding_backend"),
+            "backend": service.config.get("embedding_backend", service.backend),
             "pooling": service.config.get("embedding_options", {}).get("pooling_mode"),
             "max_length": service.config.get("embedding_options", {}).get("max_length"),
             "normalise": service.config.get("embedding_options", {}).get(
@@ -252,7 +275,7 @@ def create_app(service: EmbeddingService) -> FastAPI:
             vectors=vectors,
             dims=dims,
             count=len(vectors),
-            backend=service.config.get("embedding_backend", "huggingface"),
+            backend=service.backend,
             model=service.config.get("base_model_id", "unknown"),
             normalised=normalised,
         )
@@ -322,7 +345,11 @@ def main() -> None:
     settings = get_settings()
 
     model_dir: Path | None = Path(args.model_dir) if args.model_dir else None
-    if settings.embedding_backend == "huggingface":
+    resolved_backend = EmbeddingService._normalise_backend(
+        getattr(settings, "embedding_backend", "huggingface")
+    )
+
+    if resolved_backend == "huggingface":
         if model_dir is None:
             raise SystemExit(
                 "--model-dir is required when using the Hugging Face backend"
@@ -338,8 +365,17 @@ def main() -> None:
     else:
         load_in_4bit = None
 
+    LOGGER.info(
+        "Starting LLM2Vec embedding service",
+        extra={
+            "backend": resolved_backend,
+            "model_dir": str(model_dir) if model_dir else None,
+        },
+    )
+
     service = EmbeddingService(
         model_dir,
+        backend=resolved_backend,
         prefer_merged=args.prefer_merged,
         device=args.device,
         load_in_4bit=load_in_4bit,

@@ -42,6 +42,10 @@ from monGARS.utils.hardware import recommended_worker_count
 log = logging.getLogger(__name__)
 
 
+EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = ("huggingface", "ollama")
+"""Supported embedding backends exposed to runtime configuration."""
+
+
 # --- helpers (top-level) ---
 
 
@@ -425,7 +429,7 @@ class Settings(BaseSettings):
         if value is None:
             return "huggingface"
         normalised = str(value).strip().lower()
-        allowed = {"huggingface", "ollama"}
+        allowed = set(EMBEDDING_BACKEND_CHOICES)
         if normalised not in allowed:
             options = ", ".join(sorted(allowed))
             raise ValueError(f"embedding_backend must be one of: {options}")
