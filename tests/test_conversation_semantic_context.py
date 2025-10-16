@@ -7,6 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from monGARS.core.conversation import ConversationalModule
+from monGARS.core.inference_utils import (
+    CHATML_BEGIN_OF_TEXT,
+    CHATML_END_HEADER,
+    CHATML_START_HEADER,
+)
 from monGARS.core.persistence import VectorMatch
 
 
@@ -15,13 +20,21 @@ class _FakeLLMIntegration:
         self.prompts: list[str] = []
         self.calls: list[dict[str, object]] = []
 
-    async def generate_response(self, prompt: str, task_type: str = "general", *, response_hints=None):  # type: ignore[override]
+    async def generate_response(
+        self,
+        prompt: str,
+        task_type: str = "general",
+        *,
+        response_hints=None,
+        formatted_prompt: str | None = None,
+    ):  # type: ignore[override]
         self.prompts.append(prompt)
         self.calls.append(
             {
                 "prompt": prompt,
                 "task_type": task_type,
                 "response_hints": response_hints,
+                "formatted_prompt": formatted_prompt,
             }
         )
         return {
@@ -223,6 +236,11 @@ async def test_generate_response_injects_semantic_context(monkeypatch) -> None:
         == "semantic-question"
     )
     assert saved_interaction.input_data["semantic_prompt"] == prompt
+    chatml_prompt = saved_interaction.input_data["chatml_prompt"]
+    assert chatml_prompt.startswith(CHATML_BEGIN_OF_TEXT)
+    assert chatml_prompt.endswith(
+        f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"
+    )
     assert saved_interaction.context["semantic_matches"]
     assert llm.calls[0]["task_type"] == "general"
     assert llm.calls[0]["response_hints"] is None
@@ -367,7 +385,12 @@ async def test_generate_response_propagates_llm_failures(monkeypatch) -> None:
 
     class _FailingLLM(_FakeLLMIntegration):
         async def generate_response(  # type: ignore[override]
-            self, prompt: str, task_type: str = "general", *, response_hints=None
+            self,
+            prompt: str,
+            task_type: str = "general",
+            *,
+            response_hints=None,
+            formatted_prompt: str | None = None,
         ):
             raise RuntimeError("LLM failure")
 

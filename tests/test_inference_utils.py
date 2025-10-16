@@ -1,4 +1,10 @@
-from monGARS.core.inference_utils import build_context_prompt, prepare_tokenizer_inputs
+from monGARS.core.inference_utils import (
+    CHATML_BEGIN_OF_TEXT,
+    CHATML_END_OF_TURN,
+    build_context_prompt,
+    prepare_tokenizer_inputs,
+    render_chat_prompt_from_text,
+)
 
 
 class _TensorStub:
@@ -76,3 +82,16 @@ def test_build_context_prompt_includes_sections() -> None:
     assert "Recent conversation turns" in prompt
     assert "Archived interactions" in prompt
     assert "Current user request" in prompt
+
+
+def test_render_chat_prompt_from_text_wraps_chatml_tokens() -> None:
+    prompt = render_chat_prompt_from_text(
+        "Summarise the deployment status.",
+        system_prompt="You are Dolphin.",
+        include_assistant_stub=False,
+    )
+
+    assert prompt.text == "Summarise the deployment status."
+    assert prompt.chatml.startswith(CHATML_BEGIN_OF_TEXT)
+    assert prompt.chatml.endswith(CHATML_END_OF_TURN)
+    assert "You are Dolphin." in prompt.chatml

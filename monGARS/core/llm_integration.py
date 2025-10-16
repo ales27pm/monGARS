@@ -934,6 +934,7 @@ class LLMIntegration:
         task_type: str = "general",
         *,
         response_hints: dict[str, Any] | None = None,
+        formatted_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Generate a response for ``prompt`` using the configured LLM stack."""
 
@@ -946,7 +947,8 @@ class LLMIntegration:
             adapter_metadata = None
             if self._current_adapter_version != "baseline":
                 self._update_adapter_version(None)
-        cache_key = self._cache_key(task_type, prompt)
+        active_prompt = formatted_prompt or prompt
+        cache_key = self._cache_key(task_type, active_prompt)
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:
             return cached_response
@@ -962,13 +964,15 @@ class LLMIntegration:
                     },
                 )
                 try:
-                    response = await self._ray_call(prompt, task_type, adapter_metadata)
+                    response = await self._ray_call(
+                        active_prompt, task_type, adapter_metadata
+                    )
                 except Exception:
                     logger.exception(
                         "llm.ray.error",
                         extra={"task_type": task_type, "cache_key": cache_key},
                     )
-                    response = await self._call_local_provider(prompt, task_type)
+                    response = await self._call_local_provider(active_prompt, task_type)
                     response_source = "local"
                     logger.info(
                         "llm.ray.fallback_local",
@@ -989,7 +993,9 @@ class LLMIntegration:
                                 "error": error_message,
                             },
                         )
-                        response = await self._call_local_provider(prompt, task_type)
+                        response = await self._call_local_provider(
+                            active_prompt, task_type
+                        )
                         response_source = "local"
                         logger.info(
                             "llm.ray.fallback_local",
@@ -1000,7 +1006,7 @@ class LLMIntegration:
                             },
                         )
             else:
-                response = await self._call_local_provider(prompt, task_type)
+                response = await self._call_local_provider(active_prompt, task_type)
         except self.LocalProviderError as exc:
             return await self._fail(cache_key, exc.message)
         generated_text = self._extract_text(response)
@@ -1013,7 +1019,7 @@ class LLMIntegration:
                 },
             )
             try:
-                response = await self._call_local_provider(prompt, task_type)
+                response = await self._call_local_provider(active_prompt, task_type)
             except self.LocalProviderError as exc:
                 return await self._fail(cache_key, exc.message)
             generated_text = self._extract_text(response)

@@ -21,6 +21,7 @@ from tenacity import (
 )
 
 from ..config import Settings, get_settings
+from .inference_utils import render_chat_prompt_from_text
 from ..init_db import (
     ConversationHistory,
     Interaction,
@@ -134,7 +135,13 @@ class PersistenceRepository:
             segments.append(f"User: {query.strip()}")
         if response:
             segments.append(f"Assistant: {response.strip()}")
-        return "\n".join(segments)
+        combined = "\n".join(segments)
+        system_prompt = getattr(self._settings, "llm2vec_instruction", None)
+        return render_chat_prompt_from_text(
+            combined,
+            system_prompt=system_prompt,
+            include_assistant_stub=False,
+        ).chatml
 
     async def _history_embedding_vector(
         self, query: str | None, response: str | None

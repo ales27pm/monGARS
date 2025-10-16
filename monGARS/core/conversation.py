@@ -10,7 +10,7 @@ from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.evolution_engine import EvolutionEngine
 from monGARS.core.hippocampus import Hippocampus
-from monGARS.core.inference_utils import build_context_prompt
+from monGARS.core.inference_utils import ChatPrompt, build_converged_chat_prompt
 from monGARS.core.llm_integration import LLMIntegration
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
@@ -413,13 +413,19 @@ class ConversationalModule:
         *,
         history_pairs: Sequence[tuple[str, str]],
         semantic_context: Sequence[dict[str, object]],
-    ) -> str:
+    ) -> ChatPrompt:
         """Render the final prompt combining history and semantic recall."""
 
-        return build_context_prompt(
+        system_prompt = getattr(
+            settings,
+            "llm_system_prompt",
+            "You are Dolphin, a helpful assistant.",
+        )
+        return build_converged_chat_prompt(
             refined_prompt,
             history_pairs=history_pairs,
             semantic_context=semantic_context,
+            system_prompt=system_prompt,
         )
 
     async def generate_response(
@@ -447,7 +453,7 @@ class ConversationalModule:
             query=augmented_query,
             history_pairs=history_pairs,
         )
-        prompt = self._compose_prompt(
+        prompt_bundle = self._compose_prompt(
             refined_prompt,
             history_pairs=history_pairs,
             semantic_context=semantic_context,
@@ -456,9 +462,10 @@ class ConversationalModule:
         task_type = self._determine_task_type(original_query)
 
         llm_out = await self.llm.generate_response(
-            prompt,
+            prompt_bundle.text,
             task_type=task_type,
             response_hints=response_hints,
+            formatted_prompt=prompt_bundle.chatml,
         )
         recent_interactions = [
             {"message": query_text, "response": response_text}
@@ -487,7 +494,8 @@ class ConversationalModule:
                     "refined_prompt": refined_prompt,
                     "reasoning_metadata": dict(reasoning_metadata),
                     "semantic_context": semantic_context,
-                    "semantic_prompt": prompt,
+                    "semantic_prompt": prompt_bundle.text,
+                    "chatml_prompt": prompt_bundle.chatml,
                     "llm_task_type": task_type,
                     "llm_response_hints": response_hints,
                 },

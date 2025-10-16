@@ -10,6 +10,13 @@ from monGARS.core.embeddings import (
     EmbeddingBackendError,
     LLM2VecEmbedder,
 )
+from monGARS.core.inference_utils import (
+    CHATML_BEGIN_OF_TEXT,
+    CHATML_END_HEADER,
+    CHATML_END_OF_TURN,
+    CHATML_START_HEADER,
+    render_chat_prompt_from_text,
+)
 
 
 class _RecordingManager:
@@ -92,7 +99,16 @@ async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
 
     assert len(result.vectors) == len(payloads)
     assert all(len(vector) == 3 for vector in result.vectors)
-    assert manager.calls == [payloads[:2], payloads[2:4], payloads[4:]]
+    expected_batches = [payloads[:2], payloads[2:4], payloads[4:]]
+    assert len(manager.calls) == len(expected_batches)
+    for recorded_batch, expected_texts in zip(manager.calls, expected_batches):
+        assert len(recorded_batch) == len(expected_texts)
+        for rendered, original in zip(recorded_batch, expected_texts):
+            assert rendered.startswith(CHATML_BEGIN_OF_TEXT)
+            assert rendered.endswith(CHATML_END_OF_TURN)
+            assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in rendered
+            assert settings.llm2vec_instruction in rendered
+            assert original in rendered
     assert result.used_fallback is False
 
 
@@ -314,8 +330,15 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
     assert len(reference_vectors) == 1
     reference_vector = reference_vectors[0]
 
+    system_prompt = getattr(dolphin3_tiny_embedder._settings, "llm2vec_instruction", None)
+    formatted = render_chat_prompt_from_text(
+        text,
+        system_prompt=system_prompt,
+        include_assistant_stub=False,
+    ).chatml
+
     tokenized = tokenizer(
-        [text],
+        [formatted],
         return_tensors="pt",
         padding=True,
         truncation=True,

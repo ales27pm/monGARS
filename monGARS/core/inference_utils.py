@@ -2,8 +2,59 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+CHATML_BEGIN_OF_TEXT = "<|begin_of_text|>"
+CHATML_START_HEADER = "<|start_header_id|>"
+CHATML_END_HEADER = "<|end_header_id|>"
+CHATML_END_OF_TURN = "<|eot_id|>"
+
+
+@dataclass(slots=True)
+class ChatPrompt:
+    """Container bundling human readable and ChatML-formatted prompts."""
+
+    text: str
+    chatml: str
+
+
+def _normalise_text(value: str) -> str:
+    return value.strip() if value else ""
+
+
+def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -> str:
+    normalized_role = role.strip().lower() or "user"
+    normalized_content = _normalise_text(content)
+    segment = (
+        f"{CHATML_START_HEADER}{normalized_role}{CHATML_END_HEADER}\n\n"
+        f"{normalized_content}"
+    )
+    if terminate:
+        segment += CHATML_END_OF_TURN
+    return segment
+
+
+def render_chat_prompt_from_text(
+    user_text: str,
+    *,
+    system_prompt: str | None = None,
+    include_assistant_stub: bool = True,
+) -> ChatPrompt:
+    """Return a :class:`ChatPrompt` wrapping ``user_text`` in ChatML markers."""
+
+    segments: list[str] = [CHATML_BEGIN_OF_TEXT]
+    if system_prompt and system_prompt.strip():
+        segments.append(_render_chatml_segment("system", system_prompt))
+    segments.append(_render_chatml_segment("user", user_text))
+    if include_assistant_stub:
+        segments.append(
+            _render_chatml_segment("assistant", "", terminate=False)
+        )
+    chatml = "".join(segments)
+    return ChatPrompt(text=user_text, chatml=chatml)
+
 
 
 def _move_to_device(value: Any, device: Any | None) -> Any:
@@ -124,3 +175,27 @@ def build_context_prompt(
     sections.append(template.format(prompt=refined_prompt))
 
     return "\n\n".join(section for section in sections if section.strip())
+
+
+def build_converged_chat_prompt(
+    refined_prompt: str,
+    *,
+    history_pairs: Sequence[tuple[str, str]] | None = None,
+    semantic_context: Sequence[Mapping[str, object]] | None = None,
+    instruction_template: str | None = None,
+    system_prompt: str | None = None,
+    include_assistant_stub: bool = True,
+) -> ChatPrompt:
+    """Return a :class:`ChatPrompt` that mirrors chat preprocessing for embeddings."""
+
+    context_text = build_context_prompt(
+        refined_prompt,
+        history_pairs=history_pairs,
+        semantic_context=semantic_context,
+        instruction_template=instruction_template,
+    )
+    return render_chat_prompt_from_text(
+        context_text,
+        system_prompt=system_prompt,
+        include_assistant_stub=include_assistant_stub,
+    )
