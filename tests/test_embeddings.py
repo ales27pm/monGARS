@@ -5,7 +5,11 @@ import math
 import pytest
 
 from monGARS.config import Settings
-from monGARS.core.embeddings import EmbeddingBackendError, LLM2VecEmbedder
+from monGARS.core.embeddings import (
+    Dolphin3Embedder,
+    EmbeddingBackendError,
+    LLM2VecEmbedder,
+)
 
 
 class _RecordingManager:
@@ -250,3 +254,113 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
         sum(component * component for component in batch_ninf.vectors[0])
     )
     assert magnitude_ninf == pytest.approx(1.0)
+
+
+@pytest.fixture(scope="session")
+def dolphin3_tiny_embedder() -> Dolphin3Embedder:
+    """Return a Dolphin 3 embedder backed by a tiny reference checkpoint."""
+
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    embedder = Dolphin3Embedder(
+        settings=Settings(),
+        model_id="hf-internal-testing/tiny-random-LlamaForCausalLM",
+        device="cpu",
+        batch_size=2,
+        max_length=64,
+        target_dimension=3072,
+        torch_dtype="float32",
+    )
+
+    try:
+        embedder.encode(["warmup sentence for dolphin 3 embeddings"])
+    except EmbeddingBackendError as exc:  # pragma: no cover - dependency missing
+        pytest.skip(f"Unable to load Dolphin 3 embedding model: {exc}")
+    except OSError as exc:  # pragma: no cover - HF download/IO failure
+        pytest.skip(f"Dolphin 3 embedding model unavailable: {exc}")
+
+    return embedder
+
+
+def test_dolphin3_embedder_respects_configured_dimension(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    vectors = dolphin3_tiny_embedder.encode(["alpha", "beta"])
+
+    assert len(vectors) == 2
+    assert {len(vector) for vector in vectors} == {
+        dolphin3_tiny_embedder.vector_dimension
+    }
+
+    torch_module, model, _ = dolphin3_tiny_embedder._ensure_model_components()
+    hidden_size = getattr(getattr(model, "config", None), "hidden_size", None)
+    if (
+        isinstance(hidden_size, int)
+        and hidden_size < dolphin3_tiny_embedder.vector_dimension
+    ):
+        tail_index = hidden_size
+        for vector in vectors:
+            assert all(abs(component) < 1e-6 for component in vector[tail_index:])
+
+
+def test_dolphin3_embedder_matches_manual_mean_pool(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    torch_module, model, tokenizer = dolphin3_tiny_embedder._ensure_model_components()
+    text = "verifying dolphin 3 pooling"
+
+    reference_vectors = dolphin3_tiny_embedder.encode([text])
+    assert len(reference_vectors) == 1
+    reference_vector = reference_vectors[0]
+
+    tokenized = tokenizer(
+        [text],
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=dolphin3_tiny_embedder.max_length,
+    )
+    prepared = {
+        name: (
+            tensor.to(dolphin3_tiny_embedder.device)
+            if hasattr(tensor, "to")
+            else tensor
+        )
+        for name, tensor in tokenized.items()
+    }
+    with torch_module.inference_mode():
+        outputs = model(**prepared, output_hidden_states=True)
+
+    final_hidden = outputs.hidden_states[-1]
+    mask = prepared.get("attention_mask")
+    if mask is None:
+        mask_tensor = torch_module.ones(
+            final_hidden.shape[:2],
+            dtype=final_hidden.dtype,
+            device=final_hidden.device,
+        )
+    else:
+        mask_tensor = mask.to(final_hidden.dtype)
+    mask_tensor = mask_tensor.unsqueeze(-1)
+
+    pooled = torch_module.nan_to_num(
+        (final_hidden * mask_tensor).sum(dim=1) / mask_tensor.sum(dim=1).clamp_min(1.0),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )[0]
+    manual_vector = pooled.detach().to(torch_module.float32)
+    if manual_vector.device.type != "cpu":
+        manual_vector = manual_vector.cpu()
+    if manual_vector.shape[-1] > dolphin3_tiny_embedder.vector_dimension:
+        manual_vector = manual_vector[: dolphin3_tiny_embedder.vector_dimension]
+    elif manual_vector.shape[-1] < dolphin3_tiny_embedder.vector_dimension:
+        pad = torch_module.zeros(
+            dolphin3_tiny_embedder.vector_dimension - manual_vector.shape[-1],
+            dtype=manual_vector.dtype,
+            device=manual_vector.device,
+        )
+        manual_vector = torch_module.cat((manual_vector, pad), dim=0)
+
+    assert reference_vector == pytest.approx(manual_vector.tolist(), abs=1e-5)

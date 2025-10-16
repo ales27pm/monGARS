@@ -1,17 +1,21 @@
-"""Utilities for generating high-fidelity embeddings with LLM2Vec."""
+"""Utilities for generating high-fidelity embeddings with LLM2Vec and Dolphin 3."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import hmac
+import importlib
+import importlib.util
 import json
 import logging
 import math
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from modules.neurons.core import NeuronManager
 from monGARS.config import Settings, get_settings
@@ -278,6 +282,299 @@ class LLM2VecEmbedder:
             return False
 
 
+class Dolphin3Embedder:
+    """Generate embeddings by mean-pooling Dolphin 3.0 hidden states."""
+
+    DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
+    DEFAULT_MAX_LENGTH = 4096
+    DEFAULT_BATCH_SIZE = 2
+    DEFAULT_VECTOR_DIMENSION = 3072
+
+    def __init__(
+        self,
+        *,
+        settings: Settings | None = None,
+        model_id: str | None = None,
+        device: str | None = None,
+        batch_size: int | None = None,
+        max_length: int | None = None,
+        target_dimension: int | None = None,
+        torch_dtype: str | None = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._model_id = (
+            model_id
+            or getattr(self._settings, "dolphin3_embedding_model_id", None)
+            or self.DEFAULT_MODEL_ID
+        )
+        self._max_length = max(
+            1,
+            int(
+                max_length
+                or getattr(
+                    self._settings,
+                    "dolphin3_embedding_max_length",
+                    self.DEFAULT_MAX_LENGTH,
+                )
+            ),
+        )
+        self._batch_size = max(
+            1,
+            int(
+                batch_size
+                or getattr(
+                    self._settings,
+                    "dolphin3_embedding_batch_size",
+                    self.DEFAULT_BATCH_SIZE,
+                )
+            ),
+        )
+        self._target_dimension = max(
+            1,
+            int(
+                target_dimension
+                or getattr(
+                    self._settings,
+                    "dolphin3_embedding_vector_dimensions",
+                    self.DEFAULT_VECTOR_DIMENSION,
+                )
+            ),
+        )
+        self._device_preference = device or getattr(
+            self._settings, "dolphin3_embedding_device", None
+        )
+        self._torch_dtype_config = torch_dtype or getattr(
+            self._settings, "dolphin3_embedding_torch_dtype", None
+        )
+        self._torch_module: Any | None = None
+        self._tokenizer = None
+        self._model = None
+        self._device = None
+        self._model_lock = threading.Lock()
+
+    @property
+    def vector_dimension(self) -> int:
+        """Return the configured output dimensionality."""
+
+        return self._target_dimension
+
+    @property
+    def device(self):  # noqa: ANN201 - torch device type resolved dynamically
+        """Return the resolved torch device used for inference."""
+
+        if self._device is not None:
+            return self._device
+        self._ensure_model_components()
+        return self._device
+
+    @property
+    def max_length(self) -> int:
+        """Return the maximum sequence length used during tokenisation."""
+
+        return self._max_length
+
+    def encode(self, texts: Sequence[str]) -> list[list[float]]:
+        """Return embeddings for ``texts`` using Dolphin 3 mean pooling."""
+
+        if not texts:
+            return []
+
+        torch_module, model, tokenizer = self._ensure_model_components()
+        device = self.device
+        results: list[list[float]] = []
+
+        for start in range(0, len(texts), self._batch_size):
+            chunk = [str(text) for text in texts[start : start + self._batch_size]]
+            tokenized = tokenizer(
+                chunk,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self._max_length,
+            )
+            prepared_inputs = {
+                name: tensor.to(device) if hasattr(tensor, "to") else tensor
+                for name, tensor in tokenized.items()
+            }
+            with torch_module.inference_mode():
+                outputs = model(**prepared_inputs, output_hidden_states=True)
+
+            hidden_states = getattr(outputs, "hidden_states", None)
+            if not hidden_states:
+                raise EmbeddingBackendError(
+                    "Dolphin 3 model did not return hidden states"
+                )
+
+            final_hidden = hidden_states[-1]
+            attention_mask = prepared_inputs.get("attention_mask")
+            if attention_mask is None:
+                mask = torch_module.ones(
+                    final_hidden.shape[:2],
+                    dtype=final_hidden.dtype,
+                    device=final_hidden.device,
+                )
+            else:
+                mask = attention_mask.to(final_hidden.dtype)
+            mask = mask.unsqueeze(-1)
+
+            masked_hidden = final_hidden * mask
+            token_counts = mask.sum(dim=1).clamp_min(1.0)
+            pooled = torch_module.nan_to_num(
+                masked_hidden.sum(dim=1) / token_counts,
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+
+            for vector in pooled:
+                results.append(self._prepare_output_vector(vector, torch_module))
+
+        return results
+
+    def _ensure_model_components(self):  # noqa: ANN201 - runtime torch types
+        if self._model is not None and self._tokenizer is not None:
+            return self._torch_module, self._model, self._tokenizer
+
+        with self._model_lock:
+            if self._model is not None and self._tokenizer is not None:
+                return self._torch_module, self._model, self._tokenizer
+
+            torch_module = self._load_torch()
+            tokenizer_cls, model_cls = self._load_transformers_classes()
+
+            device = self._resolve_device(torch_module)
+            dtype = self._resolve_torch_dtype(torch_module, device)
+
+            tokenizer = tokenizer_cls.from_pretrained(
+                self._model_id,
+                use_fast=True,
+                trust_remote_code=True,
+            )
+
+            model_options: dict[str, Any] = {"trust_remote_code": True}
+            if dtype is not None:
+                model_options["torch_dtype"] = dtype
+
+            model = model_cls.from_pretrained(self._model_id, **model_options)
+            model.eval()
+            if device is not None and getattr(model, "hf_device_map", None) is None:
+                model.to(device)
+
+            self._torch_module = torch_module
+            self._tokenizer = tokenizer
+            self._model = model
+            self._device = device
+
+        return self._torch_module, self._model, self._tokenizer
+
+    def _prepare_output_vector(self, tensor, torch_module):  # noqa: ANN201
+        vector = tensor.detach().to(torch_module.float32)
+        if vector.device.type != "cpu":
+            vector = vector.cpu()
+
+        components = vector.shape[-1]
+        if components > self._target_dimension:
+            vector = vector[: self._target_dimension]
+        elif components < self._target_dimension:
+            pad = torch_module.zeros(
+                self._target_dimension - components,
+                dtype=vector.dtype,
+                device=vector.device,
+            )
+            vector = torch_module.cat((vector, pad), dim=0)
+
+        return vector.tolist()
+
+    def _load_torch(self):  # noqa: ANN201 - runtime torch module
+        if self._torch_module is not None:
+            return self._torch_module
+
+        spec = importlib.util.find_spec("torch")
+        if spec is None:
+            raise EmbeddingBackendError(
+                "PyTorch is required for Dolphin 3 embeddings but is not installed"
+            )
+        torch_module = importlib.import_module("torch")
+        self._torch_module = torch_module
+        return torch_module
+
+    def _load_transformers_classes(self) -> tuple[Any, Any]:
+        spec = importlib.util.find_spec("transformers")
+        if spec is None:
+            raise EmbeddingBackendError(
+                "transformers is required for Dolphin 3 embeddings but is not installed"
+            )
+        transformers_module = importlib.import_module("transformers")
+        tokenizer_cls = getattr(transformers_module, "AutoTokenizer", None)
+        model_cls = getattr(transformers_module, "AutoModelForCausalLM", None)
+        if tokenizer_cls is None or model_cls is None:
+            raise EmbeddingBackendError(
+                "transformers does not provide AutoTokenizer/AutoModelForCausalLM"
+            )
+        return tokenizer_cls, model_cls
+
+    def _resolve_device(self, torch_module):  # noqa: ANN201
+        if self._device_preference:
+            return torch_module.device(self._device_preference)
+        if torch_module.cuda.is_available():
+            return torch_module.device("cuda")
+        mps_available = getattr(torch_module.backends, "mps", None)
+        if mps_available and mps_available.is_available():
+            return torch_module.device("mps")
+        return torch_module.device("cpu")
+
+    def _resolve_torch_dtype(self, torch_module, device):  # noqa: ANN201
+        if not self._torch_dtype_config:
+            return None
+
+        configured = str(self._torch_dtype_config).strip()
+        if not configured:
+            return None
+
+        alias_map = {
+            "fp16": "float16",
+            "half": "float16",
+            "float16": "float16",
+            "float32": "float32",
+            "fp32": "float32",
+            "float": "float32",
+            "bf16": "bfloat16",
+            "bfloat16": "bfloat16",
+        }
+        candidates = {
+            configured,
+            configured.lower(),
+            alias_map.get(configured.lower(), ""),
+        }
+        dtype = None
+        for candidate in candidates:
+            if not candidate:
+                continue
+            attribute = getattr(torch_module, candidate, None)
+            if attribute is not None and getattr(attribute, "__class__", None):
+                dtype = attribute
+                break
+
+        if dtype is None:
+            logger.warning(
+                "dolphin3.embedding.dtype_unresolved",
+                extra={"value": self._torch_dtype_config},
+            )
+            return None
+
+        if device.type == "cpu" and getattr(dtype, "__str__", lambda: "")() not in {
+            "torch.float32",
+            "torch.float64",
+        }:
+            logger.warning(
+                "dolphin3.embedding.dtype_cpu_override",
+                extra={"requested": self._torch_dtype_config},
+            )
+            return torch_module.float32
+
+        return dtype
+
+
 @lru_cache(maxsize=1)
 def get_llm2vec_embedder() -> LLM2VecEmbedder:
     """Return a cached embedder instance for reuse across services."""
@@ -285,9 +582,18 @@ def get_llm2vec_embedder() -> LLM2VecEmbedder:
     return LLM2VecEmbedder()
 
 
+@lru_cache(maxsize=1)
+def get_dolphin3_embedder() -> Dolphin3Embedder:
+    """Return a cached Dolphin 3 embedder instance."""
+
+    return Dolphin3Embedder()
+
+
 __all__ = [
     "EmbeddingBackendError",
     "EmbeddingBatch",
+    "Dolphin3Embedder",
     "LLM2VecEmbedder",
+    "get_dolphin3_embedder",
     "get_llm2vec_embedder",
 ]
