@@ -21,7 +21,6 @@ from tenacity import (
 )
 
 from ..config import Settings, get_settings
-from .inference_utils import render_chat_prompt_from_text
 from ..init_db import (
     ConversationHistory,
     Interaction,
@@ -34,6 +33,7 @@ from .embeddings import (
     LLM2VecEmbedder,
     get_llm2vec_embedder,
 )
+from .inference_utils import render_chat_prompt_from_text
 
 try:  # pragma: no cover - optional dependency
     from transformers import AutoTokenizer  # type: ignore

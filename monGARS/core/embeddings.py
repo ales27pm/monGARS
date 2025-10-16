@@ -374,9 +374,7 @@ class LLM2VecEmbedder:
         except Exception:  # pragma: no cover - defensive guard
             return False
 
-    async def _ollama_embed(
-        self, payloads: Sequence[str]
-    ) -> Sequence[Sequence[float]]:
+    async def _ollama_embed(self, payloads: Sequence[str]) -> Sequence[Sequence[float]]:
         module = self._ensure_ollama_module()
         if module is None:
             logger.error("llm2vec.ollama.module_missing")

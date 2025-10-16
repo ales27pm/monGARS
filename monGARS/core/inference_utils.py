@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 CHATML_BEGIN_OF_TEXT = "<|begin_of_text|>"
@@ -49,12 +49,9 @@ def render_chat_prompt_from_text(
         segments.append(_render_chatml_segment("system", system_prompt))
     segments.append(_render_chatml_segment("user", user_text))
     if include_assistant_stub:
-        segments.append(
-            _render_chatml_segment("assistant", "", terminate=False)
-        )
+        segments.append(_render_chatml_segment("assistant", "", terminate=False))
     chatml = "".join(segments)
     return ChatPrompt(text=user_text, chatml=chatml)
-
 
 
 def _move_to_device(value: Any, device: Any | None) -> Any:

@@ -39,6 +39,9 @@ highlights the non-negotiable guardrails and shared context.
 - Document architecture, configuration, and operator workflows in `docs/` or the README when behaviour
     changes.
 - ✅ Run `isort --check --diff .` and `black --check .` locally before committing to avoid CI formatting failures.
+- 📌 Remember the 2025-10-16 CI failure where `isort` flagged `monGARS/core/inference_utils.py` and
+    `monGARS/core/persistence.py`; always re-run the formatters after touching shared inference helpers
+    to keep imports ordered and unblock the pipeline.
 
 ## Observability & Security
 
