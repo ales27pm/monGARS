@@ -45,6 +45,7 @@ from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_mani
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
 from monGARS.config import get_settings
 
+from .inference_utils import prepare_tokenizer_inputs
 from .model_manager import LLMModelManager, ModelDefinition
 from .model_slot_manager import ModelSlotManager
 from .ui_events import event_bus, make_event
@@ -890,10 +891,14 @@ class LLMIntegration:
             with ModelSlotManager("primary") as (model, tokenizer):
                 if model is None or tokenizer is None:
                     raise RuntimeError("Model slot returned empty artefacts")
-                inputs = tokenizer(prompt, return_tensors="pt")
                 device = getattr(model, "device", None)
-                if device is not None:
-                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                inputs, _ = prepare_tokenizer_inputs(
+                    tokenizer,
+                    prompt,
+                    device=device,
+                    padding=False,
+                    truncation=False,
+                )
                 with torch.inference_mode():
                     output = model.generate(**inputs, **slot_generation_kwargs)
                 if hasattr(output, "sequences"):
