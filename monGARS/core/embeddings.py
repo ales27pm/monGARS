@@ -19,8 +19,8 @@ from typing import Any, Mapping
 
 from modules.neurons.core import NeuronManager
 from monGARS.config import Settings, get_settings
-from monGARS.core.embedding_backends import normalise_embedding_backend
 from monGARS.core.constants import DEFAULT_EMBEDDING_BACKEND
+from monGARS.core.embedding_backends import normalise_embedding_backend
 from monGARS.core.inference_utils import prepare_tokenizer_inputs
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,8 @@ class LLM2VecEmbedder:
     ) -> None:
         self._settings = settings or get_settings()
         self._backend = self._resolve_backend(
-            backend or getattr(self._settings, "embedding_backend", DEFAULT_EMBEDDING_BACKEND)
+            backend
+            or getattr(self._settings, "embedding_backend", DEFAULT_EMBEDDING_BACKEND)
         )
         self._manager_factory = neuron_manager_factory or self._default_manager_factory
         self._manager: NeuronManager | None = None
