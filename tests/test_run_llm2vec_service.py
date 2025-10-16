@@ -61,7 +61,8 @@ def test_embedding_service_exposes_health_and_embed(tmp_path: Path) -> None:
 
 
 def test_embedding_service_ollama_backend(monkeypatch) -> None:
-    async def fake_encode_batch(self, texts, *, instruction=None):
+    async def fake_encode_batch(_self, texts, *, instruction=None):
+        del instruction
         return EmbeddingBatch(
             vectors=[[float(index), float(index + 1)] for index, _ in enumerate(texts)],
             used_fallback=False,
