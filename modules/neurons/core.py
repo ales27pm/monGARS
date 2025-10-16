@@ -442,9 +442,7 @@ class NeuronManager:
 
         torch_module = _get_torch_module()
         if torch_module is None:
-            logger.warning(
-                "Torch is unavailable; ignoring dtype override '%s'", dtype
-            )
+            logger.warning("Torch is unavailable; ignoring dtype override '%s'", dtype)
             return None
 
         attribute_name = normalized.split(".")[-1]
