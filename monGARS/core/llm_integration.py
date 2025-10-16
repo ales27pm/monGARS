@@ -45,7 +45,13 @@ from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_mani
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
 from monGARS.config import get_settings
 
-from .inference_utils import prepare_tokenizer_inputs
+from .inference_utils import (
+    CHATML_BEGIN_OF_TEXT,
+    CHATML_END_HEADER,
+    CHATML_END_OF_TURN,
+    CHATML_START_HEADER,
+    prepare_tokenizer_inputs,
+)
 from .model_manager import LLMModelManager, ModelDefinition
 from .model_slot_manager import ModelSlotManager
 from .ui_events import event_bus, make_event
@@ -320,6 +326,10 @@ class LLMIntegration:
 
     SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists", "skipped"})
     FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
+    _CHATML_SYSTEM_TOKEN = "<|system|>"
+    _CHATML_USER_TOKEN = "<|user|>"
+    _CHATML_ASSISTANT_TOKEN = "<|assistant|>"
+    _CHATML_END_TOKEN = "<|end|>"
     _CODE_BLOCK_PATTERN = re.compile(r"```")
     _CODE_DECLARATION_PATTERN = re.compile(
         r"\b("
@@ -526,10 +536,95 @@ class LLMIntegration:
             )
         self._ollama_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
         self._ray_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
+        raw_system_prompt = getattr(self._settings, "llm_system_prompt", None)
+        if isinstance(raw_system_prompt, str) and raw_system_prompt.strip():
+            self._default_system_prompt = raw_system_prompt.strip()
+        else:
+            self._default_system_prompt = "You are Dolphin, a helpful assistant."
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
         return f"{task_type}:{self._current_adapter_version}:{digest}"
+
+    @staticmethod
+    def _normalise_chatml_content(value: str) -> str:
+        if not value:
+            return ""
+        normalized = value.replace("\r\n", "\n")
+        return normalized.rstrip("\n")
+
+    @staticmethod
+    def _has_chatml_prefix(value: str) -> bool:
+        return value.lstrip().startswith(CHATML_BEGIN_OF_TEXT)
+
+    @classmethod
+    def _render_chatml_segment(
+        cls, role_token: str, content: str, *, terminate: bool = True
+    ) -> str:
+        normalized = cls._normalise_chatml_content(content)
+        segment = f"{role_token}\n\n{normalized}" if normalized else f"{role_token}\n\n"
+        if terminate:
+            segment += cls._CHATML_END_TOKEN
+        return segment
+
+    @classmethod
+    def _translate_legacy_chatml(cls, prompt: str) -> str:
+        converted = prompt
+        replacements = {
+            f"{CHATML_START_HEADER}system{CHATML_END_HEADER}": cls._CHATML_SYSTEM_TOKEN,
+            f"{CHATML_START_HEADER}user{CHATML_END_HEADER}": cls._CHATML_USER_TOKEN,
+            f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}": cls._CHATML_ASSISTANT_TOKEN,
+        }
+        for legacy, modern in replacements.items():
+            converted = converted.replace(legacy, modern)
+        converted = converted.replace(CHATML_END_OF_TURN, cls._CHATML_END_TOKEN)
+        return converted
+
+    def _build_chatml_prompt(
+        self, user_prompt: str, *, system_prompt: str | None = None
+    ) -> str:
+        segments = [CHATML_BEGIN_OF_TEXT]
+        if system_prompt:
+            segments.append(
+                self._render_chatml_segment(self._CHATML_SYSTEM_TOKEN, system_prompt)
+            )
+        segments.append(
+            self._render_chatml_segment(self._CHATML_USER_TOKEN, user_prompt)
+        )
+        segments.append(
+            self._render_chatml_segment(
+                self._CHATML_ASSISTANT_TOKEN, "", terminate=False
+            )
+        )
+        return "".join(segments)
+
+    def _ensure_chatml_prompt(self, prompt: str, formatted_prompt: str | None) -> str:
+        candidate = (
+            formatted_prompt
+            if formatted_prompt is not None and formatted_prompt.strip()
+            else prompt
+        )
+        if not candidate:
+            return self._build_chatml_prompt(
+                "", system_prompt=self._default_system_prompt
+            )
+        if CHATML_START_HEADER in candidate and CHATML_END_HEADER in candidate:
+            candidate = self._translate_legacy_chatml(candidate)
+        if self._CHATML_USER_TOKEN in candidate:
+            if self._CHATML_ASSISTANT_TOKEN not in candidate:
+                candidate = "".join(
+                    [
+                        candidate,
+                        self._render_chatml_segment(
+                            self._CHATML_ASSISTANT_TOKEN, "", terminate=False
+                        ),
+                    ]
+                )
+            if not self._has_chatml_prefix(candidate):
+                candidate = f"{CHATML_BEGIN_OF_TEXT}{candidate.lstrip()}"
+            return candidate
+        system_prompt = self._default_system_prompt
+        return self._build_chatml_prompt(candidate, system_prompt=system_prompt)
 
     async def _ensure_adapter_metadata(self) -> dict[str, str] | None:
         """Load manifest metadata if it changed since the last call."""
@@ -947,7 +1042,7 @@ class LLMIntegration:
             adapter_metadata = None
             if self._current_adapter_version != "baseline":
                 self._update_adapter_version(None)
-        active_prompt = formatted_prompt or prompt
+        active_prompt = self._ensure_chatml_prompt(prompt, formatted_prompt)
         cache_key = self._cache_key(task_type, active_prompt)
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:
@@ -972,7 +1067,7 @@ class LLMIntegration:
                         "llm.ray.error",
                         extra={"task_type": task_type, "cache_key": cache_key},
                     )
-                    response = await self._call_local_provider(prompt, task_type)
+                    response = await self._call_local_provider(active_prompt, task_type)
                     response_source = "local"
                     logger.info(
                         "llm.ray.fallback_local",
@@ -993,7 +1088,9 @@ class LLMIntegration:
                                 "error": error_message,
                             },
                         )
-                        response = await self._call_local_provider(prompt, task_type)
+                        response = await self._call_local_provider(
+                            active_prompt, task_type
+                        )
                         response_source = "local"
                         logger.info(
                             "llm.ray.fallback_local",
@@ -1004,7 +1101,7 @@ class LLMIntegration:
                             },
                         )
             else:
-                response = await self._call_local_provider(prompt, task_type)
+                response = await self._call_local_provider(active_prompt, task_type)
         except self.LocalProviderError as exc:
             return await self._fail(cache_key, exc.message)
         generated_text = self._extract_text(response)
@@ -1017,7 +1114,7 @@ class LLMIntegration:
                 },
             )
             try:
-                response = await self._call_local_provider(prompt, task_type)
+                response = await self._call_local_provider(active_prompt, task_type)
             except self.LocalProviderError as exc:
                 return await self._fail(cache_key, exc.message)
             generated_text = self._extract_text(response)
