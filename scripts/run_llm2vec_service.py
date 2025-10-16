@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence
 
@@ -16,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from monGARS.config import Settings, get_settings
+from monGARS.core.embeddings import EmbeddingBackendError, LLM2VecEmbedder
 from scripts.export_llm2vec_wrapper import load_wrapper_config
 
 LOGGER = logging.getLogger("llm2vec.service")
@@ -49,14 +52,30 @@ class EmbeddingService:
         device: str | None = None,
         load_in_4bit: bool | None = None,
         wrapper_factory: Callable[[], Any] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.model_dir = model_dir
         self.prefer_merged = prefer_merged
         self.device = device
         self.load_in_4bit = load_in_4bit
-        self.config = load_wrapper_config(model_dir)
-        self._wrapper_factory = wrapper_factory or self._load_wrapper
+        self._settings = settings or get_settings()
+        self.backend = getattr(self._settings, "embedding_backend", "huggingface")
+        self._wrapper_factory: Callable[[], Any] | None = None
         self._wrapper: Any | None = None
+        self._embedder: LLM2VecEmbedder | None = None
+        if self.backend == "huggingface":
+            self.config = load_wrapper_config(model_dir)
+            self._wrapper_factory = wrapper_factory or self._load_wrapper
+        else:
+            self.config = {
+                "base_model_id": self._settings.ollama_embedding_model,
+                "embedding_backend": "ollama",
+                "embedding_options": {
+                    "normalise": False,
+                    "dimensions": int(self._settings.llm2vec_vector_dimensions),
+                },
+            }
+            self._embedder = LLM2VecEmbedder(settings=self._settings)
         self._lock = asyncio.Lock()
 
     def _load_wrapper(self) -> Any:
@@ -113,6 +132,14 @@ class EmbeddingService:
         if not texts:
             raise HTTPException(status_code=400, detail="inputs must not be empty")
 
+        if self.backend == "ollama":
+            return await self._embed_with_ollama(texts, normalise)
+
+        return await self._embed_with_wrapper(texts, normalise)
+
+    async def _embed_with_wrapper(
+        self, texts: Sequence[str], normalise: bool | None
+    ) -> tuple[List[List[float]], bool]:
         wrapper = await self._ensure_wrapper()
         tensor = await asyncio.to_thread(
             wrapper.embed, list(texts), normalise=normalise
@@ -128,6 +155,58 @@ class EmbeddingService:
             if normalise is not None
             else self.config["embedding_options"].get("normalise", False)
         )
+
+    async def _embed_with_ollama(
+        self, texts: Sequence[str], normalise: bool | None
+    ) -> tuple[List[List[float]], bool]:
+        if self._embedder is None:
+            raise HTTPException(
+                status_code=500, detail="Ollama backend not initialised"
+            )
+
+        apply_normalise = bool(
+            normalise
+            if normalise is not None
+            else self.config["embedding_options"].get("normalise", False)
+        )
+
+        try:
+            batch = await self._embedder.encode_batch(
+                [str(text) for text in texts],
+                instruction=self._settings.llm2vec_instruction,
+            )
+        except EmbeddingBackendError as exc:  # pragma: no cover - backend failure
+            LOGGER.exception("ollama.embedding.unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama embedding backend is unavailable",
+            ) from exc
+
+        vectors = [list(vector) for vector in batch.vectors]
+        if apply_normalise:
+            vectors = [self._l2_normalise(vector) for vector in vectors]
+
+        if not vectors:
+            raise HTTPException(status_code=502, detail="No embeddings returned")
+
+        dims = len(vectors[0])
+        LOGGER.debug(
+            "Generated Ollama embeddings",
+            extra={
+                "count": len(vectors),
+                "dims": dims,
+                "normalise": apply_normalise,
+                "used_fallback": batch.used_fallback,
+            },
+        )
+        return vectors, apply_normalise
+
+    def _l2_normalise(self, vector: Sequence[float]) -> List[float]:
+        floats = [float(component) for component in vector]
+        magnitude = math.sqrt(sum(component * component for component in floats))
+        if magnitude == 0.0:
+            return floats
+        return [component / magnitude for component in floats]
 
 
 def create_app(service: EmbeddingService) -> FastAPI:
