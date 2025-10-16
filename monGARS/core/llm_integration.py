@@ -972,7 +972,7 @@ class LLMIntegration:
                         "llm.ray.error",
                         extra={"task_type": task_type, "cache_key": cache_key},
                     )
-                    response = await self._call_local_provider(active_prompt, task_type)
+                    response = await self._call_local_provider(prompt, task_type)
                     response_source = "local"
                     logger.info(
                         "llm.ray.fallback_local",
@@ -993,9 +993,7 @@ class LLMIntegration:
                                 "error": error_message,
                             },
                         )
-                        response = await self._call_local_provider(
-                            active_prompt, task_type
-                        )
+                        response = await self._call_local_provider(prompt, task_type)
                         response_source = "local"
                         logger.info(
                             "llm.ray.fallback_local",
@@ -1006,7 +1004,7 @@ class LLMIntegration:
                             },
                         )
             else:
-                response = await self._call_local_provider(active_prompt, task_type)
+                response = await self._call_local_provider(prompt, task_type)
         except self.LocalProviderError as exc:
             return await self._fail(cache_key, exc.message)
         generated_text = self._extract_text(response)
@@ -1019,7 +1017,7 @@ class LLMIntegration:
                 },
             )
             try:
-                response = await self._call_local_provider(active_prompt, task_type)
+                response = await self._call_local_provider(prompt, task_type)
             except self.LocalProviderError as exc:
                 return await self._fail(cache_key, exc.message)
             generated_text = self._extract_text(response)

@@ -262,6 +262,7 @@ async def test_generate_response_injects_semantic_context(monkeypatch) -> None:
     )
     assert saved_interaction.input_data["semantic_prompt"] == llm.calls[0]["prompt"]
     chatml_prompt = saved_interaction.input_data["chatml_prompt"]
+    assert llm.calls[0]["formatted_prompt"] == chatml_prompt
     assert chatml_prompt.startswith(CHATML_BEGIN_OF_TEXT)
     assert chatml_prompt.endswith(
         f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"

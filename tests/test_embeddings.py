@@ -101,9 +101,11 @@ async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
     assert all(len(vector) == 3 for vector in result.vectors)
     expected_batches = [payloads[:2], payloads[2:4], payloads[4:]]
     assert len(manager.calls) == len(expected_batches)
-    for recorded_batch, expected_texts in zip(manager.calls, expected_batches):
+    for recorded_batch, expected_texts in zip(
+        manager.calls, expected_batches, strict=True
+    ):
         assert len(recorded_batch) == len(expected_texts)
-        for rendered, original in zip(recorded_batch, expected_texts):
+        for rendered, original in zip(recorded_batch, expected_texts, strict=True):
             assert rendered.startswith(CHATML_BEGIN_OF_TEXT)
             assert rendered.endswith(CHATML_END_OF_TURN)
             assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in rendered
@@ -200,7 +202,9 @@ async def test_encode_batch_uses_fallback_when_manager_not_ready() -> None:
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_records_chatml_for_fallback_vectors(monkeypatch) -> None:
+async def test_encode_batch_records_chatml_for_fallback_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = Settings(
         llm2vec_max_batch_size=2,
         llm2vec_max_concurrency=1,

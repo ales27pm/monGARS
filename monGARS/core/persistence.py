@@ -136,6 +136,8 @@ class PersistenceRepository:
         if response:
             segments.append(f"Assistant: {response.strip()}")
         combined = "\n".join(segments)
+        if not combined.strip():
+            return ""
         system_prompt = getattr(self._settings, "llm2vec_instruction", None)
         return render_chat_prompt_from_text(
             combined,
