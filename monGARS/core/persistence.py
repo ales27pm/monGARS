@@ -33,6 +33,7 @@ from .embeddings import (
     LLM2VecEmbedder,
     get_llm2vec_embedder,
 )
+from .inference_utils import render_chat_prompt_from_text
 
 try:  # pragma: no cover - optional dependency
     from transformers import AutoTokenizer  # type: ignore
@@ -134,7 +135,15 @@ class PersistenceRepository:
             segments.append(f"User: {query.strip()}")
         if response:
             segments.append(f"Assistant: {response.strip()}")
-        return "\n".join(segments)
+        combined = "\n".join(segments)
+        if not combined.strip():
+            return ""
+        system_prompt = getattr(self._settings, "llm2vec_instruction", None)
+        return render_chat_prompt_from_text(
+            combined,
+            system_prompt=system_prompt,
+            include_assistant_stub=False,
+        ).chatml
 
     async def _history_embedding_vector(
         self, query: str | None, response: str | None

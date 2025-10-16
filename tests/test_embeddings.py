@@ -10,6 +10,13 @@ from monGARS.core.embeddings import (
     EmbeddingBackendError,
     LLM2VecEmbedder,
 )
+from monGARS.core.inference_utils import (
+    CHATML_BEGIN_OF_TEXT,
+    CHATML_END_HEADER,
+    CHATML_END_OF_TURN,
+    CHATML_START_HEADER,
+    render_chat_prompt_from_text,
+)
 
 
 class _RecordingManager:
@@ -92,7 +99,18 @@ async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
 
     assert len(result.vectors) == len(payloads)
     assert all(len(vector) == 3 for vector in result.vectors)
-    assert manager.calls == [payloads[:2], payloads[2:4], payloads[4:]]
+    expected_batches = [payloads[:2], payloads[2:4], payloads[4:]]
+    assert len(manager.calls) == len(expected_batches)
+    for recorded_batch, expected_texts in zip(
+        manager.calls, expected_batches, strict=True
+    ):
+        assert len(recorded_batch) == len(expected_texts)
+        for rendered, original in zip(recorded_batch, expected_texts, strict=True):
+            assert rendered.startswith(CHATML_BEGIN_OF_TEXT)
+            assert rendered.endswith(CHATML_END_OF_TURN)
+            assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in rendered
+            assert settings.llm2vec_instruction in rendered
+            assert original in rendered
     assert result.used_fallback is False
 
 
@@ -181,6 +199,84 @@ async def test_encode_batch_uses_fallback_when_manager_not_ready() -> None:
     assert batch.used_fallback is True
     assert manager.calls == 0
     assert all(len(vector) == 3 for vector in batch.vectors)
+
+
+@pytest.mark.asyncio
+async def test_encode_batch_records_chatml_for_fallback_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        llm2vec_max_batch_size=2,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        llm2vec_instruction="Embed with care.",
+        debug=True,
+    )
+    manager = _NotReadyManager()
+    embedder = LLM2VecEmbedder(
+        settings=settings, neuron_manager_factory=lambda: manager
+    )
+
+    captured: list[dict[str, object]] = []
+    original = render_chat_prompt_from_text
+
+    def _recording_render_chat_prompt_from_text(
+        user_text: str,
+        *,
+        system_prompt: str | None = None,
+        include_assistant_stub: bool = True,
+    ):
+        prompt = original(
+            user_text,
+            system_prompt=system_prompt,
+            include_assistant_stub=include_assistant_stub,
+        )
+        captured.append(
+            {
+                "text": prompt.text,
+                "chatml": prompt.chatml,
+                "system_prompt": system_prompt,
+                "include_assistant_stub": include_assistant_stub,
+            }
+        )
+        return prompt
+
+    monkeypatch.setattr(
+        "monGARS.core.embeddings.render_chat_prompt_from_text",
+        _recording_render_chat_prompt_from_text,
+    )
+
+    payloads = ["first payload", "second payload"]
+    batch = await embedder.encode_batch(payloads)
+
+    assert batch.used_fallback is True
+    assert manager.calls == 0
+    assert len(captured) % len(payloads) == 0
+    block_count = len(captured) // len(payloads)
+    blocks = [
+        captured[index * len(payloads) : (index + 1) * len(payloads)]
+        for index in range(block_count)
+    ]
+
+    for idx, original_text in enumerate(payloads):
+        previous_chatml: str | None = None
+        for block in blocks:
+            entry = block[idx]
+            assert entry["text"] == original_text
+            assert entry["system_prompt"] == settings.llm2vec_instruction
+            assert entry["include_assistant_stub"] is False
+            chatml = entry["chatml"]
+            if previous_chatml is None:
+                previous_chatml = chatml
+            else:
+                assert chatml == previous_chatml
+            assert chatml.startswith(CHATML_BEGIN_OF_TEXT)
+            assert chatml.endswith(CHATML_END_OF_TURN)
+            assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in chatml
+            assert f"{CHATML_START_HEADER}system{CHATML_END_HEADER}" in chatml
+            assert settings.llm2vec_instruction in chatml
+            assert original_text in chatml
 
 
 @pytest.mark.asyncio
@@ -314,8 +410,17 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
     assert len(reference_vectors) == 1
     reference_vector = reference_vectors[0]
 
+    system_prompt = getattr(
+        dolphin3_tiny_embedder._settings, "llm2vec_instruction", None
+    )
+    formatted = render_chat_prompt_from_text(
+        text,
+        system_prompt=system_prompt,
+        include_assistant_stub=False,
+    ).chatml
+
     tokenized = tokenizer(
-        [text],
+        [formatted],
         return_tensors="pt",
         padding=True,
         truncation=True,

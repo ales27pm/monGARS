@@ -21,7 +21,10 @@ from modules.neurons.core import NeuronManager
 from monGARS.config import Settings, get_settings
 from monGARS.core.constants import DEFAULT_EMBEDDING_BACKEND
 from monGARS.core.embedding_backends import normalise_embedding_backend
-from monGARS.core.inference_utils import prepare_tokenizer_inputs
+from monGARS.core.inference_utils import (
+    prepare_tokenizer_inputs,
+    render_chat_prompt_from_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +273,12 @@ class LLM2VecEmbedder:
         return values
 
     def _fallback_vector(self, instruction: str, text: str) -> list[float]:
-        cache_key = (instruction, text)
+        rendered = render_chat_prompt_from_text(
+            text,
+            system_prompt=instruction,
+            include_assistant_stub=False,
+        ).chatml
+        cache_key = (instruction, rendered)
         cached = self._fallback_cache.get(cache_key)
         if cached is not None:
             self._fallback_cache.move_to_end(cache_key)
@@ -308,7 +316,13 @@ class LLM2VecEmbedder:
                 chunk_vectors[index] = self._fallback_vector(prompt, text)
             else:
                 backend_indices.append(index)
-                backend_payloads.append(text)
+                backend_payloads.append(
+                    render_chat_prompt_from_text(
+                        text,
+                        system_prompt=prompt,
+                        include_assistant_stub=False,
+                    ).chatml
+                )
 
         return chunk_vectors, backend_indices, backend_payloads, used_fallback
 
@@ -536,12 +550,21 @@ class Dolphin3Embedder:
         torch_module, model, tokenizer = self._ensure_model_components()
         device = self.device
         results: list[list[float]] = []
+        system_prompt = getattr(self._settings, "llm2vec_instruction", None)
 
         for start in range(0, len(texts), self._batch_size):
             chunk = [str(text) for text in texts[start : start + self._batch_size]]
+            formatted_chunk = [
+                render_chat_prompt_from_text(
+                    text,
+                    system_prompt=system_prompt,
+                    include_assistant_stub=False,
+                ).chatml
+                for text in chunk
+            ]
             prepared_inputs, _ = prepare_tokenizer_inputs(
                 tokenizer,
-                chunk,
+                formatted_chunk,
                 max_length=self._max_length,
                 device=device,
                 padding=True,
