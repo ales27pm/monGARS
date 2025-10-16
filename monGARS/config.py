@@ -403,6 +403,34 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the code-focused model.",
     )
+    embedding_backend: Literal["huggingface", "ollama"] = Field(
+        default="huggingface",
+        description="Embedding backend provider used for semantic vector generation.",
+    )
+    ollama_host: AnyUrl | None = Field(
+        default=None,
+        description=(
+            "Optional base URL for the Ollama runtime when using the Ollama embedding backend."
+        ),
+    )
+    ollama_embedding_model: str = Field(
+        default="nomic-embed-text",
+        min_length=1,
+        description="Model identifier requested from Ollama when embedding_backend='ollama'.",
+    )
+
+    @field_validator("embedding_backend", mode="before")
+    @classmethod
+    def _normalise_embedding_backend(cls, value: Any) -> str:
+        if value is None:
+            return "huggingface"
+        normalised = str(value).strip().lower()
+        allowed = {"huggingface", "ollama"}
+        if normalised not in allowed:
+            options = ", ".join(sorted(allowed))
+            raise ValueError(f"embedding_backend must be one of: {options}")
+        return normalised
+
     llm2vec_base_model: str = Field(
         default="nomic-ai/llm2vec-large",
         description="Base checkpoint used when instantiating the LLM2Vec encoder.",

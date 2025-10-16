@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Mapping
 
 from modules.neurons.core import NeuronManager
 from monGARS.config import Settings, get_settings
@@ -45,6 +45,9 @@ class LLM2VecEmbedder:
         neuron_manager_factory: Callable[[], NeuronManager] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
+        self._backend = self._resolve_backend(
+            getattr(self._settings, "embedding_backend", "huggingface")
+        )
         self._manager_factory = neuron_manager_factory or self._default_manager_factory
         self._manager: NeuronManager | None = None
         self._manager_lock = asyncio.Lock()
@@ -52,6 +55,9 @@ class LLM2VecEmbedder:
         self._semaphore = asyncio.Semaphore(concurrency)
         self._fallback_cache_size = 256
         self._fallback_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
+        self._ollama_module: Any | None = None
+        self._ollama_client: Any | None = None
+        self._ollama_client_lock = asyncio.Lock()
 
     async def encode_batch(
         self, texts: Sequence[str], *, instruction: str | None = None
@@ -72,6 +78,23 @@ class LLM2VecEmbedder:
             vectors = [self._fallback_vector(prompt, text) for text in cleaned]
             return EmbeddingBatch(vectors=vectors, used_fallback=True)
 
+        if self._backend == "ollama":
+            return await self._encode_with_ollama(cleaned, prompt)
+        return await self._encode_with_huggingface(cleaned, prompt)
+
+    async def embed_text(
+        self, text: str, *, instruction: str | None = None
+    ) -> tuple[list[float], bool]:
+        """Return a single embedding vector for ``text``."""
+
+        batch = await self.encode_batch([text], instruction=instruction)
+        if not batch.vectors or not batch.vectors[0]:
+            return [], batch.used_fallback
+        return batch.vectors[0], batch.used_fallback
+
+    async def _encode_with_huggingface(
+        self, cleaned: Sequence[str], prompt: str
+    ) -> EmbeddingBatch:
         manager = await self._ensure_manager()
 
         aggregate_vectors: list[list[float]] = []
@@ -79,7 +102,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = cleaned[start : start + batch_size]
+            chunk = list(cleaned[start : start + batch_size])
             (
                 chunk_vectors,
                 backend_indices,
@@ -128,15 +151,52 @@ class LLM2VecEmbedder:
             logger.debug("llm2vec.fallback_embeddings", extra={"count": len(cleaned)})
         return EmbeddingBatch(vectors=aggregate_vectors, used_fallback=used_fallback)
 
-    async def embed_text(
-        self, text: str, *, instruction: str | None = None
-    ) -> tuple[list[float], bool]:
-        """Return a single embedding vector for ``text``."""
+    async def _encode_with_ollama(
+        self, cleaned: Sequence[str], prompt: str
+    ) -> EmbeddingBatch:
+        aggregate_vectors: list[list[float]] = []
+        used_fallback = False
+        batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
-        batch = await self.encode_batch([text], instruction=instruction)
-        if not batch.vectors or not batch.vectors[0]:
-            return [], batch.used_fallback
-        return batch.vectors[0], batch.used_fallback
+        for start in range(0, len(cleaned), batch_size):
+            chunk = list(cleaned[start : start + batch_size])
+            (
+                chunk_vectors,
+                backend_indices,
+                backend_payloads,
+                chunk_used_fallback,
+            ) = self._partition_chunk(chunk, prompt)
+
+            raw_sequence: Sequence[Sequence[float]] | None = None
+
+            if backend_payloads:
+                try:
+                    async with self._semaphore:
+                        raw_sequence = await self._ollama_embed(backend_payloads)
+                except EmbeddingBackendError:
+                    chunk_used_fallback = True
+                    self._assign_fallbacks(
+                        chunk, chunk_vectors, backend_indices, prompt
+                    )
+
+            (
+                chunk_vectors,
+                merge_used_fallback,
+            ) = self._merge_backend_results(
+                chunk,
+                chunk_vectors,
+                backend_indices,
+                raw_sequence,
+                prompt,
+            )
+            chunk_used_fallback = chunk_used_fallback or merge_used_fallback
+
+            aggregate_vectors.extend(chunk_vectors)  # type: ignore[arg-type]
+            used_fallback = used_fallback or chunk_used_fallback
+
+        if used_fallback:
+            logger.debug("llm2vec.fallback_embeddings", extra={"count": len(cleaned)})
+        return EmbeddingBatch(vectors=aggregate_vectors, used_fallback=used_fallback)
 
     async def _ensure_manager(self) -> NeuronManager:
         if self._manager is not None:
@@ -160,6 +220,16 @@ class LLM2VecEmbedder:
             fallback_dimensions=self._settings.llm2vec_vector_dimensions,
             llm2vec_options=filtered_options,
         )
+
+    def _resolve_backend(self, configured: str | None) -> str:
+        value = (configured or "huggingface").strip().lower()
+        if value not in {"huggingface", "ollama"}:
+            logger.warning(
+                "llm2vec.embedding_backend.invalid",
+                extra={"backend": configured},
+            )
+            return "huggingface"
+        return value
 
     def _normalise_dimensions(
         self, vector: Sequence[float] | None
@@ -280,6 +350,81 @@ class LLM2VecEmbedder:
             return bool(attr()) if callable(attr) else bool(attr)
         except Exception:  # pragma: no cover - defensive guard
             return False
+
+    async def _ollama_embed(self, payloads: Sequence[str]) -> Sequence[Sequence[float]]:
+        module = self._ensure_ollama_module()
+        if module is None:
+            logger.error("llm2vec.ollama.module_missing")
+            raise EmbeddingBackendError("Ollama client is not available")
+
+        client = await self._ensure_ollama_client(module)
+        if client is None:
+            logger.error("llm2vec.ollama.client_unavailable")
+            raise EmbeddingBackendError("Ollama client is not available")
+
+        model_name = self._resolve_ollama_model()
+        dimensions = self._resolve_ollama_dimensions()
+        embed_kwargs: dict[str, Any] = {
+            "model": model_name,
+            "input": list(payloads),
+        }
+        if dimensions is not None:
+            embed_kwargs["dimensions"] = dimensions
+
+        try:
+            response = await asyncio.to_thread(client.embed, **embed_kwargs)
+        except Exception as exc:  # pragma: no cover - network/client failure
+            logger.exception(
+                "llm2vec.ollama.embed_failed",
+                extra={"payload_count": len(payloads), "model": model_name},
+            )
+            raise EmbeddingBackendError("Ollama embeddings failed") from exc
+
+        embeddings = getattr(response, "embeddings", None)
+        if embeddings is None and isinstance(response, Mapping):
+            embeddings = response.get("embeddings")
+
+        if not embeddings:
+            logger.error(
+                "llm2vec.ollama.empty_response",
+                extra={"payload_count": len(payloads), "model": model_name},
+            )
+            raise EmbeddingBackendError("Ollama embeddings missing")
+
+        return embeddings
+
+    def _ensure_ollama_module(self) -> Any | None:
+        if self._ollama_module is not None:
+            return self._ollama_module
+        spec = importlib.util.find_spec("ollama")
+        if spec is None:
+            return None
+        module = importlib.import_module("ollama")
+        self._ollama_module = module
+        return module
+
+    async def _ensure_ollama_client(self, module: Any) -> Any | None:
+        if self._ollama_client is not None:
+            return self._ollama_client
+        async with self._ollama_client_lock:
+            if self._ollama_client is not None:
+                return self._ollama_client
+            host_value = getattr(self._settings, "ollama_host", None)
+            host = str(host_value) if host_value else None
+            self._ollama_client = module.Client(host=host)
+        return self._ollama_client
+
+    def _resolve_ollama_model(self) -> str:
+        model = getattr(self._settings, "ollama_embedding_model", None)
+        if not model:
+            raise EmbeddingBackendError("Ollama embedding model is not configured")
+        return str(model).strip()
+
+    def _resolve_ollama_dimensions(self) -> int | None:
+        try:
+            return int(self._settings.llm2vec_vector_dimensions)
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+            return None
 
 
 class Dolphin3Embedder:
