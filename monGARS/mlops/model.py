@@ -132,8 +132,8 @@ def load_4bit_causal_lm(
             model_id,
             base_kwargs=model_kwargs,
             optional_kwargs=(
-                {"torch_dtype": target_dtype},
                 {"dtype": target_dtype},
+                {"torch_dtype": target_dtype},
             ),
         )
     except TypeError:
@@ -288,8 +288,8 @@ def _load_cpu_causal_lm(
                 model_id,
                 base_kwargs=cpu_kwargs,
                 optional_kwargs=(
-                    {"torch_dtype": cpu_dtype},
                     {"dtype": cpu_dtype},
+                    {"torch_dtype": cpu_dtype},
                 ),
             )
         except Exception as exc:  # pragma: no cover - relies on runtime backends

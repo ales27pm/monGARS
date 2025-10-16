@@ -305,24 +305,55 @@ class NeuronManager:
             for key, value in self._llm2vec_options.items()
             if value is not None
         }
-        if "torch_dtype" in overrides:
+        if "dtype" in overrides:
+            torch_dtype_value = overrides.pop("dtype")
+        elif "torch_dtype" in overrides:
             torch_dtype_value = overrides.pop("torch_dtype")
         else:
             torch_dtype_value = "bfloat16"
 
-        options: dict[str, Any] = {
+        base_options: dict[str, Any] = {
             "base_model_name_or_path": self.base_model_path,
             "enable_bidirectional": True,
             "pooling_mode": "mean",
             "device_map": overrides.pop("device_map", "cpu"),
         }
-        resolved_dtype = self._resolve_torch_dtype(torch_dtype_value)
-        if resolved_dtype is not None:
-            options["torch_dtype"] = resolved_dtype
         if self.encoder_path:
-            options["peft_model_name_or_path"] = self.encoder_path
-        options |= overrides
-        return LLM2Vec.from_pretrained(**options)
+            base_options["peft_model_name_or_path"] = self.encoder_path
+        base_options |= overrides
+
+        resolved_dtype = self._resolve_torch_dtype(torch_dtype_value)
+        if resolved_dtype is None:
+            return LLM2Vec.from_pretrained(**base_options)
+
+        optional_kwargs = (
+            {"dtype": resolved_dtype},
+            {"torch_dtype": resolved_dtype},
+        )
+        last_error: Exception | None = None
+
+        for extras in optional_kwargs:
+            try:
+                return LLM2Vec.from_pretrained(**(base_options | extras))
+            except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                last_error = exc
+                logger.debug(
+                    "Retrying LLM2Vec load without unsupported dtype kwarg",
+                    extra={
+                        "loader": "LLM2Vec.from_pretrained",
+                        "attempted_kwargs": sorted(extras.keys()),
+                    },
+                )
+
+        if last_error is not None:
+            logger.debug(
+                "Falling back to LLM2Vec load without dtype override",
+                extra={"loader": "LLM2Vec.from_pretrained"},
+            )
+
+        return LLM2Vec.from_pretrained(**base_options)
 
     def _normalise_encode_options(
         self, options: dict[str, Any] | None
@@ -440,9 +471,7 @@ class NeuronManager:
 
         torch_module = _get_torch_module()
         if torch_module is None:
-            logger.warning(
-                "Torch is unavailable; ignoring torch_dtype override '%s'", dtype
-            )
+            logger.warning("Torch is unavailable; ignoring dtype override '%s'", dtype)
             return None
 
         attribute_name = normalized.split(".")[-1]

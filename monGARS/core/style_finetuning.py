@@ -356,7 +356,7 @@ class AdapterTrainer:
 
         model = AutoModelForCausalLM.from_pretrained(
             self._config.base_model,
-            torch_dtype=torch.float32,
+            dtype=torch.float32,
             device_map=None,
             quantization_config=quantization_config,
         )

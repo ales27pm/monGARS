@@ -212,7 +212,7 @@ class LLM2VecEmbedder:
     def _default_manager_factory(self) -> NeuronManager:
         options = {
             "device_map": self._settings.llm2vec_device_map,
-            "torch_dtype": self._settings.llm2vec_torch_dtype,
+            "dtype": self._settings.llm2vec_torch_dtype,
         }
         filtered_options = {k: v for k, v in options.items() if v is not None}
         return NeuronManager(
@@ -596,7 +596,7 @@ class Dolphin3Embedder:
 
             model_options: dict[str, Any] = {"trust_remote_code": True}
             if dtype is not None:
-                model_options["torch_dtype"] = dtype
+                model_options["dtype"] = dtype
 
             model = model_cls.from_pretrained(self._model_id, **model_options)
             model.eval()
