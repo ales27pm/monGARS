@@ -10,7 +10,7 @@ THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[1]
 
 # Only deliberate test doubles are allowed to raise NotImplementedError.
-ALLOWED_NOT_IMPLEMENTED: dict[str, set[int]] = {"tests/test_dynamic_response.py": {15}}
+ALLOWED_NOT_IMPLEMENTED: dict[str, set[int]] = {}
 
 
 def _iter_python_files(root: Path) -> list[Path]:

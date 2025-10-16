@@ -13,7 +13,7 @@ service surface, CLI entry points, and test support utilities.
 | --- | --- | --- |
 | `rg "TODO"` | Track high-level work markers left in code comments. | No matches. |
 | `rg "FIXME"` / `rg "XXX"` | Catch lower-level bug markers or temporary hacks. | No matches. |
-| `rg "NotImplemented"` | Identify deliberate test doubles raising `NotImplementedError`. | One test double (documented below). |
+| `rg "NotImplemented"` | Identify deliberate test doubles raising `NotImplementedError`. | No matches. |
 | `rg "\\bpass\\b" monGARS` | Locate `pass` statements inside runtime modules. | Four runtime locations reviewed. |
 | Manual inspection | Review each match in surrounding context to confirm intent and downstream behaviour. | Completed. |
 
@@ -26,11 +26,10 @@ unfinished branch.
 
 ### `NotImplementedError`
 
-| Location | Context | Disposition |
-| --- | --- | --- |
-| `tests/test_dynamic_response.py:15` | `StubStyleTuner.estimate_personality` raises to ensure production inference code is not called inside caching tests. | Safe: confined to test double used to assert guard-rail behaviour. |
-
-No runtime modules raise `NotImplementedError`.
+No runtime or test modules raise `NotImplementedError` following the recent
+dynamic-response cache refactor. The guardrail test now treats any new
+occurrence as a regression, with the allow list cleared to ensure deliberate
+review before reintroducing such stubs.
 
 ### `pass` Statements
 
