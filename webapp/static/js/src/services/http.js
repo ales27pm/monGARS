@@ -43,6 +43,36 @@ export function createHttpService({ config, auth }) {
     return resp;
   }
 
+  async function postEmbed(text, options = {}) {
+    if (!config.embedServiceUrl) {
+      throw new Error(
+        "Service d'embedding indisponible: aucune URL configurée."
+      );
+    }
+    const payload = {
+      inputs: [text],
+    };
+    if (Object.prototype.hasOwnProperty.call(options, "normalise")) {
+      payload.normalise = Boolean(options.normalise);
+    } else {
+      payload.normalise = false;
+    }
+    const resp = await authorisedFetch(config.embedServiceUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      const bodyText = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${bodyText}`);
+    }
+    const data = await resp.json();
+    if (!data || !Array.isArray(data.vectors)) {
+      throw new Error("Embedding response invalide: vecteurs manquants");
+    }
+    return data;
+  }
+
   async function postSuggestions(prompt) {
     const resp = await authorisedFetch("/api/v1/ui/suggestions", {
       method: "POST",
@@ -61,6 +91,7 @@ export function createHttpService({ config, auth }) {
   return {
     fetchTicket,
     postChat,
+    postEmbed,
     postSuggestions,
   };
 }

@@ -30,6 +30,8 @@ async def index(request):
             submission fails validation.
         fastapi_url (str): Base URL for the FastAPI service used by the
             JavaScript layer.
+        embed_service_url (str | None): Absolute URL for the optional embedding
+            service. ``None`` when embeddings are disabled.
         user_id (str): Identifier for the authenticated operator.
         token (str): JWT used by the client-side enhancements.
     """
@@ -66,6 +68,7 @@ async def index(request):
         history_error = "Historique indisponible pour le moment."
 
     fastapi_url = os.environ.get("FASTAPI_URL", "http://localhost:8000")
+    embed_service_url = os.environ.get("EMBED_SERVICE_URL", "").strip() or None
     return render(
         request,
         "chat/index.html",
@@ -77,6 +80,7 @@ async def index(request):
             "form_error": form_error,
             "prompt_value": prompt_value,
             "fastapi_url": fastapi_url,
+            "embed_service_url": embed_service_url,
             "user_id": request.user_id,
             "token": request.token,
         },

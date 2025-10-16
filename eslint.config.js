@@ -1,7 +1,7 @@
-import prettier from "eslint-config-prettier";
+import prettierCompat from "./eslint/prettierCompat.js";
 
 export default [
-  prettier,
+  prettierCompat,
   {
     files: ["webapp/static/js/src/**/*.js"],
     languageOptions: {

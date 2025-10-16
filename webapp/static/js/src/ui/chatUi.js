@@ -28,6 +28,28 @@ export function createChatUi({ elements, timelineStore }) {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const SCROLL_THRESHOLD = 140;
   const PROMPT_MAX_HEIGHT = 320;
+  const composerStatusEmbedding =
+    (elements.composerStatus &&
+      elements.composerStatus.getAttribute("data-embed-label")) ||
+    "Mode Embedding : générez des vecteurs pour vos textes.";
+  const promptPlaceholderDefault =
+    (elements.prompt && elements.prompt.getAttribute("placeholder")) || "";
+  const promptPlaceholderEmbedding =
+    (elements.prompt &&
+      elements.prompt.getAttribute("data-embed-placeholder")) ||
+    "Entrez le texte à encoder…";
+  const promptAriaDefault =
+    (elements.prompt && elements.prompt.getAttribute("aria-label")) || "";
+  const promptAriaEmbedding =
+    (elements.prompt &&
+      elements.prompt.getAttribute("data-embed-aria-label")) ||
+    "Texte à encoder";
+  const sendAriaDefault =
+    (elements.send && elements.send.getAttribute("aria-label")) ||
+    sendIdleLabel;
+  const sendAriaEmbedding =
+    (elements.send && elements.send.getAttribute("data-embed-aria-label")) ||
+    "Générer un embedding";
 
   const diagnostics = {
     connectedAt: null,
@@ -39,6 +61,7 @@ export function createChatUi({ elements, timelineStore }) {
     resetStatusTimer: null,
     hideScrollTimer: null,
     voiceStatusTimer: null,
+    mode: "chat",
     activeFilter: "",
     historyBootstrapped: elements.transcript.childElementCount > 0,
     bootstrapping: false,
@@ -60,6 +83,10 @@ export function createChatUi({ elements, timelineStore }) {
 
   function emit(event, payload) {
     emitter.emit(event, payload);
+  }
+
+  function normaliseMode(mode) {
+    return mode === "embed" ? "embed" : "chat";
   }
 
   function setBusy(busy) {
@@ -101,7 +128,9 @@ export function createChatUi({ elements, timelineStore }) {
   }
 
   function setComposerStatusIdle() {
-    setComposerStatus(composerStatusDefault, "muted");
+    const message =
+      state.mode === "embed" ? composerStatusEmbedding : composerStatusDefault;
+    setComposerStatus(message, "muted");
   }
 
   function scheduleComposerIdle(delay = 3500) {
@@ -137,7 +166,10 @@ export function createChatUi({ elements, timelineStore }) {
     }, delay);
   }
 
-  function setVoiceAvailability({ recognition = false, synthesis = false } = {}) {
+  function setVoiceAvailability({
+    recognition = false,
+    synthesis = false,
+  } = {}) {
     if (elements.voiceControls) {
       elements.voiceControls.classList.toggle(
         "d-none",
@@ -145,10 +177,7 @@ export function createChatUi({ elements, timelineStore }) {
       );
     }
     if (elements.voiceRecognitionGroup) {
-      elements.voiceRecognitionGroup.classList.toggle(
-        "d-none",
-        !recognition,
-      );
+      elements.voiceRecognitionGroup.classList.toggle("d-none", !recognition);
     }
     if (elements.voiceToggle) {
       elements.voiceToggle.disabled = !recognition;
@@ -188,7 +217,10 @@ export function createChatUi({ elements, timelineStore }) {
 
   function setVoiceListening(listening) {
     if (!elements.voiceToggle) return;
-    elements.voiceToggle.setAttribute("aria-pressed", listening ? "true" : "false");
+    elements.voiceToggle.setAttribute(
+      "aria-pressed",
+      listening ? "true" : "false",
+    );
     elements.voiceToggle.classList.toggle("btn-danger", listening);
     elements.voiceToggle.classList.toggle("btn-outline-secondary", !listening);
     elements.voiceToggle.textContent = listening
@@ -261,6 +293,48 @@ export function createChatUi({ elements, timelineStore }) {
     } else {
       select.value = "";
     }
+  }
+
+  function setMode(mode, options = {}) {
+    const next = normaliseMode(mode);
+    const previous = state.mode;
+    state.mode = next;
+    if (elements.modeSelect && elements.modeSelect.value !== next) {
+      elements.modeSelect.value = next;
+    }
+    if (elements.composer) {
+      elements.composer.dataset.mode = next;
+    }
+    if (elements.prompt) {
+      const placeholder =
+        next === "embed"
+          ? promptPlaceholderEmbedding
+          : promptPlaceholderDefault;
+      if (placeholder) {
+        elements.prompt.setAttribute("placeholder", placeholder);
+      } else {
+        elements.prompt.removeAttribute("placeholder");
+      }
+      const ariaLabel =
+        next === "embed" ? promptAriaEmbedding : promptAriaDefault;
+      if (ariaLabel) {
+        elements.prompt.setAttribute("aria-label", ariaLabel);
+      } else {
+        elements.prompt.removeAttribute("aria-label");
+      }
+    }
+    if (elements.send) {
+      const ariaLabel = next === "embed" ? sendAriaEmbedding : sendAriaDefault;
+      if (ariaLabel) {
+        elements.send.setAttribute("aria-label", ariaLabel);
+      } else {
+        elements.send.removeAttribute("aria-label");
+      }
+    }
+    if (!options.skipStatus && (previous !== next || options.forceStatus)) {
+      setComposerStatusIdle();
+    }
+    return next;
   }
 
   function updatePromptMetrics() {
@@ -698,20 +772,20 @@ export function createChatUi({ elements, timelineStore }) {
           (row.classList.contains("chat-user")
             ? "user"
             : row.classList.contains("chat-assistant")
-            ? "assistant"
-            : "system");
+              ? "assistant"
+              : "system");
         const text =
           row.dataset.rawText && row.dataset.rawText.length > 0
             ? row.dataset.rawText
             : bubble
-            ? extractBubbleText(bubble)
-            : row.textContent.trim();
+              ? extractBubbleText(bubble)
+              : row.textContent.trim();
         const timestamp =
           row.dataset.timestamp && row.dataset.timestamp.length > 0
             ? row.dataset.timestamp
             : meta
-            ? meta.textContent.trim()
-            : nowISO();
+              ? meta.textContent.trim()
+              : nowISO();
         const messageId = timelineStore.register({
           id: existingId,
           role,
@@ -896,6 +970,15 @@ export function createChatUi({ elements, timelineStore }) {
       });
     }
 
+    if (elements.modeSelect) {
+      elements.modeSelect.addEventListener("change", (event) => {
+        const value = event.target.value || "";
+        const nextMode = normaliseMode(value);
+        setMode(nextMode);
+        emit("mode-change", { mode: nextMode });
+      });
+    }
+
     if (elements.quickActions) {
       elements.quickActions.addEventListener("click", (event) => {
         const target = event.target;
@@ -1070,6 +1153,7 @@ export function createChatUi({ elements, timelineStore }) {
   }
 
   function initialise() {
+    setMode(state.mode, { skipStatus: true });
     setDiagnostics({ connectedAt: null, lastMessageAt: null, latencyMs: null });
     updatePromptMetrics();
     autosizePrompt();
@@ -1114,11 +1198,15 @@ export function createChatUi({ elements, timelineStore }) {
     setVoicePreferences,
     setVoiceSpeaking,
     setVoiceVoiceOptions,
+    setMode,
     set diagnostics(value) {
       Object.assign(diagnostics, value);
     },
     get diagnostics() {
       return { ...diagnostics };
+    },
+    get mode() {
+      return state.mode;
     },
     formatTimestamp,
     nowISO,

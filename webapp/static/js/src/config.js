@@ -7,6 +7,26 @@ export function resolveConfig(raw = {}) {
     console.error("Invalid FASTAPI URL", err, candidate);
     config.baseUrl = new URL(window.location.origin);
   }
+  const embedCandidate =
+    typeof config.embedServiceUrl === "string"
+      ? config.embedServiceUrl.trim()
+      : "";
+  if (embedCandidate) {
+    try {
+      const url = new URL(embedCandidate);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        config.embedServiceUrl = url.toString();
+      } else {
+        console.warn("Unsupported embedding service protocol", url.protocol);
+        config.embedServiceUrl = null;
+      }
+    } catch (err) {
+      console.warn("Invalid embedding service URL", err, embedCandidate);
+      config.embedServiceUrl = null;
+    }
+  } else {
+    config.embedServiceUrl = null;
+  }
   return config;
 }
 

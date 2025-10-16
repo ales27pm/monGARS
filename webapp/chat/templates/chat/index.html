@@ -275,13 +275,19 @@
                     autocomplete="off"
                     rows="1"
                     maxlength="1000"
+                    aria-label="Message à envoyer"
+                    data-embed-placeholder="Entrez le texte à encoder…"
+                    data-embed-aria-label="Texte à encoder"
                     aria-describedby="composer-hint"
-                  >{{ prompt_value|default_if_none:"" }}</textarea>
+                  >
+                  {{ prompt_value|default_if_none:"" }}
+                  </textarea>
                   <button
                     id="send"
                     type="submit"
                     class="btn btn-primary"
                     data-idle-label="Envoyer"
+                    data-embed-aria-label="Générer un embedding"
                   >
                     Envoyer
                   </button>
@@ -290,9 +296,23 @@
                   class="composer-meta form-text d-flex justify-content-between flex-wrap gap-2 mt-2"
                   id="composer-hint"
                 >
-                  <span id="composer-status" class="composer-status text-muted"
+                  <span
+                    id="composer-status"
+                    class="composer-status text-muted"
+                    data-embed-label="Mode Embedding : générez des vecteurs pour vos textes."
                     >Appuyez sur Ctrl+Entrée pour envoyer rapidement.</span
                   >
+                  <div class="chat-mode-toggle d-flex align-items-center gap-2">
+                    <label class="mb-0 small" for="chat-mode">Mode</label>
+                    <select
+                      id="chat-mode"
+                      class="form-select form-select-sm w-auto"
+                      aria-label="Sélection du mode de requête"
+                    >
+                      <option value="chat" selected>Chat</option>
+                      <option value="embed">Embedding</option>
+                    </select>
+                  </div>
                   <span
                     id="prompt-count"
                     class="composer-count text-muted"
@@ -329,10 +349,7 @@
                       </div>
                     </div>
                   </div>
-                  <div
-                    id="voice-synthesis-group"
-                    class="voice-section mt-2"
-                  >
+                  <div id="voice-synthesis-group" class="voice-section mt-2">
                     <div class="d-flex flex-wrap align-items-center gap-2">
                       <div class="form-check form-switch m-0">
                         <input
@@ -344,7 +361,10 @@
                           Lire les réponses
                         </label>
                       </div>
-                      <label class="form-label mb-0 small" for="voice-voice-select">
+                      <label
+                        class="form-label mb-0 small"
+                        for="voice-voice-select"
+                      >
                         Voix
                       </label>
                       <select
@@ -388,6 +408,7 @@
     <script>
       window.chatConfig = {
         fastapiUrl: "{{ fastapi_url }}",
+        embedServiceUrl: {% if embed_service_url %}"{{ embed_service_url|escapejs }}"{% else %}null{% endif %},
         userId: "{{ user_id }}",
         token: "{{ token }}",
       };
