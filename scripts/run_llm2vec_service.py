@@ -18,11 +18,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from monGARS.config import Settings, get_settings
-from monGARS.core.embeddings import (
-    SUPPORTED_EMBEDDING_BACKENDS,
-    EmbeddingBackendError,
-    LLM2VecEmbedder,
-)
+from monGARS.core.constants import DEFAULT_EMBEDDING_BACKEND
+from monGARS.core.embedding_backends import normalise_embedding_backend
+from monGARS.core.embeddings import EmbeddingBackendError, LLM2VecEmbedder
 from scripts.export_llm2vec_wrapper import load_wrapper_config
 
 LOGGER = logging.getLogger("llm2vec.service")
@@ -65,7 +63,12 @@ class EmbeddingService:
         self.load_in_4bit = load_in_4bit
         self._settings = settings or get_settings()
         self.backend = self._normalise_backend(
-            backend or getattr(self._settings, "embedding_backend", "huggingface")
+            backend
+            or getattr(
+                self._settings,
+                "embedding_backend",
+                DEFAULT_EMBEDDING_BACKEND,
+            )
         )
         self._wrapper_factory: Callable[[], Any] | None = None
         self._wrapper: Any | None = None
@@ -74,7 +77,7 @@ class EmbeddingService:
             if self.model_dir is None:
                 raise ValueError("model_dir is required for the Hugging Face backend")
             self.config = load_wrapper_config(self.model_dir)
-            self.config.setdefault("embedding_backend", self.backend)
+            self.config["embedding_backend"] = self.backend
             self._wrapper_factory = wrapper_factory or self._load_wrapper
         else:
             self.config = {
@@ -92,16 +95,7 @@ class EmbeddingService:
 
     @staticmethod
     def _normalise_backend(candidate: str | None) -> str:
-        if candidate is None:
-            return "huggingface"
-        normalised = str(candidate).strip().lower()
-        if normalised not in SUPPORTED_EMBEDDING_BACKENDS:
-            LOGGER.warning(
-                "llm2vec.embedding.backend.unsupported",
-                extra={"backend": candidate},
-            )
-            return "huggingface"
-        return normalised
+        return normalise_embedding_backend(candidate, logger=LOGGER)
 
     def _load_wrapper(self) -> Any:
         if self.model_dir is None:

@@ -90,3 +90,31 @@ def test_embedding_service_ollama_backend(monkeypatch) -> None:
     assert payload["dims"] == 2
     assert payload["normalised"] is False
     assert payload["vectors"] == [[0.0, 1.0], [1.0, 2.0]]
+
+
+def test_embedding_service_unsupported_backend_warns(
+    tmp_path: Path, caplog
+) -> None:
+    wrapper_dir = tmp_path / "wrapper"
+    wrapper_dir.mkdir()
+    config = {
+        "base_model_id": "fallback/model",
+        "embedding_backend": "huggingface",
+        "embedding_options": {"normalise": False},
+    }
+    (tmp_path / "wrapper_config.json").write_text(json.dumps(config))
+    (wrapper_dir / "config.json").write_text(json.dumps(config))
+
+    caplog.set_level("WARNING")
+
+    service = EmbeddingService(
+        tmp_path,
+        backend="unsupported-backend",
+        settings=get_settings(),
+    )
+
+    assert service.backend == "huggingface"
+    assert any(
+        record.getMessage() == "llm2vec.embedding.backend.unsupported"
+        for record in caplog.records
+    )
