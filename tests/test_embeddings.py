@@ -19,6 +19,10 @@ from monGARS.core.inference_utils import (
 )
 
 
+def _vector_norm(values: list[float]) -> float:
+    return math.sqrt(sum(component * component for component in values))
+
+
 class _RecordingManager:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -154,7 +158,7 @@ async def test_encode_batch_generates_deterministic_fallback_vectors() -> None:
     assert first.vectors == second.vectors
     assert {len(vector) for vector in first.vectors} == {5}
     for vector in first.vectors:
-        magnitude = math.sqrt(sum(component * component for component in vector))
+        magnitude = _vector_norm(vector)
         assert magnitude == pytest.approx(1.0)
 
 
@@ -324,7 +328,7 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
     assert batch.used_fallback is True
     assert len(batch.vectors) == 1
     assert len(batch.vectors[0]) == 3
-    magnitude = math.sqrt(sum(component * component for component in batch.vectors[0]))
+    magnitude = _vector_norm(batch.vectors[0])
     assert magnitude == pytest.approx(1.0)
 
     # Test fallback for positive infinity values
@@ -334,9 +338,7 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
     assert batch_inf.used_fallback is True
     assert len(batch_inf.vectors) == 1
     assert len(batch_inf.vectors[0]) == 3
-    magnitude_inf = math.sqrt(
-        sum(component * component for component in batch_inf.vectors[0])
-    )
+    magnitude_inf = _vector_norm(batch_inf.vectors[0])
     assert magnitude_inf == pytest.approx(1.0)
 
     # Test fallback for negative infinity values
@@ -346,9 +348,7 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
     assert batch_ninf.used_fallback is True
     assert len(batch_ninf.vectors) == 1
     assert len(batch_ninf.vectors[0]) == 3
-    magnitude_ninf = math.sqrt(
-        sum(component * component for component in batch_ninf.vectors[0])
-    )
+    magnitude_ninf = _vector_norm(batch_ninf.vectors[0])
     assert magnitude_ninf == pytest.approx(1.0)
 
 
@@ -469,3 +469,77 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
         manual_vector = torch_module.cat((manual_vector, pad), dim=0)
 
     assert reference_vector == pytest.approx(manual_vector.tolist(), abs=1e-5)
+
+
+def test_dolphin3_embedder_embeddings_are_deterministic(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    text = "determinism check for dolphin embeddings"
+
+    first = dolphin3_tiny_embedder.encode([text])[0]
+    second = dolphin3_tiny_embedder.encode([text])[0]
+
+    assert len(first) == dolphin3_tiny_embedder.vector_dimension
+    assert len(second) == dolphin3_tiny_embedder.vector_dimension
+    assert first == pytest.approx(second, rel=1e-6, abs=1e-6)
+    assert _vector_norm(first) == pytest.approx(
+        _vector_norm(second), rel=1e-6, abs=1e-6
+    )
+    assert all(math.isfinite(component) for component in first)
+
+
+def test_dolphin3_embedder_batch_determinism(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    texts = [
+        "batch determinism check 1",
+        "batch determinism check 2",
+        "batch determinism check 3",
+        "batch determinism check 4",
+        "batch determinism check 5",
+    ]
+
+    for batch_size in (1, 2, len(texts)):
+        payload = texts[:batch_size]
+        first_batch = dolphin3_tiny_embedder.encode(payload)
+        second_batch = dolphin3_tiny_embedder.encode(payload)
+
+        assert len(first_batch) == len(payload)
+        assert len(second_batch) == len(payload)
+
+        for first_vector, second_vector in zip(first_batch, second_batch, strict=True):
+            assert len(first_vector) == dolphin3_tiny_embedder.vector_dimension
+            assert len(second_vector) == dolphin3_tiny_embedder.vector_dimension
+            assert first_vector == pytest.approx(second_vector, rel=1e-6, abs=1e-6)
+            assert _vector_norm(first_vector) == pytest.approx(
+                _vector_norm(second_vector), rel=1e-6, abs=1e-6
+            )
+            assert all(math.isfinite(component) for component in first_vector)
+
+
+def test_dolphin3_embedder_normalises_empty_inputs(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    payloads = [
+        "",  # empty string
+        " ",  # single space
+        "   ",  # multiple spaces
+        "\t",  # tab
+        "\n",  # newline
+        "\r\n",  # carriage return + newline
+        "\u2003",  # em space (unicode whitespace)
+        "\u2009",  # thin space (unicode whitespace)
+        "\u202f",  # narrow no-break space (unicode whitespace)
+        " \t\n\u2003\u2009\u202f",  # combination of whitespace
+    ]
+
+    vectors = dolphin3_tiny_embedder.encode(payloads)
+
+    assert len(vectors) == len(payloads)
+    for vector in vectors:
+        assert len(vector) == dolphin3_tiny_embedder.vector_dimension
+        assert all(math.isfinite(component) for component in vector)
+        norm = _vector_norm(vector)
+        assert norm >= 0.0
+        # Ensure the prompt normalisation keeps vectors non-zero for downstream cosine similarity.
+        assert norm > 0.0
