@@ -216,7 +216,7 @@ class LLM2Vec:
             model_dir = f"{self.base_dir}/merged"
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_dir,
-                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 device_map="auto",
             )
         else:

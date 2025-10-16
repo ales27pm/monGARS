@@ -250,7 +250,7 @@ def test_string_torch_dtype_is_resolved(monkeypatch: pytest.MonkeyPatch) -> None
     manager = NeuronManager(base_model_path="base/model", default_encoder_path="enc")
 
     assert isinstance(manager.model, _StubLLM2Vec)
-    assert captured["options"]["torch_dtype"] is _StubTorch.bfloat16
+    assert captured["options"]["dtype"] is _StubTorch.bfloat16
 
 
 def test_invalid_string_torch_dtype_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,7 +275,7 @@ def test_invalid_string_torch_dtype_is_ignored(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert isinstance(manager.model, _StubLLM2Vec)
-    assert "torch_dtype" not in captured["options"]
+    assert "dtype" not in captured["options"]
 
 
 def test_dotted_torch_dtype_is_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -300,7 +300,7 @@ def test_dotted_torch_dtype_is_resolved(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     assert isinstance(manager.model, _StubLLM2Vec)
-    assert captured["options"]["torch_dtype"] is _StubTorch.float32
+    assert captured["options"]["dtype"] is _StubTorch.float32
 
 
 def test_auto_torch_dtype_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -322,7 +322,7 @@ def test_auto_torch_dtype_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert isinstance(manager.model, _StubLLM2Vec)
-    assert captured["options"].get("torch_dtype") == "auto"
+    assert captured["options"].get("dtype") == "auto"
 
 
 def test_encode_allows_instruction_sequence() -> None:

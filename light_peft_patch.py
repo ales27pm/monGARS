@@ -118,7 +118,7 @@ def load_4bit_causal_lm(
         quantization_config=bnb_cfg,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
-        torch_dtype=compute_dtype,
+        dtype=compute_dtype,
     )
     # Required for HF quantizer validator when any module is on CPU in 8/4-bit
     if cpu_offload:

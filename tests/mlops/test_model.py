@@ -94,6 +94,12 @@ def auto_config_state(_patch_auto_config) -> SimpleNamespace:  # type: ignore[mi
     return _patch_auto_config
 
 
+def _dtype_from_kwargs(kwargs: dict[str, Any]) -> Any:
+    """Return the dtype argument recorded in a kwargs dictionary."""
+
+    return kwargs.get("dtype") or kwargs.get("torch_dtype")
+
+
 @pytest.mark.no_quantization_patch
 def test_is_quantization_unavailable_due_to_cuda(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -109,7 +115,7 @@ def test_is_quantization_unavailable_due_to_cuda(
     )
 
 
-def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
+def test_load_4bit_causal_lm_prefers_dtype_kwarg(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
     recorded_kwargs: dict[str, Any] = {}
@@ -123,7 +129,7 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
         quantization_config: Any,
         low_cpu_mem_usage: bool,
         trust_remote_code: bool,
-        torch_dtype,
+        dtype,
     ) -> Any:  # noqa: ARG001
         recorded_kwargs.update(
             {
@@ -133,7 +139,7 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
                 "quantization_config": quantization_config,
                 "low_cpu_mem_usage": low_cpu_mem_usage,
                 "trust_remote_code": trust_remote_code,
-                "torch_dtype": torch_dtype,
+                "dtype": dtype,
             }
         )
         return _DummyModel()
@@ -148,7 +154,7 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
 
     assert isinstance(model, _DummyModel)
     assert isinstance(tokenizer, _DummyTokenizer)
-    assert recorded_kwargs["torch_dtype"] is model_module.torch.float16
+    assert recorded_kwargs["dtype"] is model_module.torch.float16
     assert (
         recorded_kwargs["quantization_config"].llm_int8_enable_fp32_cpu_offload is True
     )
@@ -156,7 +162,7 @@ def test_load_4bit_causal_lm_prefers_torch_dtype_kwarg(
     assert getattr(model, "_mongars_quantized_4bit", None) is True
 
 
-def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
+def test_load_4bit_causal_lm_falls_back_to_torch_dtype_kwarg(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
     calls: list[dict[str, Any]] = []
@@ -173,8 +179,8 @@ def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
         **kwargs,
     ) -> Any:  # noqa: ARG001
         calls.append(kwargs)
-        if "torch_dtype" in kwargs:
-            raise TypeError("unexpected keyword argument 'torch_dtype'")
+        if "dtype" in kwargs:
+            raise TypeError("unexpected keyword argument 'dtype'")
         return _DummyModel()
 
     monkeypatch.setattr(
@@ -186,8 +192,8 @@ def test_load_4bit_causal_lm_falls_back_to_dtype_kwarg(
     )[0]
 
     assert len(calls) == 2
-    assert calls[0]["torch_dtype"] is model_module.torch.float16
-    assert calls[1]["dtype"] is model_module.torch.float16
+    assert calls[0]["dtype"] is model_module.torch.float16
+    assert calls[1]["torch_dtype"] is model_module.torch.float16
     assert getattr(model, "_mongars_quantized_4bit", None) is True
 
 
@@ -205,14 +211,14 @@ def test_load_4bit_causal_lm_reserves_activation_buffer(
         quantization_config: Any,
         low_cpu_mem_usage: bool,
         trust_remote_code: bool,
-        torch_dtype,
+        dtype,
     ) -> Any:  # noqa: ARG001
         recorded.update(
             {
                 "device_map": device_map,
                 "max_memory": max_memory,
                 "offload_folder": offload_folder,
-                "torch_dtype": torch_dtype,
+                "dtype": dtype,
                 "quantization_config": quantization_config,
             }
         )
@@ -306,7 +312,7 @@ def test_load_4bit_causal_lm_cpu_fallback(monkeypatch: pytest.MonkeyPatch) -> No
     assert isinstance(tokenizer, _DummyTokenizer)
     assert recorded_kwargs.get("quantization_config") is None
     assert recorded_kwargs.get("device_map") is None
-    assert recorded_kwargs.get("torch_dtype") is model_module.torch.float16
+    assert recorded_kwargs.get("dtype") is model_module.torch.float16
     assert getattr(model, "_mongars_quantized_4bit", None) is False
 
 
@@ -331,7 +337,7 @@ def test_load_4bit_causal_lm_cpu_fallback_respects_requested_dtype(
 
     model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf", dtype=preferred_dtype)
 
-    assert recorded_kwargs.get("torch_dtype") is preferred_dtype
+    assert recorded_kwargs.get("dtype") is preferred_dtype
 
 
 def test_load_4bit_causal_lm_cpu_fallback_prefers_config_dtype(
@@ -349,7 +355,7 @@ def test_load_4bit_causal_lm_cpu_fallback_prefers_config_dtype(
 
     def _maybe_fail_from_pretrained(*_, **kwargs):  # noqa: ANN002
         calls.append(kwargs)
-        dtype = kwargs.get("torch_dtype") or kwargs.get("dtype")
+        dtype = _dtype_from_kwargs(kwargs)
         if dtype is bfloat16:
             raise RuntimeError("Simulated failure for config dtype")
         return _DummyModel()
@@ -362,8 +368,8 @@ def test_load_4bit_causal_lm_cpu_fallback_prefers_config_dtype(
 
     model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
 
-    assert calls[0]["torch_dtype"] is bfloat16
-    assert calls[1]["torch_dtype"] is model_module.torch.float16
+    assert _dtype_from_kwargs(calls[0]) is bfloat16
+    assert _dtype_from_kwargs(calls[1]) is model_module.torch.float16
 
 
 def test_load_4bit_causal_lm_cpu_fallback_ignores_unknown_config_dtype(
@@ -384,7 +390,7 @@ def test_load_4bit_causal_lm_cpu_fallback_ignores_unknown_config_dtype(
 
     model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")
 
-    assert calls[0]["torch_dtype"] is model_module.torch.float16
+    assert _dtype_from_kwargs(calls[0]) is model_module.torch.float16
 
 
 def test_load_4bit_causal_lm_cpu_fallback_tries_multiple_dtypes(
@@ -396,7 +402,7 @@ def test_load_4bit_causal_lm_cpu_fallback_tries_multiple_dtypes(
 
     def _maybe_fail_from_pretrained(*_, **kwargs):  # noqa: ANN002
         calls.append(kwargs)
-        dtype = kwargs.get("torch_dtype") or kwargs.get("dtype")
+        dtype = _dtype_from_kwargs(kwargs)
         if dtype is not model_module.torch.float32:
             raise RuntimeError("Unsupported dtype for CPU fallback")
         return _DummyModel()
@@ -410,7 +416,7 @@ def test_load_4bit_causal_lm_cpu_fallback_tries_multiple_dtypes(
     with caplog.at_level("WARNING"):
         model = model_module.load_4bit_causal_lm("meta-llama/Llama-2-7b-hf")[0]
 
-    assert calls[-1]["torch_dtype"] is model_module.torch.float32
+    assert _dtype_from_kwargs(calls[-1]) is model_module.torch.float32
     assert any(
         "CPU fallback load failed for dtype" in record.message
         for record in caplog.records
@@ -463,8 +469,8 @@ def test_build_model_kwargs_candidates_skips_unsupported() -> None:
         _loader,
         base_kwargs={"low_cpu_mem_usage": True},
         optional_kwargs=(
-            {"torch_dtype": model_module.torch.float32},
             {"dtype": model_module.torch.float32},
+            {"torch_dtype": model_module.torch.float32},
         ),
     )
 
@@ -479,14 +485,14 @@ def test_build_model_kwargs_candidates_includes_all_for_kwargs_loader() -> None:
         _loader,
         base_kwargs={"low_cpu_mem_usage": True},
         optional_kwargs=(
-            {"torch_dtype": model_module.torch.float32},
             {"dtype": model_module.torch.float32},
+            {"torch_dtype": model_module.torch.float32},
         ),
     )
 
     assert candidates == [
-        {"low_cpu_mem_usage": True, "torch_dtype": model_module.torch.float32},
         {"low_cpu_mem_usage": True, "dtype": model_module.torch.float32},
+        {"low_cpu_mem_usage": True, "torch_dtype": model_module.torch.float32},
         {"low_cpu_mem_usage": True},
     ]
 
@@ -505,15 +511,15 @@ def test_build_model_kwargs_candidates_prefers_first_supported() -> None:
         _loader,
         base_kwargs={"low_cpu_mem_usage": True},
         optional_kwargs=(
-            {"torch_dtype": model_module.torch.float16},
             {"dtype": model_module.torch.float16},
+            {"torch_dtype": model_module.torch.float16},
         ),
     )
 
     assert len(candidates) == 3
-    assert candidates[0]["torch_dtype"] is model_module.torch.float16
-    assert "dtype" not in candidates[0]
-    assert candidates[1]["dtype"] is model_module.torch.float16
+    assert candidates[0]["dtype"] is model_module.torch.float16
+    assert "torch_dtype" not in candidates[0]
+    assert candidates[1]["torch_dtype"] is model_module.torch.float16
     assert candidates[2] == {"low_cpu_mem_usage": True}
 
 

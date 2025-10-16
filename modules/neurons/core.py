@@ -305,7 +305,9 @@ class NeuronManager:
             for key, value in self._llm2vec_options.items()
             if value is not None
         }
-        if "torch_dtype" in overrides:
+        if "dtype" in overrides:
+            torch_dtype_value = overrides.pop("dtype")
+        elif "torch_dtype" in overrides:
             torch_dtype_value = overrides.pop("torch_dtype")
         else:
             torch_dtype_value = "bfloat16"
@@ -318,7 +320,7 @@ class NeuronManager:
         }
         resolved_dtype = self._resolve_torch_dtype(torch_dtype_value)
         if resolved_dtype is not None:
-            options["torch_dtype"] = resolved_dtype
+            options["dtype"] = resolved_dtype
         if self.encoder_path:
             options["peft_model_name_or_path"] = self.encoder_path
         options |= overrides
@@ -441,7 +443,7 @@ class NeuronManager:
         torch_module = _get_torch_module()
         if torch_module is None:
             logger.warning(
-                "Torch is unavailable; ignoring torch_dtype override '%s'", dtype
+                "Torch is unavailable; ignoring dtype override '%s'", dtype
             )
             return None
 

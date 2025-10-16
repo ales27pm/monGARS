@@ -585,7 +585,7 @@ class MNTPTrainer:
             "dataset_split": "train[:1%]",
             "model_name_or_path": "sshleifer/tiny-gpt2",
             "lora_r": 8,
-            "torch_dtype": "float32",
+            "dtype": "float32",
             "attn_implementation": None,
             "per_device_train_batch_size": 1,
             "gradient_accumulation_steps": 16,
@@ -1314,7 +1314,9 @@ class MNTPTrainer:
         if AutoModelForCausalLM is None or get_peft_model is None:
             raise RuntimeError("transformers/peft unavailable for training")
 
-        dtype_name = str(self.config.get("torch_dtype", "float32"))
+        dtype_name = str(
+            self.config.get("dtype", self.config.get("torch_dtype", "float32"))
+        )
         torch_dtype = getattr(torch, dtype_name, None) if torch else None
         if torch_dtype is None and torch is not None:
             logger.warning(
@@ -1335,7 +1337,7 @@ class MNTPTrainer:
 
         load_kwargs: dict[str, Any] = {}
         if torch_dtype is not None:
-            load_kwargs["torch_dtype"] = torch_dtype
+            load_kwargs["dtype"] = torch_dtype
         attn_impl = self.config.get("attn_implementation")
         if attn_impl:
             load_kwargs["attn_implementation"] = attn_impl

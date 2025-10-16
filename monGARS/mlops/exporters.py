@@ -32,7 +32,7 @@ def merge_lora_adapters(
     )
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_id,
-        torch_dtype="auto",
+        dtype="auto",
         device_map={"": "cpu"},
     )
     tokenizer = AutoTokenizer.from_pretrained(base_model_id, use_fast=True)

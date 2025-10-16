@@ -105,15 +105,15 @@ class LLM2Vec:
 
         if self.prefer_merged and merged_path.exists():
             dtype_name = self.config.get("embedding_options", {}).get("dtype")
-            torch_dtype = torch.float32
+            resolved_dtype = torch.float32
             if dtype_name == "bfloat16":
-                torch_dtype = torch.bfloat16
+                resolved_dtype = torch.bfloat16
             elif dtype_name == "float16":
-                torch_dtype = torch.float16
+                resolved_dtype = torch.float16
 
             return AutoModelForCausalLM.from_pretrained(
                 str(merged_path),
-                torch_dtype=torch_dtype if torch.cuda.is_available() else torch.float32,
+                dtype=resolved_dtype if torch.cuda.is_available() else torch.float32,
                 device_map="auto",
             )
 
