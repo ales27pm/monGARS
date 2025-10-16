@@ -44,6 +44,11 @@ export function createHttpService({ config, auth }) {
   }
 
   async function postEmbed(text, options = {}) {
+    if (!config.embedServiceUrl) {
+      throw new Error(
+        "Service d'embedding indisponible: aucune URL configurée."
+      );
+    }
     const payload = {
       inputs: [text],
     };
@@ -52,7 +57,7 @@ export function createHttpService({ config, auth }) {
     } else {
       payload.normalise = false;
     }
-    const resp = await authorisedFetch("/embed", {
+    const resp = await authorisedFetch(config.embedServiceUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

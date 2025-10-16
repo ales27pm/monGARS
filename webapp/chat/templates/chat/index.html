@@ -408,6 +408,7 @@
     <script>
       window.chatConfig = {
         fastapiUrl: "{{ fastapi_url }}",
+        embedServiceUrl: {% if embed_service_url %}"{{ embed_service_url|escapejs }}"{% else %}null{% endif %},
         userId: "{{ user_id }}",
         token: "{{ token }}",
       };

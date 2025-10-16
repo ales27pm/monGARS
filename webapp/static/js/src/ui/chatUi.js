@@ -973,7 +973,9 @@ export function createChatUi({ elements, timelineStore }) {
     if (elements.modeSelect) {
       elements.modeSelect.addEventListener("change", (event) => {
         const value = event.target.value || "";
-        emit("mode-change", { mode: normaliseMode(value) });
+        const nextMode = normaliseMode(value);
+        setMode(nextMode);
+        emit("mode-change", { mode: nextMode });
       });
     }
 

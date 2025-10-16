@@ -106,6 +106,9 @@ export class ChatApp {
     this.mode = this.ui.mode || "chat";
     this.auth = createAuthService(this.config);
     this.http = createHttpService({ config: this.config, auth: this.auth });
+    this.embeddingAvailable = Boolean(this.config.embedServiceUrl);
+    this.embedOptionLabel = null;
+    this.configureModeAvailability();
     this.exporter = createExporter({
       timelineStore: this.timelineStore,
       announce: (message, variant) =>
@@ -136,6 +139,36 @@ export class ChatApp {
     this.socket.open();
   }
 
+  configureModeAvailability() {
+    const select = this.elements.modeSelect;
+    if (!select) {
+      return;
+    }
+    const option = select.querySelector('option[value="embed"]');
+    if (!option) {
+      return;
+    }
+    if (!this.embedOptionLabel) {
+      this.embedOptionLabel = option.textContent.trim() || "Embedding";
+    }
+    if (this.embeddingAvailable) {
+      option.disabled = false;
+      option.removeAttribute("aria-disabled");
+      option.textContent = this.embedOptionLabel;
+    } else {
+      option.disabled = true;
+      option.setAttribute("aria-disabled", "true");
+      option.textContent = `${this.embedOptionLabel} (indisponible)`;
+      if (select.value === "embed") {
+        select.value = "chat";
+      }
+      if (this.ui && typeof this.ui.setMode === "function") {
+        this.ui.setMode("chat", { forceStatus: true });
+      }
+      this.mode = "chat";
+    }
+  }
+
   registerUiHandlers() {
     this.ui.on("submit", async ({ text }) => {
       const value = (text || "").trim();
@@ -146,6 +179,19 @@ export class ChatApp {
           "warning",
         );
         this.ui.scheduleComposerIdle(4000);
+        return;
+      }
+      if (requestMode === "embed" && !this.embeddingAvailable) {
+        this.ui.setMode("chat", { forceStatus: true });
+        if (this.elements.modeSelect) {
+          this.elements.modeSelect.value = "chat";
+        }
+        this.mode = "chat";
+        this.ui.setComposerStatus(
+          "Service d'embedding indisponible. Mode Chat rétabli.",
+          "warning",
+        );
+        this.ui.scheduleComposerIdle(5000);
         return;
       }
       this.ui.hideError();
@@ -212,13 +258,22 @@ export class ChatApp {
     });
 
     this.ui.on("mode-change", ({ mode }) => {
-      const nextMode = mode === "embed" ? "embed" : "chat";
-      if (this.mode === nextMode) {
+      const requestedMode = mode === "embed" ? "embed" : "chat";
+      if (requestedMode === "embed" && !this.embeddingAvailable) {
+        this.configureModeAvailability();
+        this.ui.setComposerStatus(
+          "Service d'embedding indisponible. Mode Chat rétabli.",
+          "warning",
+        );
+        this.ui.scheduleComposerIdle(5000);
         return;
       }
-      this.mode = nextMode;
-      this.ui.setMode(nextMode);
-      if (nextMode === "embed") {
+      if (this.mode === requestedMode) {
+        return;
+      }
+      this.mode = requestedMode;
+      this.ui.setMode(requestedMode);
+      if (requestedMode === "embed") {
         this.ui.setComposerStatus(
           "Mode Embedding activé. Les requêtes renvoient des vecteurs.",
           "info",
