@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve the Dolphin 3.0 LLM2Vec wrapper over HTTP."""
+"""Serve Dolphin 3.0 embeddings over HTTP via Hugging Face or Ollama."""
 from __future__ import annotations
 
 import argparse
@@ -46,7 +46,7 @@ class EmbeddingService:
 
     def __init__(
         self,
-        model_dir: Path,
+        model_dir: Path | None,
         *,
         prefer_merged: bool = False,
         device: str | None = None,
@@ -64,7 +64,9 @@ class EmbeddingService:
         self._wrapper: Any | None = None
         self._embedder: LLM2VecEmbedder | None = None
         if self.backend == "huggingface":
-            self.config = load_wrapper_config(model_dir)
+            if self.model_dir is None:
+                raise ValueError("model_dir is required for the Hugging Face backend")
+            self.config = load_wrapper_config(self.model_dir)
             self._wrapper_factory = wrapper_factory or self._load_wrapper
         else:
             self.config = {
@@ -79,6 +81,9 @@ class EmbeddingService:
         self._lock = asyncio.Lock()
 
     def _load_wrapper(self) -> Any:
+        if self.model_dir is None:
+            raise RuntimeError("model_dir must be set when loading the wrapper")
+
         wrapper_dir = self.model_dir / "wrapper"
         wrapper_path = wrapper_dir / "llm2vec_wrapper.py"
         if not wrapper_path.exists():
@@ -190,16 +195,20 @@ class EmbeddingService:
             raise HTTPException(status_code=502, detail="No embeddings returned")
 
         dims = len(vectors[0])
+        final_used_normalise = apply_normalise or bool(
+            getattr(batch, "used_fallback", False)
+        )
+
         LOGGER.debug(
             "Generated Ollama embeddings",
             extra={
                 "count": len(vectors),
                 "dims": dims,
-                "normalise": apply_normalise,
+                "normalise": final_used_normalise,
                 "used_fallback": batch.used_fallback,
             },
         )
-        return vectors, apply_normalise
+        return vectors, final_used_normalise
 
     def _l2_normalise(self, vector: Sequence[float]) -> List[float]:
         floats = [float(component) for component in vector]
@@ -255,7 +264,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--model-dir",
-        required=True,
+        required=False,
+        default=None,
         help="Directory that contains the fine-tuned Dolphin 3.0 artifacts",
     )
     parser.add_argument(
@@ -309,9 +319,16 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper()))
 
-    model_dir = Path(args.model_dir)
-    if not model_dir.exists():
-        raise SystemExit(f"Model directory {model_dir} does not exist")
+    settings = get_settings()
+
+    model_dir: Path | None = Path(args.model_dir) if args.model_dir else None
+    if settings.embedding_backend == "huggingface":
+        if model_dir is None:
+            raise SystemExit(
+                "--model-dir is required when using the Hugging Face backend"
+            )
+        if not model_dir.exists():
+            raise SystemExit(f"Model directory {model_dir} does not exist")
 
     load_in_4bit: bool | None
     if args.force_4bit:
@@ -326,6 +343,7 @@ def main() -> None:
         prefer_merged=args.prefer_merged,
         device=args.device,
         load_in_4bit=load_in_4bit,
+        settings=settings,
     )
     app = create_app(service)
 
