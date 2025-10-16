@@ -92,9 +92,7 @@ def test_embedding_service_ollama_backend(monkeypatch) -> None:
     assert payload["vectors"] == [[0.0, 1.0], [1.0, 2.0]]
 
 
-def test_embedding_service_unsupported_backend_warns(
-    tmp_path: Path, caplog
-) -> None:
+def test_embedding_service_unsupported_backend_warns(tmp_path: Path, caplog) -> None:
     wrapper_dir = tmp_path / "wrapper"
     wrapper_dir.mkdir()
     config = {

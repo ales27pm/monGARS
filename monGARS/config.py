@@ -47,9 +47,7 @@ from monGARS.utils.hardware import recommended_worker_count
 log = logging.getLogger(__name__)
 
 
-EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(
-    sorted(SUPPORTED_EMBEDDING_BACKENDS)
-)
+EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(sorted(SUPPORTED_EMBEDDING_BACKENDS))
 """Supported embedding backends exposed to runtime configuration."""
 
 EmbeddingBackend = Literal[*EMBEDDING_BACKEND_CHOICES]

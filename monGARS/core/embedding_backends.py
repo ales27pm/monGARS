@@ -49,4 +49,3 @@ __all__ = [
     "SUPPORTED_EMBEDDING_BACKENDS",
     "normalise_embedding_backend",
 ]
-
