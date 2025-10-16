@@ -311,7 +311,12 @@ async def test_generate_response_uses_slot_fallback_when_needed(
 
     result = await fake_llm_integration.generate_response("hello", "general")
 
-    assert result["text"] == "slot::hello::general"
+    assert result["text"].startswith("slot::")
+    assert result["text"].endswith("::general")
+    payload = result["text"].split("::", 2)[1]
+    assert "<|system|>" in payload
+    assert "<|user|>" in payload
+    assert "<|assistant|>" in payload
     assert result["tokens_used"] == len(result["text"].split())
     assert call_counts == {"slot": 1}
 
