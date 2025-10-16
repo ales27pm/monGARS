@@ -19,10 +19,7 @@ suites.
   - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
   - ✅ Replace demo users in `web_api.py` with the database-backed authentication flow and migrations; bootstrap now persists accounts without shipping in-memory defaults.【F:monGARS/api/authentication.py†L17-L120】【F:monGARS/api/web_api.py†L41-L120】
 - **Research Coverage**
-  - ✅ Personality profiles persisted via SQLModel with live adapter updates.
-  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
-  - 🔄 Expand tests and dashboards for long-running MNTP jobs, multi-replica Ray Serve rollouts, and energy telemetry correlation across distributed workflows.【F:tests/test_long_haul_validation.py†L1-L220】【F:monGARS/core/long_haul_validation.py†L156-L226】
+  - _(No matching roadmap entries for `Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)`)_
 
 ## Structure & Conventions
 
@@ -40,7 +37,9 @@ suites.
 
 ## Tooling
 
-Default command is `pytest`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1`
-for triage. Generate coverage with `pytest --cov=monGARS --cov=modules` when requested.
-Run suites from the repository root so module paths resolve (e.g. `pytest tests/test_embeddings.py`);
-avoid the `pytest monGARS/tests/...` form that failed in CI on 2025-10-16.
+Default command is `pytest`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1` for
+triage. Generate coverage with `pytest --cov=monGARS --cov=modules` when requested.
+
+Run suites from the repository root so module paths resolve (e.g. `pytest
+tests/test_embeddings.py`); avoid the `pytest monGARS/tests/...` form that failed in CI on
+2025-10-16.
