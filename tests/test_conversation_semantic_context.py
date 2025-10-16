@@ -28,13 +28,15 @@ class _FakeLLMIntegration:
         response_hints=None,
         formatted_prompt: str | None = None,
     ):  # type: ignore[override]
-        self.prompts.append(prompt)
+        used_prompt = formatted_prompt if formatted_prompt is not None else prompt
+        self.prompts.append(used_prompt)
         self.calls.append(
             {
                 "prompt": prompt,
                 "task_type": task_type,
                 "response_hints": response_hints,
                 "formatted_prompt": formatted_prompt,
+                "used_prompt": used_prompt,
             }
         )
         return {
@@ -109,6 +111,23 @@ class _FakeSpeakerService:
     async def speak(self, text: str, *, session_id: str | None = None):  # type: ignore[override]
         self.calls.append((text, session_id))
         return _FakeSpeechTurn(text)
+
+
+@pytest.mark.asyncio
+async def test_fake_llm_integration_prefers_formatted_prompt() -> None:
+    llm = _FakeLLMIntegration()
+
+    await llm.generate_response(
+        "plain", formatted_prompt="formatted", task_type="general"
+    )
+    await llm.generate_response("plain", formatted_prompt=None, task_type="general")
+
+    assert llm.prompts == ["formatted", "plain"]
+    assert llm.calls[0]["used_prompt"] == "formatted"
+    assert llm.calls[0]["prompt"] == "plain"
+    assert llm.calls[0]["formatted_prompt"] == "formatted"
+    assert llm.calls[1]["used_prompt"] == "plain"
+    assert llm.calls[1]["formatted_prompt"] is None
 
 
 class _FakeMemoryService:
@@ -202,6 +221,12 @@ async def test_generate_response_injects_semantic_context(monkeypatch) -> None:
         conversation_module.settings, "llm2vec_context_max_distance", 0.6, raising=False
     )
 
+    system_prompt = getattr(
+        conversation_module.settings,
+        "llm_system_prompt",
+        "You are Dolphin, a helpful assistant.",
+    )
+
     record = SimpleNamespace(
         id=101,
         query="semantic-question",
@@ -235,12 +260,14 @@ async def test_generate_response_injects_semantic_context(monkeypatch) -> None:
         saved_interaction.input_data["semantic_context"][0]["query"]
         == "semantic-question"
     )
-    assert saved_interaction.input_data["semantic_prompt"] == prompt
+    assert saved_interaction.input_data["semantic_prompt"] == llm.calls[0]["prompt"]
     chatml_prompt = saved_interaction.input_data["chatml_prompt"]
     assert chatml_prompt.startswith(CHATML_BEGIN_OF_TEXT)
     assert chatml_prompt.endswith(
         f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"
     )
+    assert system_prompt in chatml_prompt
+    assert prompt in chatml_prompt
     assert saved_interaction.context["semantic_matches"]
     assert llm.calls[0]["task_type"] == "general"
     assert llm.calls[0]["response_hints"] is None
