@@ -24,7 +24,7 @@ def _write_wrapper(tmp_path: Path, name: str = "wrapper") -> Path:
     (wrapper_dir / "config.json").write_text(
         json.dumps(
             {
-                "base_model_id": "stub-base",
+                "base_model_id": "sample-base",
                 "lora_dir": (tmp_path / "adapter").as_posix(),
                 "max_seq_len": 512,
                 "quantized_4bit": True,
@@ -40,7 +40,7 @@ def test_load_wrapper_bundle_success(tmp_path: Path) -> None:
     wrapper_dir = _write_wrapper(tmp_path)
     bundle = load_wrapper_bundle(wrapper_dir)
 
-    assert bundle.config.base_model_id == "stub-base"
+    assert bundle.config.base_model_id == "sample-base"
     assert bundle.module_path == wrapper_dir / "project_wrapper.py"
 
     instance = bundle.create_instance()

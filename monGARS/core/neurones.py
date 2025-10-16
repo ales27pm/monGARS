@@ -35,7 +35,7 @@ class _NoOpResult:
     """Minimal async-compatible result used when the Neo4j driver is absent.
 
     The curiosity engine exercises ``data()``, ``records()`` and async iteration
-    when normalising query responses. These stubs mirror that interface so tests
+    when normalising query responses. These fakes mirror that interface so tests
     can run without the optional driver dependency. Extend this class if new
     result helpers are accessed in the future.
     """

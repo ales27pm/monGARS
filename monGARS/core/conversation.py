@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-class _StubLLM:
+class _FakeLLM:
     """Lightweight LLM double used in legacy unit tests."""
 
     def __init__(self) -> None:
@@ -46,9 +46,9 @@ class _StubLLM:
         }
         self.calls.append(call)
         return {
-            "text": "stub-response",
+            "text": "sample-response",
             "confidence": 0.0,
-            "source": "stub",
+            "source": "sample",
             "adapter_version": "test",
         }
 
@@ -64,7 +64,7 @@ class _StubLLM:
         )
 
 
-class _StubPersistence:
+class _FakePersistence:
     """Persistence façade that records interactions for inspection in tests."""
 
     def __init__(self) -> None:
@@ -105,7 +105,7 @@ class _StubPersistence:
         )
 
 
-class _StubMimicry:
+class _FakeMimicry:
     """Trivial mimicry adapter that echoes inputs for backwards compatibility tests."""
 
     def __init__(self) -> None:
@@ -126,9 +126,9 @@ class _StubMimicry:
 async def generate_response(
     *,
     prompt: str,
-    llm: LLMIntegration | _StubLLM | None = None,
-    persistence: PersistenceRepository | _StubPersistence | None = None,
-    mimicry: MimicryModule | _StubMimicry | None = None,
+    llm: LLMIntegration | _FakeLLM | None = None,
+    persistence: PersistenceRepository | _FakePersistence | None = None,
+    mimicry: MimicryModule | _FakeMimicry | None = None,
 ) -> Mapping[str, Any]:
     """Legacy coroutine kept for backwards compatibility in older tests.
 
@@ -138,9 +138,9 @@ async def generate_response(
     funnels the call to the injected LLM implementation.
     """
 
-    llm_impl = llm or _StubLLM()
-    persistence_impl = persistence or _StubPersistence()
-    mimicry_impl = mimicry or _StubMimicry()
+    llm_impl = llm or _FakeLLM()
+    persistence_impl = persistence or _FakePersistence()
+    mimicry_impl = mimicry or _FakeMimicry()
 
     required_hooks = ("update_profile", "adapt_response_style")
     missing_hooks = [hook for hook in required_hooks if not hasattr(mimicry_impl, hook)]

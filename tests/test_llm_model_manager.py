@@ -130,7 +130,7 @@ def test_default_profile_exposes_reasoning_role(tmp_path):
 async def test_adapter_artifacts_copied_into_registry(monkeypatch, tmp_path):
     source_dir = tmp_path / "artifacts" / "adapter"
     source_dir.mkdir(parents=True)
-    (source_dir / "adapter_model.safetensors").write_bytes(b"stub")
+    (source_dir / "adapter_model.safetensors").write_bytes(b"sample")
     config_data = {
         "profiles": {
             "default": {
@@ -178,7 +178,7 @@ async def test_adapter_artifacts_copied_into_registry(monkeypatch, tmp_path):
     assert adapter_status.action == "installed"
     installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
     assert installed_file.exists()
-    assert installed_file.read_bytes() == b"stub", "File content should match source"
+    assert installed_file.read_bytes() == b"sample", "File content should match source"
 
 
 @pytest.mark.asyncio
@@ -231,7 +231,7 @@ async def test_adapter_downloads_remote_payload(monkeypatch, tmp_path):
         def list(self) -> dict[str, object]:
             return {"models": []}
 
-        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
             pass
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())
@@ -285,7 +285,7 @@ async def test_local_adapter_installs_when_downloads_disabled(monkeypatch, tmp_p
         def list(self) -> dict[str, object]:
             return {"models": []}
 
-        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
             pass
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())
@@ -377,7 +377,7 @@ async def test_adapter_provision_missing_source(monkeypatch, tmp_path):
         def list(self) -> dict[str, object]:
             return {"models": []}
 
-        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
             pass
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())
@@ -431,7 +431,7 @@ async def test_adapter_provision_checksum_mismatch(monkeypatch, tmp_path):
         def list(self) -> dict[str, object]:
             return {"models": []}
 
-        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
             pass
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())
@@ -483,7 +483,7 @@ async def test_adapter_provision_extraction_failure(monkeypatch, tmp_path):
         def list(self) -> dict[str, object]:
             return {"models": []}
 
-        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
             pass
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())
@@ -548,7 +548,7 @@ async def test_force_does_not_delete_frozen_adapter(monkeypatch, tmp_path):
         def list(self) -> dict[str, object]:
             return {"models": []}
 
-        def pull(self, name: str) -> None:  # pragma: no cover - defensive stub
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
             pass
 
     monkeypatch.setattr(model_manager, "ollama", FakeOllama())

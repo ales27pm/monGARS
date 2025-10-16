@@ -13,7 +13,7 @@ service surface, CLI entry points, and test support utilities.
 | --- | --- | --- |
 | `rg "TODO"` | Track high-level work markers left in code comments. | No matches. |
 | `rg "FIXME"` / `rg "XXX"` | Catch lower-level bug markers or temporary hacks. | No matches. |
-| `rg "NotImplemented"` | Identify deliberate stubs raising `NotImplementedError`. | One test double (documented below). |
+| `rg "NotImplemented"` | Identify deliberate test doubles raising `NotImplementedError`. | One test double (documented below). |
 | `rg "\\bpass\\b" monGARS` | Locate `pass` statements inside runtime modules. | Four runtime locations reviewed. |
 | Manual inspection | Review each match in surrounding context to confirm intent and downstream behaviour. | Completed. |
 

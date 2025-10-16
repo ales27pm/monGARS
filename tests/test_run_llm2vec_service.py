@@ -23,7 +23,7 @@ def test_embedding_service_exposes_health_and_embed(tmp_path: Path) -> None:
     wrapper_dir.mkdir()
 
     config = {
-        "base_model_id": "stub/dolphin",
+        "base_model_id": "sample/dolphin",
         "embedding_backend": "huggingface",
         "embedding_options": {"max_length": 16, "normalise": False},
     }
@@ -43,7 +43,7 @@ def test_embedding_service_exposes_health_and_embed(tmp_path: Path) -> None:
 
     health = client.get("/healthz")
     assert health.status_code == 200
-    assert health.json()["model"] == "stub/dolphin"
+    assert health.json()["model"] == "sample/dolphin"
 
     response = client.post(
         "/embed",

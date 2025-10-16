@@ -273,7 +273,7 @@ def test_orchestrator_trains_when_vram_query_fails(
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
         def fit(self, dataset: Any) -> dict[str, Any]:
-            return {"status": "success", "artifacts": {"adapter": "stub"}}
+            return {"status": "success", "artifacts": {"adapter": "sample"}}
 
     _mock_idle(monkeypatch)
     _mock_torch_vram(monkeypatch, allocated_gb=1.0, fail_stage="properties")
@@ -416,7 +416,7 @@ def test_reasoning_loop_receives_approval_registry(
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
         def fit(self, dataset: Any) -> dict[str, Any]:
-            return {"status": "success", "artifacts": {"adapter": "stub"}}
+            return {"status": "success", "artifacts": {"adapter": "sample"}}
 
     class _ReasoningLoopStub:
         def __init__(self, **kwargs: Any) -> None:
