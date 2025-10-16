@@ -10,6 +10,7 @@ from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.evolution_engine import EvolutionEngine
 from monGARS.core.hippocampus import Hippocampus
+from monGARS.core.inference_utils import build_context_prompt
 from monGARS.core.llm_integration import LLMIntegration
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
@@ -415,49 +416,11 @@ class ConversationalModule:
     ) -> str:
         """Render the final prompt combining history and semantic recall."""
 
-        sections: list[str] = []
-
-        if history_pairs:
-            history_lines: list[str] = []
-            for idx, (query_text, response_text) in enumerate(history_pairs, start=1):
-                user_line = (query_text or "").strip()
-                assistant_line = (response_text or "").strip()
-                history_lines.append(
-                    f"[{idx}] User: {user_line}\n    Assistant: {assistant_line}"
-                )
-            sections.append(
-                "Recent conversation turns (most recent first):\n"
-                + "\n".join(history_lines)
-            )
-
-        if semantic_context:
-            semantic_lines: list[str] = []
-            for idx, entry in enumerate(semantic_context, start=1):
-                similarity = entry.get("similarity")
-                similarity_text = (
-                    f" (similarity {similarity:.3f})"
-                    if isinstance(similarity, float)
-                    else ""
-                )
-                query_text = (entry.get("query") or "").strip()
-                response_text = (entry.get("response") or "").strip()
-                semantic_lines.append(
-                    f"[{idx}]{similarity_text} User: {query_text}\n    Assistant: {response_text}"
-                )
-            sections.append(
-                "Archived interactions retrieved via semantic search:\n"
-                + "\n".join(semantic_lines)
-            )
-
-        instructions = (
-            "Leverage the provided context to craft an accurate and concise reply. "
-            "If the context is unrelated, continue with your best effort response. "
-            "Current user request:\n"
-            f"{refined_prompt}"
+        return build_context_prompt(
+            refined_prompt,
+            history_pairs=history_pairs,
+            semantic_context=semantic_context,
         )
-        sections.append(instructions)
-
-        return "\n\n".join(section for section in sections if section.strip())
 
     async def generate_response(
         self,

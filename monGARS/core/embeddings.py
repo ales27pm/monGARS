@@ -19,6 +19,7 @@ from typing import Any, Mapping
 
 from modules.neurons.core import NeuronManager
 from monGARS.config import Settings, get_settings
+from monGARS.core.inference_utils import prepare_tokenizer_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -530,17 +531,14 @@ class Dolphin3Embedder:
 
         for start in range(0, len(texts), self._batch_size):
             chunk = [str(text) for text in texts[start : start + self._batch_size]]
-            tokenized = tokenizer(
+            prepared_inputs, _ = prepare_tokenizer_inputs(
+                tokenizer,
                 chunk,
-                return_tensors="pt",
+                max_length=self._max_length,
+                device=device,
                 padding=True,
                 truncation=True,
-                max_length=self._max_length,
             )
-            prepared_inputs = {
-                name: tensor.to(device) if hasattr(tensor, "to") else tensor
-                for name, tensor in tokenized.items()
-            }
             with torch_module.inference_mode():
                 outputs = model(**prepared_inputs, output_hidden_states=True)
 
