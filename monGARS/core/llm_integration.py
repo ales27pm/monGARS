@@ -548,7 +548,10 @@ class LLMIntegration:
 
     @staticmethod
     def _normalise_chatml_content(value: str) -> str:
-        return value.strip() if value else ""
+        if not value:
+            return ""
+        normalized = value.replace("\r\n", "\n")
+        return normalized.rstrip("\n")
 
     @staticmethod
     def _has_chatml_prefix(value: str) -> bool:
@@ -596,7 +599,11 @@ class LLMIntegration:
         return "".join(segments)
 
     def _ensure_chatml_prompt(self, prompt: str, formatted_prompt: str | None) -> str:
-        candidate = formatted_prompt if formatted_prompt is not None else prompt
+        candidate = (
+            formatted_prompt
+            if formatted_prompt is not None and formatted_prompt.strip()
+            else prompt
+        )
         if not candidate:
             return self._build_chatml_prompt(
                 "", system_prompt=self._default_system_prompt
