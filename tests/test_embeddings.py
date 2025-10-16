@@ -469,3 +469,41 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
         manual_vector = torch_module.cat((manual_vector, pad), dim=0)
 
     assert reference_vector == pytest.approx(manual_vector.tolist(), abs=1e-5)
+
+
+def _vector_norm(values: list[float]) -> float:
+    return math.sqrt(sum(component * component for component in values))
+
+
+def test_dolphin3_embedder_embeddings_are_deterministic(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    text = "determinism check for dolphin embeddings"
+
+    first = dolphin3_tiny_embedder.encode([text])[0]
+    second = dolphin3_tiny_embedder.encode([text])[0]
+
+    assert len(first) == dolphin3_tiny_embedder.vector_dimension
+    assert len(second) == dolphin3_tiny_embedder.vector_dimension
+    assert first == pytest.approx(second, rel=1e-6, abs=1e-6)
+    assert _vector_norm(first) == pytest.approx(
+        _vector_norm(second), rel=1e-6, abs=1e-6
+    )
+    assert all(math.isfinite(component) for component in first)
+
+
+def test_dolphin3_embedder_normalises_empty_inputs(
+    dolphin3_tiny_embedder: Dolphin3Embedder,
+) -> None:
+    payloads = ["", " "]
+
+    vectors = dolphin3_tiny_embedder.encode(payloads)
+
+    assert len(vectors) == len(payloads)
+    for vector in vectors:
+        assert len(vector) == dolphin3_tiny_embedder.vector_dimension
+        assert all(math.isfinite(component) for component in vector)
+        norm = _vector_norm(vector)
+        assert norm >= 0.0
+        # Ensure the prompt normalisation keeps vectors non-zero for downstream cosine similarity.
+        assert norm > 0.0
