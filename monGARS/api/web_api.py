@@ -17,6 +17,8 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from httpx import HTTPError
+from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.api.authentication import (
     authenticate_user,
@@ -44,11 +46,12 @@ from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
+from monGARS.core.llm_integration import CircuitBreakerOpenError
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.security import SecurityManager, validate_user_input
-from monGARS.core.ui_events import event_bus, make_event
+from monGARS.core.ui_events import BackendUnavailable, event_bus, make_event
 
 from . import authentication as auth_routes
 from . import model_management
@@ -184,7 +187,10 @@ async def register_admin_user(
             )
     except HTTPException:
         raise
-    except Exception as exc:  # pragma: no cover - unexpected failure
+    except (
+        RuntimeError,
+        SQLAlchemyError,
+    ) as exc:  # pragma: no cover - unexpected failure
         logger.error(
             "auth.register_admin.state_check_failed",
             extra={"username": reg.username},
@@ -220,7 +226,10 @@ async def conversation_history(
         raise HTTPException(status_code=400, detail="limit must be positive")
     try:
         return await store.history(user_id, limit=limit)
-    except Exception as exc:  # pragma: no cover - unexpected errors
+    except (
+        RuntimeError,
+        SQLAlchemyError,
+    ) as exc:  # pragma: no cover - unexpected errors
         logger.exception(
             "conversation.history_failed",
             extra={"user": _redact_user_id(user_id), "limit": limit},
@@ -263,7 +272,13 @@ async def chat(
         ) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except (
+        CircuitBreakerOpenError,
+        HTTPError,
+        RuntimeError,
+        SQLAlchemyError,
+        ValueError,
+    ) as exc:
         logger.exception(
             "web_api.chat_inference_failed",
             extra={"user": _redact_user_id(user_id)},
@@ -285,7 +300,12 @@ async def chat(
             response_payload,
         )
         await event_bus().publish(event)
-    except Exception:  # pragma: no cover - defensive logging
+    except BackendUnavailable:
+        logger.exception(
+            "web_api.chat_event_publish_failed",
+            extra={"user": _redact_user_id(user_id)},
+        )
+    except (OSError, RuntimeError):
         logger.exception(
             "web_api.chat_event_publish_failed",
             extra={"user": _redact_user_id(user_id)},
@@ -307,7 +327,7 @@ async def peer_message(
     """Receive an encrypted message from a peer."""
     try:
         data = communicator.decode(message.payload)
-    except (ValueError, json.JSONDecodeError) as exc:
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.warning(
             "peer.message_invalid_payload",
             extra={"detail": str(exc)},
@@ -316,7 +336,7 @@ async def peer_message(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid peer payload",
         ) from exc
-    except Exception as exc:
+    except (RuntimeError, OSError, TypeError) as exc:
         logger.exception("peer.message_decode_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

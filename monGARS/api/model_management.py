@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from httpx import HTTPError
 
 from monGARS.api.authentication import get_current_admin_user
 from monGARS.api.dependencies import get_model_manager
@@ -55,8 +56,16 @@ async def provision_models(
     roles = payload.roles
     try:
         report = await manager.ensure_models_installed(roles, force=payload.force)
-    except Exception as exc:  # pragma: no cover - provider failure bubble-up
-        logger.exception("api.models.provision.failed", extra={"roles": roles})
+    except (
+        HTTPError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as exc:  # pragma: no cover - provider failure bubble-up
+        logger.exception(
+            "api.models.provision.failed",
+            extra={"roles": roles},
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to provision requested models.",

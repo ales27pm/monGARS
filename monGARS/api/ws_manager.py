@@ -17,11 +17,12 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.api.dependencies import get_hippocampus
 from monGARS.api.ws_ticket import verify_ws_ticket
 from monGARS.config import get_settings
-from monGARS.core.ui_events import Event, event_bus, make_event
+from monGARS.core.ui_events import BackendUnavailable, Event, event_bus, make_event
 
 log = logging.getLogger(__name__)
 settings = get_settings()
@@ -206,8 +207,16 @@ class WebSocketManager:
                     await self.send_event(ev)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # pragma: no cover - defensive logging
+            except BackendUnavailable:  # pragma: no cover - defensive logging
                 log.exception("ws_manager.background_failed")
+                raise
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+            ):  # pragma: no cover - defensive logging
+                log.exception("ws_manager.background_failed")
+                raise
             finally:
                 self._task = None
 
@@ -273,9 +282,12 @@ async def _sender_loop(state: _ConnectionState) -> None:
         raise
     except WebSocketDisconnect:
         raise
-    except Exception:  # pragma: no cover - defensive logging
+    except (OSError, RuntimeError, ValueError):  # pragma: no cover - defensive logging
         if not state.closed:
-            log.exception("ws_manager.send_failed", extra={"user_id": state.user_id})
+            log.exception(
+                "ws_manager.send_failed",
+                extra={"user_id": state.user_id},
+            )
         raise
 
 
@@ -411,7 +423,7 @@ async def ws_chat(ws: WebSocket, ticket: str = Query(..., alias="t")) -> None:
         )
         await ws.close(code=close_code)
         return
-    except Exception:
+    except (RuntimeError, UnicodeError, ValueError):
         log.exception("ws_manager.ticket_verification_failed")
         await ws.close(code=1011)
         return
@@ -443,8 +455,11 @@ async def ws_chat(ws: WebSocket, ticket: str = Query(..., alias="t")) -> None:
             {"items": payload},
         )
         await ws.send_text(snapshot.to_json())
-    except Exception:  # pragma: no cover - defensive logging
-        log.exception("ws_manager.history_failed", extra={"user_id": user_id})
+    except (RuntimeError, SQLAlchemyError):  # pragma: no cover - defensive logging
+        log.exception(
+            "ws_manager.history_failed",
+            extra={"user_id": user_id},
+        )
 
     state.sender_task = asyncio.create_task(_sender_loop(state))
     receiver_task = asyncio.create_task(_receiver_loop(state))
