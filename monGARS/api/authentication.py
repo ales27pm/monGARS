@@ -8,6 +8,7 @@ from typing import Any, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.config import get_settings
 from monGARS.core.persistence import PersistenceRepository
@@ -61,7 +62,10 @@ async def _user_exists(repo: PersistenceRepository, username: str) -> bool:
 
     try:
         return await repo.get_user_by_username(username) is not None
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except (
+        RuntimeError,
+        SQLAlchemyError,
+    ) as exc:  # pragma: no cover - defensive logging
         logger.warning(
             "auth.bootstrap.lookup_failed",
             extra={"username": username},
@@ -125,7 +129,13 @@ async def _create_user_safely(
             "auth.bootstrap.user_exists_or_race",
             extra={"username": username},
         )
-    except Exception as exc:  # pragma: no cover - unexpected failure
+    except SQLAlchemyError as exc:  # pragma: no cover - unexpected failure
+        logger.warning(
+            "auth.bootstrap.create_failed",
+            extra={"username": username},
+            exc_info=exc,
+        )
+    except RuntimeError as exc:  # pragma: no cover - unexpected failure
         logger.warning(
             "auth.bootstrap.create_failed",
             extra={"username": username},
@@ -139,7 +149,10 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     )
     try:
         payload = sec.verify_token(token)
-    except Exception as exc:  # pragma: no cover - FastAPI handles response
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:  # pragma: no cover - FastAPI handles response
         missing_subject = False
         try:
             claims = jwt.get_unverified_claims(token)
