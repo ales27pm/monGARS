@@ -333,6 +333,27 @@
         "title": "MemoryItem",
         "type": "object"
       },
+      "PasswordChangeRequest": {
+        "description": "Payload for password change requests.",
+        "properties": {
+          "new_password": {
+            "minLength": 8,
+            "title": "New Password",
+            "type": "string"
+          },
+          "old_password": {
+            "minLength": 8,
+            "title": "Old Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old_password",
+          "new_password"
+        ],
+        "title": "PasswordChangeRequest",
+        "type": "object"
+      },
       "PeerLoadSnapshot": {
         "description": "Minimal load report shared between peer schedulers.",
         "properties": {
@@ -1223,6 +1244,51 @@
         "tags": [
           "ui"
         ]
+      }
+    },
+    "/api/v1/user/change-password": {
+      "post": {
+        "operationId": "change_password_api_v1_user_change_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Change Password Api V1 User Change Password Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Change Password"
       }
     },
     "/api/v1/user/register": {
