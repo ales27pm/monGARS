@@ -389,7 +389,6 @@ class PersistenceRepository:
                 if user is None:
                     return False
                 user.password_hash = password_hash
-                session.add(user)
                 return True
 
         return await self._execute_with_retry(

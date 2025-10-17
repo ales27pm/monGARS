@@ -218,7 +218,8 @@ async def change_password(
     username = current_user.get("sub")
     if not isinstance(username, str) or not username:
         logger.warning(
-            "auth.change_password.invalid_subject", extra={"subject": username}
+            "auth.change_password.invalid_subject",
+            extra={"subject": _redact_user_id(username)},
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -228,7 +229,8 @@ async def change_password(
     user = await repo.get_user_by_username(username)
     if user is None:
         logger.warning(
-            "auth.change_password.user_missing", extra={"username": username}
+            "auth.change_password.user_missing",
+            extra={"username": _redact_user_id(username)},
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -245,7 +247,10 @@ async def change_password(
         username, sec_manager.get_password_hash(payload.new_password)
     )
     if not updated:
-        logger.error("auth.change_password.update_failed", extra={"username": username})
+        logger.error(
+            "auth.change_password.update_failed",
+            extra={"username": _redact_user_id(username)},
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
