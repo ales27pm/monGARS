@@ -276,6 +276,8 @@ async def conversation_history(
     store: Annotated[Any, Depends(get_hippocampus)],
     limit: int = 10,
 ) -> list[MemoryItem]:
+    if user_id != current_user.get("sub"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     if not isinstance(user_id, str) or not user_id.strip():
         logger.warning(
             "conversation.history_invalid_user_id",
@@ -294,8 +296,6 @@ async def conversation_history(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="limit must be a positive integer",
         )
-    if user_id != current_user.get("sub"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     try:
         return await store.history(user_id, limit=limit)
     except (
