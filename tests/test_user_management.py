@@ -1,8 +1,11 @@
 """End-to-end tests for user registration and authentication flows."""
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException, status
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
@@ -157,6 +160,20 @@ async def test_login_incorrect_credentials(client: AsyncClient) -> None:
         "/token", data={"username": "nosuchuser", "password": "any"}
     )
     assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_login_invalid_credentials_returns_401_detail() -> None:
+    asyncio.run(reset_database())
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/token",
+                data={"username": "wronguser", "password": "wrongpass"},
+            )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.json() == {"detail": "Invalid credentials"}
+    finally:
+        asyncio.run(reset_database())
 
 
 @pytest.mark.asyncio
