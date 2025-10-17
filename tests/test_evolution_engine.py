@@ -423,6 +423,8 @@ def test_orchestrator_runs_cycle_and_rolls_out(
     assert reasoning_events[0][0] == "init"
     assert reasoning_events[0][1]["slot_manager_cls"] is DummySlotManager
     assert ("train", 100) in reasoning_events
+    assert summary["reasoning_alignment"]["accuracy"] == 0.9
+    assert summary["reasoning_alignment"]["steps"] == 42
 
 
 def test_reasoning_loop_receives_approval_registry(
@@ -478,10 +480,12 @@ def test_reasoning_loop_receives_approval_registry(
         approval_policy=lambda payload: bool(payload.get("metrics")),
     )
 
-    orchestrator._run_reasoning_alignment()
+    result = orchestrator._run_reasoning_alignment()
 
     assert captured["registry"] is approvals
     assert callable(captured["policy"])
+    assert result is not None
+    assert result["accuracy"] == 0.9
 
 
 def test_training_cycle_triggers_reasoning_alignment(
@@ -572,6 +576,10 @@ def test_training_cycle_triggers_reasoning_alignment(
     assert events[0][0] == "init"
     assert events[0][1]["slot_manager_cls"] is DummySlotManager
     assert ("train", 100) in events
+    summary = json.loads(
+        (run_dir / "training_summary.json").read_text(encoding="utf-8")
+    )
+    assert "reasoning_alignment" in summary
 
 
 @pytest.mark.asyncio
@@ -681,6 +689,7 @@ async def test_train_cycle_executes_training_and_broadcasts(
             "weights": str(run_dir / "weights"),
         },
         "metrics": {"loss": 0.1},
+        "reasoning_alignment": {"accuracy": 0.78, "steps": 32},
     }
 
     class _StubOrchestrator:
@@ -737,10 +746,12 @@ async def test_train_cycle_executes_training_and_broadcasts(
     broadcast = communicator.broadcasts[-1]
     assert broadcast["training_version"] == "v-test"
     assert broadcast["energy"]["energy_wh"] == 1.25
+    assert broadcast["reasoning_alignment"]["accuracy"] == 0.78
 
     assert bus.events
     event = bus.events[-1]
     assert event.data["energy"]["energy_wh"] == 1.25
+    assert event.data["reasoning_alignment"]["steps"] == 32
 
 
 @pytest.mark.asyncio
@@ -786,7 +797,12 @@ async def test_train_cycle_schedules_long_haul_validation(
             self.reasons.append(reason)
 
     bus = _StubEventBus()
-    summary_payload = {"status": "success", "artifacts": {}, "metrics": {}}
+    summary_payload = {
+        "status": "success",
+        "artifacts": {},
+        "metrics": {},
+        "reasoning_alignment": {"accuracy": 0.7, "steps": 24},
+    }
     long_haul = _SpyLongHaulService()
 
     monkeypatch.setattr(

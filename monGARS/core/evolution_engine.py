@@ -424,6 +424,10 @@ class EvolutionEngine:
                 "metrics": training_result.summary.get("metrics", {}),
                 "energy": training_result.energy,
             }
+            if training_result.summary.get("reasoning_alignment"):
+                event_payload["reasoning_alignment"] = training_result.summary[
+                    "reasoning_alignment"
+                ]
             await event_bus().publish(
                 make_event(
                     "evolution_engine.training_complete",
@@ -518,6 +522,8 @@ class EvolutionEngine:
             "hardware": self._hardware_profile.to_snapshot(),
             "user": user_id,
         }
+        if result.summary.get("reasoning_alignment"):
+            telemetry["reasoning_alignment"] = result.summary["reasoning_alignment"]
         if self._peer_communicator:
             self._peer_communicator.update_local_telemetry(telemetry)
             try:

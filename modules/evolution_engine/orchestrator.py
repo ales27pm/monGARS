@@ -378,6 +378,15 @@ class EvolutionOrchestrator:
             summary.setdefault("version", summary.get("version") or uuid4().hex)
             summary.setdefault("completed_at", datetime.now(timezone.utc).isoformat())
 
+            try:
+                reasoning_summary = self._run_reasoning_alignment()
+            except Exception:  # pragma: no cover - unexpected reinforcement issues
+                logger.exception("Reasoning alignment pipeline failed")
+                reasoning_summary = None
+            else:
+                if reasoning_summary is not None:
+                    summary["reasoning_alignment"] = reasoning_summary
+
             self._persist_run_artifacts(run_dir, summary, energy_report)
             self._update_manifest(summary)
             try:
@@ -385,20 +394,15 @@ class EvolutionOrchestrator:
             except Exception:  # pragma: no cover - rollout failures must not crash
                 logger.exception("Adapter rollout failed")
 
-            try:
-                self._run_reasoning_alignment()
-            except Exception:  # pragma: no cover - unexpected reinforcement issues
-                logger.exception("Reasoning alignment pipeline failed")
-
         return run_dir
 
-    def _run_reasoning_alignment(self) -> None:
+    def _run_reasoning_alignment(self) -> dict[str, Any] | None:
         if self._slot_manager_cls is None:
             logger.info(
                 "reinforcement.reasoning.slot_unavailable",
                 extra={"model_id": self.model_id},
             )
-            return
+            return None
 
         if self._reasoning_loop is None:
             self._reasoning_loop = ReinforcementLoop(
@@ -420,17 +424,46 @@ class EvolutionOrchestrator:
                 "reinforcement.reasoning.skipped",
                 extra={"reason": str(exc)},
             )
+            return None
         except Exception:
             logger.exception("reinforcement.reasoning.unexpected_error")
-        else:
-            logger.info(
-                "reinforcement.reasoning.completed",
-                extra={
-                    "accuracy": summary.accuracy,
-                    "steps": summary.steps,
-                    "eval_samples": summary.eval_samples,
-                },
-            )
+            return None
+
+        payload = self._serialize_reasoning_summary(summary)
+        logger.info(
+            "reinforcement.reasoning.completed",
+            extra={
+                "accuracy": payload.get("accuracy"),
+                "steps": payload.get("steps"),
+                "eval_samples": payload.get("eval_samples"),
+            },
+        )
+        return payload
+
+    def _serialize_reasoning_summary(self, summary: Any) -> dict[str, Any]:
+        if summary is None:
+            return {}
+
+        if isinstance(summary, Mapping):
+            return dict(summary)
+
+        if hasattr(summary, "to_dict"):
+            try:
+                payload = summary.to_dict()
+            except Exception:
+                logger.debug("reasoning.summary.to_dict_failed", exc_info=True)
+            else:
+                if isinstance(payload, Mapping):
+                    return dict(payload)
+
+        if hasattr(summary, "__dict__"):
+            return {
+                key: value
+                for key, value in vars(summary).items()
+                if not key.startswith("_")
+            }
+
+        return {"result": summary}
 
     def _persist_run_artifacts(
         self,

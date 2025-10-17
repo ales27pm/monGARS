@@ -41,8 +41,6 @@ def _setup_test_env() -> None:
         os.environ["SECRET_KEY"] = previous_secret_key
 
 
-
-
 @pytest.fixture
 def chat_test_client() -> TestClient:
     """Return a FastAPI client with a deterministic conversational module."""
