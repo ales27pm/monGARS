@@ -162,6 +162,55 @@ async def test_login_incorrect_credentials(client: AsyncClient) -> None:
     assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 
+@pytest.mark.asyncio
+async def test_change_password_success(client: AsyncClient) -> None:
+    token = await get_token(client, "user", "passphrase")
+
+    response = await client.post(
+        "/api/v1/user/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "old_password": "passphrase",
+            "new_password": "newpassphrase",
+        },
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"status": "changed"}
+
+    old_login = await client.post(
+        "/token", data={"username": "user", "password": "passphrase"}
+    )
+    assert old_login.status_code == status.HTTP_401_UNAUTHORIZED
+
+    new_login = await client.post(
+        "/token", data={"username": "user", "password": "newpassphrase"}
+    )
+    assert new_login.status_code == status.HTTP_200_OK
+    new_payload = sec_manager.verify_token(new_login.json()["access_token"])
+    assert new_payload["sub"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_change_password_wrong_old_password(client: AsyncClient) -> None:
+    token = await get_token(client, "user", "passphrase")
+
+    response = await client.post(
+        "/api/v1/user/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "old_password": "incorrectpw",
+            "new_password": "replacement",
+        },
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"] == "Incorrect password"
+
+    still_valid = await client.post(
+        "/token", data={"username": "user", "password": "passphrase"}
+    )
+    assert still_valid.status_code == status.HTTP_200_OK
+
+
 def test_login_invalid_credentials_returns_401_detail() -> None:
     asyncio.run(reset_database())
     try:

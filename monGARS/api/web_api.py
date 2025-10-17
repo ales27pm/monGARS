@@ -35,6 +35,7 @@ from monGARS.api.dependencies import (
 from monGARS.api.schemas import (
     ChatRequest,
     ChatResponse,
+    PasswordChangeRequest,
     PeerLoadSnapshot,
     PeerMessage,
     PeerRegistration,
@@ -206,6 +207,51 @@ async def register_admin_user(
             detail="Unable to determine admin availability",
         ) from exc
     return await _persist_registration(repo, reg, is_admin=True)
+
+
+@app.post("/api/v1/user/change-password")
+async def change_password(
+    payload: PasswordChangeRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+) -> dict:
+    username = current_user.get("sub")
+    if not isinstance(username, str) or not username:
+        logger.warning(
+            "auth.change_password.invalid_subject", extra={"subject": username}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing subject",
+        )
+
+    user = await repo.get_user_by_username(username)
+    if user is None:
+        logger.warning(
+            "auth.change_password.user_missing", extra={"username": username}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    if not sec_manager.verify_password(payload.old_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Incorrect password",
+        )
+
+    updated = await repo.update_user_password(
+        username, sec_manager.get_password_hash(payload.new_password)
+    )
+    if not updated:
+        logger.error("auth.change_password.update_failed", extra={"username": username})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    return {"status": "changed"}
 
 
 @app.get("/healthz")
