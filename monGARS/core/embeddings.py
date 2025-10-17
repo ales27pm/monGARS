@@ -117,6 +117,8 @@ class LLM2VecEmbedder:
         ] = OrderedDict()
         self._encode_batch_cache_lock = threading.Lock()
         self._ollama_module: Any | None = None
+        self._ollama_module_lock = threading.Lock()
+        self._ollama_module_unavailable = False
         self._ollama_client: Any | None = None
         self._ollama_client_lock = asyncio.Lock()
         self._transformers_model: Any | None = None
@@ -606,23 +608,54 @@ class LLM2VecEmbedder:
 
     def _ensure_ollama_module(self) -> Any | None:
         if self._ollama_module is not None:
+            logger.debug("llm2vec.ollama.module_import.reuse")
             return self._ollama_module
-        spec = importlib.util.find_spec("ollama")
-        if spec is None:
+        if self._ollama_module_unavailable:
+            logger.debug("llm2vec.ollama.module_import.unavailable_cached")
             return None
-        module = importlib.import_module("ollama")
-        self._ollama_module = module
-        return module
+
+        with self._ollama_module_lock:
+            if self._ollama_module is not None:
+                logger.debug("llm2vec.ollama.module_import.reuse")
+                return self._ollama_module
+            if self._ollama_module_unavailable:
+                logger.debug("llm2vec.ollama.module_import.unavailable_cached")
+                return None
+
+            logger.info("llm2vec.ollama.module_import.start")
+            spec = importlib.util.find_spec("ollama")
+            if spec is None:
+                logger.warning("llm2vec.ollama.module_import.missing")
+                self._ollama_module_unavailable = True
+                return None
+
+            module = importlib.import_module("ollama")
+            self._ollama_module = module
+            logger.info("llm2vec.ollama.module_import.success")
+            return module
 
     async def _ensure_ollama_client(self, module: Any) -> Any | None:
+        if module is None:
+            logger.debug("llm2vec.ollama.client.missing_module")
+            return None
         if self._ollama_client is not None:
+            logger.debug("llm2vec.ollama.client.reuse")
             return self._ollama_client
         async with self._ollama_client_lock:
             if self._ollama_client is not None:
+                logger.debug("llm2vec.ollama.client.reuse")
                 return self._ollama_client
             host_value = getattr(self._settings, "ollama_host", None)
             host = str(host_value) if host_value else None
+            logger.info(
+                "llm2vec.ollama.client.initialising",
+                extra={"host": host or "default"},
+            )
             self._ollama_client = module.Client(host=host)
+            logger.info(
+                "llm2vec.ollama.client.initialised",
+                extra={"host": host or "default"},
+            )
         return self._ollama_client
 
     def _resolve_ollama_model(self) -> str:
