@@ -80,8 +80,12 @@ class EmbeddingService:
             self.config["embedding_backend"] = self.backend
             self._wrapper_factory = wrapper_factory or self._load_wrapper
         else:
+            if self.backend == "transformers":
+                base_model_id = self._settings.transformers_embedding_model
+            else:
+                base_model_id = self._settings.ollama_embedding_model
             self.config = {
-                "base_model_id": self._settings.ollama_embedding_model,
+                "base_model_id": base_model_id,
                 "embedding_backend": self.backend,
                 "embedding_options": {
                     "normalise": False,
@@ -154,36 +158,18 @@ class EmbeddingService:
         if not texts:
             raise HTTPException(status_code=400, detail="inputs must not be empty")
 
-        if self.backend == "ollama":
-            return await self._embed_with_ollama(texts, normalise)
+        if self.backend in {"ollama", "transformers"}:
+            return await self._embed_with_llm2vec(texts, normalise)
 
         return await self._embed_with_wrapper(texts, normalise)
 
-    async def _embed_with_wrapper(
-        self, texts: Sequence[str], normalise: bool | None
-    ) -> tuple[List[List[float]], bool]:
-        wrapper = await self._ensure_wrapper()
-        tensor = await asyncio.to_thread(
-            wrapper.embed, list(texts), normalise=normalise
-        )
-        matrix = tensor.tolist()
-        dims = tensor.shape[-1]
-        LOGGER.debug(
-            "Generated embeddings",
-            extra={"count": len(matrix), "dims": dims, "normalise": normalise},
-        )
-        return matrix, bool(
-            normalise
-            if normalise is not None
-            else self.config["embedding_options"].get("normalise", False)
-        )
-
-    async def _embed_with_ollama(
+    async def _embed_with_llm2vec(
         self, texts: Sequence[str], normalise: bool | None
     ) -> tuple[List[List[float]], bool]:
         if self._embedder is None:
             raise HTTPException(
-                status_code=500, detail="Ollama backend not initialised"
+                status_code=500,
+                detail=f"{self.backend} backend not initialised",
             )
 
         apply_normalise = bool(
@@ -198,10 +184,10 @@ class EmbeddingService:
                 instruction=self._settings.llm2vec_instruction,
             )
         except EmbeddingBackendError as exc:  # pragma: no cover - backend failure
-            LOGGER.exception("ollama.embedding.unavailable")
+            LOGGER.exception("%s.embedding.unavailable", self.backend)
             raise HTTPException(
                 status_code=503,
-                detail="Ollama embedding backend is unavailable",
+                detail=f"{self.backend} embedding backend is unavailable",
             ) from exc
 
         vectors = [list(vector) for vector in batch.vectors]
@@ -212,20 +198,46 @@ class EmbeddingService:
             raise HTTPException(status_code=502, detail="No embeddings returned")
 
         dims = len(vectors[0])
-        final_used_normalise = apply_normalise or bool(
-            getattr(batch, "used_fallback", False)
-        )
+        used_fallback = bool(getattr(batch, "used_fallback", False))
+        final_used_normalise = apply_normalise or used_fallback
 
         LOGGER.debug(
-            "Generated Ollama embeddings",
+            "Generated %s embeddings",
+            self.backend,
             extra={
                 "count": len(vectors),
                 "dims": dims,
                 "normalise": final_used_normalise,
-                "used_fallback": batch.used_fallback,
+                "used_fallback": used_fallback,
             },
         )
         return vectors, final_used_normalise
+
+    async def _embed_with_wrapper(
+        self, texts: Sequence[str], normalise: bool | None
+    ) -> tuple[List[List[float]], bool]:
+        wrapper = await self._ensure_wrapper()
+        try:
+            tensor = await asyncio.to_thread(
+                wrapper.embed, list(texts), normalise=normalise
+            )
+        except Exception as exc:  # pragma: no cover - wrapper failure
+            LOGGER.exception("wrapper.embedding.unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail="wrapper embedding backend is unavailable",
+            ) from exc
+        matrix = tensor.tolist()
+        dims = tensor.shape[-1]
+        LOGGER.debug(
+            "Generated embeddings",
+            extra={"count": len(matrix), "dims": dims, "normalise": normalise},
+        )
+        return matrix, bool(
+            normalise
+            if normalise is not None
+            else self.config["embedding_options"].get("normalise", False)
+        )
 
     def _l2_normalise(self, vector: Sequence[float]) -> List[float]:
         floats = [float(component) for component in vector]

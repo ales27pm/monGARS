@@ -429,6 +429,10 @@ class Settings(BaseSettings):
         min_length=1,
         description="Model identifier requested from Ollama when embedding_backend='ollama'.",
     )
+    transformers_embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Model identifier requested when embedding_backend='transformers'.",
+    )
 
     @field_validator("embedding_backend", mode="before")
     @classmethod

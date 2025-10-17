@@ -352,6 +352,39 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
     assert magnitude_ninf == pytest.approx(1.0)
 
 
+@pytest.mark.asyncio
+async def test_transformers_backend_matches_reference_model() -> None:
+    sentence_transformers = pytest.importorskip("sentence_transformers")
+    model_name = "sentence-transformers/all-MiniLM-L6-v2"
+    reference_model = sentence_transformers.SentenceTransformer(model_name)
+
+    dimension = int(reference_model.get_sentence_embedding_dimension())
+    text = "test sentence"
+
+    settings = Settings(
+        llm2vec_max_batch_size=4,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=dimension,
+        transformers_embedding_model=model_name,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        debug=True,
+    )
+
+    embedder = LLM2VecEmbedder(settings=settings, backend="transformers")
+
+    batch = await embedder.encode_batch([text])
+
+    assert embedder.backend == "transformers"
+    assert batch.used_fallback is False
+    assert len(batch.vectors) == 1
+
+    reference_vector = reference_model.encode(
+        [text], convert_to_numpy=True, normalize_embeddings=False
+    )[0].tolist()
+
+    assert batch.vectors[0] == pytest.approx(reference_vector, rel=1e-6, abs=1e-6)
+
+
 @pytest.fixture(scope="session")
 def dolphin3_tiny_embedder() -> Dolphin3Embedder:
     """Return a Dolphin 3 embedder backed by a tiny reference checkpoint."""

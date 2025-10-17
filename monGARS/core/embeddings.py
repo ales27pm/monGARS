@@ -26,6 +26,11 @@ from monGARS.core.inference_utils import (
     render_chat_prompt_from_text,
 )
 
+try:  # pragma: no cover - optional heavy dependency
+    from sentence_transformers import SentenceTransformer
+except ImportError:  # pragma: no cover - dependency absent in some environments
+    SentenceTransformer = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +71,8 @@ class LLM2VecEmbedder:
         self._ollama_module: Any | None = None
         self._ollama_client: Any | None = None
         self._ollama_client_lock = asyncio.Lock()
+        self._transformers_model: Any | None = None
+        self._transformers_model_lock = asyncio.Lock()
 
     @property
     def backend(self) -> str:
@@ -94,6 +101,8 @@ class LLM2VecEmbedder:
 
         if self._backend == "ollama":
             return await self._encode_with_ollama(cleaned, prompt)
+        if self._backend == "transformers":
+            return await self._encode_with_transformers(cleaned, prompt)
         return await self._encode_with_huggingface(cleaned, prompt)
 
     async def embed_text(
@@ -416,6 +425,78 @@ class LLM2VecEmbedder:
 
         return embeddings
 
+    async def _encode_with_transformers(
+        self, cleaned: Sequence[str], prompt: str
+    ) -> EmbeddingBatch:
+        try:
+            model = await self._ensure_transformers_model()
+        except EmbeddingBackendError:
+            logger.warning(
+                "llm2vec.transformers.model_unavailable",
+                extra={"payload_count": len(cleaned)},
+            )
+            vectors = [self._fallback_vector(prompt, text) for text in cleaned]
+            return EmbeddingBatch(vectors=vectors, used_fallback=True)
+
+        aggregate_vectors: list[list[float]] = []
+        used_fallback = False
+        batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
+
+        for start in range(0, len(cleaned), batch_size):
+            chunk = list(cleaned[start : start + batch_size])
+            chunk_vectors: list[list[float] | None] = [None] * len(chunk)
+            encode_indices: list[int] = []
+            encode_payloads: list[str] = []
+
+            for index, text in enumerate(chunk):
+                if not text.strip():
+                    chunk_vectors[index] = self._fallback_vector(prompt, text)
+                    used_fallback = True
+                else:
+                    encode_indices.append(index)
+                    encode_payloads.append(str(text))
+
+            raw_vectors: Sequence[Sequence[float]] | None = None
+            if encode_payloads:
+                try:
+                    async with self._semaphore:
+                        raw_vectors = await asyncio.to_thread(
+                            self._transformers_encode_sync,
+                            model,
+                            encode_payloads,
+                        )
+                except Exception as exc:  # pragma: no cover - encode failures are rare
+                    logger.exception(
+                        "llm2vec.transformers.encode_failed",
+                        extra={
+                            "chunk_size": len(chunk),
+                            "payload_count": len(encode_payloads),
+                        },
+                    )
+                    raw_vectors = None
+
+            for relative_index, index in enumerate(encode_indices):
+                candidate = (
+                    raw_vectors[relative_index]
+                    if raw_vectors is not None and relative_index < len(raw_vectors)
+                    else None
+                )
+                prepared = self._normalise_dimensions(candidate)
+                if prepared is None:
+                    chunk_vectors[index] = self._fallback_vector(prompt, chunk[index])
+                    used_fallback = True
+                else:
+                    chunk_vectors[index] = prepared
+
+            for index, vector in enumerate(chunk_vectors):
+                if vector is None:
+                    chunk_vectors[index] = self._fallback_vector(prompt, chunk[index])
+                    used_fallback = True
+
+            aggregate_vectors.extend(chunk_vectors)  # type: ignore[arg-type]
+
+        return EmbeddingBatch(vectors=aggregate_vectors, used_fallback=used_fallback)
+
     def _ensure_ollama_module(self) -> Any | None:
         if self._ollama_module is not None:
             return self._ollama_module
@@ -442,6 +523,48 @@ class LLM2VecEmbedder:
         if not model:
             raise EmbeddingBackendError("Ollama embedding model is not configured")
         return str(model).strip()
+
+    async def _ensure_transformers_model(self) -> Any:
+        if self._transformers_model is not None:
+            return self._transformers_model
+
+        if SentenceTransformer is None:
+            raise EmbeddingBackendError(
+                "sentence-transformers library is not available"
+            )
+
+        async with self._transformers_model_lock:
+            if self._transformers_model is not None:
+                return self._transformers_model
+
+            model_name = getattr(
+                self._settings,
+                "transformers_embedding_model",
+                "sentence-transformers/all-MiniLM-L6-v2",
+            )
+            try:
+                model = await asyncio.to_thread(SentenceTransformer, str(model_name))
+            except Exception as exc:  # pragma: no cover - model load errors are rare
+                logger.exception(
+                    "llm2vec.transformers.model_load_failed",
+                    extra={"model": model_name},
+                )
+                raise EmbeddingBackendError(
+                    "Failed to load transformers embedding model"
+                ) from exc
+            self._transformers_model = model
+            return model
+
+    @staticmethod
+    def _transformers_encode_sync(
+        model: Any, payloads: Sequence[str]
+    ) -> list[list[float]]:
+        result = model.encode(  # type: ignore[call-arg]
+            list(payloads), convert_to_numpy=True, normalize_embeddings=False
+        )
+        if hasattr(result, "tolist"):
+            return result.tolist()
+        return [[float(component) for component in sequence] for sequence in result]
 
     def _resolve_ollama_dimensions(self) -> int | None:
         try:
