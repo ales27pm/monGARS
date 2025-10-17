@@ -80,6 +80,19 @@ async def test_history_empty_user_id_returns_422(client: TestClient):
 
 
 @pytest.mark.asyncio
+async def test_history_whitespace_user_id_returns_422(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "   "},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_history_limit_capped(client: TestClient):
     for i in range(hippocampus.MAX_HISTORY + 5):
         await hippocampus.store("u1", f"q{i}", f"r{i}")
