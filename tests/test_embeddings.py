@@ -119,6 +119,36 @@ async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_encode_batch_returns_cached_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        llm2vec_max_batch_size=4,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        debug=True,
+    )
+    manager = _RecordingManager()
+    embedder = LLM2VecEmbedder(
+        settings=settings, neuron_manager_factory=lambda: manager
+    )
+
+    payloads = ["cached", "batch"]
+    first = await embedder.encode_batch(payloads)
+
+    def _should_not_run(*_args, **_kwargs):
+        raise AssertionError("encode should not be invoked on a cache hit")
+
+    monkeypatch.setattr(manager, "encode", _should_not_run)
+
+    second = await embedder.encode_batch(payloads)
+
+    assert second.vectors == first.vectors
+    assert second.used_fallback is first.used_fallback
+
+
+@pytest.mark.asyncio
 async def test_embed_text_raises_on_backend_failure() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
