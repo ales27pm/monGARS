@@ -41,7 +41,6 @@ def _setup_test_env() -> None:
         os.environ["SECRET_KEY"] = previous_secret_key
 
 
-UTC = getattr(datetime, "UTC", timezone.utc)
 
 
 @pytest.fixture
