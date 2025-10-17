@@ -108,6 +108,44 @@ async def test_register_admin_when_none_exists(
 
 
 @pytest.mark.asyncio
+async def test_user_list_requires_admin_and_returns_usernames(
+    client: AsyncClient,
+) -> None:
+    first_registration = await client.post(
+        "/api/v1/user/register",
+        json={"username": "firstuser", "password": "firstpassword"},
+    )
+    assert first_registration.status_code == status.HTTP_200_OK
+
+    second_registration = await client.post(
+        "/api/v1/user/register",
+        json={"username": "seconduser", "password": "secondpassword"},
+    )
+    assert second_registration.status_code == status.HTTP_200_OK
+
+    admin_token = await get_token(client, "admin", "secret")
+    user_token = await get_token(client, "user", "passphrase")
+
+    unauthenticated = await client.get("/api/v1/user/list")
+    assert unauthenticated.status_code == status.HTTP_401_UNAUTHORIZED
+
+    forbidden = await client.get(
+        "/api/v1/user/list",
+        headers={"Authorization": f"Bearer {user_token}"},
+    )
+    assert forbidden.status_code == status.HTTP_403_FORBIDDEN
+
+    response = await client.get(
+        "/api/v1/user/list",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["users"]
+    assert {"firstuser", "seconduser"}.issubset(set(body["users"]))
+
+
+@pytest.mark.asyncio
 async def test_register_existing_username_returns_conflict(
     client: AsyncClient,
 ) -> None:

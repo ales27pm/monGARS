@@ -41,6 +41,7 @@ from monGARS.api.schemas import (
     PeerRegistration,
     PeerTelemetryEnvelope,
     PeerTelemetryPayload,
+    UserListResponse,
     UserRegistration,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
@@ -207,6 +208,27 @@ async def register_admin_user(
             detail="Unable to determine admin availability",
         ) from exc
     return await _persist_registration(repo, reg, is_admin=True)
+
+
+@app.get("/api/v1/user/list", response_model=UserListResponse)
+async def list_users(
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
+) -> UserListResponse:
+    try:
+        usernames = await repo.list_usernames()
+    except (RuntimeError, SQLAlchemyError) as exc:
+        logger.error(
+            "auth.list_users_failed",
+            extra={"admin": _redact_user_id(current_admin.get("sub"))},
+            exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to load users",
+        ) from exc
+
+    return UserListResponse(users=usernames)
 
 
 @app.post("/api/v1/user/change-password")
