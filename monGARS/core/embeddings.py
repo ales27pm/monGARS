@@ -17,6 +17,21 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping
 
+try:  # pragma: no cover - optional dependency
+    from httpx import HTTPError as HTTPXError
+except Exception:  # pragma: no cover - httpx may be unavailable
+    HTTPXError = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from requests import HTTPError as RequestsHTTPError
+except Exception:  # pragma: no cover - requests may be unavailable
+    RequestsHTTPError = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from huggingface_hub.utils import HfHubHTTPError
+except Exception:  # pragma: no cover - huggingface_hub may be unavailable
+    HfHubHTTPError = None  # type: ignore[assignment]
+
 from modules.neurons.core import NeuronManager
 from monGARS.config import Settings, get_settings
 from monGARS.core.constants import DEFAULT_EMBEDDING_BACKEND
@@ -34,6 +49,14 @@ except ImportError:  # pragma: no cover - dependency absent in some environments
 logger = logging.getLogger(__name__)
 
 
+def _exception_tuple(*candidates: object) -> tuple[type[BaseException], ...]:
+    result: list[type[BaseException]] = []
+    for candidate in candidates:
+        if isinstance(candidate, type) and issubclass(candidate, BaseException):
+            result.append(candidate)
+    return tuple(result)
+
+
 @dataclass(slots=True)
 class EmbeddingBatch:
     """Container describing an embedding request outcome."""
@@ -44,6 +67,26 @@ class EmbeddingBatch:
 
 class EmbeddingBackendError(RuntimeError):
     """Raised when the embedding backend cannot produce vectors."""
+
+
+_KNOWN_MANAGER_EXCEPTIONS = _exception_tuple(
+    EmbeddingBackendError,
+    RuntimeError,
+    OSError,
+    ConnectionError,
+    asyncio.TimeoutError,
+    RequestsHTTPError,
+    HTTPXError,
+    HfHubHTTPError,
+)
+
+_OLLAMA_TRANSPORT_ERRORS = _exception_tuple(
+    ConnectionError,
+    OSError,
+    asyncio.TimeoutError,
+    RequestsHTTPError,
+    HTTPXError,
+)
 
 
 class LLM2VecEmbedder:
@@ -160,7 +203,9 @@ class LLM2VecEmbedder:
                         raw_sequence = await asyncio.to_thread(
                             manager.encode, backend_payloads, prompt
                         )
-                except Exception as exc:  # pragma: no cover - unexpected backend errors
+                except _KNOWN_MANAGER_EXCEPTIONS as exc:
+                    chunk_used_fallback = True
+                    raw_sequence = None
                     logger.exception(
                         "llm2vec.encode.failed",
                         extra={
@@ -168,7 +213,9 @@ class LLM2VecEmbedder:
                             "backend_size": len(backend_payloads),
                         },
                     )
-                    raise EmbeddingBackendError("LLM2Vec encode failed") from exc
+                    self._assign_fallbacks(
+                        chunk, chunk_vectors, backend_indices, prompt
+                    )
             elif backend_payloads and not manager_ready:
                 chunk_used_fallback = True
                 self._assign_fallbacks(chunk, chunk_vectors, backend_indices, prompt)
@@ -444,6 +491,8 @@ class LLM2VecEmbedder:
 
         model_name = self._resolve_ollama_model()
         dimensions = self._resolve_ollama_dimensions()
+        client_errors = self._ollama_error_types(module)
+        expected_errors = client_errors + _OLLAMA_TRANSPORT_ERRORS
         embed_kwargs: dict[str, Any] = {
             "model": model_name,
             "input": list(payloads),
@@ -451,14 +500,17 @@ class LLM2VecEmbedder:
         if dimensions is not None:
             embed_kwargs["dimensions"] = dimensions
 
-        try:
+        if expected_errors:
+            try:
+                response = await asyncio.to_thread(client.embed, **embed_kwargs)
+            except expected_errors as exc:  # type: ignore[misc]
+                logger.exception(
+                    "llm2vec.ollama.embed_failed",
+                    extra={"payload_count": len(payloads), "model": model_name},
+                )
+                raise EmbeddingBackendError("Ollama embeddings failed") from exc
+        else:
             response = await asyncio.to_thread(client.embed, **embed_kwargs)
-        except Exception as exc:  # pragma: no cover - network/client failure
-            logger.exception(
-                "llm2vec.ollama.embed_failed",
-                extra={"payload_count": len(payloads), "model": model_name},
-            )
-            raise EmbeddingBackendError("Ollama embeddings failed") from exc
 
         embeddings = getattr(response, "embeddings", None)
         if embeddings is None and isinstance(response, Mapping):
@@ -472,6 +524,15 @@ class LLM2VecEmbedder:
             raise EmbeddingBackendError("Ollama embeddings missing")
 
         return embeddings
+
+    @staticmethod
+    def _ollama_error_types(module: Any) -> tuple[type[BaseException], ...]:
+        return _exception_tuple(
+            getattr(module, "OllamaError", None),
+            getattr(module, "RequestError", None),
+            getattr(module, "ResponseError", None),
+            getattr(module, "StreamError", None),
+        )
 
     async def _encode_with_transformers(
         self, cleaned: Sequence[str], prompt: str
