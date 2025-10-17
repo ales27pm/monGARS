@@ -68,6 +68,11 @@ class LLM2VecEmbedder:
         self._semaphore = asyncio.Semaphore(concurrency)
         self._fallback_cache_size = 256
         self._fallback_cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
+        self._encode_batch_cache_size = 256
+        self._encode_batch_cache: OrderedDict[
+            tuple[str, tuple[str, ...]], EmbeddingBatch
+        ] = OrderedDict()
+        self._encode_batch_cache_lock = threading.Lock()
         self._ollama_module: Any | None = None
         self._ollama_client: Any | None = None
         self._ollama_client_lock = asyncio.Lock()
@@ -85,9 +90,6 @@ class LLM2VecEmbedder:
     ) -> EmbeddingBatch:
         """Return embeddings for ``texts`` using LLM2Vec with graceful fallbacks."""
 
-        if not texts:
-            return EmbeddingBatch(vectors=[], used_fallback=False)
-
         cleaned: list[str] = [str(text) for text in texts]
         prompt = (
             instruction
@@ -95,15 +97,31 @@ class LLM2VecEmbedder:
             else self._settings.llm2vec_instruction
         )
 
+        cache_key = self._encode_batch_cache_key(prompt, cleaned)
+        cached = self._get_cached_batch(cache_key)
+        if cached is not None:
+            return cached
+
+        if not cleaned:
+            batch = EmbeddingBatch(vectors=[], used_fallback=False)
+            self._set_cached_batch(cache_key, batch)
+            return batch
+
         if all(not text.strip() for text in cleaned):
             vectors = [self._fallback_vector(prompt, text) for text in cleaned]
-            return EmbeddingBatch(vectors=vectors, used_fallback=True)
+            batch = EmbeddingBatch(vectors=vectors, used_fallback=True)
+            self._set_cached_batch(cache_key, batch)
+            return batch
 
         if self._backend == "ollama":
-            return await self._encode_with_ollama(cleaned, prompt)
-        if self._backend == "transformers":
-            return await self._encode_with_transformers(cleaned, prompt)
-        return await self._encode_with_huggingface(cleaned, prompt)
+            batch = await self._encode_with_ollama(cleaned, prompt)
+        elif self._backend == "transformers":
+            batch = await self._encode_with_transformers(cleaned, prompt)
+        else:
+            batch = await self._encode_with_huggingface(cleaned, prompt)
+
+        self._set_cached_batch(cache_key, batch)
+        return batch
 
     async def embed_text(
         self, text: str, *, instruction: str | None = None
@@ -307,6 +325,36 @@ class LLM2VecEmbedder:
         if len(self._fallback_cache) > self._fallback_cache_size:
             self._fallback_cache.popitem(last=False)
         return normalised
+
+    def _encode_batch_cache_key(
+        self, prompt: str, cleaned: Sequence[str]
+    ) -> tuple[str, tuple[str, ...]]:
+        return (prompt, tuple(cleaned))
+
+    def _clone_embedding_batch(self, batch: EmbeddingBatch) -> EmbeddingBatch:
+        return EmbeddingBatch(
+            vectors=[list(vector) for vector in batch.vectors],
+            used_fallback=batch.used_fallback,
+        )
+
+    def _get_cached_batch(
+        self, cache_key: tuple[str, tuple[str, ...]]
+    ) -> EmbeddingBatch | None:
+        with self._encode_batch_cache_lock:
+            cached = self._encode_batch_cache.get(cache_key)
+            if cached is None:
+                return None
+            self._encode_batch_cache.move_to_end(cache_key)
+            return self._clone_embedding_batch(cached)
+
+    def _set_cached_batch(
+        self, cache_key: tuple[str, tuple[str, ...]], batch: EmbeddingBatch
+    ) -> None:
+        with self._encode_batch_cache_lock:
+            self._encode_batch_cache[cache_key] = self._clone_embedding_batch(batch)
+            self._encode_batch_cache.move_to_end(cache_key)
+            if len(self._encode_batch_cache) > self._encode_batch_cache_size:
+                self._encode_batch_cache.popitem(last=False)
 
     def _partition_chunk(self, chunk: list[str], prompt: str) -> tuple[
         list[list[float] | None],
