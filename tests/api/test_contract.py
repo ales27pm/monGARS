@@ -266,7 +266,7 @@ async def test_chat_invalid_payload_returns_422(
 
 
 @pytest.mark.asyncio
-async def test_history_invalid_limit_returns_400(
+async def test_history_invalid_limit_returns_422(
     contract_client: Iterable[Tuple[TestClient, _FakePersistenceRepository]],
 ):
     client, _ = contract_client
@@ -278,8 +278,8 @@ async def test_history_invalid_limit_returns_400(
         params={"user_id": "u1", "limit": 0},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "limit must be positive"
+    assert response.status_code == 422
+    assert response.json()["detail"] == "limit must be a positive integer"
 
 
 @pytest.mark.asyncio

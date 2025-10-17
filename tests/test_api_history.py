@@ -41,7 +41,7 @@ async def test_history_endpoint_returns_records(client: TestClient):
 
 
 @pytest.mark.asyncio
-async def test_history_negative_limit_returns_400(client: TestClient):
+async def test_history_non_positive_limit_returns_422(client: TestClient):
     token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
         "access_token"
     ]
@@ -50,7 +50,46 @@ async def test_history_negative_limit_returns_400(client: TestClient):
         params={"user_id": "u1", "limit": -1},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_history_zero_limit_returns_422(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "u1", "limit": 0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_history_empty_user_id_returns_422(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": ""},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_history_whitespace_user_id_returns_422(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.get(
+        "/api/v1/conversation/history",
+        params={"user_id": "   "},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
