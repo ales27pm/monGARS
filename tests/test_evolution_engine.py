@@ -348,10 +348,28 @@ def test_orchestrator_runs_cycle_and_rolls_out(
                 "metrics": {"loss": 0.1},
             }
 
+    reasoning_events: list[tuple[str, Any]] = []
+
+    class _ReasoningLoopStub:
+        def __init__(self, **kwargs: Any) -> None:
+            reasoning_events.append(("init", kwargs))
+
+        def train_reasoning_grpo(self, num_samples: int = 100) -> Any:
+            reasoning_events.append(("train", num_samples))
+            return SimpleNamespace(
+                accuracy=0.9,
+                steps=42,
+                eval_samples=num_samples,
+            )
+
     rollout_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         "modules.evolution_engine.orchestrator.update_ray_deployment",
         lambda payload: rollout_calls.append(payload),
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.ReinforcementLoop",
+        _ReasoningLoopStub,
     )
 
     class _Settings:
@@ -401,6 +419,10 @@ def test_orchestrator_runs_cycle_and_rolls_out(
     assert rollout_calls
     assert rollout_calls[0]["adapter_path"] == summary["artifacts"]["adapter"]
     assert DummySlotManager.enter_calls == 1
+    assert reasoning_events
+    assert reasoning_events[0][0] == "init"
+    assert reasoning_events[0][1]["slot_manager_cls"] is DummySlotManager
+    assert ("train", 100) in reasoning_events
 
 
 def test_reasoning_loop_receives_approval_registry(
@@ -460,6 +482,96 @@ def test_reasoning_loop_receives_approval_registry(
 
     assert captured["registry"] is approvals
     assert callable(captured["policy"])
+
+
+def test_training_cycle_triggers_reasoning_alignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = DummyWorkflowBackend()
+    registry_path = tmp_path / "registry"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class DummySlotManager:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def __enter__(self) -> tuple[object, object]:
+            return object(), object()
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class _Trainer:
+        def __init__(self, training_config_path: str, output_dir: str) -> None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        def fit(self, dataset: Any) -> dict[str, Any]:
+            adapter_dir = self.output_dir / "adapter"
+            adapter_dir.mkdir(parents=True, exist_ok=True)
+            return {
+                "status": "success",
+                "artifacts": {"adapter": str(adapter_dir)},
+                "metrics": {"loss": 0.5},
+            }
+
+    events: list[tuple[str, Any]] = []
+
+    class _ReasoningLoopStub:
+        def __init__(self, **kwargs: Any) -> None:
+            events.append(("init", kwargs))
+
+        def train_reasoning_grpo(self, num_samples: int = 100) -> Any:
+            events.append(("train", num_samples))
+            return SimpleNamespace(accuracy=0.8, steps=16, eval_samples=num_samples)
+
+    def fake_update_manifest(
+        registry: Path, summary: dict[str, Any], history_limit: int = 10
+    ) -> SimpleNamespace:
+        manifest_path = registry / "manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text("{}", encoding="utf-8")
+        return SimpleNamespace(path=manifest_path, build_payload=lambda: summary)
+
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_manifest",
+        fake_update_manifest,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.update_ray_deployment",
+        lambda payload: None,
+    )
+    monkeypatch.setattr(
+        "modules.evolution_engine.orchestrator.ReinforcementLoop",
+        _ReasoningLoopStub,
+    )
+
+    policy = SimpleNamespace(
+        evaluate=lambda scope: SimpleNamespace(
+            should_proceed=True, as_logging_context=lambda: {"scope": scope}
+        )
+    )
+
+    _mock_idle(monkeypatch)
+    monkeypatch.setenv("USE_RAY_SERVE", "false")
+
+    orchestrator = EvolutionOrchestrator(
+        workflow_backend=backend,
+        model_registry_path=registry_path,
+        training_config_path=config_path,
+        trainer_cls=_Trainer,
+        slot_manager_cls=DummySlotManager,
+        data_collector=lambda: ["sample"],
+        sustainability_policy=policy,
+    )
+
+    run_dir = orchestrator.run_training_cycle()
+    assert run_dir is not None
+    assert events
+    assert events[0][0] == "init"
+    assert events[0][1]["slot_manager_cls"] is DummySlotManager
+    assert ("train", 100) in events
 
 
 @pytest.mark.asyncio

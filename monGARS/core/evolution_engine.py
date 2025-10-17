@@ -124,21 +124,6 @@ class EvolutionEngine:
             extra={"user_id": user_id, "expires_at": expires_at},
         )
 
-    async def get_curated_memory(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Return the most recent curated memory samples."""
-
-        if limit <= 0:
-            return []
-        async with self._memory_lock:
-            now = datetime.now(timezone.utc)
-            self._prune_curated_memory_locked(now)
-            snapshot = [
-                sample
-                for sample in self._curated_memory
-                if sample.get("expires_at") is None or sample["expires_at"] > now
-            ][-limit:]
-        return list(reversed(snapshot))
-
     async def diagnose_performance(self) -> list[PerformanceIssue]:
         """Analyze system statistics and return actionable performance issues."""
         issues: list[PerformanceIssue] = []
