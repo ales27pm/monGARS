@@ -41,11 +41,6 @@ models/datasets/governance.py,28,??,??,generated
 models/datasets/sanitizer.py,31,??,??,generated
 models/datasets/sanitizer.py,56,??,??,generated
 models/datasets/sanitizer.py,74,??,??,generated
-modules/evolution_engine/orchestrator.py,72,??,??,generated
-modules/evolution_engine/orchestrator.py,276,??,??,generated
-modules/evolution_engine/orchestrator.py,390,??,??,generated
-modules/evolution_engine/orchestrator.py,424,??,??,generated
-modules/evolution_engine/orchestrator.py,660,??,??,generated
 modules/evolution_engine/self_training.py,20,??,??,generated
 modules/evolution_engine/self_training.py,53,??,??,generated
 modules/evolution_engine/self_training.py,70,??,??,generated
@@ -356,9 +351,6 @@ scripts/build_multimodule_dataset.py,125,??,??,generated
 scripts/build_multimodule_dataset.py,155,??,??,generated
 scripts/build_multimodule_dataset.py,171,??,??,generated
 scripts/build_multimodule_dataset.py,190,??,??,generated
-scripts/export_llm2vec_wrapper.py,26,??,??,generated
-scripts/export_llm2vec_wrapper.py,72,??,??,generated
-scripts/export_llm2vec_wrapper.py,147,LLM2Vec.embed,"def embed(self, texts: str | Iterable[str]):",generated
 scripts/gpu_headless_autotrain.py,22,??,??,generated
 scripts/gpu_headless_autotrain.py,91,??,??,generated
 scripts/gpu_headless_autotrain.py,99,??,??,generated
@@ -402,20 +394,6 @@ scripts/train_dolphin_unsloth.py,499,??,??,generated
 scripts/train_dolphin_unsloth.py,545,??,??,generated
 scripts/train_dolphin_unsloth.py,603,??,??,generated
 scripts/train_dolphin_unsloth.py,720,??,??,generated
-scripts/train_dolphin_unsloth_multimodule.py,39,??,??,generated
-scripts/train_dolphin_unsloth_multimodule.py,47,_setup_logging,def _setup_logging():,generated
-scripts/train_dolphin_unsloth_multimodule.py,53,_detect_device_map,def _detect_device_map():,generated
-scripts/train_dolphin_unsloth_multimodule.py,68,_load_unsloth,"def _load_unsloth(base_model: str, max_len: int, try_4bit: bool = True):",generated
-scripts/train_dolphin_unsloth_multimodule.py,85,_get_peft,"def _get_peft(model, r: int = 8, alpha: int = 16, dropout: float = 0.05):",generated
-scripts/train_dolphin_unsloth_multimodule.py,133,_get_peft,"def _get_peft(model, r: int = 8, alpha: int = 16, dropout: float = 0.05):",generated
-scripts/train_dolphin_unsloth_multimodule.py,181,_tokenize,"def _tokenize(tokenizer, ds, max_len: int):",generated
-scripts/train_dolphin_unsloth_multimodule.py,182,_tok,def _tok(batch):,generated
-scripts/train_dolphin_unsloth_multimodule.py,208,_tok,def _tok(batch):,generated
-scripts/train_dolphin_unsloth_multimodule.py,236,LLM2Vec.generate,"def generate(self, prompt, max_new_tokens=512, temperature=0.2, top_p=0.9):",generated
-scripts/train_dolphin_unsloth_multimodule.py,250,LLM2Vec.embed,"def embed(self, texts):",generated
-scripts/train_dolphin_unsloth_multimodule.py,265,LLM2Vec.embed,"def embed(self, texts):",generated
-scripts/train_dolphin_unsloth_multimodule.py,300,main,def main():,generated
-scripts/train_monGARS_unsloth.py,24,??,??,generated
 scripts/ultimate_repo_analyzer.py,44,??,??,generated
 scripts/ultimate_repo_analyzer.py,89,is_text,def is_text(p):,generated
 scripts/ultimate_repo_analyzer.py,252,sha,def sha(s):,generated

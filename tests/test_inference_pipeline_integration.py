@@ -19,12 +19,28 @@ UTC = getattr(datetime, "UTC", timezone.utc)
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _setup_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _setup_test_env() -> None:
     """Configure test environment variables for all tests in this module."""
-    monkeypatch.setenv("JWT_ALGORITHM", "HS256")
-    monkeypatch.setenv("SECRET_KEY", "test")
 
-UTC = getattr(datetime, "UTC", timezone.utc)
+    previous_jwt_algorithm = os.environ.get("JWT_ALGORITHM")
+    previous_secret_key = os.environ.get("SECRET_KEY")
+
+    os.environ["JWT_ALGORITHM"] = "HS256"
+    os.environ["SECRET_KEY"] = "test"
+
+    yield
+
+    if previous_jwt_algorithm is None:
+        os.environ.pop("JWT_ALGORITHM", None)
+    else:
+        os.environ["JWT_ALGORITHM"] = previous_jwt_algorithm
+
+    if previous_secret_key is None:
+        os.environ.pop("SECRET_KEY", None)
+    else:
+        os.environ["SECRET_KEY"] = previous_secret_key
+
+
 
 
 @pytest.fixture
