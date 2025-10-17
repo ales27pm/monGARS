@@ -204,8 +204,6 @@ class LLM2VecEmbedder:
                             manager.encode, backend_payloads, prompt
                         )
                 except _KNOWN_MANAGER_EXCEPTIONS as exc:
-                    chunk_used_fallback = True
-                    raw_sequence = None
                     logger.exception(
                         "llm2vec.encode.failed",
                         extra={
@@ -213,9 +211,9 @@ class LLM2VecEmbedder:
                             "backend_size": len(backend_payloads),
                         },
                     )
-                    self._assign_fallbacks(
-                        chunk, chunk_vectors, backend_indices, prompt
-                    )
+                    raise EmbeddingBackendError(
+                        "embedding backend unavailable"
+                    ) from exc
             elif backend_payloads and not manager_ready:
                 chunk_used_fallback = True
                 self._assign_fallbacks(chunk, chunk_vectors, backend_indices, prompt)
