@@ -198,9 +198,8 @@ class EmbeddingService:
             raise HTTPException(status_code=502, detail="No embeddings returned")
 
         dims = len(vectors[0])
-        final_used_normalise = apply_normalise or bool(
-            getattr(batch, "used_fallback", False)
-        )
+        used_fallback = bool(getattr(batch, "used_fallback", False))
+        final_used_normalise = apply_normalise or used_fallback
 
         LOGGER.debug(
             "Generated %s embeddings",
@@ -209,7 +208,7 @@ class EmbeddingService:
                 "count": len(vectors),
                 "dims": dims,
                 "normalise": final_used_normalise,
-                "used_fallback": batch.used_fallback,
+                "used_fallback": used_fallback,
             },
         )
         return vectors, final_used_normalise
@@ -218,9 +217,16 @@ class EmbeddingService:
         self, texts: Sequence[str], normalise: bool | None
     ) -> tuple[List[List[float]], bool]:
         wrapper = await self._ensure_wrapper()
-        tensor = await asyncio.to_thread(
-            wrapper.embed, list(texts), normalise=normalise
-        )
+        try:
+            tensor = await asyncio.to_thread(
+                wrapper.embed, list(texts), normalise=normalise
+            )
+        except Exception as exc:  # pragma: no cover - wrapper failure
+            LOGGER.exception("wrapper.embedding.unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail="wrapper embedding backend is unavailable",
+            ) from exc
         matrix = tensor.tolist()
         dims = tensor.shape[-1]
         LOGGER.debug(
