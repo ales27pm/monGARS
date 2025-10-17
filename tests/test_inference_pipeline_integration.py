@@ -15,7 +15,6 @@ from monGARS.api.web_api import app as main_app
 from monGARS.api.web_api import get_conversational_module
 from scripts import run_llm2vec_service
 
-
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("SECRET_KEY", "test")
 
