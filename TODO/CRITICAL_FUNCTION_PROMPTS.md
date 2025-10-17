@@ -1,16 +1,3 @@
-54| DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
-57|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
- 57|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-38| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
- 38| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
- 38| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
- 38| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
- 38| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
- 38| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
-223|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-223|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-223|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-223|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-223|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-223|             base_model = "dphn/Dolphin3.0-Llama3.1-8B"
-19| BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
+# Critical Function Prompts
+
+There are currently no outstanding critical function prompts. The previous entries targeted functions that have since been fully implemented, so the list has been cleared.
