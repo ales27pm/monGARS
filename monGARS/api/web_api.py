@@ -306,6 +306,24 @@ async def conversation_history(
         )
     if normalized_user_id != current_user.get("sub"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if not isinstance(user_id, str) or not user_id.strip():
+        logger.warning(
+            "conversation.history_invalid_user_id",
+            extra={"user": _redact_user_id(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="user_id must be a non-empty string",
+        )
+    if not isinstance(limit, int) or limit <= 0:
+        logger.warning(
+            "conversation.history_invalid_limit",
+            extra={"user": _redact_user_id(user_id), "limit": limit},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="limit must be a positive integer",
+        )
     try:
         return await store.history(normalized_user_id, limit=limit)
     except (
