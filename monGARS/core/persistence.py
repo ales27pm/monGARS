@@ -377,6 +377,24 @@ class PersistenceRepository:
             operation, operation_name="get_user_by_username"
         )
 
+    async def update_user_password(self, username: str, password_hash: str) -> bool:
+        async def operation(session) -> bool:
+            async with session.begin():
+                result = await session.execute(
+                    select(UserAccount)
+                    .where(UserAccount.username == username)
+                    .with_for_update()
+                )
+                user = result.scalar_one_or_none()
+                if user is None:
+                    return False
+                user.password_hash = password_hash
+                return True
+
+        return await self._execute_with_retry(
+            operation, operation_name="update_user_password"
+        )
+
     async def has_admin_user(self) -> bool:
         """Return ``True`` when at least one admin account exists."""
 

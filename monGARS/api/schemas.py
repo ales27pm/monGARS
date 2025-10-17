@@ -38,6 +38,13 @@ class UserRegistration(BaseModel):
         return cleaned
 
 
+class PasswordChangeRequest(BaseModel):
+    """Payload for password change requests."""
+
+    old_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8)
+
+
 class ChatRequest(BaseModel):
     """Incoming chat message sent to the conversational endpoint."""
 
