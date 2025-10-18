@@ -285,11 +285,19 @@
                   <button
                     id="send"
                     type="submit"
-                    class="btn btn-primary"
+                    class="btn btn-primary composer-send"
                     data-idle-label="Envoyer"
+                    data-busy-label="Envoi…"
+                    data-busy-aria-label="Envoi en cours"
                     data-embed-aria-label="Générer un embedding"
                   >
-                    Envoyer
+                    <span
+                      class="spinner-border spinner-border-sm me-2 d-none"
+                      data-role="send-spinner"
+                      role="status"
+                      aria-hidden="true"
+                    ></span>
+                    <span data-role="send-label">Envoyer</span>
                   </button>
                 </div>
                 <div
