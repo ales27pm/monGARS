@@ -101,6 +101,22 @@ body.dark-mode #connection-meta {
   font-size: 0.9rem;
 }
 
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.composer-send.is-loading {
+  cursor: wait;
+}
+
+.composer-send .spinner-border {
+  width: 1rem;
+  height: 1rem;
+}
+
 body.dark-mode .connection-diagnostics {
   background: rgba(26, 26, 26, 0.7);
   border-color: rgba(255, 255, 255, 0.06);

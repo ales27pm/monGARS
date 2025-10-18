@@ -7,10 +7,21 @@ import { computeErrorBubbleText } from "../utils/errorUtils.js";
 export function createChatUi({ elements, timelineStore }) {
   const emitter = createEmitter();
 
+  const sendLabelElement =
+    elements.send?.querySelector("[data-role='send-label']") || null;
+  const sendSpinnerElement =
+    elements.send?.querySelector("[data-role='send-spinner']") || null;
   const sendIdleMarkup = elements.send ? elements.send.innerHTML : "";
   const sendIdleLabel =
     (elements.send && elements.send.getAttribute("data-idle-label")) ||
+    (sendLabelElement && sendLabelElement.textContent.trim()) ||
     (elements.send ? elements.send.textContent.trim() : "Envoyer");
+  const sendBusyLabel =
+    (elements.send && elements.send.getAttribute("data-busy-label")) ||
+    "Envoi…";
+  const sendBusyAriaLabel =
+    (elements.send && elements.send.getAttribute("data-busy-aria-label")) ||
+    sendBusyLabel;
   const sendBusyMarkup =
     '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Envoi…';
   const SUPPORTED_TONES = ["muted", "info", "success", "danger", "warning"];
@@ -92,15 +103,44 @@ export function createChatUi({ elements, timelineStore }) {
 
   function setBusy(busy) {
     elements.transcript.setAttribute("aria-busy", busy ? "true" : "false");
-    if (elements.send) {
-      elements.send.disabled = Boolean(busy);
-      elements.send.setAttribute("aria-busy", busy ? "true" : "false");
+    if (!elements.send) {
+      return;
+    }
+
+    elements.send.disabled = Boolean(busy);
+    elements.send.setAttribute("aria-busy", busy ? "true" : "false");
+    elements.send.classList.toggle("is-loading", Boolean(busy));
+
+    if (sendSpinnerElement) {
       if (busy) {
-        elements.send.innerHTML = sendBusyMarkup;
-      } else if (sendIdleMarkup) {
-        elements.send.innerHTML = sendIdleMarkup;
+        sendSpinnerElement.classList.remove("d-none");
+        sendSpinnerElement.setAttribute("aria-hidden", "false");
       } else {
-        elements.send.textContent = sendIdleLabel;
+        sendSpinnerElement.classList.add("d-none");
+        sendSpinnerElement.setAttribute("aria-hidden", "true");
+      }
+    }
+
+    if (sendLabelElement) {
+      sendLabelElement.textContent = busy ? sendBusyLabel : sendIdleLabel;
+    } else if (busy) {
+      elements.send.innerHTML = sendBusyMarkup;
+    } else if (sendIdleMarkup) {
+      elements.send.innerHTML = sendIdleMarkup;
+    } else {
+      elements.send.textContent = sendIdleLabel;
+    }
+
+    if (busy) {
+      if (sendBusyAriaLabel) {
+        elements.send.setAttribute("aria-label", sendBusyAriaLabel);
+      }
+    } else {
+      const ariaLabel = state.mode === "embed" ? sendAriaEmbedding : sendAriaDefault;
+      if (ariaLabel) {
+        elements.send.setAttribute("aria-label", ariaLabel);
+      } else {
+        elements.send.removeAttribute("aria-label");
       }
     }
   }
