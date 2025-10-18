@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -15,13 +16,18 @@ except ImportError:  # Python 3.10 fallback
 
     UTC = timezone.utc
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.trace import Status, StatusCode
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.api.authentication import (
@@ -49,6 +55,7 @@ from monGARS.api.schemas import (
     UserRegistration,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
+from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
@@ -58,6 +65,11 @@ from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import BackendUnavailable, event_bus, make_event
+from monGARS.telemetry import (
+    HTTP_REQUEST_LATENCY_SECONDS,
+    HTTP_REQUESTS_TOTAL,
+    PROMETHEUS_REGISTRY,
+)
 
 from . import authentication as auth_routes
 from . import model_management
@@ -85,6 +97,10 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
+
+_settings = get_settings()
+if _settings.otel_traces_enabled:
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics")
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -120,6 +136,59 @@ _chat_rate_limiter = InMemoryRateLimiter(
     prune_after_seconds=_CHAT_RATE_LIMIT_PRUNE_AFTER,
     on_reject=_log_rate_limit,
 )
+
+
+@app.middleware("http")
+async def record_request_metrics(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    if request.scope.get("type") != "http":  # pragma: no cover - defensive guard
+        return await call_next(request)
+
+    method = request.method.upper()
+    route_template = request.url.path
+    start = perf_counter()
+    status_code = 500
+    response: Response | None = None
+
+    current_span = trace.get_current_span()
+    if not current_span.is_recording():
+        current_span = None
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception as exc:
+        if current_span is not None:
+            current_span.record_exception(exc)
+            current_span.set_status(Status(StatusCode.ERROR, str(exc)))
+        raise
+    finally:
+        route = request.scope.get("route")
+        if route is not None and getattr(route, "path", None):
+            route_template = route.path
+
+        if current_span is not None:
+            current_span.set_attribute("http.method", method)
+            current_span.set_attribute("http.scheme", request.url.scheme)
+            current_span.set_attribute("http.route", route_template)
+            current_span.set_attribute("http.target", request.url.path)
+            current_span.set_attribute("http.status_code", status_code)
+
+        elapsed = perf_counter() - start
+        if _settings.otel_prometheus_enabled and route_template != "/metrics":
+            HTTP_REQUESTS_TOTAL.labels(
+                method=method, route=route_template, status=str(status_code)
+            ).inc()
+            HTTP_REQUEST_LATENCY_SECONDS.labels(
+                method=method, route=route_template
+            ).observe(elapsed)
+
+    assert (
+        response is not None
+    )  # pragma: no cover - response guaranteed unless exception
+    return response
 
 
 @app.get("/", include_in_schema=False)
@@ -387,6 +456,18 @@ async def change_password(
         )
 
     return {"status": "changed"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint(
+    _: Annotated[dict, Depends(get_current_user)],
+) -> Response:
+    """Expose Prometheus metrics collected from the API process."""
+
+    if not _settings.otel_prometheus_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    payload = generate_latest(PROMETHEUS_REGISTRY)
+    return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/healthz")
