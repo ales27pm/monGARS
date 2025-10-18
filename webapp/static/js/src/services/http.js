@@ -46,7 +46,7 @@ export function createHttpService({ config, auth }) {
   async function postEmbed(text, options = {}) {
     if (!config.embedServiceUrl) {
       throw new Error(
-        "Service d'embedding indisponible: aucune URL configurée."
+        "Service d'embedding indisponible: aucune URL configurée.",
       );
     }
     const payload = {
@@ -92,10 +92,58 @@ export function createHttpService({ config, auth }) {
     return payload;
   }
 
+  async function listUsers() {
+    const resp = await authorisedFetch("/api/v1/user/list");
+    let payload;
+    try {
+      payload = await resp.json();
+    } catch (err) {
+      payload = null;
+    }
+    if (!resp.ok) {
+      const detail =
+        payload && (payload.detail || payload.error || payload.message);
+      throw new Error(detail || `HTTP ${resp.status}`);
+    }
+    if (!payload || !Array.isArray(payload.users)) {
+      throw new Error("User list response invalid: users array missing");
+    }
+    return payload.users;
+  }
+
+  async function changePassword({ oldPassword, newPassword }) {
+    const body = {
+      old_password: oldPassword,
+      new_password: newPassword,
+    };
+    const resp = await authorisedFetch("/api/v1/user/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    let payload;
+    try {
+      payload = await resp.json();
+    } catch (err) {
+      payload = null;
+    }
+    if (!resp.ok) {
+      const detail =
+        payload && (payload.detail || payload.error || payload.message);
+      throw new Error(detail || `HTTP ${resp.status}`);
+    }
+    if (!payload || typeof payload !== "object") {
+      return { status: "changed" };
+    }
+    return payload;
+  }
+
   return {
     fetchTicket,
     postChat,
     postEmbed,
     postSuggestions,
+    listUsers,
+    changePassword,
   };
 }
