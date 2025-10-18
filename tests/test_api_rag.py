@@ -127,10 +127,8 @@ async def test_fetch_rag_context_reports_disabled(client):
         json={"query": "Investigate"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["enabled"] is False
-    assert data["references"] == []
+    assert response.status_code == 503
+    assert response.json() == {"detail": "RAG disabled"}
 
 
 @pytest.mark.asyncio
@@ -146,6 +144,22 @@ async def test_fetch_rag_context_handles_service_error(client):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_fetch_rag_context_handles_invalid_query(client):
+    client_obj, enricher = client
+    enricher.error = ValueError("query is required")
+    token = client_obj.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    response = client_obj.post(
+        "/api/v1/review/rag-context",
+        json={"query": "Investigate"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "query is required"}
 
 
 @pytest.mark.asyncio
