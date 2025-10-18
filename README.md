@@ -272,6 +272,25 @@ can be extended to register additional Ollama models or alternate providers.
   same provisioning workflow from the shell. Pass `--json` to emit machine
   readable output for automation.
 
+### Exporting Ollama Models
+- **Prerequisite** – Install the [Ollama](https://ollama.com/) runtime locally so
+  the `ollama` CLI is available on your `PATH`.
+- **Export workflow** – Run the helper to persist an Ollama-managed model to a
+  portable `.bin` artefact:
+
+  ```python
+  from pathlib import Path
+
+  from monGARS.mlops.exporters import export_to_ollama
+
+  export_path = export_to_ollama("llama3", Path("./exports"))
+  print(f"Model exported to {export_path}")
+  ```
+
+- **Verification** – The command above creates an `.bin` file (for example
+  `exports/llama3.bin`). Use standard filesystem tooling to confirm the file is
+  present before distributing it to air-gapped or offline environments.
+
 ## Operational Workflows
 - **Testing**: `pytest -q` for unit/integration coverage. Run
   `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage.
