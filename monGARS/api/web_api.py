@@ -24,9 +24,22 @@ from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
-from opentelemetry import trace
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.trace import Status, StatusCode
+
+try:
+    from opentelemetry import trace
+except ImportError:  # pragma: no cover - optional dependency
+    trace = None  # type: ignore[assignment]
+
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+except ImportError:  # pragma: no cover - optional dependency
+    FastAPIInstrumentor = None  # type: ignore[assignment]
+
+try:
+    from opentelemetry.trace import Status, StatusCode
+except ImportError:  # pragma: no cover - optional dependency
+    Status = None  # type: ignore[assignment]
+    StatusCode = None  # type: ignore[assignment]
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -100,7 +113,13 @@ logger = logging.getLogger(__name__)
 
 _settings = get_settings()
 if _settings.otel_traces_enabled:
-    FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics")
+    if FastAPIInstrumentor is None:
+        logger.warning(
+            "web_api.otel_instrumentation_missing",
+            extra={"package": "opentelemetry-instrumentation-fastapi"},
+        )
+    else:
+        FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics")
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -152,8 +171,8 @@ async def record_request_metrics(
     status_code = 500
     response: Response | None = None
 
-    current_span = trace.get_current_span()
-    if not current_span.is_recording():
+    current_span = trace.get_current_span() if trace is not None else None
+    if current_span is not None and not current_span.is_recording():
         current_span = None
 
     try:
@@ -162,7 +181,8 @@ async def record_request_metrics(
     except Exception as exc:
         if current_span is not None:
             current_span.record_exception(exc)
-            current_span.set_status(Status(StatusCode.ERROR, str(exc)))
+            if Status is not None and StatusCode is not None:
+                current_span.set_status(Status(StatusCode.ERROR, str(exc)))
         raise
     finally:
         route = request.scope.get("route")

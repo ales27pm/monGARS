@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -180,6 +182,68 @@ def export_to_gguf(
         )
 
     logger.info("GGUF model written", extra={"path": str(destination)})
+    return destination
+
+
+def export_to_ollama(model_name: str, output_dir: str | Path) -> Path:
+    """Export an Ollama model snapshot to ``output_dir`` using ``ollama export``."""
+
+    if not model_name:
+        raise ValueError("model_name must be provided for Ollama export")
+
+    if shutil.which("ollama") is None:
+        raise RuntimeError(
+            "Ollama CLI is not available. Install Ollama and ensure the `ollama` "
+            "binary is on PATH."
+        )
+
+    destination = Path(output_dir)
+    if destination.suffix:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        destination.mkdir(parents=True, exist_ok=True)
+        model_stub = model_name.replace("/", "_").strip() or "model"
+        destination = destination / f"{model_stub}.bin"
+
+    logger.info(
+        "Exporting Ollama model",
+        extra={"model": model_name, "output": str(destination)},
+    )
+
+    command = ["ollama", "export", model_name]
+    try:
+        with destination.open("wb") as export_handle:
+            result = subprocess.run(
+                command,
+                check=True,
+                stdout=export_handle,
+                stderr=subprocess.PIPE,
+            )
+    except FileNotFoundError as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError(
+            "Ollama CLI is not available. Install Ollama and ensure the `ollama` "
+            "binary is on PATH."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
+        logger.error(
+            "Ollama export failed",
+            extra={"model": model_name, "output": str(destination), "stderr": stderr},
+        )
+        raise RuntimeError(f"ollama export failed: {stderr.strip() or exc}") from exc
+
+    stderr_output = (result.stderr or b"").decode("utf-8", errors="ignore")
+    if stderr_output.strip():
+        logger.debug(
+            "Ollama export stderr",
+            extra={
+                "model": model_name,
+                "output": str(destination),
+                "stderr": stderr_output,
+            },
+        )
+
+    logger.info("Ollama model exported", extra={"path": str(destination)})
     return destination
 
 
