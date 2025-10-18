@@ -235,11 +235,7 @@ export class ChatApp {
         }
       } catch (err) {
         this.ui.setBusy(false);
-        const message = err instanceof Error ? err.message : String(err);
-        this.ui.showError(message);
-        this.ui.appendMessage("system", message, {
-          variant: "error",
-          allowMarkdown: false,
+        this.ui.showError(err, {
           metadata: { stage: "submit", mode: requestMode },
         });
         if (requestMode === "embed") {

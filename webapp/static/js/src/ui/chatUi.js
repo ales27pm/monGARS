@@ -104,6 +104,9 @@ export function createChatUi({ elements, timelineStore }) {
     }
   }
 
+  const DEFAULT_ERROR_MESSAGE =
+    "Une erreur inattendue est survenue. Veuillez réessayer.";
+
   function hideError() {
     if (!elements.errorAlert) return;
     elements.errorAlert.classList.add("d-none");
@@ -112,10 +115,80 @@ export function createChatUi({ elements, timelineStore }) {
     }
   }
 
-  function showError(message) {
-    if (!elements.errorAlert || !elements.errorMessage) return;
-    elements.errorMessage.textContent = message;
-    elements.errorAlert.classList.remove("d-none");
+  function normaliseErrorText(error) {
+    if (error instanceof Error) {
+      const text = error.message ? error.message.trim() : "";
+      return text || DEFAULT_ERROR_MESSAGE;
+    }
+    if (typeof error === "string") {
+      const text = error.trim();
+      return text || DEFAULT_ERROR_MESSAGE;
+    }
+    if (error && typeof error === "object") {
+      if (typeof error.message === "string" && error.message.trim()) {
+        return error.message.trim();
+      }
+      if (typeof error.error === "string" && error.error.trim()) {
+        return error.error.trim();
+      }
+      try {
+        const serialised = JSON.stringify(error);
+        if (serialised && serialised !== "{}") {
+          return serialised;
+        }
+      } catch (err) {
+        console.debug("Unable to serialise error payload", err);
+      }
+    }
+    if (typeof error !== "undefined" && error !== null) {
+      return String(error);
+    }
+    return DEFAULT_ERROR_MESSAGE;
+  }
+
+  function appendErrorBubble(error, options = {}) {
+    const {
+      metadata = {},
+      timestamp = nowISO(),
+      role = "system",
+      prefix,
+      register,
+      messageId,
+    } = options;
+    const text = normaliseErrorText(error);
+    const basePrefix =
+      options.prefix === null
+        ? ""
+        : typeof prefix === "string"
+          ? prefix
+          : "Erreur : ";
+    const lower = text.toLowerCase();
+    const shouldPrefix =
+      basePrefix &&
+      !lower.startsWith("erreur") &&
+      !lower.startsWith("error") &&
+      !lower.startsWith(basePrefix.trim().toLowerCase());
+    const bubbleText = shouldPrefix ? `${basePrefix}${text}` : text;
+    return appendMessage(role, bubbleText, {
+      variant: "error",
+      allowMarkdown: false,
+      timestamp,
+      metadata: { ...metadata, error: text },
+      register,
+      messageId,
+    });
+  }
+
+  function showError(error, options = {}) {
+    const text = normaliseErrorText(error);
+    if (elements.errorAlert && elements.errorMessage) {
+      elements.errorMessage.textContent = text;
+      elements.errorAlert.classList.remove("d-none");
+    }
+    if (options.bubble === false) {
+      return null;
+    }
+    return appendErrorBubble(text, options);
   }
 
   function setComposerStatus(message, tone = "muted") {
