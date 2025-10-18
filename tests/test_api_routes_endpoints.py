@@ -58,7 +58,9 @@ class FakePersistenceRepository:
         self.raise_on_has_admin: Exception | None = None
         self.update_result_override: bool | None = None
 
-    def seed_user(self, username: str, password: str, *, is_admin: bool = False) -> None:
+    def seed_user(
+        self, username: str, password: str, *, is_admin: bool = False
+    ) -> None:
         self._users[username] = FakeUser(
             username,
             sec_manager.get_password_hash(password),
@@ -96,7 +98,9 @@ class FakePersistenceRepository:
         user = self._users.get(username)
         if user is None:
             return False
-        self._users[username] = FakeUser(username, password_hash, is_admin=user.is_admin)
+        self._users[username] = FakeUser(
+            username, password_hash, is_admin=user.is_admin
+        )
         return True
 
 
@@ -381,7 +385,9 @@ def _bearer(token: str) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_login_returns_token_with_admin_claim(api_context: ApiTestContext) -> None:
+async def test_login_returns_token_with_admin_claim(
+    api_context: ApiTestContext,
+) -> None:
     api_context.repo.seed_user("alice", "wonderland", is_admin=True)
     response = await api_context.client.post(
         "/token", data={"username": "alice", "password": "wonderland"}
@@ -428,7 +434,9 @@ async def test_register_user_conflict_returns_409(api_context: ApiTestContext) -
 
 
 @pytest.mark.asyncio
-async def test_register_admin_allows_single_creation(api_context: ApiTestContext) -> None:
+async def test_register_admin_allows_single_creation(
+    api_context: ApiTestContext,
+) -> None:
     first = await api_context.client.post(
         "/api/v1/user/register/admin",
         json={"username": "founder", "password": "founderpw"},
@@ -445,7 +453,9 @@ async def test_register_admin_allows_single_creation(api_context: ApiTestContext
 
 
 @pytest.mark.asyncio
-async def test_register_admin_reports_state_failure(api_context: ApiTestContext) -> None:
+async def test_register_admin_reports_state_failure(
+    api_context: ApiTestContext,
+) -> None:
     api_context.repo.raise_on_has_admin = RuntimeError("database offline")
     response = await api_context.client.post(
         "/api/v1/user/register/admin",
@@ -649,12 +659,8 @@ async def test_chat_validation_error_from_user_input(
     def invalid_input(_: dict) -> dict:
         raise ValueError("query rejected")
 
-    monkeypatch.setattr(
-        "monGARS.core.security.validate_user_input", invalid_input
-    )
-    monkeypatch.setattr(
-        "monGARS.api.web_api.validate_user_input", invalid_input
-    )
+    monkeypatch.setattr("monGARS.core.security.validate_user_input", invalid_input)
+    monkeypatch.setattr("monGARS.api.web_api.validate_user_input", invalid_input)
 
     response = await api_context.client.post(
         "/api/v1/conversation/chat",
@@ -895,20 +901,18 @@ async def test_model_configuration_requires_admin(api_context: ApiTestContext) -
     api_context.repo.seed_user("user", "pw")
     token = await _get_token(api_context.client, "user", "pw")
 
-    response = await api_context.client.get(
-        "/api/v1/models", headers=_bearer(token)
-    )
+    response = await api_context.client.get("/api/v1/models", headers=_bearer(token))
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
-async def test_model_configuration_returns_snapshot(api_context: ApiTestContext) -> None:
+async def test_model_configuration_returns_snapshot(
+    api_context: ApiTestContext,
+) -> None:
     api_context.repo.seed_user("admin", "secret", is_admin=True)
     token = await _get_token(api_context.client, "admin", "secret")
 
-    response = await api_context.client.get(
-        "/api/v1/models", headers=_bearer(token)
-    )
+    response = await api_context.client.get("/api/v1/models", headers=_bearer(token))
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["active_profile"] == "default"
@@ -946,4 +950,3 @@ async def test_model_provision_failure_returns_502(api_context: ApiTestContext) 
         json={"roles": None, "force": False},
     )
     assert response.status_code == status.HTTP_502_BAD_GATEWAY
-
