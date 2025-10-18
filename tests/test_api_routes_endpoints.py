@@ -15,11 +15,11 @@ from httpx import ASGITransport, AsyncClient
 from monGARS.api import ui
 from monGARS.api.dependencies import (
     get_hippocampus,
+    get_model_manager,
     get_peer_communicator,
     get_persistence_repository,
     get_rag_context_enricher,
 )
-from monGARS.api.model_management import get_model_manager
 from monGARS.api.schemas import RagContextResponse
 from monGARS.api.web_api import (
     app,
