@@ -7,10 +7,11 @@ os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("SECRET_KEY", "test")
 
 import pytest
+from fastapi import status
 from fastapi.testclient import TestClient
 
 from monGARS.api.dependencies import hippocampus
-from monGARS.api.web_api import app
+from monGARS.api.web_api import app, reset_chat_rate_limiter
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.security import SecurityManager
 
@@ -36,6 +37,7 @@ def _speech_turn_payload(text: str) -> dict:
 def client(monkeypatch):
     hippocampus._memory.clear()
     hippocampus._locks.clear()
+    reset_chat_rate_limiter()
 
     monkeypatch.setitem(
         sys.modules, "spacy", types.SimpleNamespace(load=lambda n: object())
@@ -165,3 +167,27 @@ async def test_chat_missing_sub_in_token_returns_401(client: TestClient):
     )
     assert resp.status_code == 401
     assert resp.json()["detail"] == "Invalid token: missing subject"
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_returns_429(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    first = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hi"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello again"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert (
+        second.json()["detail"]
+        == "Too many requests: please wait before sending another message."
+    )

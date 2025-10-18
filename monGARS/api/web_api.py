@@ -6,6 +6,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from time import monotonic
 
 try:
     from datetime import UTC  # Python 3.11+
@@ -89,6 +90,10 @@ app.include_router(rag_routes.router)
 conversation_module: ConversationalModule | None = None
 ws_manager = _ws_manager
 
+_CHAT_RATE_LIMIT_SECONDS = 1.0
+_chat_rate_lock = asyncio.Lock()
+_chat_last_message_at: dict[str, float] = {}
+
 
 def _redact_user_id(user_id: str) -> str:
     """Return a short, stable identifier suitable for logs."""
@@ -105,6 +110,12 @@ def _get_adaptive_response_generator_for_personality(
     """Resolve the adaptive response generator for the provided personality."""
 
     return get_adaptive_response_generator(personality)
+
+
+def reset_chat_rate_limiter() -> None:
+    """Reset in-memory chat rate limiting state (primarily for tests)."""
+
+    _chat_last_message_at.clear()
 
 
 def get_conversational_module(
@@ -379,6 +390,22 @@ async def chat(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    now = monotonic()
+    async with _chat_rate_lock:
+        last_message_at = _chat_last_message_at.get(user_id)
+        if (
+            last_message_at is not None
+            and now - last_message_at < _CHAT_RATE_LIMIT_SECONDS
+        ):
+            logger.warning(
+                "web_api.chat_rate_limited",
+                extra={"user": _redact_user_id(user_id)},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests: please wait before sending another message.",
+            )
+        _chat_last_message_at[user_id] = now
     try:
         result = await conv.generate_response(
             user_id, data["query"], session_id=chat.session_id
