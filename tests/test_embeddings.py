@@ -297,7 +297,11 @@ async def test_encode_batch_records_chatml_for_fallback_vectors(
         previous_chatml: str | None = None
         for block in blocks:
             entry = block[idx]
-            assert entry["text"] == original_text
+            text_lines = [line for line in entry["text"].splitlines() if line]
+            assert text_lines[0].startswith("System:")
+            assert text_lines[-1].startswith("User:")
+            assert text_lines[-1].endswith(original_text)
+            assert "Assistant:" not in entry["text"]
             assert entry["system_prompt"] == settings.llm2vec_instruction
             assert entry["include_assistant_stub"] is False
             chatml = entry["chatml"]

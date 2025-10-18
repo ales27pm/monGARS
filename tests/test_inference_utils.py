@@ -4,6 +4,7 @@ from monGARS.core.inference_utils import (
     CHATML_END_OF_TURN,
     CHATML_START_HEADER,
     build_context_prompt,
+    build_converged_chat_prompt,
     prepare_tokenizer_inputs,
     render_chat_prompt_from_text,
 )
@@ -93,7 +94,9 @@ def test_render_chat_prompt_from_text_wraps_chatml_tokens() -> None:
         include_assistant_stub=False,
     )
 
-    assert prompt.text == "Summarise the deployment status."
+    assert "System: You are Dolphin." in prompt.text
+    assert "User: Summarise the deployment status." in prompt.text
+    assert "Assistant:" not in prompt.text
     assert prompt.chatml.startswith(CHATML_BEGIN_OF_TEXT)
     assert prompt.chatml.endswith(CHATML_END_OF_TURN)
     assert "You are Dolphin." in prompt.chatml
@@ -106,6 +109,8 @@ def test_render_chat_prompt_from_text_handles_empty_system_prompt() -> None:
         include_assistant_stub=False,
     )
 
+    assert prompt.text.startswith("User:")
+    assert "Assistant:" not in prompt.text
     assert prompt.chatml.startswith(CHATML_BEGIN_OF_TEXT)
     assert prompt.chatml.endswith(CHATML_END_OF_TURN)
     assert f"{CHATML_START_HEADER}system{CHATML_END_HEADER}" not in prompt.chatml
@@ -118,10 +123,25 @@ def test_render_chat_prompt_from_text_handles_empty_user_text() -> None:
         include_assistant_stub=False,
     )
 
-    assert prompt.text == ""
+    assert prompt.text.splitlines()[0] == "System: You are Dolphin."
+    assert prompt.text.splitlines()[-1].startswith("User:")
     assert prompt.chatml.startswith(CHATML_BEGIN_OF_TEXT)
     assert prompt.chatml.endswith(CHATML_END_OF_TURN)
     assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in prompt.chatml
+
+
+def test_render_chat_prompt_from_text_handles_empty_system_and_user_prompts() -> None:
+    prompt = render_chat_prompt_from_text(
+        "",
+        system_prompt="",
+        include_assistant_stub=False,
+    )
+
+    assert prompt.text == "User:"
+    assert "Assistant:" not in prompt.text
+    assert prompt.chatml.startswith(CHATML_BEGIN_OF_TEXT)
+    assert prompt.chatml.endswith(CHATML_END_OF_TURN)
+    assert f"{CHATML_START_HEADER}system{CHATML_END_HEADER}" not in prompt.chatml
 
 
 def test_render_chat_prompt_from_text_appends_assistant_stub() -> None:
@@ -136,3 +156,48 @@ def test_render_chat_prompt_from_text_appends_assistant_stub() -> None:
         f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"
     )
     assert prompt.chatml.count(CHATML_END_OF_TURN) == 2
+    assert prompt.text.endswith("Assistant:")
+
+
+def test_build_converged_chat_prompt_formats_role_segments() -> None:
+    prompt = build_converged_chat_prompt(
+        "Summarise the latest release.",
+        history_pairs=[("Hello", "Hi there!")],
+        semantic_context=[{"query": "Previous", "response": "Answer"}],
+        system_prompt="You are Dolphin.",
+    )
+
+    lines = prompt.text.splitlines()
+    assert lines[0] == "System: You are Dolphin."
+    assert any(line.startswith("User:") for line in lines)
+    assert prompt.text.strip().endswith("Assistant:")
+    assert prompt.chatml.count(CHATML_END_OF_TURN) == 2
+
+
+def test_build_converged_chat_prompt_handles_empty_history_pairs() -> None:
+    prompt = build_converged_chat_prompt(
+        "Summarise the latest release.",
+        history_pairs=[
+            ("", ""),
+            ("  redundant spacing  ", "   "),
+            (None, " Assistant reply "),  # type: ignore[arg-type]
+        ],
+    )
+
+    text_lines = [line for line in prompt.text.splitlines() if line]
+    assert text_lines[0].startswith("User:")
+    assert "Assistant: Assistant reply" in prompt.text
+    assert prompt.text.strip().endswith("Assistant:")
+    assert prompt.chatml.endswith(
+        f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"
+    )
+
+
+def test_build_converged_chat_prompt_includes_history_content() -> None:
+    prompt = build_converged_chat_prompt(
+        "Summarise the latest release.",
+        history_pairs=[("Hello", "Hi there!")],
+    )
+
+    assert "User: Hello" in prompt.text
+    assert "Assistant: Hi there!" in prompt.text
