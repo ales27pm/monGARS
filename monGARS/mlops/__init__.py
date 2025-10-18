@@ -21,7 +21,12 @@ from .dataset import (
     prepare_instruction_dataset,
     prepare_local_instruction_dataset,
 )
-from .exporters import export_gguf, merge_lora_adapters, run_generation_smoke_test
+from .exporters import (
+    export_gguf,
+    export_to_gguf,
+    merge_lora_adapters,
+    run_generation_smoke_test,
+)
 from .model import (
     detach_sequences,
     load_4bit_causal_lm,
@@ -65,6 +70,7 @@ __all__ = [
     "LLMUsage",
     "ModuleInteraction",
     "export_gguf",
+    "export_to_gguf",
     "merge_lora_adapters",
     "run_generation_smoke_test",
     "load_4bit_causal_lm",

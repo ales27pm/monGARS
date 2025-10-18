@@ -2,11 +2,47 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 logger = logging.getLogger(__name__)
+
+
+_GGUF_EXPORTER_CANDIDATES: tuple[str, ...] = (
+    "transformers.GgufExporter",
+    "transformers.GGUFExporter",
+    "transformers.exporters.GgufExporter",
+    "transformers.exporters.GGUFExporter",
+    "transformers.exporters.gguf.GgufExporter",
+    "transformers.exporters.gguf.GGUFExporter",
+)
+
+
+def _locate_symbol(path: str) -> Any | None:
+    """Import ``path`` and return the referenced attribute if it exists."""
+
+    module_name, _, attribute = path.rpartition(".")
+    if not module_name or not attribute:
+        return None
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:  # pragma: no cover - defensive guard
+        return None
+    return getattr(module, attribute, None)
+
+
+def _load_gguf_exporter(
+    candidates: Iterable[str] | None = None,
+) -> Callable[..., Any] | None:
+    """Return the first available GGUF exporter implementation."""
+
+    for path in candidates or _GGUF_EXPORTER_CANDIDATES:
+        exporter = _locate_symbol(path)
+        if exporter is not None:
+            return exporter
+    return None
 
 
 def merge_lora_adapters(
@@ -72,6 +108,55 @@ def export_gguf(
     )
     logger.info("GGUF export complete", extra={"gguf_dir": str(gguf_dir)})
     return True
+
+
+def export_to_gguf(model_name: str, output_path: str) -> Path:
+    """Load ``model_name`` with Transformers and export it in GGUF format."""
+
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+    except Exception as exc:  # pragma: no cover - dependency missing
+        raise RuntimeError("transformers is required for GGUF export") from exc
+
+    exporter_cls = _load_gguf_exporter()
+    if exporter_cls is None:
+        raise RuntimeError(
+            "No GGUF exporter available. Install a transformers release that "
+            "includes GgufExporter or provide llama.cpp conversion tools."
+        )
+
+    logger.info(
+        "Preparing GGUF export", extra={"model": model_name, "output": output_path}
+    )
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto")
+    try:  # pragma: no branch - defensive CPU migration
+        model.to("cpu")  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - optional step
+        logger.debug("Unable to move model to CPU before export", exc_info=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+
+    destination = Path(output_path)
+    if destination.suffix.lower() != ".gguf":
+        destination.mkdir(parents=True, exist_ok=True)
+        model_stub = model_name.replace("/", "_").strip() or "model"
+        destination = destination / f"{model_stub}.gguf"
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+    exporter = exporter_cls(model=model, tokenizer=tokenizer)
+    if hasattr(exporter, "export"):
+        exporter.export(str(destination))
+    elif hasattr(exporter, "export_model"):
+        exporter.export_model(str(destination))
+    elif hasattr(exporter, "save_pretrained"):
+        exporter.save_pretrained(str(destination))
+    else:  # pragma: no cover - unexpected interface
+        raise RuntimeError(
+            "Unsupported GGUF exporter interface; expected export/export_model/save_pretrained"
+        )
+
+    logger.info("GGUF model written", extra={"path": str(destination)})
+    return destination
 
 
 def run_generation_smoke_test(model: Any, tokenizer: Any, prompt: str) -> str | None:

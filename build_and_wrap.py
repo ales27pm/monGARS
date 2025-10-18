@@ -80,7 +80,7 @@ from monGARS.mlops.artifacts import (
 from monGARS.mlops.dataset import prepare_instruction_dataset
 from monGARS.mlops.diagnostics.analysis import analyse_cuda_state
 from monGARS.mlops.diagnostics.cuda_metrics import gather_cuda_metrics
-from monGARS.mlops.exporters import export_gguf, merge_lora_adapters
+from monGARS.mlops.exporters import export_to_gguf, merge_lora_adapters
 from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
 from monGARS.mlops.training import (
     LoraHyperParams,
@@ -539,7 +539,7 @@ def main() -> None:
     if EXPORT_GGUF:
         if not merged:
             raise RuntimeError("EXPORT_GGUF requires EXPORT_MERGED_FP16=1")
-        export_gguf(merged_dir, gguf_dir=GGUF_DIR, quantization_method=GGUF_METHOD)
+        export_to_gguf(str(merged_dir), str(GGUF_DIR))
 
     wrapper_dir = OUTPUT_DIR / "wrapper"
     bundle_config = WrapperConfig(
