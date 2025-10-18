@@ -76,6 +76,35 @@ def test_model_definition_string_entries_preserve_role(tmp_path):
     assert definition.name == "ollama/summarise"
 
 
+def test_model_definition_parses_local_path_string(tmp_path):
+    local_file = tmp_path / "models" / "offline" / "custom.gguf"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_bytes(b"weights")
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "offline": f"path:{local_file.relative_to(tmp_path)}",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+
+    manager = LLMModelManager(settings)
+
+    definition = manager.get_model_definition("offline")
+    assert definition.provider == "local_path"
+    assert definition.auto_download is False
+    assert definition.parameters["path"].endswith("custom.gguf")
+    assert definition.parameters["local"] is True
+    # original relative preserved
+    assert definition.parameters.get("source_path") == str(
+        local_file.relative_to(tmp_path)
+    )
+
+
 @pytest.mark.asyncio
 async def test_model_manager_installs_missing_model(monkeypatch, tmp_path):
     config_data = {
@@ -111,6 +140,69 @@ async def test_model_manager_installs_missing_model(monkeypatch, tmp_path):
     status = report.statuses[0]
     assert status.action == "installed"
     assert fake.pulled == ["custom/general"]
+
+
+@pytest.mark.asyncio
+async def test_local_model_provision_reports_existing_path(tmp_path):
+    local_file = tmp_path / "offline.gguf"
+    local_file.write_bytes(b"weights")
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "offline": f"path:{local_file}",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+    manager = LLMModelManager(settings)
+
+    report = await manager.ensure_models_installed(["offline"])
+
+    assert report.statuses
+    status = report.statuses[0]
+    assert status.provider == "local_path"
+    assert status.action == "exists"
+    assert status.detail == local_file.name
+
+    # Second call should be skipped due to caching
+    report2 = await manager.ensure_models_installed(["offline"])
+    assert report2.statuses
+    status2 = report2.statuses[0]
+    assert status2.action == "skipped"
+    assert status2.detail == "already_ensured"
+
+
+@pytest.mark.asyncio
+async def test_local_model_provision_reports_missing_path(tmp_path):
+    missing_file = tmp_path / "missing.gguf"
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "offline": f"path:{missing_file}",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+    manager = LLMModelManager(settings)
+
+    report = await manager.ensure_models_installed(["offline"])
+
+    assert report.statuses
+    status = report.statuses[0]
+    assert status.provider == "local_path"
+    assert status.action == "missing"
+    assert status.detail == missing_file.name
+
+    # Still missing on subsequent call; should not be skipped
+    report2 = await manager.ensure_models_installed(["offline"])
+    status2 = report2.statuses[0]
+    assert status2.action == "missing"
 
 
 def test_default_profile_exposes_reasoning_role(tmp_path):
