@@ -16,7 +16,17 @@ export function createHttpService({ config, auth }) {
         headers.set("Authorization", `Bearer ${jwt}`);
       }
     }
-    return fetch(apiUrl(config, path), { ...rest, headers });
+    try {
+      return await fetch(apiUrl(config, path), { ...rest, headers });
+    } catch (err) {
+      if (err && typeof err === "object" && err.name === "AbortError") {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      const wrappedError = new Error(`Network request failed: ${message}`);
+      wrappedError.cause = err;
+      throw wrappedError;
+    }
   }
 
   async function fetchTicket() {
