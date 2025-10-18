@@ -137,6 +137,7 @@ describe("createHttpService", () => {
     const [url, options] = global.fetch.mock.calls[0];
     expect(url).toBe("https://embed.example.test/vectors");
     expect(options.method).toBe("POST");
+    expect(options.headers.get("Authorization")).toBeNull();
     const body = JSON.parse(options.body);
     expect(body).toEqual({ inputs: ["hello"], normalise: false });
   });

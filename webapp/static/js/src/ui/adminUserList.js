@@ -242,6 +242,14 @@ function UserListApp({ http }) {
   );
 }
 
+/**
+ * Locate the mount point for the admin user list UI.
+ *
+ * Templates can opt-in by adding either an element with the ID `user-list-root`
+ * or the attribute `data-user-list-root`. The admin layout also falls back to
+ * broader containers (`#admin-root`, then `#app-root`) so existing pages render
+ * the chat experience when no dedicated mount exists.
+ */
 function findUserListRoot(doc) {
   return (
     doc.getElementById("user-list-root") ||

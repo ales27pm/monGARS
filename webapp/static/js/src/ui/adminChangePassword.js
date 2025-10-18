@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveConfig } from "../config.js";
 import { createAuthService } from "../services/auth.js";
@@ -6,6 +6,11 @@ import { createHttpService } from "../services/http.js";
 
 const h = React.createElement;
 const MIN_PASSWORD_LENGTH = 8;
+const PASSWORD_CONSTRAINTS = [
+  `Au moins ${MIN_PASSWORD_LENGTH} caractères`,
+  "Doit différer du mot de passe actuel",
+  "Confirmation identique au nouveau mot de passe",
+];
 
 function ChangePasswordApp({ http }) {
   const [form, setForm] = useState({
@@ -29,8 +34,16 @@ function ChangePasswordApp({ http }) {
     form.newPassword.length >= MIN_PASSWORD_LENGTH &&
     form.confirmPassword.length >= MIN_PASSWORD_LENGTH;
 
+  const passwordsAreDifferent =
+    form.oldPassword !== "" &&
+    form.newPassword !== "" &&
+    form.oldPassword !== form.newPassword;
+
   const canSubmit =
-    meetsLengthRequirements && !passwordMismatch && !status.submitting;
+    meetsLengthRequirements &&
+    !passwordMismatch &&
+    passwordsAreDifferent &&
+    !status.submitting;
 
   const liveMessage = status.submitting
     ? "Enregistrement du nouveau mot de passe"
@@ -40,13 +53,10 @@ function ChangePasswordApp({ http }) {
         ? status.success
         : "Formulaire prêt";
 
-  const constraints = useMemo(() => {
-    return [
-      `Au moins ${MIN_PASSWORD_LENGTH} caractères`,
-      "Doit différer du mot de passe actuel",
-      "Confirmation identique au nouveau mot de passe",
-    ];
-  }, []);
+  const samePasswordWarning =
+    form.oldPassword !== "" &&
+    form.newPassword !== "" &&
+    form.oldPassword === form.newPassword;
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -168,7 +178,21 @@ function ChangePasswordApp({ http }) {
         autoComplete: "new-password",
         minLength: MIN_PASSWORD_LENGTH,
         required: true,
+        "aria-invalid": samePasswordWarning ? "true" : "false",
+        "aria-describedby": samePasswordWarning
+          ? "password-same"
+          : undefined,
       }),
+      samePasswordWarning
+        ? h(
+            "div",
+            {
+              id: "password-same",
+              className: "text-danger small mt-2",
+            },
+            "Le nouveau mot de passe doit différer du mot de passe actuel.",
+          )
+        : null,
     ),
     h(
       "div",
@@ -213,7 +237,7 @@ function ChangePasswordApp({ http }) {
       h(
         "ul",
         { className: "small text-muted ps-3 mb-0" },
-        ...constraints.map((rule) => h("li", { key: rule }, rule)),
+        ...PASSWORD_CONSTRAINTS.map((rule) => h("li", { key: rule }, rule)),
       ),
     ),
     h(
@@ -228,6 +252,14 @@ function ChangePasswordApp({ http }) {
   );
 }
 
+/**
+ * Locate the mount point for the change-password UI.
+ *
+ * Pages can expose `#change-password-root` or the `data-change-password-root`
+ * attribute. We gracefully fall back to the admin container (`#admin-root`) and
+ * ultimately the chat root (`#app-root`) to preserve the existing experience
+ * when no dedicated mount exists.
+ */
 function findChangePasswordRoot(doc) {
   return (
     doc.getElementById("change-password-root") ||

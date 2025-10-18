@@ -2,18 +2,21 @@ import { apiUrl } from "../config.js";
 
 export function createHttpService({ config, auth }) {
   async function authorisedFetch(path, options = {}) {
-    let jwt;
-    try {
-      jwt = await auth.getJwt();
-    } catch (err) {
-      // Surface a consistent error and preserve abort semantics
-      throw new Error("Authorization failed: missing or unreadable JWT");
+    const { auth: useAuth = true, ...rest } = options;
+    const headers = new Headers(rest.headers || {});
+    if (useAuth) {
+      let jwt;
+      try {
+        jwt = await auth.getJwt();
+      } catch (err) {
+        // Surface a consistent error and preserve abort semantics
+        throw new Error("Authorization failed: missing or unreadable JWT");
+      }
+      if (!headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${jwt}`);
+      }
     }
-    const headers = new Headers(options.headers || {});
-    if (!headers.has("Authorization")) {
-      headers.set("Authorization", `Bearer ${jwt}`);
-    }
-    return fetch(apiUrl(config, path), { ...options, headers });
+    return fetch(apiUrl(config, path), { ...rest, headers });
   }
 
   async function fetchTicket() {
@@ -58,6 +61,7 @@ export function createHttpService({ config, auth }) {
       payload.normalise = false;
     }
     const resp = await authorisedFetch(config.embedServiceUrl, {
+      auth: false,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
