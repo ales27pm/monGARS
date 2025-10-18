@@ -38,6 +38,12 @@ class UserRegistration(BaseModel):
         return cleaned
 
 
+class UserListResponse(BaseModel):
+    """Response payload containing the registered usernames."""
+
+    users: list[str] = Field(default_factory=list)
+
+
 class PasswordChangeRequest(BaseModel):
     """Payload for password change requests."""
 

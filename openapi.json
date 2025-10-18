@@ -307,6 +307,18 @@
       },
       "MemoryItem": {
         "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "query": {
             "title": "Query",
             "type": "string"
@@ -426,6 +438,110 @@
           "url"
         ],
         "title": "PeerRegistration",
+        "type": "object"
+      },
+      "PeerTelemetryEnvelope": {
+        "description": "Aggregated telemetry view returned by the peer telemetry endpoint.",
+        "properties": {
+          "telemetry": {
+            "items": {
+              "$ref": "#/components/schemas/PeerTelemetryPayload"
+            },
+            "title": "Telemetry",
+            "type": "array"
+          }
+        },
+        "title": "PeerTelemetryEnvelope",
+        "type": "object"
+      },
+      "PeerTelemetryPayload": {
+        "description": "Detailed telemetry snapshot propagated between schedulers.",
+        "properties": {
+          "active_workers": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Active Workers",
+            "type": "integer"
+          },
+          "concurrency": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "load_factor": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Load Factor",
+            "type": "number"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "queue_depth": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Queue Depth",
+            "type": "integer"
+          },
+          "scheduler_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Id"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "task_failure_rate": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Task Failure Rate",
+            "type": "number"
+          },
+          "tasks_failed": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Tasks Failed",
+            "type": "integer"
+          },
+          "tasks_processed": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Tasks Processed",
+            "type": "integer"
+          },
+          "worker_uptime_seconds": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Worker Uptime Seconds",
+            "type": "number"
+          }
+        },
+        "title": "PeerTelemetryPayload",
         "type": "object"
       },
       "RagContextRequest": {
@@ -668,6 +784,20 @@
           "model"
         ],
         "title": "SuggestResponse",
+        "type": "object"
+      },
+      "UserListResponse": {
+        "description": "Response payload containing the registered usernames.",
+        "properties": {
+          "users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "title": "UserListResponse",
         "type": "object"
       },
       "UserRegistration": {
@@ -1107,6 +1237,76 @@
         "summary": "Peer Register"
       }
     },
+    "/api/v1/peer/telemetry": {
+      "get": {
+        "description": "Return cached telemetry for local and remote schedulers.",
+        "operationId": "peer_telemetry_snapshot_api_v1_peer_telemetry_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerTelemetryEnvelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer Telemetry Snapshot"
+      },
+      "post": {
+        "description": "Accept telemetry published by peer schedulers.",
+        "operationId": "peer_telemetry_ingest_api_v1_peer_telemetry_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerTelemetryPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Peer Telemetry Ingest Api V1 Peer Telemetry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Peer Telemetry Ingest"
+      }
+    },
     "/api/v1/peer/unregister": {
       "post": {
         "description": "Remove a previously registered peer URL.",
@@ -1291,6 +1491,29 @@
         "summary": "Change Password"
       }
     },
+    "/api/v1/user/list": {
+      "get": {
+        "operationId": "list_users_api_v1_user_list_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Users"
+      }
+    },
     "/api/v1/user/register": {
       "post": {
         "operationId": "register_user_api_v1_user_register_post",
@@ -1329,6 +1552,46 @@
           }
         },
         "summary": "Register User"
+      }
+    },
+    "/api/v1/user/register/admin": {
+      "post": {
+        "operationId": "register_admin_user_api_v1_user_register_admin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Admin User Api V1 User Register Admin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Admin User"
       }
     },
     "/healthz": {

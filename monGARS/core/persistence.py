@@ -412,6 +412,21 @@ class PersistenceRepository:
             operation_name="has_admin_user",
         )
 
+    async def list_usernames(self) -> list[str]:
+        """Return all registered usernames sorted alphabetically."""
+
+        async def operation(session) -> list[str]:
+            result = await session.execute(
+                select(UserAccount.username).order_by(UserAccount.username)
+            )
+            rows = result.scalars().all()
+            return [username for username in rows if isinstance(username, str)]
+
+        return await self._execute_with_retry(
+            operation,
+            operation_name="list_usernames",
+        )
+
     async def get_user_preferences(self, user_id: str) -> UserPreferences | None:
         async def operation(session):
             result = await session.execute(
