@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="fr-CA">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>monGARS - Interface de Chat</title>
+    <!-- Bootstrap 5 CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/css/chat.css" />
+  </head>
+  <body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="#">monGARS Chat</a>
+        <button
+          type="button"
+          class="btn btn-outline-light ms-auto"
+          id="toggle-dark-mode"
+          aria-pressed="false"
+        >
+          Mode Sombre
+        </button>
+      </div>
+    </nav>
+    <div class="container mt-4">
+      <div class="row">
+        <div class="col-lg-10 col-xl-8 offset-lg-1">
+          <section
+            id="connection"
+            class="alert alert-info visually-hidden"
+            role="status"
+            aria-live="polite"
+          ></section>
+          <main id="chat" class="card shadow-sm">
+            <header class="card-header border-0 bg-transparent pb-0">
+              <div
+                class="d-flex flex-column flex-md-row justify-content-between gap-2"
+              >
+                <div>
+                  <h1 class="h5 mb-1">Historique du Chat</h1>
+                  <p class="text-muted small mb-0">
+                    Suivez les échanges et l'état de la connexion en temps réel.
+                  </p>
+                </div>
+                <span
+                  id="ws-status"
+                  class="badge ws-badge offline align-self-start align-self-md-center"
+                  aria-live="polite"
+                  >Hors ligne</span
+                >
+              </div>
+              <p
+                id="connection-meta"
+                class="small text-muted mb-0 mt-2"
+                aria-live="polite"
+              >
+                En attente de connexion…
+              </p>
+              <section
+                id="connection-diagnostics"
+                class="connection-diagnostics mt-3"
+                aria-live="polite"
+                aria-label="Diagnostics de connexion"
+              >
+                <dl class="connection-diagnostics-list">
+                  <div class="connection-diagnostics-item">
+                    <dt>Connecté depuis</dt>
+                    <dd id="diag-connected">—</dd>
+                  </div>
+                  <div class="connection-diagnostics-item">
+                    <dt>Dernier message</dt>
+                    <dd id="diag-last-message">—</dd>
+                  </div>
+                  <div class="connection-diagnostics-item">
+                    <dt>Latence</dt>
+                    <dd id="diag-latency">—</dd>
+                  </div>
+                  <div class="connection-diagnostics-item">
+                    <dt>Réseau</dt>
+                    <dd id="diag-network">Vérification…</dd>
+                  </div>
+                </dl>
+              </section>
+            </header>
+            <div class="card-body p-0">
+              <div class="chat-wrapper">
+                <div
+                  id="transcript"
+                  class="chat-transcript"
+                  aria-live="polite"
+                  aria-busy="false"
+                ></div>
+              </div>
+            </div>
+            <div class="card-footer border-0">
+              <section
+                id="error-alert"
+                class="alert alert-danger d-none"
+                role="alert"
+                aria-live="assertive"
+              >
+                <strong id="error-message">Une erreur est survenue.</strong>
+              </section>
+              <form id="composer" class="chat-composer" novalidate>
+                <div class="mb-3">
+                  <label for="prompt" class="form-label">Message</label>
+                  <textarea
+                    id="prompt"
+                    class="form-control"
+                    rows="4"
+                    placeholder="Écrivez votre message ici..."
+                    required
+                  ></textarea>
+                  <div id="composer-status" class="form-text text-muted"></div>
+                  <div id="prompt-count" class="form-text text-muted"></div>
+                </div>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                  <button id="send" type="submit" class="btn btn-primary">
+                    Envoyer
+                  </button>
+                  <button
+                    id="scroll-bottom"
+                    type="button"
+                    class="btn btn-outline-secondary"
+                  >
+                    Aller en bas
+                  </button>
+                  <div class="ms-auto d-flex align-items-center gap-2">
+                    <label for="chat-mode" class="form-label mb-0"
+                      >Mode :</label
+                    >
+                    <select id="chat-mode" class="form-select form-select-sm">
+                      <option value="chat" selected>Chat</option>
+                      <option value="embed">Embedding</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="mt-3">
+                  <div class="d-flex flex-wrap gap-2" id="quick-actions">
+                    <button
+                      class="btn btn-outline-primary"
+                      type="button"
+                      data-action="code"
+                    >
+                      Code
+                    </button>
+                    <button
+                      class="btn btn-outline-secondary"
+                      type="button"
+                      data-action="summarize"
+                    >
+                      Résumer
+                    </button>
+                    <button
+                      class="btn btn-outline-success"
+                      type="button"
+                      data-action="explain"
+                    >
+                      Expliquer
+                    </button>
+                  </div>
+                </div>
+              </form>
+              <section class="mt-4">
+                <h2 class="h6">Recherche dans le chat</h2>
+                <div class="input-group mb-2">
+                  <label class="visually-hidden" for="chat-search"
+                    >Rechercher</label
+                  >
+                  <input
+                    id="chat-search"
+                    type="search"
+                    class="form-control"
+                    placeholder="Filtrer les messages"
+                  />
+                  <button
+                    id="chat-search-clear"
+                    class="btn btn-outline-secondary"
+                    type="button"
+                  >
+                    Effacer
+                  </button>
+                </div>
+                <p id="chat-search-hint" class="form-text text-muted">
+                  La recherche met en évidence les messages contenant votre terme.
+                </p>
+                <p id="filter-empty" class="text-muted d-none">
+                  Aucun message ne correspond à votre recherche.
+                </p>
+              </section>
+              <section class="mt-4">
+                <h2 class="h6">Exporter</h2>
+                <div class="btn-group" role="group">
+                  <button id="export-json" class="btn btn-outline-primary" type="button">
+                    JSON
+                  </button>
+                  <button
+                    id="export-markdown"
+                    class="btn btn-outline-secondary"
+                    type="button"
+                  >
+                    Markdown
+                  </button>
+                  <button id="export-copy" class="btn btn-outline-success" type="button">
+                    Copier
+                  </button>
+                </div>
+              </section>
+              <section id="voice-controls" class="mt-4">
+                <h2 class="h6">Contrôles vocaux</h2>
+                <div class="row g-3">
+                  <div class="col-12 col-md-6" id="voice-recognition-group">
+                    <h3 class="h6">Reconnaissance vocale</h3>
+                    <button id="voice-toggle" class="btn btn-outline-primary" type="button">
+                      Activer
+                    </button>
+                    <div id="voice-status" class="form-text text-muted"></div>
+                    <output
+                      id="voice-transcript"
+                      class="voice-transcript form-text text-muted"
+                      aria-live="polite"
+                    ></output>
+                    <div class="form-check mt-2">
+                      <input
+                        id="voice-auto-send"
+                        class="form-check-input"
+                        type="checkbox"
+                      />
+                      <label class="form-check-label" for="voice-auto-send">
+                        Envoyer automatiquement après transcription
+                      </label>
+                    </div>
+                  </div>
+                  <div class="col-12 col-md-6" id="voice-synthesis-group">
+                    <h3 class="h6">Synthèse vocale</h3>
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                      <label for="voice-voice-select" class="form-label mb-0"
+                        >Voix :</label
+                      >
+                      <select id="voice-voice-select" class="form-select form-select-sm"></select>
+                    </div>
+                    <div class="btn-group" role="group">
+                      <button id="voice-playback" class="btn btn-outline-primary" type="button">
+                        Écouter
+                      </button>
+                      <button id="voice-stop-playback" class="btn btn-outline-danger" type="button">
+                        Arrêter
+                      </button>
+                    </div>
+                    <div
+                      id="voice-speaking-indicator"
+                      class="form-text text-muted"
+                    ></div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script id="chat-history" type="application/json">[]</script>
+    <script>
+      window.chatConfig = {
+        fastapiUrl: window.location.origin,
+        embedServiceUrl: null,
+        token: null
+      };
+    </script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script src="/static/js/chat.js"></script>
+  </body>
+</html>

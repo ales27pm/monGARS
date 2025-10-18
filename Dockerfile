@@ -29,19 +29,27 @@ RUN apt-get update \
         python3-venv \
         unzip \
         wget \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git lfs install --system
 
 WORKDIR /app
 COPY requirements.txt .
+COPY package.json package-lock.json ./
 COPY vendor/llm2vec_monGARS ./vendor/llm2vec_monGARS
 RUN python -m venv /opt/venv \
     && . /opt/venv/bin/activate \
     && pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && python -m spacy download fr_core_news_sm
+RUN npm ci
 COPY . /app
+RUN NODE_ENV=production npm run build \
+    && mkdir -p /app/static \
+    && cp -R webapp/static/. /app/static/ \
+    && rm -rf node_modules
 
 # --- Final Stage ---
 ARG PYTORCH_IMAGE
