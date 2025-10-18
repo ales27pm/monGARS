@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -60,6 +61,7 @@ from . import model_management
 from . import rag as rag_routes
 from . import ui as ui_routes
 from . import ws_manager
+from .rate_limiter import InMemoryRateLimiter
 
 _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
@@ -89,6 +91,23 @@ app.include_router(rag_routes.router)
 conversation_module: ConversationalModule | None = None
 ws_manager = _ws_manager
 
+_CHAT_RATE_LIMIT_SECONDS = 1.0
+_CHAT_RATE_LIMIT_PRUNE_AFTER = 60.0
+
+
+def _log_rate_limit(user_id: str) -> None:
+    logger.warning(
+        "web_api.chat_rate_limited",
+        extra={"user": _redact_user_id(user_id)},
+    )
+
+
+_chat_rate_limiter = InMemoryRateLimiter(
+    interval_seconds=_CHAT_RATE_LIMIT_SECONDS,
+    prune_after_seconds=_CHAT_RATE_LIMIT_PRUNE_AFTER,
+    on_reject=_log_rate_limit,
+)
+
 
 def _redact_user_id(user_id: str) -> str:
     """Return a short, stable identifier suitable for logs."""
@@ -105,6 +124,54 @@ def _get_adaptive_response_generator_for_personality(
     """Resolve the adaptive response generator for the provided personality."""
 
     return get_adaptive_response_generator(personality)
+
+
+async def reset_chat_rate_limiter_async() -> None:
+    """Asynchronously reset in-memory chat rate limiting state."""
+
+    await _chat_rate_limiter.reset()
+
+
+def reset_chat_rate_limiter() -> None:
+    """Reset in-memory chat rate limiting state (primarily for tests)."""
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        raise RuntimeError(
+            "reset_chat_rate_limiter() cannot be used while an event loop is running. "
+            "Use reset_chat_rate_limiter_async() instead."
+        )
+    result: Exception | None = None
+
+    def _run() -> None:
+        nonlocal result
+        try:
+            asyncio.run(_chat_rate_limiter.reset())
+        except Exception as exc:  # pragma: no cover - unexpected failure
+            result = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join()
+
+    if result is not None:
+        raise result
+
+
+def get_chat_rate_limiter() -> InMemoryRateLimiter:
+    return _chat_rate_limiter
+
+
+async def enforce_chat_rate_limit(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    limiter: Annotated[InMemoryRateLimiter, Depends(get_chat_rate_limiter)],
+) -> dict:
+    await limiter.ensure_permitted(current_user["sub"])
+    return current_user
 
 
 def get_conversational_module(
@@ -365,7 +432,7 @@ async def conversation_history(
 @app.post("/api/v1/conversation/chat", response_model=ChatResponse)
 async def chat(
     chat: ChatRequest,
-    current_user: Annotated[dict, Depends(get_current_user)],
+    current_user: Annotated[dict, Depends(enforce_chat_rate_limit)],
     conv: Annotated[ConversationalModule, Depends(get_conversational_module)],
 ) -> ChatResponse:
     user_id = current_user["sub"]
