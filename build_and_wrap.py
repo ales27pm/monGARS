@@ -539,7 +539,11 @@ def main() -> None:
     if EXPORT_GGUF:
         if not merged:
             raise RuntimeError("EXPORT_GGUF requires EXPORT_MERGED_FP16=1")
-        export_to_gguf(str(merged_dir), str(GGUF_DIR))
+        export_to_gguf(
+            str(merged_dir),
+            str(GGUF_DIR),
+            quantization_method=GGUF_METHOD,
+        )
 
     wrapper_dir = OUTPUT_DIR / "wrapper"
     bundle_config = WrapperConfig(

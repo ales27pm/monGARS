@@ -110,7 +110,12 @@ def export_gguf(
     return True
 
 
-def export_to_gguf(model_name: str, output_path: str) -> Path:
+def export_to_gguf(
+    model_name: str,
+    output_path: str,
+    *,
+    quantization_method: str | None = None,
+) -> Path:
     """Load ``model_name`` with Transformers and export it in GGUF format."""
 
     try:
@@ -144,12 +149,31 @@ def export_to_gguf(model_name: str, output_path: str) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
 
     exporter = exporter_cls(model=model, tokenizer=tokenizer)
-    if hasattr(exporter, "export"):
-        exporter.export(str(destination))
-    elif hasattr(exporter, "export_model"):
-        exporter.export_model(str(destination))
-    elif hasattr(exporter, "save_pretrained"):
-        exporter.save_pretrained(str(destination))
+
+    def _invoke(method_name: str) -> bool:
+        method = getattr(exporter, method_name, None)
+        if method is None:
+            return False
+
+        kwargs: dict[str, str] = {}
+        if quantization_method:
+            kwargs["quantization_method"] = quantization_method
+
+        try:
+            method(str(destination), **kwargs)
+        except TypeError as exc:
+            if quantization_method and "quantization_method" in str(exc):
+                method(str(destination))
+            else:
+                raise
+        return True
+
+    if _invoke("export"):
+        pass
+    elif _invoke("export_model"):
+        pass
+    elif _invoke("save_pretrained"):
+        pass
     else:  # pragma: no cover - unexpected interface
         raise RuntimeError(
             "Unsupported GGUF exporter interface; expected export/export_model/save_pretrained"
