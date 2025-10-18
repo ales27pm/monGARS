@@ -423,7 +423,10 @@ class ConversationalModule:
         )
         return build_converged_chat_prompt(
             refined_prompt,
-            history_pairs=history_pairs,
+            history_pairs=[
+                ((query or "").strip(), (response or "").strip())
+                for query, response in history_pairs
+            ],
             semantic_context=semantic_context,
             system_prompt=system_prompt,
         )

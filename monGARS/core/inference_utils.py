@@ -11,6 +11,12 @@ CHATML_START_HEADER = "<|start_header_id|>"
 CHATML_END_HEADER = "<|end_header_id|>"
 CHATML_END_OF_TURN = "<|eot_id|>"
 
+_ROLE_ALTERNATIVES: dict[str, tuple[str, ...]] = {
+    "system": ("<system>", "[system]"),
+    "user": ("<human>", "<user>", "<|prompter|>", "[user]"),
+    "assistant": ("<assistant>", "<bot>", "<|assistant|>", "[assistant]"),
+}
+
 
 @dataclass(slots=True)
 class ChatPrompt:
@@ -36,6 +42,26 @@ def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -
     return segment
 
 
+def _format_role_message(role: str, content: str) -> str:
+    """Ensure ``content`` is prefixed with a normalised ``role`` token."""
+
+    normalised_role = role.strip() or "user"
+    label = normalised_role.capitalize()
+    base_prefix = f"{label}:"
+
+    stripped_content = _normalise_text(content)
+    if stripped_content:
+        lower_content = stripped_content.lower()
+        alternatives = _ROLE_ALTERNATIVES.get(label.lower(), ())
+        prefixes = [base_prefix.lower(), *(marker.lower() for marker in alternatives)]
+        if any(lower_content.startswith(prefix) for prefix in prefixes):
+            return stripped_content
+        if "\n" in stripped_content:
+            return f"{base_prefix}\n{stripped_content}"
+        return f"{base_prefix} {stripped_content}"
+    return base_prefix
+
+
 def render_chat_prompt_from_text(
     user_text: str,
     *,
@@ -45,13 +71,20 @@ def render_chat_prompt_from_text(
     """Return a :class:`ChatPrompt` wrapping ``user_text`` in ChatML markers."""
 
     segments: list[str] = [CHATML_BEGIN_OF_TEXT]
+    text_segments: list[str] = []
     if system_prompt and system_prompt.strip():
-        segments.append(_render_chatml_segment("system", system_prompt))
-    segments.append(_render_chatml_segment("user", user_text))
+        cleaned_system = _normalise_text(system_prompt)
+        segments.append(_render_chatml_segment("system", cleaned_system))
+        text_segments.append(_format_role_message("System", cleaned_system))
+    normalized_user = _normalise_text(user_text)
+    segments.append(_render_chatml_segment("user", normalized_user))
+    text_segments.append(_format_role_message("User", normalized_user))
     if include_assistant_stub:
         segments.append(_render_chatml_segment("assistant", "", terminate=False))
+        text_segments.append(_format_role_message("Assistant", ""))
     chatml = "".join(segments)
-    return ChatPrompt(text=user_text, chatml=chatml)
+    text = "\n\n".join(segment for segment in text_segments if segment)
+    return ChatPrompt(text=text, chatml=chatml)
 
 
 def _move_to_device(value: Any, device: Any | None) -> Any:
@@ -191,8 +224,19 @@ def build_converged_chat_prompt(
         semantic_context=semantic_context,
         instruction_template=instruction_template,
     )
-    return render_chat_prompt_from_text(
-        context_text,
-        system_prompt=system_prompt,
+    normalized_context = _normalise_text(context_text)
+    normalized_system = _normalise_text(system_prompt) if system_prompt else ""
+    prompt = render_chat_prompt_from_text(
+        normalized_context,
+        system_prompt=normalized_system or None,
         include_assistant_stub=include_assistant_stub,
     )
+
+    text_segments: list[str] = []
+    if normalized_system:
+        text_segments.append(_format_role_message("System", normalized_system))
+    text_segments.append(_format_role_message("User", normalized_context))
+    if include_assistant_stub:
+        text_segments.append(_format_role_message("Assistant", ""))
+
+    return ChatPrompt(text="\n\n".join(text_segments), chatml=prompt.chatml)
