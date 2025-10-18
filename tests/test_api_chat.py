@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import types
@@ -7,11 +8,12 @@ os.environ.setdefault("JWT_ALGORITHM", "HS256")
 os.environ.setdefault("SECRET_KEY", "test")
 
 import pytest
+import pytest_asyncio
 from fastapi import status
 from fastapi.testclient import TestClient
 
 from monGARS.api.dependencies import hippocampus
-from monGARS.api.web_api import app, reset_chat_rate_limiter
+from monGARS.api.web_api import app, reset_chat_rate_limiter_async
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.security import SecurityManager
 
@@ -33,11 +35,11 @@ def _speech_turn_payload(text: str) -> dict:
     }
 
 
-@pytest.fixture
-def client(monkeypatch):
+@pytest_asyncio.fixture
+async def client(monkeypatch):
     hippocampus._memory.clear()
     hippocampus._locks.clear()
-    reset_chat_rate_limiter()
+    await reset_chat_rate_limiter_async()
 
     monkeypatch.setitem(
         sys.modules, "spacy", types.SimpleNamespace(load=lambda n: object())
@@ -191,3 +193,33 @@ async def test_chat_rate_limit_returns_429(client: TestClient):
         second.json()["detail"]
         == "Too many requests: please wait before sending another message."
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_recovers_after_cooldown(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+
+    first = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hi"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello again"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+    await asyncio.sleep(1.1)
+
+    third = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello after cooldown"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert third.status_code == 200
