@@ -69,9 +69,7 @@ class _FakeLLM:
     def prompt_token_limit(self, task_type: str = "general") -> int | None:
         return None
 
-    def generation_token_target(
-        self, task_type: str = "general"
-    ) -> int | None:
+    def generation_token_target(self, task_type: str = "general") -> int | None:
         return None
 
 
@@ -504,7 +502,9 @@ class ConversationalModule:
 
         prompt_tokens = estimate_token_count(prompt_bundle.chatml)
         trimmed = False
-        while budget and prompt_tokens > budget and (trimmed_history or trimmed_semantic):
+        while (
+            budget and prompt_tokens > budget and (trimmed_history or trimmed_semantic)
+        ):
             if trimmed_history:
                 trimmed_history.pop(0)
             else:
@@ -563,9 +563,7 @@ class ConversationalModule:
         if budget is not None:
             llm_out.setdefault("prompt_token_budget", budget)
         if reserved_generation_tokens:
-            llm_out.setdefault(
-                "prompt_token_reservation", reserved_generation_tokens
-            )
+            llm_out.setdefault("prompt_token_reservation", reserved_generation_tokens)
         recent_interactions = [
             {"message": query_text, "response": response_text}
             for query_text, response_text in history_pairs

@@ -54,9 +54,7 @@ class _FakeLLMIntegration:
             return "coding"
         return default
 
-    def prompt_token_limit(
-        self, task_type: str = "general"
-    ) -> int | None:
+    def prompt_token_limit(self, task_type: str = "general") -> int | None:
         return self.prompt_limit
 
     def generation_token_target(self, task_type: str = "general") -> int | None:
