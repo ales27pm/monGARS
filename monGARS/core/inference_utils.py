@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +18,8 @@ _ROLE_ALTERNATIVES: dict[str, tuple[str, ...]] = {
     "user": ("<human>", "<user>", "<|prompter|>", "[user]"),
     "assistant": ("<assistant>", "<bot>", "<|assistant|>", "[assistant]"),
 }
+
+_TOKEN_PATTERN = re.compile(r"\S+")
 
 
 @dataclass(slots=True)
@@ -64,6 +68,30 @@ def _format_role_message(role: str, content: str) -> str:
         return stripped_content
     joiner = "\n" if "\n" in stripped_content else " "
     return f"{base_prefix}{joiner}{stripped_content}"
+
+
+def estimate_token_count(value: str) -> int:
+    """Return a conservative token estimate for ``value``.
+
+    The helper favours over-estimating tokens so prompt guards err on the side
+    of safety when provider-specific tokenisers are unavailable.
+    """
+
+    if not value:
+        return 0
+
+    stripped = value.strip()
+    if not stripped:
+        return 0
+
+    encoded_length = len(stripped.encode("utf-8"))
+    approx_by_chars = math.ceil(encoded_length / 4) if encoded_length else 0
+    approx_by_segments = len(_TOKEN_PATTERN.findall(stripped))
+
+    estimate = max(approx_by_chars, approx_by_segments)
+    if estimate == 0 and stripped:
+        return 1
+    return estimate
 
 
 def render_chat_prompt_from_text(

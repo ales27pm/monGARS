@@ -46,7 +46,7 @@ from monGARS.api.schemas import (
     UserRegistration,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
-from monGARS.core.conversation import ConversationalModule
+from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.llm_integration import CircuitBreakerOpenError
@@ -450,6 +450,22 @@ async def chat(
         result = await conv.generate_response(
             user_id, data["query"], session_id=chat.session_id
         )
+    except PromptTooLargeError as exc:
+        logger.warning(
+            "web_api.chat_prompt_too_large",
+            extra={
+                "user": _redact_user_id(user_id),
+                "prompt_tokens": exc.prompt_tokens,
+                "token_limit": exc.limit,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=(
+                "Prompt exceeds the maximum supported token limit. "
+                "Please shorten your request and try again."
+            ),
+        ) from exc
     except asyncio.TimeoutError as exc:
         logger.warning(
             "web_api.chat_inference_timeout",
