@@ -949,7 +949,7 @@ def configure_telemetry(settings: Settings) -> None:
         exporter = (
             ConsoleSpanExporter()
             if settings.otel_debug
-            else OTLPSpanExporter(endpoint=settings.otel_collector_url)
+            else OTLPSpanExporter(endpoint=f"{settings.otel_collector_url}/v1/traces")
         )
         trace_provider.add_span_processor(BatchSpanProcessor(exporter))
 

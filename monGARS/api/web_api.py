@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.trace import Status, StatusCode
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -55,6 +55,7 @@ from monGARS.api.schemas import (
     UserRegistration,
 )
 from monGARS.api.ws_ticket import router as ws_ticket_router
+from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
@@ -97,8 +98,9 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
-FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics")
-tracer = trace.get_tracer(__name__)
+_settings = get_settings()
+if _settings.otel_traces_enabled:
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="/metrics")
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -150,37 +152,38 @@ async def record_request_metrics(
     status_code = 500
     response: Response | None = None
 
-    with tracer.start_as_current_span(
-        f"{method} {route_template}",
-        kind=SpanKind.INTERNAL,
-        attributes={
-            "http.method": method,
-            "http.route": route_template,
-            "http.target": request.url.path,
-        },
-    ) as span:
-        span.set_attribute("http.scheme", request.url.scheme)
-        try:
-            response = await call_next(request)
-            status_code = response.status_code
-        except Exception as exc:
-            span.record_exception(exc)
-            span.set_status(Status(StatusCode.ERROR, str(exc)))
-            raise
-        finally:
-            route = request.scope.get("route")
-            if route is not None and getattr(route, "path", None):
-                route_template = route.path
-            span.set_attribute("http.status_code", status_code)
-            span.set_attribute("http.route.template", route_template)
+    current_span = trace.get_current_span()
+    if not current_span.is_recording():
+        current_span = None
 
-    elapsed = perf_counter() - start
-    HTTP_REQUESTS_TOTAL.labels(
-        method=method, route=route_template, status=str(status_code)
-    ).inc()
-    HTTP_REQUEST_LATENCY_SECONDS.labels(method=method, route=route_template).observe(
-        elapsed
-    )
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception as exc:
+        if current_span is not None:
+            current_span.record_exception(exc)
+            current_span.set_status(Status(StatusCode.ERROR, str(exc)))
+        raise
+    finally:
+        route = request.scope.get("route")
+        if route is not None and getattr(route, "path", None):
+            route_template = route.path
+
+        if current_span is not None:
+            current_span.set_attribute("http.method", method)
+            current_span.set_attribute("http.scheme", request.url.scheme)
+            current_span.set_attribute("http.route", route_template)
+            current_span.set_attribute("http.target", request.url.path)
+            current_span.set_attribute("http.status_code", status_code)
+
+        elapsed = perf_counter() - start
+        if _settings.otel_prometheus_enabled and route_template != "/metrics":
+            HTTP_REQUESTS_TOTAL.labels(
+                method=method, route=route_template, status=str(status_code)
+            ).inc()
+            HTTP_REQUEST_LATENCY_SECONDS.labels(
+                method=method, route=route_template
+            ).observe(elapsed)
 
     assert (
         response is not None
@@ -461,6 +464,8 @@ async def metrics_endpoint(
 ) -> Response:
     """Expose Prometheus metrics collected from the API process."""
 
+    if not _settings.otel_prometheus_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     payload = generate_latest(PROMETHEUS_REGISTRY)
     return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
