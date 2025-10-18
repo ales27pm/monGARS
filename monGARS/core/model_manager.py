@@ -302,6 +302,8 @@ class LLMModelManager:
         statuses: list[ModelProvisionStatus] = []
         if provider == "ollama":
             statuses.append(await self._ensure_ollama_model(definition, force=force))
+        elif provider == "local_path":
+            statuses.append(await self._ensure_local_model(definition))
         else:
             logger.info(
                 "llm.models.provider.skipped",
@@ -576,11 +578,43 @@ class LLMModelManager:
     ) -> ModelDefinition | None:
         if isinstance(payload, str):
             role_key = role.lower()
+            (
+                name_value,
+                provider,
+                auto_download_flag,
+                parameters,
+            ) = self._normalise_model_reference(
+                role_key,
+                str(payload),
+                provider="ollama",
+                parameters={},
+                auto_download=True,
+                auto_download_was_default=True,
+                path_hint=None,
+            )
+            if provider == "local_path":
+                return ModelDefinition(
+                    role=role_key,
+                    name=name_value,
+                    provider=provider,
+                    parameters=parameters,
+                    auto_download=auto_download_flag,
+                    description=None,
+                    adapters=(),
+                )
             base_definition = _DEFAULT_MODELS.get(role_key, _DEFAULT_MODELS["general"])
             return replace(base_definition, role=role_key, name=str(payload))
         if not isinstance(payload, Mapping):
             return None
-        name_value = payload.get("name") or payload.get("model") or payload.get("id")
+        name_value = (
+            payload.get("name")
+            or payload.get("model")
+            or payload.get("id")
+            or payload.get("alias")
+        )
+        path_hint = payload.get("path") or payload.get("local_path")
+        if not name_value and path_hint:
+            name_value = f"path:{path_hint}"
         if not name_value:
             return None
         provider = str(payload.get("provider", "ollama"))
@@ -616,9 +650,23 @@ class LLMModelManager:
                 role, adapter_payload
             ):
                 adapters.append(adapter_definition)
+        (
+            normalised_name,
+            provider,
+            auto_download_flag,
+            parameters,
+        ) = self._normalise_model_reference(
+            role.lower(),
+            str(name_value),
+            provider=provider,
+            parameters=parameters,
+            auto_download=auto_download_flag,
+            auto_download_was_default=auto_download is None,
+            path_hint=path_hint,
+        )
         return ModelDefinition(
             role=role.lower(),
-            name=str(name_value),
+            name=normalised_name,
             provider=provider,
             parameters=parameters,
             auto_download=auto_download_flag,
@@ -712,6 +760,112 @@ class LLMModelManager:
             )
             models["coding"] = base_coding.with_name(coding_override)
         return ModelProfile(name=profile.name, models=models)
+
+    def _normalise_model_reference(
+        self,
+        role: str,
+        name_value: str,
+        *,
+        provider: str,
+        parameters: dict[str, Any],
+        auto_download: bool,
+        auto_download_was_default: bool,
+        path_hint: str | None,
+    ) -> tuple[str, str, bool, dict[str, Any]]:
+        """Normalise model references to support local path-based entries."""
+
+        cleaned_name = name_value.strip()
+        lowered = cleaned_name.lower()
+        path_value: str | None = None
+        if lowered.startswith("path:"):
+            path_value = cleaned_name.split(":", 1)[1].strip()
+        elif path_hint:
+            path_value = str(path_hint).strip()
+        if not path_value:
+            return (cleaned_name or name_value, provider, auto_download, parameters)
+        resolved_path = self._resolve_model_path(path_value)
+        merged_parameters = dict(parameters)
+        merged_parameters.setdefault("path", str(resolved_path))
+        if path_value and str(resolved_path) != path_value:
+            merged_parameters.setdefault("source_path", path_value)
+        merged_parameters.setdefault("local", True)
+        provider_name = "local_path"
+        auto_download_flag = auto_download
+        if auto_download_was_default:
+            auto_download_flag = False
+        name_final = cleaned_name or f"path:{path_value}"
+        logger.debug(
+            "llm.models.reference.normalised",
+            extra={
+                "role": role,
+                "provider": provider_name,
+                "path": merged_parameters["path"],
+            },
+        )
+        return (name_final, provider_name, auto_download_flag, merged_parameters)
+
+    def _resolve_model_path(self, path_value: str) -> Path:
+        path = Path(path_value).expanduser()
+        if not path.is_absolute():
+            path = (self._config_dir / path).resolve()
+        return path
+
+    async def _ensure_local_model(
+        self, definition: ModelDefinition
+    ) -> ModelProvisionStatus:
+        path_value = (
+            definition.parameters.get("path") if definition.parameters else None
+        )
+        if not path_value:
+            logger.warning(
+                "llm.models.local.missing_path",
+                extra={
+                    "role": definition.role,
+                    "model": definition.name,
+                    "local_path": path_value,
+                },
+            )
+            return ModelProvisionStatus(
+                role=definition.role,
+                name=definition.name,
+                provider=definition.provider,
+                action="error",
+                detail="path_missing",
+            )
+        resolved = Path(str(path_value)).expanduser()
+        if not resolved.is_absolute():
+            resolved = (self._config_dir / resolved).resolve()
+        if resolved.exists():
+            logger.info(
+                "llm.models.local.available",
+                extra={
+                    "role": definition.role,
+                    "model": definition.name,
+                    "local_path": str(resolved),
+                },
+            )
+            return ModelProvisionStatus(
+                role=definition.role,
+                name=definition.name,
+                provider=definition.provider,
+                action="exists",
+                detail=str(resolved),
+            )
+        logger.warning(
+            "llm.models.local.missing",
+            extra={
+                "role": definition.role,
+                "model": definition.name,
+                "local_path": str(resolved),
+            },
+        )
+        return ModelProvisionStatus(
+            role=definition.role,
+            name=definition.name,
+            provider=definition.provider,
+            action="missing",
+            detail=str(resolved),
+        )
 
 
 __all__ = [
