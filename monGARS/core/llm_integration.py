@@ -542,6 +542,18 @@ class LLMIntegration:
         else:
             self._default_system_prompt = "You are Dolphin, a helpful assistant."
 
+        override = getattr(self._settings, "llm_prompt_max_tokens", None)
+        self._prompt_limit_override: int | None
+        try:
+            parsed_override = int(override) if override is not None else None
+        except (TypeError, ValueError):
+            parsed_override = None
+        if parsed_override and parsed_override > 0:
+            self._prompt_limit_override = parsed_override
+        else:
+            self._prompt_limit_override = None
+        self._prompt_token_limits: dict[str, int | None] = {}
+
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
         return f"{task_type}:{self._current_adapter_version}:{digest}"
@@ -1178,6 +1190,44 @@ class LLMIntegration:
                     return "coding"
 
         return "coding" if score >= self._coding_score_threshold else default
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    def _resolve_prompt_token_limit(self, task_type: str) -> int | None:
+        parameters = self._model_manager.get_model_parameters(task_type)
+        for key in (
+            "max_tokens",
+            "prompt_max_tokens",
+            "max_prompt_tokens",
+            "context_window",
+        ):
+            if key not in parameters:
+                continue
+            candidate = self._coerce_positive_int(parameters.get(key))
+            if candidate is not None:
+                return candidate
+        fallback = self._coerce_positive_int(parameters.get("num_predict"))
+        return fallback
+
+    def prompt_token_limit(self, task_type: str = "general") -> int | None:
+        """Return the configured prompt token limit for ``task_type``."""
+
+        if self._prompt_limit_override is not None:
+            return self._prompt_limit_override
+
+        normalized = (task_type or "general").lower()
+        if normalized in self._prompt_token_limits:
+            return self._prompt_token_limits[normalized]
+
+        resolved = self._resolve_prompt_token_limit(normalized)
+        self._prompt_token_limits[normalized] = resolved
+        return resolved
 
     def _compile_task_type_rules(
         self,

@@ -1,5 +1,4 @@
 import logging
-import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from hashlib import blake2s
@@ -10,7 +9,11 @@ from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.evolution_engine import EvolutionEngine
 from monGARS.core.hippocampus import Hippocampus
-from monGARS.core.inference_utils import ChatPrompt, build_converged_chat_prompt
+from monGARS.core.inference_utils import (
+    ChatPrompt,
+    build_converged_chat_prompt,
+    estimate_token_count,
+)
 from monGARS.core.llm_integration import LLMIntegration
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
@@ -62,6 +65,22 @@ class _FakeLLM:
         return await self.__call__(
             prompt, task_type=task_type, response_hints=response_hints
         )
+
+    def prompt_token_limit(
+        self, task_type: str = "general"
+    ) -> int | None:  # noqa: ARG002
+        return None
+
+
+class PromptTooLargeError(RuntimeError):
+    """Raised when a composed prompt exceeds the configured token budget."""
+
+    def __init__(self, prompt_tokens: int, limit: int) -> None:
+        super().__init__(
+            f"Prompt requires {prompt_tokens} tokens which exceeds the limit of {limit}"
+        )
+        self.prompt_tokens = prompt_tokens
+        self.limit = limit
 
 
 class _FakePersistence:
@@ -451,18 +470,70 @@ class ConversationalModule:
             augmented_query, user_id
         )
 
+        task_type = self._determine_task_type(original_query)
+
         semantic_context = await self._semantic_context_matches(
             user_id=user_id,
             query=augmented_query,
             history_pairs=history_pairs,
         )
+        trimmed_history = list(history_pairs)
+        trimmed_semantic = list(semantic_context)
         prompt_bundle = self._compose_prompt(
             refined_prompt,
-            history_pairs=history_pairs,
-            semantic_context=semantic_context,
+            history_pairs=trimmed_history,
+            semantic_context=trimmed_semantic,
         )
         response_hints = self._build_response_hints(reasoning_metadata)
-        task_type = self._determine_task_type(original_query)
+
+        limit = self.llm.prompt_token_limit(task_type)
+        if isinstance(limit, int) and limit <= 0:
+            limit = None
+
+        prompt_tokens = estimate_token_count(prompt_bundle.chatml)
+        trimmed = False
+        while limit and prompt_tokens > limit and (trimmed_history or trimmed_semantic):
+            if trimmed_history:
+                trimmed_history.pop(0)
+            else:
+                trimmed_semantic.pop()
+            prompt_bundle = self._compose_prompt(
+                refined_prompt,
+                history_pairs=trimmed_history,
+                semantic_context=trimmed_semantic,
+            )
+            prompt_tokens = estimate_token_count(prompt_bundle.chatml)
+            trimmed = True
+
+        if limit and prompt_tokens > limit:
+            redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
+            logger.warning(
+                "conversation.prompt.exceeds_limit",
+                extra={
+                    "user": f"u:{redacted}",
+                    "prompt_tokens": prompt_tokens,
+                    "token_limit": limit,
+                },
+            )
+            raise PromptTooLargeError(prompt_tokens, limit)
+
+        if trimmed:
+            redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
+            logger.info(
+                "conversation.prompt.trimmed",
+                extra={
+                    "user": f"u:{redacted}",
+                    "prompt_tokens": prompt_tokens,
+                    "token_limit": limit,
+                    "history_entries": len(trimmed_history),
+                    "semantic_entries": len(trimmed_semantic),
+                },
+            )
+            history_pairs = list(trimmed_history)
+            semantic_context = list(trimmed_semantic)
+        else:
+            history_pairs = trimmed_history
+            semantic_context = trimmed_semantic
 
         llm_out = await self.llm.generate_response(
             prompt_bundle.text,
@@ -470,6 +541,9 @@ class ConversationalModule:
             response_hints=response_hints,
             formatted_prompt=prompt_bundle.chatml,
         )
+        llm_out.setdefault("prompt_tokens", prompt_tokens)
+        if limit is not None:
+            llm_out.setdefault("prompt_token_limit", limit)
         recent_interactions = [
             {"message": query_text, "response": response_text}
             for query_text, response_text in history_pairs
@@ -499,6 +573,8 @@ class ConversationalModule:
                     "semantic_context": semantic_context,
                     "semantic_prompt": prompt_bundle.text,
                     "chatml_prompt": prompt_bundle.chatml,
+                    "prompt_tokens": prompt_tokens,
+                    "prompt_token_limit": limit,
                     "llm_task_type": task_type,
                     "llm_response_hints": response_hints,
                 },

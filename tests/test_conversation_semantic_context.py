@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from monGARS.core.conversation import ConversationalModule
+from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.inference_utils import (
     CHATML_BEGIN_OF_TEXT,
     CHATML_END_HEADER,
@@ -19,6 +19,7 @@ class _FakeLLMIntegration:
     def __init__(self) -> None:
         self.prompts: list[str] = []
         self.calls: list[dict[str, object]] = []
+        self.prompt_limit: int | None = 4096
 
     async def generate_response(
         self,
@@ -51,6 +52,11 @@ class _FakeLLMIntegration:
         if "```" in prompt or "function" in lowered or "class" in lowered:
             return "coding"
         return default
+
+    def prompt_token_limit(
+        self, task_type: str = "general"
+    ) -> int | None:  # noqa: ARG002
+        return self.prompt_limit
 
 
 class _FakeCuriosityEngine:
@@ -373,6 +379,51 @@ async def test_generate_response_sets_reasoning_hint(monkeypatch) -> None:
     assert llm.calls[0]["response_hints"] == {"reasoning": True}
     saved_interaction = persistence.saved[0][0]
     assert saved_interaction.input_data["llm_response_hints"] == {"reasoning": True}
+
+
+@pytest.mark.asyncio
+async def test_generate_response_trims_prompt_to_limit(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+    llm.prompt_limit = 80
+
+    token_estimates = iter([150, 70])
+
+    def _estimate(prompt: str) -> int:
+        return next(token_estimates)
+
+    monkeypatch.setattr(conversation_module, "estimate_token_count", _estimate)
+
+    response = await module.generate_response(
+        "user-trim", "Provide a comprehensive overview of quarterly metrics"
+    )
+
+    assert response["text"].endswith("::styled")
+    saved_interaction = persistence.saved[0][0]
+    history_entries = saved_interaction.context["history"]
+    assert len(history_entries) < 2, "history should be trimmed to satisfy limit"
+    assert saved_interaction.input_data["prompt_tokens"] == 70
+    assert saved_interaction.input_data["prompt_token_limit"] == 80
+
+
+@pytest.mark.asyncio
+async def test_generate_response_raises_when_prompt_remains_too_large(
+    monkeypatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+    llm.prompt_limit = 40
+
+    monkeypatch.setattr(conversation_module, "estimate_token_count", lambda _: 200)
+
+    with pytest.raises(PromptTooLargeError) as excinfo:
+        await module.generate_response("user-over", "Describe the entire codebase")
+
+    assert excinfo.value.prompt_tokens == 200
+    assert excinfo.value.limit == 40
+    assert not persistence.saved
 
 
 @pytest.mark.asyncio

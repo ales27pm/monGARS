@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app, reset_chat_rate_limiter_async
-from monGARS.core.conversation import ConversationalModule
+from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.security import SecurityManager
 
 UTC = getattr(datetime, "UTC", timezone.utc)
@@ -135,6 +135,29 @@ async def test_chat_message_too_long_returns_422(client: TestClient):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_chat_prompt_too_large_returns_413(
+    client: TestClient, monkeypatch
+) -> None:
+    async def _raise_prompt_limit(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise PromptTooLargeError(prompt_tokens=5000, limit=4096)
+
+    monkeypatch.setattr(ConversationalModule, "generate_response", _raise_prompt_limit)
+
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == status.HTTP_413_CONTENT_TOO_LARGE
+    assert resp.json()["detail"].startswith(
+        "Prompt exceeds the maximum supported token limit"
+    )
 
 
 @pytest.mark.asyncio
