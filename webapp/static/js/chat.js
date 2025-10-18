@@ -28,6 +28,68 @@
     }
   }
 
+  // src/utils/errorUtils.js
+  var DEFAULT_ERROR_MESSAGE =
+    "Une erreur inattendue est survenue. Veuillez réessayer.";
+  var ERROR_PREFIX_REGEX = /^\s*[\W_]*\s*(erreur|error)/i;
+  function normaliseErrorText(error) {
+    if (error instanceof Error) {
+      const message = error.message ? error.message.trim() : "";
+      if (message) {
+        return message;
+      }
+    }
+    if (typeof error === "string") {
+      const trimmed = error.trim();
+      return trimmed || DEFAULT_ERROR_MESSAGE;
+    }
+    if (error && typeof error === "object") {
+      const candidate =
+        (typeof error.message === "string" && error.message.trim()) ||
+        (typeof error.error === "string" && error.error.trim());
+      if (candidate) {
+        return candidate;
+      }
+      try {
+        const serialised = JSON.stringify(error);
+        if (serialised && serialised !== "{}") {
+          return serialised;
+        }
+      } catch (serialiseErr) {
+        console.debug("Unable to serialise error payload", serialiseErr);
+      }
+    }
+    if (typeof error === "undefined" || error === null) {
+      return DEFAULT_ERROR_MESSAGE;
+    }
+    const fallback = String(error).trim();
+    return fallback || DEFAULT_ERROR_MESSAGE;
+  }
+  function resolveErrorText(errorOrText) {
+    if (typeof errorOrText === "string") {
+      const trimmed = errorOrText.trim();
+      return trimmed || DEFAULT_ERROR_MESSAGE;
+    }
+    return normaliseErrorText(errorOrText);
+  }
+  function computeErrorBubbleText(errorOrText, options = {}) {
+    const { prefix } = options;
+    const text = resolveErrorText(errorOrText);
+    const basePrefix =
+      options.prefix === null
+        ? ""
+        : typeof prefix === "string"
+          ? prefix
+          : "Erreur : ";
+    const trimmedPrefix = basePrefix.trim().toLowerCase();
+    const shouldPrefix =
+      Boolean(basePrefix) &&
+      !ERROR_PREFIX_REGEX.test(text) &&
+      !(trimmedPrefix && text.toLowerCase().startsWith(trimmedPrefix));
+    const bubbleText = shouldPrefix ? `${basePrefix}${text}` : text;
+    return { text, bubbleText };
+  }
+
   // src/state/timelineStore.js
   function makeMessageId() {
     return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -266,68 +328,27 @@
         }
       }
     }
-    const DEFAULT_ERROR_MESSAGE =
-      "Une erreur inattendue est survenue. Veuillez réessayer.";
-    function hideError() {
+    const hideError = () => {
       if (!elements.errorAlert) return;
       elements.errorAlert.classList.add("d-none");
       if (elements.errorMessage) {
         elements.errorMessage.textContent = "";
       }
-    }
-    function normaliseErrorText(error) {
-      if (error instanceof Error) {
-        const text = error.message ? error.message.trim() : "";
-        return text || DEFAULT_ERROR_MESSAGE;
-      }
-      if (typeof error === "string") {
-        const text = error.trim();
-        return text || DEFAULT_ERROR_MESSAGE;
-      }
-      if (error && typeof error === "object") {
-        if (typeof error.message === "string" && error.message.trim()) {
-          return error.message.trim();
-        }
-        if (typeof error.error === "string" && error.error.trim()) {
-          return error.error.trim();
-        }
-        try {
-          const serialised = JSON.stringify(error);
-          if (serialised && serialised !== "{}") {
-            return serialised;
-          }
-        } catch (err) {
-          console.debug("Unable to serialise error payload", err);
-        }
-      }
-      if (typeof error !== "undefined" && error !== null) {
-        return String(error);
-      }
-      return DEFAULT_ERROR_MESSAGE;
-    }
-    function appendErrorBubble(error, options = {}) {
+    };
+    const appendErrorBubble = (error, options = {}) => {
       const {
         metadata = {},
         timestamp = nowISO(),
         role = "system",
         prefix,
         register,
-        messageId
+        messageId,
+        resolvedText
       } = options;
-      const text = normaliseErrorText(error);
-      const basePrefix =
-        options.prefix === null
-          ? ""
-          : typeof prefix === "string"
-            ? prefix
-            : "Erreur : ";
-      const lower = text.toLowerCase();
-      const shouldPrefix =
-        basePrefix &&
-        !lower.startsWith("erreur") &&
-        !lower.startsWith("error") &&
-        !lower.startsWith(basePrefix.trim().toLowerCase());
-      const bubbleText = shouldPrefix ? `${basePrefix}${text}` : text;
+      const { text, bubbleText } = computeErrorBubbleText(
+        typeof resolvedText === "string" ? resolvedText : error,
+        { prefix }
+      );
       return appendMessage(role, bubbleText, {
         variant: "error",
         allowMarkdown: false,
@@ -336,9 +357,9 @@
         register,
         messageId
       });
-    }
-    function showError(error, options = {}) {
-      const text = normaliseErrorText(error);
+    };
+    const showError = (error, options = {}) => {
+      const { text } = computeErrorBubbleText(error, options);
       if (elements.errorAlert && elements.errorMessage) {
         elements.errorMessage.textContent = text;
         elements.errorAlert.classList.remove("d-none");
@@ -346,28 +367,29 @@
       if (options.bubble === false) {
         return null;
       }
-      return appendErrorBubble(text, options);
-    }
-    function setComposerStatus(message, tone = "muted") {
+      const { bubble, ...bubbleOptions } = options;
+      return appendErrorBubble(error, { ...bubbleOptions, resolvedText: text });
+    };
+    const setComposerStatus = (message, tone = "muted") => {
       if (!elements.composerStatus) return;
       elements.composerStatus.textContent = message;
       SUPPORTED_TONES.forEach(
         (t) => elements.composerStatus.classList.remove(`text-${t}`)
       );
       elements.composerStatus.classList.add(`text-${tone}`);
-    }
-    function setComposerStatusIdle() {
+    };
+    const setComposerStatusIdle = () => {
       setComposerStatus(composerStatusDefault, "muted");
-    }
-    function scheduleComposerIdle(delay = 3500) {
+    };
+    const scheduleComposerIdle = (delay = 3500) => {
       if (state.resetStatusTimer) {
         clearTimeout(state.resetStatusTimer);
       }
       state.resetStatusTimer = window.setTimeout(() => {
         setComposerStatusIdle();
       }, delay);
-    }
-    function setVoiceStatus(message, tone = "muted") {
+    };
+    const setVoiceStatus = (message, tone = "muted") => {
       if (!elements.voiceStatus) return;
       if (state.voiceStatusTimer) {
         clearTimeout(state.voiceStatusTimer);
@@ -378,8 +400,8 @@
         (t) => elements.voiceStatus.classList.remove(`text-${t}`)
       );
       elements.voiceStatus.classList.add(`text-${tone}`);
-    }
-    function scheduleVoiceStatusIdle(delay = 4e3) {
+    };
+    const scheduleVoiceStatusIdle = (delay = 4e3) => {
       if (!elements.voiceStatus) return;
       if (state.voiceStatusTimer) {
         clearTimeout(state.voiceStatusTimer);
@@ -388,8 +410,10 @@
         setVoiceStatus(voiceStatusDefault, "muted");
         state.voiceStatusTimer = null;
       }, delay);
-    }
-    function setVoiceAvailability({ recognition = false, synthesis = false } = {}) {
+    };
+    const setVoiceAvailability = (
+      { recognition = false, synthesis = false } = {}
+    ) => {
       if (elements.voiceControls) {
         elements.voiceControls.classList.toggle(
           "d-none",
@@ -434,7 +458,7 @@
           elements.voiceVoiceSelect.innerHTML = "";
         }
       }
-    }
+    };
     function setVoiceListening(listening) {
       if (!elements.voiceToggle) return;
       elements.voiceToggle.setAttribute("aria-pressed", listening ? "true" : "false");
@@ -2301,7 +2325,7 @@
         const submittedAt = nowISO();
         this.ui.appendMessage("user", value, {
           timestamp: submittedAt,
-          metadata: { submitted: true }
+          metadata: { submitted: true, mode: requestMode }
         });
         if (this.elements.prompt) {
           this.elements.prompt.value = "";
@@ -2321,7 +2345,7 @@
         } catch (err) {
           this.ui.setBusy(false);
           this.ui.showError(err, {
-            metadata: { stage: "submit" }
+            metadata: { stage: "submit", mode: requestMode }
           });
           this.ui.setComposerStatus(
             "Envoi impossible. V\xE9rifiez la connexion.",
