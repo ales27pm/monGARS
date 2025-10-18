@@ -4,10 +4,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-mongars}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
       POSTGRES_DB: ${DB_NAME:-mongars_db}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mongars} -d ${DB_NAME:-mongars_db}"]
       interval: 5s
@@ -93,12 +91,12 @@ services:
       env_file:
         - .env
       environment: &app-environment
-        DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://mongars:${DB_PASSWORD:-changeme}@postgres:5432/mongars_db}
+        DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://mongars:${DB_PASSWORD?DB_PASSWORD required}@postgres:5432/mongars_db}
         DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
         DB_HOST: ${DB_HOST:-postgres}
         DB_PORT: ${DB_PORT:-5432}
         DB_USER: ${DB_USER:-mongars}
-        DB_PASSWORD: ${DB_PASSWORD:-changeme}
+        DB_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
         DB_NAME: ${DB_NAME:-mongars_db}
         DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
         DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
@@ -195,6 +193,21 @@ services:
         condition: service_started
       webapp-migrations:
         condition: service_completed_successfully
+
+  nginx:
+    image: nginx:1.25-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./webapp/static:/usr/share/nginx/html/static:ro
+      - nginx-logs:/var/log/nginx
+    restart: unless-stopped
+    networks:
+      - backend
 
   unsloth-trainer:
     <<: *app-service
@@ -301,3 +314,4 @@ volumes:
   mlflow-data:
   mlruns-data:
   ollama-data:
+  nginx-logs:
