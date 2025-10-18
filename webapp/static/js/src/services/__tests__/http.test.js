@@ -137,6 +137,7 @@ describe("createHttpService", () => {
     const [url, options] = global.fetch.mock.calls[0];
     expect(url).toBe("https://embed.example.test/vectors");
     expect(options.method).toBe("POST");
+    expect(options.headers.get("Authorization")).toBeNull();
     const body = JSON.parse(options.body);
     expect(body).toEqual({ inputs: ["hello"], normalise: false });
   });
@@ -314,6 +315,30 @@ describe("createHttpService", () => {
     const headers = options.headers;
     expect(headers.get("Authorization")).toBe("Bearer jwt-token");
     expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("rejects password changes when inputs are blank", async () => {
+    await expect(service.changePassword()).rejects.toThrow(TypeError);
+    await expect(
+      service.changePassword({ oldPassword: "", newPassword: "" }),
+    ).rejects.toThrow("oldPassword and newPassword must be non-empty strings");
+  });
+
+  it("passes AbortSignal through when changing the password", async () => {
+    const controller = new AbortController();
+    const response = createFetchResponse({
+      json: jest.fn().mockResolvedValue({ status: "changed" }),
+    });
+    global.fetch.mockResolvedValueOnce(response);
+
+    await service.changePassword({
+      oldPassword: "oldpass1",
+      newPassword: "newpass1",
+      signal: controller.signal,
+    });
+
+    const [, options] = global.fetch.mock.calls[0];
+    expect(options.signal).toBe(controller.signal);
   });
 
   it("throws with detail when the password change fails", async () => {

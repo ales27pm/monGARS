@@ -40,7 +40,7 @@ function UserListApp({ http }) {
         }));
       }
       try {
-        const users = await http.listUsers();
+        const users = await http.listUsers({ signal });
         if (signal?.aborted) {
           return;
         }
@@ -68,10 +68,10 @@ function UserListApp({ http }) {
   );
 
   useEffect(() => {
-    const controller = { aborted: false };
-    refresh({ signal: controller });
+    const controller = new AbortController();
+    refresh({ signal: controller.signal });
     return () => {
-      controller.aborted = true;
+      controller.abort();
     };
   }, [refresh]);
 
@@ -227,6 +227,11 @@ function UserListApp({ http }) {
         "table",
         { className: "table table-striped align-middle" },
         h(
+          "caption",
+          { className: "visually-hidden" },
+          "Liste des utilisateurs",
+        ),
+        h(
           "thead",
           null,
           h(
@@ -242,6 +247,12 @@ function UserListApp({ http }) {
   );
 }
 
+/**
+ * Locate the mount point for the admin user list UI.
+ * Templates that enable the React experience should declare a
+ * `<div data-user-list-root></div>` element; the component will fall back to
+ * other known roots to support legacy templates.
+ */
 function findUserListRoot(doc) {
   return (
     doc.getElementById("user-list-root") ||
@@ -261,6 +272,10 @@ export function renderUserListPage({
     return null;
   }
   const config = resolveConfig(rawConfig);
+  if (!config.isAdmin) {
+    console.warn("Admin privileges are required to render the user list UI.");
+    return null;
+  }
   const auth = createAuthService(config);
   const http = createHttpService({ config, auth });
   const root = createRoot(rootElement);

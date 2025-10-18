@@ -5,8 +5,11 @@
   "scripts": {
     "build": "node webapp/static/js/build.mjs",
     "build:chat": "node webapp/static/js/build.mjs",
+    "prelint": "node tools/ensure-node-deps.mjs",
     "lint": "eslint webapp/static/js/src --max-warnings=0",
+    "prejest": "node tools/ensure-node-deps.mjs",
     "jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "pretest": "node tools/ensure-node-deps.mjs",
     "test": "npm run lint && npm run jest"
   },
   "dependencies": {

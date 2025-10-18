@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="fr-CA">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ page_title|default:"Gestion des utilisateurs" }}</title>
+    {% load static %}
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{% static 'css/chat.css' %}" />
+  </head>
+  <body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="{% url 'index' %}">monGARS Admin</a>
+        <div class="d-flex align-items-center gap-2 ms-auto">
+          <a class="btn btn-outline-light" href="{% url 'admin-change-password' %}">
+            Modifier le mot de passe
+          </a>
+          <a class="btn btn-light" href="{% url 'index' %}">Retour au chat</a>
+        </div>
+      </div>
+    </nav>
+    <main class="container py-4">
+      <noscript>
+        <div class="alert alert-warning" role="alert">
+          Cette page d'administration nécessite JavaScript pour afficher la liste
+          des utilisateurs. Utilisez l'interface en ligne de commande ou
+          contactez le support si vous ne pouvez pas activer JavaScript.
+        </div>
+      </noscript>
+      <!-- data-user-list-root expose le point de montage React -->
+      <section class="card shadow-sm p-4" data-user-list-root>
+        <p class="text-muted mb-0">Chargement de la liste des utilisateurs…</p>
+      </section>
+    </main>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      window.chatConfig = {
+        fastapiUrl: "{{ fastapi_url }}",
+        embedServiceUrl: {% if embed_service_url %}"{{ embed_service_url|escapejs }}"{% else %}null{% endif %},
+        userId: "{{ user_id }}",
+        token: "{{ token }}",
+        isAdmin: {{ is_admin|yesno:'true,false' }},
+      };
+    </script>
+    <script src="{% static 'js/chat.js' %}"></script>
+  </body>
+</html>

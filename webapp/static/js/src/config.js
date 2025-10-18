@@ -27,6 +27,7 @@ export function resolveConfig(raw = {}) {
   } else {
     config.embedServiceUrl = null;
   }
+  config.isAdmin = Boolean(config.isAdmin);
   return config;
 }
 

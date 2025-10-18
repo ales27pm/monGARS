@@ -2,18 +2,21 @@ import { apiUrl } from "../config.js";
 
 export function createHttpService({ config, auth }) {
   async function authorisedFetch(path, options = {}) {
-    let jwt;
-    try {
-      jwt = await auth.getJwt();
-    } catch (err) {
-      // Surface a consistent error and preserve abort semantics
-      throw new Error("Authorization failed: missing or unreadable JWT");
+    const { auth: useAuth = true, headers: providedHeaders, ...rest } = options;
+    const headers = new Headers(providedHeaders || {});
+    if (useAuth) {
+      let jwt;
+      try {
+        jwt = await auth.getJwt();
+      } catch (err) {
+        // Surface a consistent error and preserve abort semantics
+        throw new Error("Authorization failed: missing or unreadable JWT");
+      }
+      if (!headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${jwt}`);
+      }
     }
-    const headers = new Headers(options.headers || {});
-    if (!headers.has("Authorization")) {
-      headers.set("Authorization", `Bearer ${jwt}`);
-    }
-    return fetch(apiUrl(config, path), { ...options, headers });
+    return fetch(apiUrl(config, path), { ...rest, headers });
   }
 
   async function fetchTicket() {
@@ -58,6 +61,7 @@ export function createHttpService({ config, auth }) {
       payload.normalise = false;
     }
     const resp = await authorisedFetch(config.embedServiceUrl, {
+      auth: false,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -92,8 +96,11 @@ export function createHttpService({ config, auth }) {
     return payload;
   }
 
-  async function listUsers() {
-    const resp = await authorisedFetch("/api/v1/user/list");
+  async function listUsers(options = {}) {
+    const resp = await authorisedFetch("/api/v1/user/list", {
+      method: "GET",
+      signal: options.signal,
+    });
     let payload;
     try {
       payload = await resp.json();
@@ -111,7 +118,17 @@ export function createHttpService({ config, auth }) {
     return payload.users;
   }
 
-  async function changePassword({ oldPassword, newPassword }) {
+  async function changePassword({ oldPassword, newPassword, signal } = {}) {
+    if (
+      typeof oldPassword !== "string" ||
+      typeof newPassword !== "string" ||
+      oldPassword.trim() === "" ||
+      newPassword.trim() === ""
+    ) {
+      throw new TypeError(
+        "oldPassword and newPassword must be non-empty strings",
+      );
+    }
     const body = {
       old_password: oldPassword,
       new_password: newPassword,
@@ -120,6 +137,7 @@ export function createHttpService({ config, auth }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     let payload;
     try {

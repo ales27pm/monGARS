@@ -16,14 +16,24 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
       <div class="container-fluid">
         <a class="navbar-brand" href="#">monGARS Chat</a>
-        <button
-          type="button"
-          class="btn btn-outline-light ms-auto"
-          id="toggle-dark-mode"
-          aria-pressed="false"
-        >
-          Mode Sombre
-        </button>
+        <div class="d-flex align-items-center gap-2 ms-auto">
+          {% if is_admin %}
+          <a class="btn btn-outline-light" href="{% url 'admin-user-list' %}">
+            Utilisateurs
+          </a>
+          <a class="btn btn-outline-light" href="{% url 'admin-change-password' %}">
+            Mot de passe
+          </a>
+          {% endif %}
+          <button
+            type="button"
+            class="btn btn-outline-light"
+            id="toggle-dark-mode"
+            aria-pressed="false"
+          >
+            Mode Sombre
+          </button>
+        </div>
       </div>
     </nav>
     <div class="container mt-4">
@@ -419,6 +429,7 @@
         embedServiceUrl: {% if embed_service_url %}"{{ embed_service_url|escapejs }}"{% else %}null{% endif %},
         userId: "{{ user_id }}",
         token: "{{ token }}",
+        isAdmin: {{ is_admin|yesno:'true,false' }},
       };
     </script>
     <script

@@ -3,12 +3,27 @@ import os
 import re
 from typing import Any
 
+from django.http import HttpResponseForbidden
 from django.shortcuts import redirect, render
 
 from .decorators import require_token
 from .services import authenticate_user, fetch_history, post_chat_message
+from monGARS.core.security import SecurityManager
 
 logger = logging.getLogger(__name__)
+security_manager = SecurityManager()
+
+
+def _shared_context(request):
+    fastapi_url = os.environ.get("FASTAPI_URL", "http://localhost:8000")
+    embed_service_url = os.environ.get("EMBED_SERVICE_URL", "").strip() or None
+    return {
+        "fastapi_url": fastapi_url,
+        "embed_service_url": embed_service_url,
+        "user_id": getattr(request, "user_id", None),
+        "token": getattr(request, "token", None),
+        "is_admin": bool(getattr(request, "is_admin", False)),
+    }
 
 
 @require_token
@@ -67,8 +82,7 @@ async def index(request):
     else:
         history_error = "Historique indisponible pour le moment."
 
-    fastapi_url = os.environ.get("FASTAPI_URL", "http://localhost:8000")
-    embed_service_url = os.environ.get("EMBED_SERVICE_URL", "").strip() or None
+    shared = _shared_context(request)
     return render(
         request,
         "chat/index.html",
@@ -79,10 +93,7 @@ async def index(request):
             "flash_message": flash_message,
             "form_error": form_error,
             "prompt_value": prompt_value,
-            "fastapi_url": fastapi_url,
-            "embed_service_url": embed_service_url,
-            "user_id": request.user_id,
-            "token": request.token,
+            **shared,
         },
     )
 
@@ -116,8 +127,37 @@ async def login_view(request):
             # downstream modules treat user_id as an arbitrary string
             request.session["token"] = token
             request.session["user_id"] = username
+            try:
+                payload = security_manager.verify_token(token)
+            except ValueError as exc:  # pragma: no cover - token mismatch
+                logger.warning("Token verification failed", exc_info=exc)
+                request.session["is_admin"] = False
+            else:
+                request.session["is_admin"] = bool(payload.get("admin"))
             return redirect("index")
         error = "Connexion impossible. Veuillez réessayer plus tard."
         return render(request, "chat/login.html", {"error": error})
 
     return render(request, "chat/login.html")
+
+
+@require_token
+async def admin_user_list(request):
+    if not getattr(request, "is_admin", False):
+        return HttpResponseForbidden("L'accès administrateur est requis.")
+    context = _shared_context(request)
+    context.update({
+        "page_title": "Gestion des utilisateurs",
+    })
+    return render(request, "chat/admin_user_list.html", context)
+
+
+@require_token
+async def admin_change_password(request):
+    if not getattr(request, "is_admin", False):
+        return HttpResponseForbidden("L'accès administrateur est requis.")
+    context = _shared_context(request)
+    context.update({
+        "page_title": "Modifier le mot de passe administrateur",
+    })
+    return render(request, "chat/admin_change_password.html", context)

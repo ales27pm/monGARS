@@ -12,11 +12,18 @@ const rawConfig = window.chatConfig || {};
 const pathname = window.location?.pathname || "/";
 const normalisedPath =
   pathname && pathname !== "/" ? pathname.replace(/\/+$/, "") || "/" : "/";
+const isUserList = /^\/user\/list(?:$|\/)/.test(normalisedPath);
+const isChangePassword = /^\/user\/change-password(?:$|\/)/.test(
+  normalisedPath,
+);
 
-if (normalisedPath.startsWith("/user/list")) {
-  renderUserListPage({ doc: document, rawConfig });
-} else if (normalisedPath.startsWith("/user/change-password")) {
-  renderChangePasswordPage({ doc: document, rawConfig });
-} else {
+let rendered = null;
+if (isUserList) {
+  rendered = renderUserListPage({ doc: document, rawConfig });
+} else if (isChangePassword) {
+  rendered = renderChangePasswordPage({ doc: document, rawConfig });
+}
+
+if (!rendered) {
   new ChatApp(document, rawConfig);
 }
