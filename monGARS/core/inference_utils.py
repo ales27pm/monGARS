@@ -42,24 +42,28 @@ def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -
     return segment
 
 
+def _has_role_prefix(normalised_role: str, content: str) -> bool:
+    role = normalised_role.lower()
+    base_prefix = f"{role.capitalize()}:"
+    alternatives = _ROLE_ALTERNATIVES.get(role, ())
+    prefixes = (base_prefix.lower(), *(marker.lower() for marker in alternatives))
+    lower_content = content.lower()
+    return any(lower_content.startswith(prefix) for prefix in prefixes)
+
+
 def _format_role_message(role: str, content: str) -> str:
     """Ensure ``content`` is prefixed with a normalised ``role`` token."""
 
-    normalised_role = role.strip() or "user"
+    normalised_role = role.strip().lower() or "user"
     label = normalised_role.capitalize()
     base_prefix = f"{label}:"
 
-    stripped_content = _normalise_text(content)
-    if stripped_content:
-        lower_content = stripped_content.lower()
-        alternatives = _ROLE_ALTERNATIVES.get(label.lower(), ())
-        prefixes = [base_prefix.lower(), *(marker.lower() for marker in alternatives)]
-        if any(lower_content.startswith(prefix) for prefix in prefixes):
-            return stripped_content
-        if "\n" in stripped_content:
-            return f"{base_prefix}\n{stripped_content}"
-        return f"{base_prefix} {stripped_content}"
-    return base_prefix
+    if not (stripped_content := _normalise_text(content)):
+        return base_prefix
+    if _has_role_prefix(normalised_role, stripped_content):
+        return stripped_content
+    joiner = "\n" if "\n" in stripped_content else " "
+    return f"{base_prefix}{joiner}{stripped_content}"
 
 
 def render_chat_prompt_from_text(

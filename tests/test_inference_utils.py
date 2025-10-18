@@ -130,6 +130,20 @@ def test_render_chat_prompt_from_text_handles_empty_user_text() -> None:
     assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in prompt.chatml
 
 
+def test_render_chat_prompt_from_text_handles_empty_system_and_user_prompts() -> None:
+    prompt = render_chat_prompt_from_text(
+        "",
+        system_prompt="",
+        include_assistant_stub=False,
+    )
+
+    assert prompt.text == "User:"
+    assert "Assistant:" not in prompt.text
+    assert prompt.chatml.startswith(CHATML_BEGIN_OF_TEXT)
+    assert prompt.chatml.endswith(CHATML_END_OF_TURN)
+    assert f"{CHATML_START_HEADER}system{CHATML_END_HEADER}" not in prompt.chatml
+
+
 def test_render_chat_prompt_from_text_appends_assistant_stub() -> None:
     prompt = render_chat_prompt_from_text(
         "Provide the metrics report.",
@@ -158,3 +172,32 @@ def test_build_converged_chat_prompt_formats_role_segments() -> None:
     assert any(line.startswith("User:") for line in lines)
     assert prompt.text.strip().endswith("Assistant:")
     assert prompt.chatml.count(CHATML_END_OF_TURN) == 2
+
+
+def test_build_converged_chat_prompt_handles_empty_history_pairs() -> None:
+    prompt = build_converged_chat_prompt(
+        "Summarise the latest release.",
+        history_pairs=[
+            ("", ""),
+            ("  redundant spacing  ", "   "),
+            (None, " Assistant reply "),  # type: ignore[arg-type]
+        ],
+    )
+
+    text_lines = [line for line in prompt.text.splitlines() if line]
+    assert text_lines[0].startswith("User:")
+    assert "Assistant: Assistant reply" in prompt.text
+    assert prompt.text.strip().endswith("Assistant:")
+    assert prompt.chatml.endswith(
+        f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"
+    )
+
+
+def test_build_converged_chat_prompt_includes_history_content() -> None:
+    prompt = build_converged_chat_prompt(
+        "Summarise the latest release.",
+        history_pairs=[("Hello", "Hi there!")],
+    )
+
+    assert "User: Hello" in prompt.text
+    assert "Assistant: Hi there!" in prompt.text
