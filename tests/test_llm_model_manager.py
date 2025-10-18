@@ -99,6 +99,10 @@ def test_model_definition_parses_local_path_string(tmp_path):
     assert definition.auto_download is False
     assert definition.parameters["path"].endswith("custom.gguf")
     assert definition.parameters["local"] is True
+    # original relative preserved
+    assert definition.parameters.get("source_path") == str(
+        local_file.relative_to(tmp_path)
+    )
 
 
 @pytest.mark.asyncio
@@ -161,7 +165,14 @@ async def test_local_model_provision_reports_existing_path(tmp_path):
     status = report.statuses[0]
     assert status.provider == "local_path"
     assert status.action == "exists"
-    assert local_file.name in status.detail
+    assert status.detail == local_file.name
+
+    # Second call should be skipped due to caching
+    report2 = await manager.ensure_models_installed(["offline"])
+    assert report2.statuses
+    status2 = report2.statuses[0]
+    assert status2.action == "skipped"
+    assert status2.detail == "already_ensured"
 
 
 @pytest.mark.asyncio
@@ -186,7 +197,12 @@ async def test_local_model_provision_reports_missing_path(tmp_path):
     status = report.statuses[0]
     assert status.provider == "local_path"
     assert status.action == "missing"
-    assert missing_file.name in status.detail
+    assert status.detail == missing_file.name
+
+    # Still missing on subsequent call; should not be skipped
+    report2 = await manager.ensure_models_installed(["offline"])
+    status2 = report2.statuses[0]
+    assert status2.action == "missing"
 
 
 def test_default_profile_exposes_reasoning_role(tmp_path):

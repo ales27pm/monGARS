@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -779,6 +780,17 @@ class LLMModelManager:
         path_value: str | None = None
         if lowered.startswith("path:"):
             path_value = cleaned_name.split(":", 1)[1].strip()
+            if path_value == "":
+                logger.warning(
+                    "llm.models.reference.invalid_path",
+                    extra={"role": role, "raw": name_value},
+                )
+                return (
+                    cleaned_name or name_value,
+                    provider,
+                    auto_download,
+                    parameters,
+                )
         elif path_hint:
             path_value = str(path_hint).strip()
         if not path_value:
@@ -789,7 +801,7 @@ class LLMModelManager:
         if path_value and str(resolved_path) != path_value:
             merged_parameters.setdefault("source_path", path_value)
         merged_parameters.setdefault("local", True)
-        provider_name = "local_path"
+        resolved_provider = "local_path"
         auto_download_flag = auto_download
         if auto_download_was_default:
             auto_download_flag = False
@@ -798,11 +810,11 @@ class LLMModelManager:
             "llm.models.reference.normalised",
             extra={
                 "role": role,
-                "provider": provider_name,
-                "path": merged_parameters["path"],
+                "provider": resolved_provider,
+                "path": Path(merged_parameters["path"]).name,
             },
         )
-        return (name_final, provider_name, auto_download_flag, merged_parameters)
+        return (name_final, resolved_provider, auto_download_flag, merged_parameters)
 
     def _resolve_model_path(self, path_value: str) -> Path:
         path = Path(path_value).expanduser()
@@ -832,16 +844,30 @@ class LLMModelManager:
                 action="error",
                 detail="path_missing",
             )
-        resolved = Path(str(path_value)).expanduser()
-        if not resolved.is_absolute():
-            resolved = (self._config_dir / resolved).resolve()
-        if resolved.exists():
+        resolved = self._resolve_model_path(str(path_value))
+        if resolved.is_file():
+            if not os.access(resolved, os.R_OK):
+                logger.warning(
+                    "llm.models.local.unreadable",
+                    extra={
+                        "role": definition.role,
+                        "model": definition.name,
+                        "local_path": resolved.name,
+                    },
+                )
+                return ModelProvisionStatus(
+                    role=definition.role,
+                    name=definition.name,
+                    provider=definition.provider,
+                    action="unreadable",
+                    detail=resolved.name,
+                )
             logger.info(
                 "llm.models.local.available",
                 extra={
                     "role": definition.role,
                     "model": definition.name,
-                    "local_path": str(resolved),
+                    "local_path": resolved.name,
                 },
             )
             return ModelProvisionStatus(
@@ -849,14 +875,14 @@ class LLMModelManager:
                 name=definition.name,
                 provider=definition.provider,
                 action="exists",
-                detail=str(resolved),
+                detail=resolved.name,
             )
         logger.warning(
             "llm.models.local.missing",
             extra={
                 "role": definition.role,
                 "model": definition.name,
-                "local_path": str(resolved),
+                "local_path": resolved.name,
             },
         )
         return ModelProvisionStatus(
@@ -864,7 +890,7 @@ class LLMModelManager:
             name=definition.name,
             provider=definition.provider,
             action="missing",
-            detail=str(resolved),
+            detail=resolved.name,
         )
 
 
