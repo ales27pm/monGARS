@@ -14,10 +14,13 @@ except ImportError:  # Python 3.10 fallback
     from datetime import timezone
 
     UTC = timezone.utc
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -78,8 +81,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
+STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+else:  # pragma: no cover - build-time issue
+    logger.warning(
+        "web_api.static_missing",
+        extra={"path": str(STATIC_DIR)},
+    )
 
 app.include_router(ws_manager.router)
 app.include_router(auth_routes.router)
@@ -107,6 +120,34 @@ _chat_rate_limiter = InMemoryRateLimiter(
     prune_after_seconds=_CHAT_RATE_LIMIT_PRUNE_AFTER,
     on_reject=_log_rate_limit,
 )
+
+
+@app.get("/", include_in_schema=False)
+async def frontend() -> FileResponse:
+    """Serve the compiled web frontend."""
+
+    if not STATIC_DIR.exists():
+        logger.error(
+            "web_api.static_directory_missing",
+            extra={"path": str(STATIC_DIR)},
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Static assets are unavailable.",
+        )
+
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.exists():
+        logger.error(
+            "web_api.index_missing",
+            extra={"path": str(index_path)},
+        )
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Frontend build not found.",
+        )
+
+    return FileResponse(index_path)
 
 
 def _redact_user_id(user_id: str) -> str:
