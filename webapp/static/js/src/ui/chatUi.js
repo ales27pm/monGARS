@@ -2,6 +2,7 @@ import { createEmitter } from "../utils/emitter.js";
 import { htmlToText, extractBubbleText, escapeHTML } from "../utils/dom.js";
 import { renderMarkdown } from "../services/markdown.js";
 import { formatTimestamp, nowISO } from "../utils/time.js";
+import { computeErrorBubbleText } from "../utils/errorUtils.js";
 
 export function createChatUi({ elements, timelineStore }) {
   const emitter = createEmitter();
@@ -104,45 +105,76 @@ export function createChatUi({ elements, timelineStore }) {
     }
   }
 
-  function hideError() {
+  const hideError = () => {
     if (!elements.errorAlert) return;
     elements.errorAlert.classList.add("d-none");
     if (elements.errorMessage) {
       elements.errorMessage.textContent = "";
     }
-  }
+  };
 
-  function showError(message) {
-    if (!elements.errorAlert || !elements.errorMessage) return;
-    elements.errorMessage.textContent = message;
-    elements.errorAlert.classList.remove("d-none");
-  }
+  const appendErrorBubble = (error, options = {}) => {
+    const {
+      metadata = {},
+      timestamp = nowISO(),
+      role = "system",
+      prefix,
+      register,
+      messageId,
+      resolvedText,
+    } = options;
+    const { text, bubbleText } = computeErrorBubbleText(
+      typeof resolvedText === "string" ? resolvedText : error,
+      { prefix },
+    );
+    return appendMessage(role, bubbleText, {
+      variant: "error",
+      allowMarkdown: false,
+      timestamp,
+      metadata: { ...metadata, error: text },
+      register,
+      messageId,
+    });
+  };
 
-  function setComposerStatus(message, tone = "muted") {
+  const showError = (error, options = {}) => {
+    const { text } = computeErrorBubbleText(error, options);
+    if (elements.errorAlert && elements.errorMessage) {
+      elements.errorMessage.textContent = text;
+      elements.errorAlert.classList.remove("d-none");
+    }
+    if (options.bubble === false) {
+      return null;
+    }
+    const { bubble, ...bubbleOptions } = options;
+    return appendErrorBubble(error, { ...bubbleOptions, resolvedText: text });
+  };
+
+  const setComposerStatus = (message, tone = "muted") => {
     if (!elements.composerStatus) return;
     elements.composerStatus.textContent = message;
     SUPPORTED_TONES.forEach((t) =>
       elements.composerStatus.classList.remove(`text-${t}`),
     );
     elements.composerStatus.classList.add(`text-${tone}`);
-  }
+  };
 
-  function setComposerStatusIdle() {
+  const setComposerStatusIdle = () => {
     const message =
       state.mode === "embed" ? composerStatusEmbedding : composerStatusDefault;
     setComposerStatus(message, "muted");
-  }
+  };
 
-  function scheduleComposerIdle(delay = 3500) {
+  const scheduleComposerIdle = (delay = 3500) => {
     if (state.resetStatusTimer) {
       clearTimeout(state.resetStatusTimer);
     }
     state.resetStatusTimer = window.setTimeout(() => {
       setComposerStatusIdle();
     }, delay);
-  }
+  };
 
-  function setVoiceStatus(message, tone = "muted") {
+  const setVoiceStatus = (message, tone = "muted") => {
     if (!elements.voiceStatus) return;
     if (state.voiceStatusTimer) {
       clearTimeout(state.voiceStatusTimer);
@@ -153,9 +185,9 @@ export function createChatUi({ elements, timelineStore }) {
       elements.voiceStatus.classList.remove(`text-${t}`),
     );
     elements.voiceStatus.classList.add(`text-${tone}`);
-  }
+  };
 
-  function scheduleVoiceStatusIdle(delay = 4000) {
+  const scheduleVoiceStatusIdle = (delay = 4000) => {
     if (!elements.voiceStatus) return;
     if (state.voiceStatusTimer) {
       clearTimeout(state.voiceStatusTimer);
@@ -164,12 +196,12 @@ export function createChatUi({ elements, timelineStore }) {
       setVoiceStatus(voiceStatusDefault, "muted");
       state.voiceStatusTimer = null;
     }, delay);
-  }
+  };
 
-  function setVoiceAvailability({
+  const setVoiceAvailability = ({
     recognition = false,
     synthesis = false,
-  } = {}) {
+  } = {}) => {
     if (elements.voiceControls) {
       elements.voiceControls.classList.toggle(
         "d-none",
@@ -213,7 +245,7 @@ export function createChatUi({ elements, timelineStore }) {
         elements.voiceVoiceSelect.innerHTML = "";
       }
     }
-  }
+  };
 
   function setVoiceListening(listening) {
     if (!elements.voiceToggle) return;
