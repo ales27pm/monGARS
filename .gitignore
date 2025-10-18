@@ -21,3 +21,6 @@ mongars_local.db
 unsloth_compiled_cache/
 dolphin3_finetuned/
 tools/monGARS_deep_scan.zip
+# JavaScript dependencies
+node_modules/
+
