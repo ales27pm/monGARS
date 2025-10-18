@@ -12,6 +12,10 @@ describe("createSuggestionService", () => {
   let http;
   let ui;
   let service;
+  const settleAsync = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -33,8 +37,7 @@ describe("createSuggestionService", () => {
     service.schedule("hi");
 
     jest.advanceTimersByTime(500);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleAsync();
 
     expect(http.postSuggestions).not.toHaveBeenCalled();
     expect(ui.applyQuickActionOrdering).not.toHaveBeenCalled();
@@ -44,8 +47,7 @@ describe("createSuggestionService", () => {
     service.schedule("   explore  ");
 
     jest.advanceTimersByTime(220);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleAsync();
 
     expect(http.postSuggestions).toHaveBeenCalledTimes(1);
     expect(http.postSuggestions).toHaveBeenCalledWith("explore");
@@ -58,8 +60,7 @@ describe("createSuggestionService", () => {
     service.schedule("second prompt");
 
     jest.advanceTimersByTime(220);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleAsync();
 
     expect(http.postSuggestions).toHaveBeenCalledTimes(1);
     expect(http.postSuggestions).toHaveBeenCalledWith("second prompt");
@@ -72,8 +73,7 @@ describe("createSuggestionService", () => {
 
     service.schedule("failing prompt");
     jest.advanceTimersByTime(220);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleAsync();
 
     expect(http.postSuggestions).toHaveBeenCalledTimes(1);
     expect(debugSpy).toHaveBeenCalled();

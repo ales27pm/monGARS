@@ -50,7 +50,7 @@ export function createHttpService({ config, auth }) {
       );
     }
     const payload = {
-      inputs: [text],
+      inputs: Array.isArray(text) ? text : [text],
     };
     if (Object.prototype.hasOwnProperty.call(options, "normalise")) {
       payload.normalise = Boolean(options.normalise);
@@ -85,7 +85,11 @@ export function createHttpService({ config, auth }) {
     if (!resp.ok) {
       throw new Error(`Suggestion error: ${resp.status}`);
     }
-    return resp.json();
+    const payload = await resp.json();
+    if (!payload || !Array.isArray(payload.actions)) {
+      throw new Error("Suggestion response invalid: actions array missing");
+    }
+    return payload;
   }
 
   return {

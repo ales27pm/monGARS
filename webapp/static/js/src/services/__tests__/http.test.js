@@ -23,6 +23,20 @@ describe("createHttpService", () => {
   const baseUrl = new URL("https://api.example.test");
   let auth;
   let config;
+  let service;
+
+  const makeService = (overrides = {}) => {
+    const mergedConfig = {
+      ...config,
+      ...(overrides.config ?? {}),
+    };
+    const mergedAuth = overrides.auth ?? auth;
+
+    return createHttpService({
+      config: mergedConfig,
+      auth: mergedAuth,
+    });
+  };
 
   beforeEach(() => {
     auth = {
@@ -33,6 +47,7 @@ describe("createHttpService", () => {
       embedServiceUrl: "https://embed.example.test/vectors",
     };
     global.fetch = jest.fn();
+    service = makeService();
   });
 
   afterEach(() => {
@@ -43,15 +58,13 @@ describe("createHttpService", () => {
   it("adds an authorization header when posting chat messages", async () => {
     const response = createFetchResponse();
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
-
     const result = await service.postChat("Hello world");
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
     const [url, options] = global.fetch.mock.calls[0];
     expect(url).toBe("https://api.example.test/api/v1/conversation/chat");
     expect(options.method).toBe("POST");
-    const headers = options.headers;
+    const { headers } = options;
     expect(headers.get("Authorization")).toBe("Bearer jwt-token");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(JSON.parse(options.body)).toEqual({ message: "Hello world" });
@@ -60,8 +73,6 @@ describe("createHttpService", () => {
 
   it("throws when the JWT cannot be retrieved", async () => {
     auth.getJwt.mockRejectedValueOnce(new Error("boom"));
-    const service = createHttpService({ config, auth });
-
     await expect(service.postChat("hi")).rejects.toThrow(
       "Authorization failed: missing or unreadable JWT",
     );
@@ -73,8 +84,6 @@ describe("createHttpService", () => {
       json: jest.fn().mockResolvedValue({ ticket: "abc123" }),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
-
     await expect(service.fetchTicket()).resolves.toBe("abc123");
     const [url, options] = global.fetch.mock.calls[0];
     expect(url).toBe("https://api.example.test/api/v1/auth/ws/ticket");
@@ -87,8 +96,6 @@ describe("createHttpService", () => {
       status: 403,
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
-
     await expect(service.fetchTicket()).rejects.toThrow("Ticket error: 403");
   });
 
@@ -97,19 +104,15 @@ describe("createHttpService", () => {
       json: jest.fn().mockResolvedValue({}),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
-
     await expect(service.fetchTicket()).rejects.toThrow(
       "Ticket response invalide",
     );
   });
 
   it("throws when no embedding service URL is configured", async () => {
-    const service = createHttpService({
-      config: { baseUrl, embedServiceUrl: null },
-      auth,
+    const service = makeService({
+      config: { embedServiceUrl: null },
     });
-
     await expect(service.postEmbed("text"))
       .rejects.toThrow("Service d'embedding indisponible: aucune URL configurée.");
     expect(global.fetch).not.toHaveBeenCalled();
@@ -120,7 +123,6 @@ describe("createHttpService", () => {
       json: jest.fn().mockResolvedValue({ vectors: [[1, 2, 3]] }),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
 
     const payload = await service.postEmbed("hello");
 
@@ -132,12 +134,27 @@ describe("createHttpService", () => {
     expect(body).toEqual({ inputs: ["hello"], normalise: false });
   });
 
+  it("posts multiple input strings to the embedding service", async () => {
+    const response = createFetchResponse({
+      json: jest.fn().mockResolvedValue({ vectors: [[1, 2, 3], [4, 5, 6]] }),
+    });
+    global.fetch.mockResolvedValueOnce(response);
+
+    const payload = await service.postEmbed(["foo", "bar"]);
+
+    expect(payload).toEqual({ vectors: [[1, 2, 3], [4, 5, 6]] });
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toBe("https://embed.example.test/vectors");
+    expect(options.method).toBe("POST");
+    const body = JSON.parse(options.body);
+    expect(body).toEqual({ inputs: ["foo", "bar"], normalise: false });
+  });
+
   it("passes through the requested normalise flag for embeddings", async () => {
     const response = createFetchResponse({
       json: jest.fn().mockResolvedValue({ vectors: [[4, 5]] }),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
 
     await service.postEmbed("hello", { normalise: true });
     const [, options] = global.fetch.mock.calls[0];
@@ -151,7 +168,6 @@ describe("createHttpService", () => {
       text: jest.fn().mockResolvedValue("offline"),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
 
     await expect(service.postEmbed("hello")).rejects.toThrow(
       "HTTP 503: offline",
@@ -163,7 +179,6 @@ describe("createHttpService", () => {
       json: jest.fn().mockResolvedValue({ invalid: true }),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
 
     await expect(service.postEmbed("hello")).rejects.toThrow(
       "Embedding response invalide: vecteurs manquants",
@@ -176,7 +191,6 @@ describe("createHttpService", () => {
       status: 500,
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
 
     await expect(service.postSuggestions("prompt"))
       .rejects.toThrow("Suggestion error: 500");
@@ -187,7 +201,6 @@ describe("createHttpService", () => {
       json: jest.fn().mockResolvedValue({ actions: ["code"] }),
     });
     global.fetch.mockResolvedValueOnce(response);
-    const service = createHttpService({ config, auth });
 
     await expect(service.postSuggestions("prompt"))
       .resolves.toEqual({ actions: ["code"] });
@@ -198,5 +211,25 @@ describe("createHttpService", () => {
       prompt: "prompt",
       actions: ["code", "summarize", "explain"],
     });
+  });
+
+  it("throws an error when postSuggestions receives a malformed payload (missing actions)", async () => {
+    const response = createFetchResponse({
+      json: jest.fn().mockResolvedValue({}),
+    });
+    global.fetch.mockResolvedValueOnce(response);
+
+    await expect(service.postSuggestions("prompt"))
+      .rejects.toThrow(/Suggestion response invalid/i);
+  });
+
+  it("throws an error when postSuggestions receives a malformed payload (actions is not an array)", async () => {
+    const response = createFetchResponse({
+      json: jest.fn().mockResolvedValue({ actions: "nope" }),
+    });
+    global.fetch.mockResolvedValueOnce(response);
+
+    await expect(service.postSuggestions("prompt"))
+      .rejects.toThrow(/Suggestion response invalid/i);
   });
 });
