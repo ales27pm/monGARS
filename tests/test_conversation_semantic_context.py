@@ -20,6 +20,7 @@ class _FakeLLMIntegration:
         self.prompts: list[str] = []
         self.calls: list[dict[str, object]] = []
         self.prompt_limit: int | None = 4096
+        self.generation_tokens: int | None = 512
 
     async def generate_response(
         self,
@@ -55,8 +56,11 @@ class _FakeLLMIntegration:
 
     def prompt_token_limit(
         self, task_type: str = "general"
-    ) -> int | None:  # noqa: ARG002
+    ) -> int | None:
         return self.prompt_limit
+
+    def generation_token_target(self, task_type: str = "general") -> int | None:
+        return self.generation_tokens
 
 
 class _FakeCuriosityEngine:
@@ -387,10 +391,11 @@ async def test_generate_response_trims_prompt_to_limit(monkeypatch) -> None:
 
     module, llm, persistence = _build_conversational_module(matches=[])
     llm.prompt_limit = 80
+    llm.generation_tokens = 0
 
     token_estimates = iter([150, 70])
 
-    def _estimate(prompt: str) -> int:
+    def _estimate(_: str) -> int:
         return next(token_estimates)
 
     monkeypatch.setattr(conversation_module, "estimate_token_count", _estimate)
@@ -405,6 +410,37 @@ async def test_generate_response_trims_prompt_to_limit(monkeypatch) -> None:
     assert len(history_entries) < 2, "history should be trimmed to satisfy limit"
     assert saved_interaction.input_data["prompt_tokens"] == 70
     assert saved_interaction.input_data["prompt_token_limit"] == 80
+    assert saved_interaction.input_data["prompt_token_budget"] == 80
+    assert saved_interaction.input_data["prompt_token_reservation"] == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_response_reserves_generation_tokens(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+    llm.prompt_limit = 120
+    llm.generation_tokens = 40
+
+    token_estimates = iter([110, 70])
+
+    def _estimate(_: str) -> int:
+        return next(token_estimates)
+
+    monkeypatch.setattr(conversation_module, "estimate_token_count", _estimate)
+
+    response = await module.generate_response(
+        "user-reserve", "Summarise the overall platform architecture"
+    )
+
+    assert response["text"].endswith("::styled")
+    saved_interaction = persistence.saved[0][0]
+    history_entries = saved_interaction.context["history"]
+    assert len(history_entries) < 2, "history should be trimmed due to reservation"
+    assert saved_interaction.input_data["prompt_tokens"] == 70
+    assert saved_interaction.input_data["prompt_token_limit"] == 120
+    assert saved_interaction.input_data["prompt_token_budget"] == 80
+    assert saved_interaction.input_data["prompt_token_reservation"] == 40
 
 
 @pytest.mark.asyncio
@@ -415,6 +451,7 @@ async def test_generate_response_raises_when_prompt_remains_too_large(
 
     module, llm, persistence = _build_conversational_module(matches=[])
     llm.prompt_limit = 40
+    llm.generation_tokens = 0
 
     monkeypatch.setattr(conversation_module, "estimate_token_count", lambda _: 200)
 

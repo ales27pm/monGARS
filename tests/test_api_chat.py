@@ -141,7 +141,13 @@ async def test_chat_message_too_long_returns_422(client: TestClient):
 async def test_chat_prompt_too_large_returns_413(
     client: TestClient, monkeypatch
 ) -> None:
-    async def _raise_prompt_limit(*args, **kwargs):  # noqa: ANN002, ANN003
+    async def _raise_prompt_limit(
+        self,
+        user_id: str,
+        query: str,
+        session_id: str | None = None,
+        image_data: bytes | None = None,
+    ) -> None:
         raise PromptTooLargeError(prompt_tokens=5000, limit=4096)
 
     monkeypatch.setattr(ConversationalModule, "generate_response", _raise_prompt_limit)

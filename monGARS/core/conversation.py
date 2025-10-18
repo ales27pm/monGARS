@@ -66,9 +66,12 @@ class _FakeLLM:
             prompt, task_type=task_type, response_hints=response_hints
         )
 
-    def prompt_token_limit(
+    def prompt_token_limit(self, task_type: str = "general") -> int | None:
+        return None
+
+    def generation_token_target(
         self, task_type: str = "general"
-    ) -> int | None:  # noqa: ARG002
+    ) -> int | None:
         return None
 
 
@@ -486,13 +489,22 @@ class ConversationalModule:
         )
         response_hints = self._build_response_hints(reasoning_metadata)
 
-        limit = self.llm.prompt_token_limit(task_type)
-        if isinstance(limit, int) and limit <= 0:
-            limit = None
+        configured_limit = self.llm.prompt_token_limit(task_type)
+        if isinstance(configured_limit, int) and configured_limit <= 0:
+            configured_limit = None
+
+        reserved_generation_tokens = 0
+        generation_target = self.llm.generation_token_target(task_type)
+        if isinstance(generation_target, int) and generation_target > 0:
+            reserved_generation_tokens = generation_target
+
+        budget = configured_limit
+        if configured_limit is not None and reserved_generation_tokens:
+            budget = max(configured_limit - reserved_generation_tokens, 1)
 
         prompt_tokens = estimate_token_count(prompt_bundle.chatml)
         trimmed = False
-        while limit and prompt_tokens > limit and (trimmed_history or trimmed_semantic):
+        while budget and prompt_tokens > budget and (trimmed_history or trimmed_semantic):
             if trimmed_history:
                 trimmed_history.pop(0)
             else:
@@ -505,17 +517,19 @@ class ConversationalModule:
             prompt_tokens = estimate_token_count(prompt_bundle.chatml)
             trimmed = True
 
-        if limit and prompt_tokens > limit:
+        if budget and prompt_tokens > budget:
             redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
             logger.warning(
                 "conversation.prompt.exceeds_limit",
                 extra={
                     "user": f"u:{redacted}",
                     "prompt_tokens": prompt_tokens,
-                    "token_limit": limit,
+                    "token_limit": budget,
+                    "configured_limit": configured_limit,
+                    "reserved_generation_tokens": reserved_generation_tokens,
                 },
             )
-            raise PromptTooLargeError(prompt_tokens, limit)
+            raise PromptTooLargeError(prompt_tokens, budget)
 
         if trimmed:
             redacted = blake2s(user_id.encode("utf-8"), digest_size=4).hexdigest()
@@ -524,7 +538,9 @@ class ConversationalModule:
                 extra={
                     "user": f"u:{redacted}",
                     "prompt_tokens": prompt_tokens,
-                    "token_limit": limit,
+                    "token_limit": budget,
+                    "configured_limit": configured_limit,
+                    "reserved_generation_tokens": reserved_generation_tokens,
                     "history_entries": len(trimmed_history),
                     "semantic_entries": len(trimmed_semantic),
                 },
@@ -542,8 +558,14 @@ class ConversationalModule:
             formatted_prompt=prompt_bundle.chatml,
         )
         llm_out.setdefault("prompt_tokens", prompt_tokens)
-        if limit is not None:
-            llm_out.setdefault("prompt_token_limit", limit)
+        if configured_limit is not None:
+            llm_out.setdefault("prompt_token_limit", configured_limit)
+        if budget is not None:
+            llm_out.setdefault("prompt_token_budget", budget)
+        if reserved_generation_tokens:
+            llm_out.setdefault(
+                "prompt_token_reservation", reserved_generation_tokens
+            )
         recent_interactions = [
             {"message": query_text, "response": response_text}
             for query_text, response_text in history_pairs
@@ -574,7 +596,9 @@ class ConversationalModule:
                     "semantic_prompt": prompt_bundle.text,
                     "chatml_prompt": prompt_bundle.chatml,
                     "prompt_tokens": prompt_tokens,
-                    "prompt_token_limit": limit,
+                    "prompt_token_limit": configured_limit,
+                    "prompt_token_budget": budget,
+                    "prompt_token_reservation": reserved_generation_tokens,
                     "llm_task_type": task_type,
                     "llm_response_hints": response_hints,
                 },

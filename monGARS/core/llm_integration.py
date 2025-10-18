@@ -553,6 +553,7 @@ class LLMIntegration:
         else:
             self._prompt_limit_override = None
         self._prompt_token_limits: dict[str, int | None] = {}
+        self._generation_token_targets: dict[str, int | None] = {}
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
@@ -1202,10 +1203,10 @@ class LLMIntegration:
     def _resolve_prompt_token_limit(self, task_type: str) -> int | None:
         parameters = self._model_manager.get_model_parameters(task_type)
         for key in (
-            "max_tokens",
             "prompt_max_tokens",
             "max_prompt_tokens",
             "context_window",
+            "max_tokens",
         ):
             if key not in parameters:
                 continue
@@ -1227,6 +1228,32 @@ class LLMIntegration:
 
         resolved = self._resolve_prompt_token_limit(normalized)
         self._prompt_token_limits[normalized] = resolved
+        return resolved
+
+    def _resolve_generation_token_target(self, task_type: str) -> int | None:
+        parameters = self._model_manager.get_model_parameters(task_type)
+        for key in (
+            "generation_tokens",
+            "prompt_generation_tokens",
+            "max_new_tokens",
+            "num_predict",
+        ):
+            if key not in parameters:
+                continue
+            candidate = self._coerce_positive_int(parameters.get(key))
+            if candidate is not None:
+                return candidate
+        return None
+
+    def generation_token_target(self, task_type: str = "general") -> int | None:
+        """Return the configured generation token target for ``task_type``."""
+
+        normalized = (task_type or "general").lower()
+        if normalized in self._generation_token_targets:
+            return self._generation_token_targets[normalized]
+
+        resolved = self._resolve_generation_token_target(normalized)
+        self._generation_token_targets[normalized] = resolved
         return resolved
 
     def _compile_task_type_rules(
