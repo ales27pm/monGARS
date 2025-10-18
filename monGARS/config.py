@@ -16,6 +16,7 @@ from dotenv import dotenv_values, set_key
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -41,6 +42,7 @@ from monGARS.core.constants import (
     SUPPORTED_EMBEDDING_BACKENDS,
 )
 from monGARS.core.embedding_backends import normalise_embedding_backend
+from monGARS.telemetry import PROMETHEUS_REGISTRY
 from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
@@ -539,6 +541,12 @@ class Settings(BaseSettings):
     otel_collector_url: str = Field(default="http://localhost:4318")
     otel_metrics_enabled: EnvBool = Field(default=True)
     otel_traces_enabled: EnvBool = Field(default=True)
+    otel_prometheus_enabled: EnvBool = Field(
+        default=True,
+        description=(
+            "Expose OpenTelemetry metrics via the in-process Prometheus registry served by the API."
+        ),
+    )
 
     WS_ENABLE_EVENTS: bool = Field(default=True)
     WS_ALLOWED_ORIGINS: list[AnyUrl] = Field(
@@ -922,6 +930,14 @@ def configure_telemetry(settings: Settings) -> None:
             metric_readers.append(PeriodicExportingMetricReader(metric_exporter))
         except Exception as exc:  # pragma: no cover - optional metrics
             log.warning("Failed to configure metrics: %s", exc)
+
+    if settings.otel_prometheus_enabled:
+        try:
+            metric_readers.append(
+                PrometheusMetricReader(collector_registry=PROMETHEUS_REGISTRY)
+            )
+        except Exception as exc:  # pragma: no cover - optional metrics
+            log.warning("Failed to configure Prometheus metrics exporter: %s", exc)
 
     meter_provider = MeterProvider(
         resource=resource,
