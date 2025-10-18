@@ -23,8 +23,10 @@ export function createHttpService({ config, auth }) {
         throw err;
       }
       const message = err instanceof Error ? err.message : String(err);
-      const wrappedError = new Error(`Network request failed: ${message}`);
-      wrappedError.cause = err;
+      const wrappedError = new Error(
+        `Network request failed: ${message}. Original error: ${String(err)}`
+      );
+      wrappedError.originalError = err;
       throw wrappedError;
     }
   }
