@@ -117,22 +117,39 @@ describe("createHttpService", () => {
       .rejects.toThrow("Service d'embedding indisponible: aucune URL configurée.");
     expect(global.fetch).not.toHaveBeenCalled();
   });
-
-  it("posts to the embedding service with normalise defaulting to false", async () => {
-    const response = createFetchResponse({
-      json: jest.fn().mockResolvedValue({ vectors: [[1, 2, 3]] }),
-    });
-    global.fetch.mockResolvedValueOnce(response);
-
-    const payload = await service.postEmbed("hello");
-
-    expect(payload).toEqual({ vectors: [[1, 2, 3]] });
-    const [url, options] = global.fetch.mock.calls[0];
-    expect(url).toBe("https://embed.example.test/vectors");
-    expect(options.method).toBe("POST");
-    const body = JSON.parse(options.body);
-    expect(body).toEqual({ inputs: ["hello"], normalise: false });
-  });
++  it("posts to the embedding service with normalise defaulting to false", async () => {
++    const response = createFetchResponse({
++      json: jest.fn().mockResolvedValue({ vectors: [[1, 2, 3]] }),
++    });
++    global.fetch.mockResolvedValueOnce(response);
++    const service = createHttpService({ config, auth });
++
++    const payload = await service.postEmbed("hello");
++
++    expect(payload).toEqual({ vectors: [[1, 2, 3]] });
++    const [url, options] = global.fetch.mock.calls[0];
++    expect(url).toBe("https://embed.example.test/vectors");
++    expect(options.method).toBe("POST");
++    const body = JSON.parse(options.body);
++    expect(body).toEqual({ inputs: ["hello"], normalise: false });
++  });
++
++  it("posts multiple input strings to the embedding service", async () => {
++    const response = createFetchResponse({
++      json: jest.fn().mockResolvedValue({ vectors: [[1, 2, 3], [4, 5, 6]] }),
++    });
++    global.fetch.mockResolvedValueOnce(response);
++    const service = createHttpService({ config, auth });
++
++    const payload = await service.postEmbed(["foo", "bar"]);
++
++    expect(payload).toEqual({ vectors: [[1, 2, 3], [4, 5, 6]] });
++    const [url, options] = global.fetch.mock.calls[0];
++    expect(url).toBe("https://embed.example.test/vectors");
++    expect(options.method).toBe("POST");
++    const body = JSON.parse(options.body);
++    expect(body).toEqual({ inputs: ["foo", "bar"], normalise: false });
++  });
 
   it("posts multiple input strings to the embedding service", async () => {
     const response = createFetchResponse({
