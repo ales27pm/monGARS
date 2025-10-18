@@ -2,6 +2,8 @@ services:
   postgres:
     image: pgvector/pgvector:pg18
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${DB_USER:-mongars}
       POSTGRES_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
@@ -91,7 +93,7 @@ services:
       env_file:
         - .env
       environment: &app-environment
-        DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://mongars:${DB_PASSWORD?DB_PASSWORD required}@postgres:5432/mongars_db}
+        DATABASE_URL: "postgresql+asyncpg://${DB_USER:-mongars}:${DB_PASSWORD?DB_PASSWORD required}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mongars_db}"
         DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
         DB_HOST: ${DB_HOST:-postgres}
         DB_PORT: ${DB_PORT:-5432}
@@ -102,7 +104,7 @@ services:
         DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
         ENV: ${APP_ENV:-production}
         HOST: 0.0.0.0
-        PORT: ${API_PORT:-8000}
+        PORT: 8000
         USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
         RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
         REDIS_URL: redis://redis:6379/0
