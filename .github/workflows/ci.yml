@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -29,7 +29,7 @@ jobs:
     needs: build
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build Docker image for tests
         env:
           DOCKER_BUILDKIT: '1'
@@ -45,13 +45,13 @@ jobs:
     needs: build
     steps:
       - name: Checkout target revision
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: pr
           fetch-depth: 0
       - name: Checkout base revision
         if: github.event_name == 'pull_request'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
