@@ -197,7 +197,7 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
 
         try:
             unsloth = importlib.import_module("unsloth")
-        except (ModuleNotFoundError, _NotImplError):
+        except (ModuleNotFoundError, ImportError, _NotImplError):
             logger.info(
                 "llm.unsloth.unavailable", extra={"patched": False, "available": False}
             )

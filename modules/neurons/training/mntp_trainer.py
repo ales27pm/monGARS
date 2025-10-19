@@ -4,7 +4,10 @@ from __future__ import annotations
 # transformers/peft modules are loaded.
 try:  # pragma: no cover - optional dependency
     import unsloth  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - fallback when unsloth missing
+except (
+    ModuleNotFoundError,
+    ImportError,
+):  # pragma: no cover - fallback when unsloth missing
     unsloth = None  # type: ignore[assignment]
 except Exception:  # pragma: no cover - defensive guardrail around import time
     unsloth = None  # type: ignore[assignment]
