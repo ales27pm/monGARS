@@ -733,6 +733,7 @@ async def test_rag_context_disabled(api_context: ApiTestContext) -> None:
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert response.json()["detail"] == "RAG disabled"
 
+
 @pytest.mark.asyncio
 async def test_rag_context_service_error(api_context: ApiTestContext) -> None:
     api_context.repo.seed_user("reviewer", "pw")
