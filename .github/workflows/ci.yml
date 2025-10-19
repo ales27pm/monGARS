@@ -30,6 +30,22 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Reclaim runner disk space
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          echo "Disk usage before cleanup"
+          df -h
+          sudo rm -rf /home/runner/actions-runner/_diag/* || true
+          sudo rm -rf /home/runner/actions-runner/cached/* || true
+          sudo rm -rf /home/runner/_work/_temp/* || true
+          sudo rm -rf ~/.cache/pip || true
+          sudo rm -rf ~/.cache/pnpm || true
+          sudo rm -rf ~/.npm || true
+          docker system prune -af || true
+          docker volume prune -f || true
+          echo "Disk usage after cleanup"
+          df -h
       - name: Build Docker image for tests
         env:
           DOCKER_BUILDKIT: '1'
