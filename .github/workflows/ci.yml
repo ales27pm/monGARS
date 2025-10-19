@@ -35,7 +35,7 @@ jobs:
           DOCKER_BUILDKIT: '1'
         run: |
           docker build \
-            --build-arg PYTORCH_IMAGE=pytorch/pytorch:2.1.2-cpu-py3.10 \
+            --build-arg PYTORCH_IMAGE=pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime \
             -t mongars-ci .
       - name: Run pytest inside Docker image
         run: docker run --rm mongars-ci pytest -q
