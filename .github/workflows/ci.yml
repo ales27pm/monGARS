@@ -54,8 +54,7 @@ jobs:
             --build-arg PYTORCH_IMAGE=python:3.11-slim \
             -t mongars-ci .
       - name: Run pytest inside Docker image
-        run: docker run --rm mongars-ci pytest -q
-
+        run: docker run --rm mongars-ci pytest 
   inventory:
     runs-on: ubuntu-latest
     needs: build
