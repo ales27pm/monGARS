@@ -9,12 +9,13 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import (
     app,
     get_conversational_module,
+    get_hippocampus,
     reset_chat_rate_limiter_async,
 )
+from monGARS.core.hippocampus import Hippocampus
 
 UTC = getattr(datetime, "UTC", timezone.utc)
 
@@ -35,9 +36,10 @@ def _speech_turn_payload(text: str, turn_index: int) -> dict[str, Any]:
 
 
 class _FakeConversationalModule:
-    def __init__(self) -> None:
+    def __init__(self, store: Hippocampus) -> None:
         self.calls: list[dict[str, Any]] = []
         self.responses: list[str] = []
+        self._store = store
 
     async def generate_response(
         self,
@@ -52,7 +54,7 @@ class _FakeConversationalModule:
         else:
             response_text = f"auto-response-{index}"
         speech_turn = _speech_turn_payload(response_text, index + 1)
-        await hippocampus.store(user_id, query, response_text)
+        await self._store.store(user_id, query, response_text)
         call = {
             "user_id": user_id,
             "query": query,
@@ -70,11 +72,12 @@ class _FakeConversationalModule:
 
 @pytest_asyncio.fixture
 async def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    hippocampus._memory.clear()
-    hippocampus._locks.clear()
+    store = Hippocampus()
     await reset_chat_rate_limiter_async()
 
-    fake_module = _FakeConversationalModule()
+    app.dependency_overrides[get_hippocampus] = lambda: store
+
+    fake_module = _FakeConversationalModule(store)
 
     async def _allow_rate_limit(_: str) -> None:
         return None
@@ -90,8 +93,7 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         yield client
 
     app.dependency_overrides.pop(get_conversational_module, None)
-    hippocampus._memory.clear()
-    hippocampus._locks.clear()
+    app.dependency_overrides.pop(get_hippocampus, None)
 
 
 @pytest.mark.asyncio
