@@ -19,6 +19,7 @@ RUN apt-get update \
         git \
         git-lfs \
         libffi-dev \
+        # OpenMP runtime required by CPU-only PyTorch wheels when using the python:3.11-slim base image
         libgomp1 \
         libgl1 \
         libjpeg-dev \
@@ -70,6 +71,7 @@ RUN apt-get update \
         git \
         git-lfs \
         libffi-dev \
+        # OpenMP runtime required by CPU-only PyTorch wheels when using the python:3.11-slim base image
         libgomp1 \
         libgl1 \
         libjpeg-dev \
