@@ -19,9 +19,11 @@ RUN apt-get update \
         git \
         git-lfs \
         libffi-dev \
+        libgomp1 \
         libgl1 \
         libjpeg-dev \
         libpq-dev \
+        libstdc++6 \
         libssl-dev \
         libxml2-dev \
         libxslt1-dev \
@@ -68,9 +70,11 @@ RUN apt-get update \
         git \
         git-lfs \
         libffi-dev \
+        libgomp1 \
         libgl1 \
         libjpeg-dev \
         libpq5 \
+        libstdc++6 \
         libssl-dev \
         libxml2 \
         libxslt1.1 \
