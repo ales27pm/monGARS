@@ -721,7 +721,6 @@ async def test_rag_context_success(api_context: ApiTestContext) -> None:
 async def test_rag_context_disabled(api_context: ApiTestContext) -> None:
     api_context.repo.seed_user("reviewer", "pw")
     token = await _get_token(api_context.client, "reviewer", "pw")
-    api_context.rag.raise_error = RuntimeError("disabled")
 
     from monGARS.core.rag import RagDisabledError
 
@@ -733,7 +732,6 @@ async def test_rag_context_disabled(api_context: ApiTestContext) -> None:
     )
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert response.json()["detail"] == "RAG disabled"
-
 
 @pytest.mark.asyncio
 async def test_rag_context_service_error(api_context: ApiTestContext) -> None:
