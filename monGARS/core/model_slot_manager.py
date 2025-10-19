@@ -9,16 +9,16 @@ safely offloaded when GPU memory pressure exceeds the configured threshold.
 from __future__ import annotations
 
 # Import Unsloth before torch/transformer ecosystems to activate its patches.
+_UNSLOTH_IMPORT_ERROR: Exception | None = None
+
 try:  # pragma: no cover - optional dependency at runtime
     import unsloth  # type: ignore
-except ModuleNotFoundError as exc:  # pragma: no cover
+except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover
     unsloth = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR: Exception | None = exc
+    _UNSLOTH_IMPORT_ERROR = exc
 except Exception as exc:  # pragma: no cover - defensive guardrail
     unsloth = None  # type: ignore[assignment]
     _UNSLOTH_IMPORT_ERROR = exc
-else:
-    _UNSLOTH_IMPORT_ERROR = None
 
 FastLanguageModel = (
     getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]

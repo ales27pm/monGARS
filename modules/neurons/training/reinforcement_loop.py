@@ -28,7 +28,10 @@ from __future__ import annotations
 # transformer-based helpers from TRL are loaded.
 try:  # pragma: no cover - optional dependency for reasoning loop
     import unsloth  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
+except (
+    ModuleNotFoundError,
+    ImportError,
+):  # pragma: no cover - optional dependency branch
     unsloth = None  # type: ignore[assignment]
 except Exception:  # pragma: no cover - defensive guard
     unsloth = None  # type: ignore[assignment]
