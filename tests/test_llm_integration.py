@@ -321,6 +321,74 @@ async def test_generate_response_uses_slot_fallback_when_needed(
     assert call_counts == {"slot": 1}
 
 
+@pytest.mark.asyncio
+async def test_generate_response_returns_expected_keys(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful generations should populate the standard response payload."""
+
+    fake_llm_integration.use_ray = False
+
+    async def _fake_local(prompt: str, task_type: str) -> dict[str, object]:
+        assert task_type == "general"
+        assert prompt.startswith(llm_integration.CHATML_BEGIN_OF_TEXT)
+        return {"message": {"content": "final answer"}}
+
+    monkeypatch.setattr(
+        fake_llm_integration, "_call_local_provider", _fake_local, raising=False
+    )
+
+    result = await fake_llm_integration.generate_response("hello", task_type="general")
+
+    assert result == {
+        "text": "final answer",
+        "confidence": pytest.approx(2 / 512),
+        "tokens_used": 2,
+        "source": "local",
+        "adapter_version": fake_llm_integration._current_adapter_version,
+    }
+
+    active_prompt = fake_llm_integration._ensure_chatml_prompt("hello", None)
+    cache_key = fake_llm_integration._cache_key("general", active_prompt)
+    cached = await llm_integration._RESPONSE_CACHE.get(cache_key)
+    assert cached == result
+
+
+@pytest.mark.asyncio
+async def test_generate_response_handles_local_provider_errors(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local provider failures should produce an error payload and cache entry."""
+
+    fake_llm_integration.use_ray = False
+
+    async def _raise_local(prompt: str, task_type: str) -> dict[str, object]:
+        raise fake_llm_integration.LocalProviderError("Missing Ollama API key.")
+
+    monkeypatch.setattr(
+        fake_llm_integration, "_call_local_provider", _raise_local, raising=False
+    )
+
+    result = await fake_llm_integration.generate_response(
+        "diagnostics", task_type="general"
+    )
+
+    assert result == {
+        "text": "Missing Ollama API key.",
+        "confidence": 0.0,
+        "tokens_used": 0,
+        "source": "error",
+        "adapter_version": fake_llm_integration._current_adapter_version,
+    }
+
+    active_prompt = fake_llm_integration._ensure_chatml_prompt("diagnostics", None)
+    cache_key = fake_llm_integration._cache_key("general", active_prompt)
+    cached = await llm_integration._RESPONSE_CACHE.get(cache_key)
+    assert cached == result
+
+
 def test_infer_task_type_detects_coding(
     fake_llm_integration: llm_integration.LLMIntegration,
 ) -> None:

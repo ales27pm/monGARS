@@ -37,6 +37,22 @@ class _RecordingManager:
         return [base_vector for _ in texts]
 
 
+class _DeterministicManager:
+    """Manager double that returns a preset set of vectors for assertions."""
+
+    def __init__(self, vectors: list[list[float]]) -> None:
+        self._ready = True
+        self._vectors = vectors
+        self.calls: list[tuple[list[str], str]] = []
+
+    def is_ready(self) -> bool:
+        return self._ready
+
+    def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
+        self.calls.append((list(texts), prompt))
+        return self._vectors
+
+
 class _FailingManager:
     def __init__(self) -> None:
         self._ready = True
@@ -236,6 +252,36 @@ async def test_encode_batch_uses_fallback_when_manager_not_ready() -> None:
 
 
 @pytest.mark.asyncio
+async def test_encode_batch_returns_vectors_from_ready_manager() -> None:
+    settings = Settings(
+        llm2vec_max_batch_size=4,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=4,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        debug=True,
+    )
+    expected_vectors = [[0.1, 0.2, 0.3, 0.4], [0.9, 0.8, 0.7, 0.6]]
+    manager = _DeterministicManager(expected_vectors)
+    embedder = LLM2VecEmbedder(
+        settings=settings, neuron_manager_factory=lambda: manager
+    )
+
+    batch = await embedder.encode_batch(["first", "second"], instruction="Prompt")
+
+    assert batch.used_fallback is False
+    assert batch.vectors == expected_vectors
+    assert len(manager.calls) == 1
+    payloads, recorded_prompt = manager.calls[0]
+    assert recorded_prompt == "Prompt"
+    assert len(payloads) == 2
+    for payload, original_text in zip(payloads, ["first", "second"], strict=True):
+        assert payload.startswith(CHATML_BEGIN_OF_TEXT)
+        assert f"{CHATML_START_HEADER}system{CHATML_END_HEADER}" in payload
+        assert f"{CHATML_START_HEADER}user{CHATML_END_HEADER}" in payload
+        assert original_text in payload
+
+
+@pytest.mark.asyncio
 async def test_encode_batch_records_chatml_for_fallback_vectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -384,6 +430,30 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
     assert len(batch_ninf.vectors[0]) == 3
     magnitude_ninf = _vector_norm(batch_ninf.vectors[0])
     assert magnitude_ninf == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_encode_batch_fallback_matches_internal_generator() -> None:
+    settings = Settings(
+        llm2vec_max_batch_size=4,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=5,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        debug=True,
+    )
+    embedder = LLM2VecEmbedder(
+        settings=settings, neuron_manager_factory=_NotReadyManager
+    )
+    prompt = "Fallback instruction"
+    payload = "payload"
+
+    batch = await embedder.encode_batch([payload], instruction=prompt)
+
+    assert batch.used_fallback is True
+    assert len(batch.vectors) == 1
+    expected_vector = embedder._fallback_vector(prompt, payload)
+    assert batch.vectors[0] == expected_vector
+    assert len(expected_vector) == settings.llm2vec_vector_dimensions
 
 
 @pytest.mark.asyncio
