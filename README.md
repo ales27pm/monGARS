@@ -132,7 +132,7 @@ slide decks or ops runbooks.
 - Python 3.11+
 - Docker & Docker Compose for container workflows
 - NVIDIA drivers compatible with CUDA 12.1 when running GPU workloads inside the
-  official `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image
+  official `pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime` image
 - Optional: GPU drivers for Ollama or Torch-based adapters
 
 ### Local Development
@@ -208,7 +208,7 @@ The refreshed Compose topology keeps the same service names but now uses
 anchors to share environment blocks, consistent health checks, and optional
 profiles for inference (`ollama`) and distributed serving (`ray-head`,
 `rayserve`). Application images default to
-`pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime`, but the Dockerfiles accept a
+`pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime`, but the Dockerfiles accept a
 `PYTORCH_IMAGE` build argument so you can bump CUDA/PyTorch releases without
 editing manifests. The GPU overlay sets `PYTORCH_IMAGE_GPU` to
 `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` and publishes the build under
