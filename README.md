@@ -292,8 +292,8 @@ can be extended to register additional Ollama models or alternate providers.
   present before distributing it to air-gapped or offline environments.
 
 ## Operational Workflows
-- **Testing**: `pytest -q` for unit/integration coverage. Run
-  `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage.
+- **Testing**: `pytest -q` (631 tests in ~107 seconds) for unit/integration coverage. Run
+  `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage; execute `npm run test` when frontend assets or SDKs change.
 - **Static analysis**: `black . && isort .` before committing. Add type hints when
   editing public APIs.
 - **Provisioning**: `python -m scripts.provision_models --json` ensures Ollama

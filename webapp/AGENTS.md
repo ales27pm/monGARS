@@ -14,21 +14,29 @@ middleware.
 ## Roadmap Alignment
 
 - **Web Interface Goals**
-  - _(No matching roadmap entries for `Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)`)_
+  - ✅ FastAPI chat/history/token endpoints with validation.
+  - ✅ Django chat UI with progressive enhancement.
+  - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
+  - ✅ Replaced hard-coded credential stores with database-backed auth flows; FastAPI no longer seeds demo credentials at startup.【F:monGARS/api/web_api.py†L41-L120】
+  - ✅ Publish polished SDKs and reference clients with documented release flows.【F:docs/sdk-release-guide.md†L1-L160】【F:docs/sdk-overview.md†L1-L120】
 
 ## Views & Services
 
 - Keep views asynchronous and delegate outbound HTTP calls to `chat/services.py` for centralised auth,
-    retries, and logging.
-- Pull configuration from environment variables/Django settings; never hardcode secrets or URLs.
+    retries, logging, and WebSocket ticket exchange.
+- Pull configuration from environment variables/Django settings; never hardcode secrets or URLs and
+    keep parity with FastAPI settings.
 - Apply `require_token` to authenticated routes and document context variables in docstrings.
 
 ## Templates & Frontend
 
-- Keep business logic in views/services; templates focus on presentation with progressive enhancement.
-- Ensure JavaScript has graceful degradation paths and document new data attributes/events.
+- Keep business logic in views/services; templates focus on presentation with progressive enhancement
+    and localisation-ready strings.
+- Ensure JavaScript bundles built via `webapp/static/js/build.mjs` have graceful degradation paths;
+    run `npm run lint`/`npm run test` when editing them.
 
 ## Testing
 
-Update `tests/test_api_history.py` and `tests/test_websocket.py` when UI flows change; mock FastAPI
-interactions with `respx`/`httpx`.
+Update `tests/test_webapp_chat_services.py`, `tests/test_webapp_settings.py`,
+`tests/test_webapp_database_settings.py`, and `tests/test_websocket.py` when UI flows change; mock
+FastAPI interactions with `respx`/`httpx`.

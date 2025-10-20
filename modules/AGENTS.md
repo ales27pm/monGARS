@@ -13,17 +13,28 @@ Covers optional subsystems under `modules/`, including evolution and neuron trai
 ## Roadmap Alignment
 
 - **Self-Improvement Focus**
-  - _(No matching roadmap entries for `Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)`)_
+  - ✅ Personality profiles persisted via SQLModel with live adapter updates.
+  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - ✅ ResearchLongHaulService now schedules multi-replica soak runs and persists observability snapshots for dashboards, ensuring reinforcement pipelines stay healthy without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_research_long_haul_service.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】
+- **Sustainability Research**
+  - 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.
+  - 🚧 Automate energy usage reporting and advanced hardware-aware scaling using the energy tracker pipeline and reinforcement observability feeds as the baseline data source.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
+  - 🚧 Share optimisation artefacts between nodes for faster convergence.
 
 ## Design Tenets
 
 - Gate heavy dependencies (Torch, datasets, GPU tooling) behind runtime checks with informative
-    warnings.
-- Accept configuration via explicit parameters or config bundles from `configs/`.
-- Log with contextual metadata (model, dataset, artefact path) using `logging.getLogger(__name__)`.
+    warnings and deterministic fallbacks.
+- Accept configuration via explicit parameters or config bundles from `configs/` and surface artefact
+    metadata for the catalog.
+- Log with contextual metadata (model, dataset, artefact path) using `logging.getLogger(__name__)` and
+    feed sustainability metrics when available.
 
 ## Documentation & Testing
 
-- Add scoped AGENTS.md files for new subpackages and update `monGARS_structure.txt`.
-- Keep `tests/test_evolution_engine.py` and `tests/test_mntp_trainer.py` current as features evolve;
-    patch heavy integrations for speed.
+- Add scoped AGENTS.md files for new subpackages and update `monGARS_structure.txt` when landing
+    modules.
+- Keep `tests/test_evolution_engine.py`, `tests/test_training_pipeline.py`,
+    `tests/test_mntp_trainer.py`, `tests/test_run_dolphin_unsloth_workflow.py`, and
+    `tests/test_mlops_training.py` current as features evolve; patch heavy integrations for speed.
