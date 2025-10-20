@@ -27,14 +27,13 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
-    PostgresDsn,
     PrivateAttr,
     RedisDsn,
     field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from monGARS.core.constants import (

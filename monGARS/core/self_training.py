@@ -318,7 +318,7 @@ class SelfTrainingEngine:
         external_limit = max(0, num_samples - internal_limit)
 
         try:  # pragma: no cover - heavy dependency gated at runtime
-            from datasets import Dataset, concatenate_datasets, load_dataset
+            from datasets import Dataset, concatenate_datasets
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dep
             raise RuntimeError(
                 "The 'datasets' package is required for reasoning dataset curation"
