@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
-import threading
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -178,16 +178,16 @@ async def record_request_metrics(
     try:
         response = await call_next(request)
         status_code = response.status_code
-    except Exception as exc:
-        if current_span is not None:
-            current_span.record_exception(exc)
-            if Status is not None and StatusCode is not None:
-                current_span.set_status(Status(StatusCode.ERROR, str(exc)))
-        raise
     finally:
         route = request.scope.get("route")
         if route is not None and getattr(route, "path", None):
             route_template = route.path
+
+        exc = sys.exc_info()[1]
+        if exc is not None and current_span is not None:
+            current_span.record_exception(exc)
+            if Status is not None and StatusCode is not None:
+                current_span.set_status(Status(StatusCode.ERROR, str(exc)))
 
         if current_span is not None:
             current_span.set_attribute("http.method", method)
@@ -275,21 +275,7 @@ def reset_chat_rate_limiter() -> None:
             "reset_chat_rate_limiter() cannot be used while an event loop is running. "
             "Use reset_chat_rate_limiter_async() instead."
         )
-    result: Exception | None = None
-
-    def _run() -> None:
-        nonlocal result
-        try:
-            asyncio.run(_chat_rate_limiter.reset())
-        except Exception as exc:  # pragma: no cover - unexpected failure
-            result = exc
-
-    worker = threading.Thread(target=_run, daemon=True)
-    worker.start()
-    worker.join()
-
-    if result is not None:
-        raise result
+    asyncio.run(_chat_rate_limiter.reset())
 
 
 def get_chat_rate_limiter() -> InMemoryRateLimiter:

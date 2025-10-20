@@ -348,10 +348,11 @@ async def api_context(monkeypatch) -> ApiTestContext:
 
     await reset_chat_rate_limiter_async()
     try:
-        transport = ASGITransport(app=app)
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
         async with app.router.lifespan_context(app):
             async with AsyncClient(
-                transport=transport, base_url="http://test"
+                transport=transport,
+                base_url="http://test",
             ) as client:
                 yield ApiTestContext(
                     client=client,
@@ -815,6 +816,24 @@ async def test_peer_message_validation_errors(api_context: ApiTestContext) -> No
         json={"payload": json.dumps({})},
     )
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+@pytest.mark.asyncio
+async def test_peer_message_unexpected_error_surfaces(
+    api_context: ApiTestContext,
+) -> None:
+    api_context.repo.seed_user("peer", "pw")
+    token = await _get_token(api_context.client, "peer", "pw")
+
+    api_context.peer.decode_error = Exception("boom")
+    response = await api_context.client.post(
+        "/api/v1/peer/message",
+        headers=_bearer(token),
+        json={"payload": json.dumps({})},
+    )
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.text == "Internal Server Error"
 
 
 @pytest.mark.asyncio
