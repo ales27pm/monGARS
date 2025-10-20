@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-ARG PYTORCH_IMAGE=pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+ARG PYTORCH_IMAGE=pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
 
 # --- Build Stage ---
 FROM ${PYTORCH_IMAGE} AS builder
@@ -19,9 +19,12 @@ RUN apt-get update \
         git \
         git-lfs \
         libffi-dev \
+        # OpenMP runtime required by CPU-only PyTorch wheels when using the python:3.11-slim base image
+        libgomp1 \
         libgl1 \
         libjpeg-dev \
         libpq-dev \
+        libstdc++6 \
         libssl-dev \
         libxml2-dev \
         libxslt1-dev \
@@ -68,9 +71,12 @@ RUN apt-get update \
         git \
         git-lfs \
         libffi-dev \
+        # OpenMP runtime required by CPU-only PyTorch wheels when using the python:3.11-slim base image
+        libgomp1 \
         libgl1 \
         libjpeg-dev \
         libpq5 \
+        libstdc++6 \
         libssl-dev \
         libxml2 \
         libxslt1.1 \
