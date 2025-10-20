@@ -15,8 +15,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .persistence import PersistenceManager
-
 # Import Unsloth before torch/transformer ecosystems to activate its patches.
 _UNSLOTH_IMPORT_ERROR: Exception | None = None
 
@@ -49,6 +47,8 @@ try:  # pragma: no cover - optional helper for GPU diagnostics
     import GPUtil  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     GPUtil = None  # type: ignore[assignment]
+
+from .persistence import PersistenceManager
 
 logger = logging.getLogger(__name__)
 
