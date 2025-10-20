@@ -23,23 +23,33 @@ Covers the primary FastAPI app, cognition services, persistence layer, and share
   - ✅ Encrypted peer registry, admin-guarded endpoints, and distributed scheduler.
   - ✅ Sommeil Paradoxal idle-time optimisation and safe apply pipeline.
   - ✅ Implemented load-aware scheduling strategies and shared optimisation telemetry across nodes.
+- **Self-Improvement & Research**
+  - ✅ Personality profiles persisted via SQLModel with live adapter updates.
+  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - ✅ ResearchLongHaulService now schedules multi-replica soak runs and persists observability snapshots for dashboards, ensuring reinforcement pipelines stay healthy without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_research_long_haul_service.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】
 
 ## Dependency & Configuration Discipline
 
-- Resolve configuration once with `monGARS.config.get_settings()` and inject dependencies via
-    constructors or FastAPI dependency providers.
-- Guard optional ML/serving libraries with availability checks and deliver graceful fallbacks with
-    structured warnings.
+- Resolve configuration once with `monGARS.config.get_settings()` and pass dependencies into
+    constructors or FastAPI dependency overrides instead of storing module-level state.
+- Guard optional integrations (Ray Serve, Torch, MLflow, Ollama) with capability checks and fall back
+    to deterministic adapters (`AdaptiveResponseGenerator`, linear manifest paths) when unavailable.
+- Coordinate shared singletons like `ui_events.event_bus`, cache layers, and rate limiters through the
+    central `monGARS.core` modules so API routes, workers, and background schedulers stay in sync.
 
 ## Logging & Persistence
 
-- Emit logs via `logging.getLogger(__name__)` with scrubbed identifiers.
-- Route database access through `core.persistence.PersistenceRepository` and align schemas with
-    Alembic migrations in `alembic/`.
-- Prefer caching helpers in `core.caching` / `core.hippocampus` and clear them explicitly inside
-    tests.
+- Emit logs via `logging.getLogger(__name__)` with structured `extra` metadata; propagate correlation
+    IDs surfaced by API and peer events.
+- Route database access through `core.persistence.PersistenceRepository` and keep Alembic migrations
+    in `alembic_migrations/` authoritative for schema changes.
+- Use caching helpers in `core.caching` / `core.hippocampus` and ensure tests clear caches via
+    fixtures to avoid state bleed.
 
 ## Testing Map
 
-Update cognition and API suites together; relevant modules drive `tests/test_api_*.py`,
-`tests/test_hippocampus.py`, and peers listed in the roadmap snapshot.
+Update cognition, persistence, and networking suites together—`tests/test_conversation_flow.py`,
+`tests/test_llm_integration.py`, `tests/test_peer_communication.py`,
+`tests/test_long_haul_validation.py`, `tests/test_sustainability_dashboard.py`, and
+`tests/test_research_long_haul_service.py` exercise this package.

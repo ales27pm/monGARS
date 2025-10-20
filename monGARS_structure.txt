@@ -1,101 +1,87 @@
 monGARS/
-├── .env
-├── .gitignore
-├── alembic.ini
-├── config.py
-├── docker-compose.yml
-├── Dockerfile
-├── init_db.py
-├── main.py
-├── monGARS_structure.txt
-├── pyproject.toml
-├── requirements.txt
-├── setup.py
+├── AGENTS.md
+├── README.md
+├── ROADMAP.md
 ├── configs/
+│   ├── AGENTS.md
+│   ├── agents/
+│   │   └── agents_config.json
+│   ├── training/
+│   │   ├── mntp_dolphin_config.json
+│   │   └── sustainability_policy.json
 │   └── llm_models.json
-├── scripts/
-│   ├── docker_menu.py
-│   └── provision_models.py
-├── tasks.py
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py
-│   ├── integration_test.py
-│   ├── self_training_test.py
-│   ├── property_test.py
-│   ├── chaos_test.py
-│   └── test_sustainability_policy.py
-├── k8s/
-│   ├── deployment.yaml
-│   ├── prometheus.yaml
-│   └── secrets.yaml
-├── .github/
-│   └── workflows/
-│       └── ci-cd.yml
+├── docs/
+│   ├── AGENTS.md
+│   ├── architecture/
+│   │   ├── module_interactions.md
+│   │   └── system_overview.svg
+│   ├── api/
+│   │   └── README.md
+│   ├── codebase_status_report.md
+│   ├── implementation_status.md
+│   ├── testing.md
+│   └── ... (runbooks, SDK guides, RAG governance)
+├── monGARS/
+│   ├── AGENTS.md
+│   ├── api/
+│   │   ├── AGENTS.md
+│   │   ├── authentication.py
+│   │   ├── web_api.py
+│   │   ├── ws_manager.py
+│   │   └── ws_ticket.py
+│   ├── core/
+│   │   ├── AGENTS.md
+│   │   ├── conversation.py
+│   │   ├── hippocampus.py
+│   │   ├── llm_integration.py
+│   │   ├── peer.py
+│   │   ├── research_validation.py
+│   │   ├── sustainability_dashboard.py
+│   │   └── ... (adaptive response, personality, ui_events, etc.)
+│   ├── telemetry.py
+│   └── ... (config, utils, adapters)
 ├── modules/
-│   ├── ray_service.py
+│   ├── AGENTS.md
 │   ├── evolution_engine/
-│   │   ├── __init__.py
-│   │   ├── energy.py
-│   │   ├── hardware.py
+│   │   ├── AGENTS.md
 │   │   ├── orchestrator.py
-│   │   ├── self_training.py
+│   │   ├── energy.py
 │   │   └── sustainability.py
 │   └── neurons/
-│       ├── __init__.py
-│       ├── core.py
-│       ├── registry.py
+│       ├── AGENTS.md
 │       └── training/
-│           └── mntp_trainer.py
-├── monGARS/
-    ├── __init__.py
-    ├── db/
-    │   ├── __init__.py
-    │   └── models.py
-    ├── api/
-    │   ├── __init__.py
-    │   ├── authentication.py
-    │   ├── dependencies.py
-    │   ├── model_management.py
-    │   └── web_api.py
-    ├── core/
-    │   ├── __init__.py
-    │   ├── caching/
-    │   │   ├── __init__.py
-    │   │   └── tiered_cache.py
-    │   ├── conversation.py
-    │   ├── evolution_engine.py
-    │   ├── llm_integration.py
-    │   ├── model_manager.py
-    │   ├── logging.py
-    │   ├── operator_approvals.py
-    │   ├── monitor.py
-    │   ├── neuro_symbolic/
-    │   │   ├── __init__.py
-    │   │   └── advanced_reasoner.py
-    │   ├── neurones.py
-    │   ├── personality.py
-    │   ├── security.py
-    │   ├── self_training.py
-    │   ├── social.py
-    │   ├── utils.py
-    │   ├── cortex/
-    │   │   ├── __init__.py
-    │   │   └── curiosity_engine.py
-    │   ├── mains_virtuelles.py
-    │   ├── mimicry.py
-    │   └── orchestrator.py
-└── webapp/
-    ├── manage.py
-    ├── webapp/
-    │   ├── __init__.py
-    │   ├── settings.py
-    │   ├── urls.py
-    │   └── wsgi.py
-    └── chat/
-        ├── __init__.py
-        ├── urls.py
-        ├── views.py
-        └── templates/
-            └── chat/
-                └── index.html
+│           ├── mntp_trainer.py
+│           └── reinforcement_loop.py
+├── scripts/
+│   ├── manage_agents.py
+│   ├── docker_menu.py
+│   └── provision_models.py
+├── sdks/
+│   ├── python/
+│   │   └── README.md
+│   └── typescript/
+│       └── package.json
+├── tests/
+│   ├── AGENTS.md
+│   ├── api/
+│   │   └── test_contract.py
+│   ├── chaos_test.py
+│   ├── integration_test.py
+│   ├── self_training_test.py
+│   └── ... (631 total unit, integration, and reinforcement suites)
+├── webapp/
+│   ├── AGENTS.md
+│   ├── chat/
+│   │   ├── AGENTS.md
+│   │   ├── services.py
+│   │   └── templates/
+│   ├── manage.py
+│   └── static/
+│       └── js/
+│           ├── build.mjs
+│           └── src/
+├── Dockerfile
+├── docker-compose.yml
+├── init_db.py
+├── package.json
+└── pyproject.toml

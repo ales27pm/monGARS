@@ -18,32 +18,42 @@
           "label": "Security & Stability Hotlist"
         },
         {
-          "phase": "Phase 3 – Hardware & Performance (✅ Completed Q3 2025)",
-          "label": "Phase 3 – Hardware & Performance"
+          "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
+          "label": "Web/API Refinement"
         },
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
-          "label": "Phase 5 – Web/API Refinement"
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
+          "label": "Self-Improvement & Research"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability & Longevity"
         }
       ],
       "sections": [
         {
           "heading": "Workflow Guardrails",
           "bullets": [
-            "Target **Python 3.11** across tooling and CI.",
-            "Format with `black` and `isort` using the repository `pyproject.toml` configuration.",
-            "Run `pytest` before raising a pull request; record skipped suites and why.",
-            "Document architecture, configuration, and operator workflows in `docs/` or the README when behaviour changes.",
-            "✅ Run `isort --check --diff .` and `black --check .` locally before committing to avoid CI formatting failures.",
-            "📌 Remember the 2025-10-16 CI failure where `isort` flagged `monGARS/core/inference_utils.py` and `monGARS/core/persistence.py`; always re-run the formatters after touching shared inference helpers to keep imports ordered and unblock the pipeline."
+            "Target **Python 3.11** for backend tooling and **Node.js 18+** for frontend builds.",
+            "Format Python with `black` and `isort` (configured via `pyproject.toml`) and lint TypeScript/JavaScript assets with `npm run lint` before committing.",
+            "Run `pytest` (631 tests, ~110s) and record skips; execute `npm run test` when web assets or SDKs change.",
+            "Document architecture, configuration, and operator workflow changes in `docs/` or the README before shipping.",
+            "Regenerate these instructions with `python scripts/manage_agents.py refresh` after editing `configs/agents/agents_config.json`."
           ]
         },
         {
           "heading": "Observability & Security",
           "bullets": [
             "Load configuration through `monGARS.config.get_settings()` so cached settings stay coherent across services.",
-            "Redact secrets in logs and surface metrics via OpenTelemetry when you introduce background workers or retries.",
-            "Keep Dockerfiles, build scripts, and Kubernetes manifests aligned—when you touch one, review the others."
+            "Redact secrets in logs and wire new background tasks into `monGARS.telemetry` counters and OpenTelemetry toggles (`otel_prometheus_enabled`, `otel_traces_enabled`).",
+            "Keep Dockerfiles, Compose stacks, and Kubernetes manifests aligned; review Vault/ExternalSecret usage whenever credentials change."
+          ]
+        },
+        {
+          "heading": "Documentation & Runbooks",
+          "bullets": [
+            "Update runbooks, diagrams, and `monGARS_structure.txt` whenever module layout or workflows shift.",
+            "Cross-link roadmap entries, docs, and code so operators can trace feature readiness and configuration changes."
           ]
         },
         {
@@ -69,28 +79,33 @@
         {
           "phase": "Phase 4 – Collaborative Networking (✅ Completed Q4 2025)",
           "label": "Networking & Collaboration"
+        },
+        {
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
+          "label": "Self-Improvement & Research"
         }
       ],
       "sections": [
         {
           "heading": "Dependency & Configuration Discipline",
           "bullets": [
-            "Resolve configuration once with `monGARS.config.get_settings()` and inject dependencies via constructors or FastAPI dependency providers.",
-            "Guard optional ML/serving libraries with availability checks and deliver graceful fallbacks with structured warnings."
+            "Resolve configuration once with `monGARS.config.get_settings()` and pass dependencies into constructors or FastAPI dependency overrides instead of storing module-level state.",
+            "Guard optional integrations (Ray Serve, Torch, MLflow, Ollama) with capability checks and fall back to deterministic adapters (`AdaptiveResponseGenerator`, linear manifest paths) when unavailable.",
+            "Coordinate shared singletons like `ui_events.event_bus`, cache layers, and rate limiters through the central `monGARS.core` modules so API routes, workers, and background schedulers stay in sync."
           ]
         },
         {
           "heading": "Logging & Persistence",
           "bullets": [
-            "Emit logs via `logging.getLogger(__name__)` with scrubbed identifiers.",
-            "Route database access through `core.persistence.PersistenceRepository` and align schemas with Alembic migrations in `alembic/`.",
-            "Prefer caching helpers in `core.caching` / `core.hippocampus` and clear them explicitly inside tests."
+            "Emit logs via `logging.getLogger(__name__)` with structured `extra` metadata; propagate correlation IDs surfaced by API and peer events.",
+            "Route database access through `core.persistence.PersistenceRepository` and keep Alembic migrations in `alembic_migrations/` authoritative for schema changes.",
+            "Use caching helpers in `core.caching` / `core.hippocampus` and ensure tests clear caches via fixtures to avoid state bleed."
           ]
         },
         {
           "heading": "Testing Map",
           "paragraphs": [
-            "Update cognition and API suites together; relevant modules drive `tests/test_api_*.py`, `tests/test_hippocampus.py`, and peers listed in the roadmap snapshot."
+            "Update cognition, persistence, and networking suites together—`tests/test_conversation_flow.py`, `tests/test_llm_integration.py`, `tests/test_peer_communication.py`, `tests/test_long_haul_validation.py`, `tests/test_sustainability_dashboard.py`, and `tests/test_research_long_haul_service.py` exercise this package."
           ]
         }
       ]
@@ -104,7 +119,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
           "label": "API Refinement"
         }
       ],
@@ -112,21 +127,29 @@
         {
           "heading": "Endpoint Design",
           "bullets": [
-            "Expose asynchronous routes returning typed Pydantic responses; centralise validation inside `schemas.py`.",
-            "Register shared dependencies inside `dependencies.py` so tests can inject doubles."
+            "Expose asynchronous routes returning typed Pydantic responses; define request/response models in `schemas.py` and reuse dependency helpers from `dependencies.py`.",
+            "Register routers with explicit prefixes/tags and share singletons (rate limiter, WebSocket manager, ticket signer) via module-level references to avoid reinitialisation races."
           ]
         },
         {
-          "heading": "Security & Error Handling",
+          "heading": "Security, Tickets & Rate Limiting",
           "bullets": [
-            "Flow authentication through `core.security.SecurityManager` and enforce bearer tokens on every route except `/ready` and `/healthz`.",
-            "Translate domain errors into `HTTPException` codes; log unexpected failures with correlation IDs before bubbling up."
+            "Authenticate through `core.security.SecurityManager`/`authenticate_user` and guard chat endpoints with `InMemoryRateLimiter` while logging rejects via `_log_rate_limit`.",
+            "Issue and verify WebSocket tickets using `ws_ticket.py`/`ticket_signer.py`; ensure `ws_manager` respects queue sizes and token-bucket settings from configuration.",
+            "Translate domain failures into FastAPI `HTTPException`s and capture upstream errors (`HTTPError`, `SQLAlchemyError`, `CircuitBreakerOpenError`) before re-raising."
+          ]
+        },
+        {
+          "heading": "Observability & Static Assets",
+          "bullets": [
+            "Expose `/metrics` via `PROMETHEUS_REGISTRY` and enable OpenTelemetry instrumentation only when `_settings.otel_*` toggles demand it.",
+            "Serve static assets through `StaticFiles` when the build output exists; log actionable warnings when assets are missing during development builds."
           ]
         },
         {
           "heading": "Testing Hooks",
           "paragraphs": [
-            "Keep `tests/test_api_chat.py`, `tests/test_api_history.py`, and WebSocket suites aligned when request/response contracts evolve."
+            "Keep `tests/test_api_chat.py`, `tests/test_api_history.py`, `tests/test_api_model_management.py`, `tests/test_api_rag.py`, `tests/test_ticket_signer.py`, `tests/test_websocket.py`, and `tests/test_ws_manager.py` aligned when contracts evolve."
           ]
         }
       ]
@@ -144,31 +167,34 @@
           "label": "Performance & Resilience"
         },
         {
-          "phase": "Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)",
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
           "label": "Self-Improvement"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability"
         }
       ],
       "sections": [
         {
           "heading": "Architectural Principles",
           "bullets": [
-            "Keep orchestrators thin and asynchronous; inject collaborators and avoid module-level singletons.",
-            "Prefer existing services (`Hippocampus`, `PersistenceRepository`, `DistributedScheduler`, `PeerCommunicator`) before inventing new state machines.",
-            "Document new behaviours and heuristics in module docstrings."
+            "Keep orchestrators asynchronous, inject collaborators explicitly, and favour existing services (`AdaptiveResponseGenerator`, `ConversationalModule`, `PeerCommunicator`, `LongHaulValidation`) over ad-hoc state machines.",
+            "Route UI events through `ui_events.event_bus`, persist approvals via `operator_approvals`, and coordinate sustainability metrics with `sustainability_dashboard` when adding new workflows."
           ]
         },
         {
           "heading": "Operational Discipline",
           "bullets": [
-            "Wrap blocking work with `asyncio.to_thread` or queue it on executors.",
-            "Publish counters/metrics for long-running loops and redact sensitive identifiers in logs.",
-            "Handle optional ML dependencies defensively with explicit fallbacks."
+            "Offload blocking work with `asyncio.to_thread` or executors and avoid sharing mutable globals across tasks.",
+            "Emit metrics through `monGARS.telemetry`/OpenTelemetry where available and prefer timezone-aware timestamps (`datetime.now(datetime.UTC)`) in new code.",
+            "Handle optional ML dependencies defensively with explicit fallbacks and structured warnings."
           ]
         },
         {
           "heading": "Test Coverage",
           "paragraphs": [
-            "Expand cognition suites when behaviour shifts—`tests/test_hippocampus.py`, `tests/test_personality.py`, `tests/test_mimicry.py`, and scheduler/evolution tests anchor this area."
+            "Expand cognition, reinforcement, and sustainability suites when behaviour shifts—`tests/test_conversation_semantic_context.py`, `tests/test_llm_integration.py`, `tests/test_peer_communication.py`, `tests/test_reinforcement_loop.py`, `tests/test_long_haul_validation.py`, and `tests/test_sustainability_dashboard.py` anchor this area."
           ]
         }
       ]
@@ -182,24 +208,28 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)",
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
           "label": "Self-Improvement Focus"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability Research"
         }
       ],
       "sections": [
         {
           "heading": "Design Tenets",
           "bullets": [
-            "Gate heavy dependencies (Torch, datasets, GPU tooling) behind runtime checks with informative warnings.",
-            "Accept configuration via explicit parameters or config bundles from `configs/`.",
-            "Log with contextual metadata (model, dataset, artefact path) using `logging.getLogger(__name__)`."
+            "Gate heavy dependencies (Torch, datasets, GPU tooling) behind runtime checks with informative warnings and deterministic fallbacks.",
+            "Accept configuration via explicit parameters or config bundles from `configs/` and surface artefact metadata for the catalog.",
+            "Log with contextual metadata (model, dataset, artefact path) using `logging.getLogger(__name__)` and feed sustainability metrics when available."
           ]
         },
         {
           "heading": "Documentation & Testing",
           "bullets": [
-            "Add scoped AGENTS.md files for new subpackages and update `monGARS_structure.txt`.",
-            "Keep `tests/test_evolution_engine.py` and `tests/test_mntp_trainer.py` current as features evolve; patch heavy integrations for speed."
+            "Add scoped AGENTS.md files for new subpackages and update `monGARS_structure.txt` when landing modules.",
+            "Keep `tests/test_evolution_engine.py`, `tests/test_training_pipeline.py`, `tests/test_mntp_trainer.py`, `tests/test_run_dolphin_unsloth_workflow.py`, and `tests/test_mlops_training.py` current as features evolve; patch heavy integrations for speed."
           ]
         }
       ]
@@ -213,30 +243,34 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)",
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
           "label": "Self-Training Execution"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability Coordination"
         }
       ],
       "sections": [
         {
           "heading": "Pipeline Discipline",
           "bullets": [
-            "Keep `EvolutionOrchestrator` focused on sequencing; instantiate trainers from `modules.neurons.training` and return artefact metadata.",
-            "Represent pipeline stages with explicit methods for validation, training, deployment, and rollback.",
-            "Wrap external calls with targeted exception handling—log the action and propagate unexpected errors."
+            "Keep `EvolutionOrchestrator` focused on sequencing; instantiate trainers from `modules.neurons.training` and return artefact metadata for catalog updates.",
+            "Represent pipeline stages with explicit methods for validation, training, deployment, rollback, and sustainability checks.",
+            "Wrap external calls with targeted exception handling—log the action, include artefact identifiers, and propagate unexpected errors."
           ]
         },
         {
           "heading": "Configuration",
           "bullets": [
-            "Default to `configs/training/mntp_dolphin_config.json` with constructor overrides for deterministic tests.",
-            "Document config changes in the README and roadmap when defaults move."
+            "Default to configs in `configs/training/` (`mntp_dolphin_config.json`, sustainability policies) with constructor overrides for deterministic tests.",
+            "Document config changes in the README/docs and roadmap when defaults move or new sustainability gates are added."
           ]
         },
         {
           "heading": "Validation",
           "paragraphs": [
-            "Extend `tests/test_evolution_engine.py` to cover success, failure, and artefact validation scenarios. Use fakes for `MNTPTrainer` in unit tests."
+            "Extend `tests/test_evolution_engine.py`, `tests/test_sustainability_policy.py`, and long-haul integration tests to cover success, failure, artefact validation, and sustainability gate scenarios. Use fakes for `MNTPTrainer` in unit tests."
           ]
         }
       ]
@@ -250,24 +284,28 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)",
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
           "label": "Training Cadence"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability Hooks"
         }
       ],
       "sections": [
         {
           "heading": "Runtime Expectations",
           "bullets": [
-            "Import heavy ML frameworks lazily; fall back gracefully when dependencies are missing.",
-            "Accept explicit arguments for output directories, manifests, and config paths to keep orchestration testable.",
-            "Persist artefacts with helper methods (e.g., `_save_config`, `_save_placeholder`) and document layouts in docstrings."
+            "Import heavy ML frameworks lazily; fall back gracefully when dependencies are missing and document deterministic adapter paths.",
+            "Accept explicit arguments for output directories, manifests, approvals, and config paths so orchestration remains testable.",
+            "Persist artefacts with helper methods (e.g., `_save_config`, `_save_placeholder`) and document layouts in docstrings for catalog consumers."
           ]
         },
         {
           "heading": "Telemetry & Tests",
           "bullets": [
-            "Stream progress logs with model, dataset, and loss context; emit metrics when long-running jobs are introduced.",
-            "Keep `tests/test_mntp_trainer.py` up to date and constrain property-based tests for speed."
+            "Stream progress logs with model, dataset, loss, and sustainability context; emit metrics when long-running jobs are introduced.",
+            "Keep `tests/test_mntp_trainer.py`, `tests/test_reinforcement_loop.py`, and `tests/test_training_pipeline.py` up to date and constrain property-based tests for speed."
           ]
         }
       ]
@@ -281,7 +319,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
           "label": "Web Interface Goals"
         }
       ],
@@ -289,22 +327,22 @@
         {
           "heading": "Views & Services",
           "bullets": [
-            "Keep views asynchronous and delegate outbound HTTP calls to `chat/services.py` for centralised auth, retries, and logging.",
-            "Pull configuration from environment variables/Django settings; never hardcode secrets or URLs.",
+            "Keep views asynchronous and delegate outbound HTTP calls to `chat/services.py` for centralised auth, retries, logging, and WebSocket ticket exchange.",
+            "Pull configuration from environment variables/Django settings; never hardcode secrets or URLs and keep parity with FastAPI settings.",
             "Apply `require_token` to authenticated routes and document context variables in docstrings."
           ]
         },
         {
           "heading": "Templates & Frontend",
           "bullets": [
-            "Keep business logic in views/services; templates focus on presentation with progressive enhancement.",
-            "Ensure JavaScript has graceful degradation paths and document new data attributes/events."
+            "Keep business logic in views/services; templates focus on presentation with progressive enhancement and localisation-ready strings.",
+            "Ensure JavaScript bundles built via `webapp/static/js/build.mjs` have graceful degradation paths; run `npm run lint`/`npm run test` when editing them."
           ]
         },
         {
           "heading": "Testing",
           "paragraphs": [
-            "Update `tests/test_api_history.py` and `tests/test_websocket.py` when UI flows change; mock FastAPI interactions with `respx`/`httpx`."
+            "Update `tests/test_webapp_chat_services.py`, `tests/test_webapp_settings.py`, `tests/test_webapp_database_settings.py`, and `tests/test_websocket.py` when UI flows change; mock FastAPI interactions with `respx`/`httpx`."
           ]
         }
       ]
@@ -318,7 +356,7 @@
       ],
       "roadmap_focus": [
         {
-          "phase": "Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)",
+          "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
           "label": "Chat UX Alignment"
         }
       ],
@@ -326,21 +364,21 @@
         {
           "heading": "Architecture",
           "bullets": [
-            "Route logic through `services.py` and wrap protected views with `require_token`.",
-            "Mirror payloads defined in `monGARS.api.web_api.ChatRequest`; document new context variables in docstrings/templates."
+            "Route logic through `services.py` and wrap protected views with `require_token`; reuse async clients for history, chat, and ticket exchange.",
+            "Mirror payloads defined in `monGARS.api.web_api.ChatRequest` and related schemas; document new context variables in docstrings/templates."
           ]
         },
         {
           "heading": "Networking & Error Handling",
           "bullets": [
-            "Centralise HTTP calls in `services.py` to reuse retries, error handling, and logging.",
-            "Surface actionable operator errors for network issues and capture exceptions with context."
+            "Centralise HTTP calls in `services.py` to reuse retries, error handling, structured logging, and token refresh logic.",
+            "Surface actionable operator errors for network issues and capture exceptions with context for downstream telemetry."
           ]
         },
         {
           "heading": "Verification",
           "paragraphs": [
-            "Revise `tests/test_api_history.py` and `tests/test_websocket.py` alongside chat changes; rely on async clients or httpx mocks."
+            "Revise `tests/test_webapp_chat_services.py`, `tests/test_websocket.py`, and end-to-end suites alongside chat changes; rely on async clients or httpx mocks."
           ]
         }
       ]
@@ -358,8 +396,12 @@
           "label": "Stability Assurance"
         },
         {
-          "phase": "Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)",
+          "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
           "label": "Research Coverage"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability Validation"
         }
       ],
       "sections": [
@@ -368,22 +410,62 @@
           "bullets": [
             "Annotate async tests with `pytest.mark.asyncio` and lean on fixtures in `conftest.py`; never create event loops manually.",
             "Reset shared state (hippocampus caches, global singletons) in fixtures to keep tests hermetic.",
-            "Stub heavy dependencies (Torch, spaCy, HTTP clients) with fakes or patches."
+            "Stub heavy dependencies (Torch, spaCy, HTTP clients) with fakes or patches to keep runs deterministic."
           ]
         },
         {
           "heading": "Coverage Expectations",
           "bullets": [
-            "Exercise success and failure paths for HTTP endpoints, WebSockets, and orchestration flows.",
-            "Run `chaos_test.py`, `integration_test.py`, and `self_training_test.py` before releases or infrastructure-heavy changes.",
-            "Constrain property-based tests to stay fast and deterministic."
+            "Exercise success and failure paths for HTTP endpoints, WebSockets, orchestration flows, sustainability gates, and SDK tooling.",
+            "Run `chaos_test.py`, `integration_test.py`, `self_training_test.py`, and reinforcement long-haul suites before releases or infrastructure-heavy changes.",
+            "Constrain property-based tests to stay fast and deterministic; document skipped suites in PR notes."
           ]
         },
         {
           "heading": "Tooling",
           "paragraphs": [
-            "Default command is `pytest`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1` for triage. Generate coverage with `pytest --cov=monGARS --cov=modules` when requested.",
-            "Run suites from the repository root so module paths resolve (e.g. `pytest tests/test_embeddings.py`); avoid the `pytest monGARS/tests/...` form that failed in CI on 2025-10-16."
+            "Default command is `pytest`; run from the repository root so module paths resolve (631 tests currently pass in ~110 seconds). Use `pytest -k <pattern>` for focused runs, `pytest --maxfail=1` for triage, and `pytest --cov=monGARS --cov=modules` when coverage is required.",
+            "Invoke `npm run test` when frontend/TypeScript assets change so lint and Jest suites stay green."
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/AGENTS.md",
+      "title": "Documentation Authoring Guide",
+      "scope": "Covers runbooks, API references, and architectural notes under `docs/`.",
+      "dynamic_notes": [
+        "Generated via the agents manager script; edit the JSON profile and refresh after updating guidance."
+      ],
+      "roadmap_focus": [
+        {
+          "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
+          "label": "Operator Documentation"
+        },
+        {
+          "phase": "Phase 7 – Sustainability & Longevity (🌱 Future)",
+          "label": "Sustainability Runbooks"
+        }
+      ],
+      "sections": [
+        {
+          "heading": "Style & Accuracy",
+          "bullets": [
+            "Write in present tense, reference canonical module paths/tests, and refresh `Last updated` stamps when present.",
+            "Include direct links to source files or diagrams so readers can jump to implementations quickly."
+          ]
+        },
+        {
+          "heading": "Maintenance",
+          "bullets": [
+            "Update metrics, counts, and configuration tables when behaviour changes (e.g., test totals in `docs/testing.md`, deployment ports, feature flags).",
+            "Document new configuration keys, sustainability controls, or operator workflows before declaring roadmap items complete."
+          ]
+        },
+        {
+          "heading": "Cross-Linking",
+          "paragraphs": [
+            "Cross-reference roadmap milestones and other docs when closing loops so contributors understand how features land across API, core, modules, and webapp layers."
           ]
         }
       ]

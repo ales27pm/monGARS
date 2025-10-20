@@ -19,27 +19,35 @@ suites.
   - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
   - ✅ Replace demo users in `web_api.py` with the database-backed authentication flow and migrations; bootstrap now persists accounts without shipping in-memory defaults.【F:monGARS/api/authentication.py†L17-L120】【F:monGARS/api/web_api.py†L41-L120】
 - **Research Coverage**
-  - _(No matching roadmap entries for `Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)`)_
+  - ✅ Personality profiles persisted via SQLModel with live adapter updates.
+  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - ✅ ResearchLongHaulService now schedules multi-replica soak runs and persists observability snapshots for dashboards, ensuring reinforcement pipelines stay healthy without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_research_long_haul_service.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】
+- **Sustainability Validation**
+  - 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.
+  - 🚧 Automate energy usage reporting and advanced hardware-aware scaling using the energy tracker pipeline and reinforcement observability feeds as the baseline data source.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
+  - 🚧 Share optimisation artefacts between nodes for faster convergence.
 
 ## Structure & Conventions
 
 - Annotate async tests with `pytest.mark.asyncio` and lean on fixtures in `conftest.py`; never create
     event loops manually.
 - Reset shared state (hippocampus caches, global singletons) in fixtures to keep tests hermetic.
-- Stub heavy dependencies (Torch, spaCy, HTTP clients) with fakes or patches.
+- Stub heavy dependencies (Torch, spaCy, HTTP clients) with fakes or patches to keep runs
+    deterministic.
 
 ## Coverage Expectations
 
-- Exercise success and failure paths for HTTP endpoints, WebSockets, and orchestration flows.
-- Run `chaos_test.py`, `integration_test.py`, and `self_training_test.py` before releases or
-    infrastructure-heavy changes.
-- Constrain property-based tests to stay fast and deterministic.
+- Exercise success and failure paths for HTTP endpoints, WebSockets, orchestration flows,
+    sustainability gates, and SDK tooling.
+- Run `chaos_test.py`, `integration_test.py`, `self_training_test.py`, and reinforcement long-haul
+    suites before releases or infrastructure-heavy changes.
+- Constrain property-based tests to stay fast and deterministic; document skipped suites in PR notes.
 
 ## Tooling
 
-Default command is `pytest`; use `pytest -k <pattern>` for focused runs and `pytest --maxfail=1` for
-triage. Generate coverage with `pytest --cov=monGARS --cov=modules` when requested.
+Default command is `pytest`; run from the repository root so module paths resolve (631 tests
+currently pass in ~110 seconds). Use `pytest -k <pattern>` for focused runs, `pytest --maxfail=1`
+for triage, and `pytest --cov=monGARS --cov=modules` when coverage is required.
 
-Run suites from the repository root so module paths resolve (e.g. `pytest
-tests/test_embeddings.py`); avoid the `pytest monGARS/tests/...` form that failed in CI on
-2025-10-16.
+Invoke `npm run test` when frontend/TypeScript assets change so lint and Jest suites stay green.

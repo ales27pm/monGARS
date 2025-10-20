@@ -13,20 +13,27 @@ Covers views, services, forms, and templates for `webapp/chat/`.
 ## Roadmap Alignment
 
 - **Chat UX Alignment**
-  - _(No matching roadmap entries for `Phase 5 – Web Interface & API Refinement (🔄 In Progress, Target Q1 2026)`)_
+  - ✅ FastAPI chat/history/token endpoints with validation.
+  - ✅ Django chat UI with progressive enhancement.
+  - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
+  - ✅ Replaced hard-coded credential stores with database-backed auth flows; FastAPI no longer seeds demo credentials at startup.【F:monGARS/api/web_api.py†L41-L120】
+  - ✅ Publish polished SDKs and reference clients with documented release flows.【F:docs/sdk-release-guide.md†L1-L160】【F:docs/sdk-overview.md†L1-L120】
 
 ## Architecture
 
-- Route logic through `services.py` and wrap protected views with `require_token`.
-- Mirror payloads defined in `monGARS.api.web_api.ChatRequest`; document new context variables in
-    docstrings/templates.
+- Route logic through `services.py` and wrap protected views with `require_token`; reuse async clients
+    for history, chat, and ticket exchange.
+- Mirror payloads defined in `monGARS.api.web_api.ChatRequest` and related schemas; document new
+    context variables in docstrings/templates.
 
 ## Networking & Error Handling
 
-- Centralise HTTP calls in `services.py` to reuse retries, error handling, and logging.
-- Surface actionable operator errors for network issues and capture exceptions with context.
+- Centralise HTTP calls in `services.py` to reuse retries, error handling, structured logging, and
+    token refresh logic.
+- Surface actionable operator errors for network issues and capture exceptions with context for
+    downstream telemetry.
 
 ## Verification
 
-Revise `tests/test_api_history.py` and `tests/test_websocket.py` alongside chat changes; rely on
-async clients or httpx mocks.
+Revise `tests/test_webapp_chat_services.py`, `tests/test_websocket.py`, and end-to-end suites
+alongside chat changes; rely on async clients or httpx mocks.

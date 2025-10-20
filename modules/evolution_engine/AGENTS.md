@@ -14,22 +14,33 @@ Defines how retraining orchestration and self-healing pipelines behave under
 ## Roadmap Alignment
 
 - **Self-Training Execution**
-  - _(No matching roadmap entries for `Phase 6 – Self-Improvement & Research (🗓 Target Q2 2026)`)_
+  - ✅ Personality profiles persisted via SQLModel with live adapter updates.
+  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - ✅ ResearchLongHaulService now schedules multi-replica soak runs and persists observability snapshots for dashboards, ensuring reinforcement pipelines stay healthy without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_research_long_haul_service.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】
+- **Sustainability Coordination**
+  - 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.
+  - 🚧 Automate energy usage reporting and advanced hardware-aware scaling using the energy tracker pipeline and reinforcement observability feeds as the baseline data source.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
+  - 🚧 Share optimisation artefacts between nodes for faster convergence.
 
 ## Pipeline Discipline
 
 - Keep `EvolutionOrchestrator` focused on sequencing; instantiate trainers from
-    `modules.neurons.training` and return artefact metadata.
-- Represent pipeline stages with explicit methods for validation, training, deployment, and rollback.
-- Wrap external calls with targeted exception handling—log the action and propagate unexpected errors.
+    `modules.neurons.training` and return artefact metadata for catalog updates.
+- Represent pipeline stages with explicit methods for validation, training, deployment, rollback, and
+    sustainability checks.
+- Wrap external calls with targeted exception handling—log the action, include artefact identifiers,
+    and propagate unexpected errors.
 
 ## Configuration
 
-- Default to `configs/training/mntp_dolphin_config.json` with constructor overrides for deterministic
-    tests.
-- Document config changes in the README and roadmap when defaults move.
+- Default to configs in `configs/training/` (`mntp_dolphin_config.json`, sustainability policies) with
+    constructor overrides for deterministic tests.
+- Document config changes in the README/docs and roadmap when defaults move or new sustainability
+    gates are added.
 
 ## Validation
 
-Extend `tests/test_evolution_engine.py` to cover success, failure, and artefact validation
-scenarios. Use fakes for `MNTPTrainer` in unit tests.
+Extend `tests/test_evolution_engine.py`, `tests/test_sustainability_policy.py`, and long-haul
+integration tests to cover success, failure, artefact validation, and sustainability gate scenarios.
+Use fakes for `MNTPTrainer` in unit tests.

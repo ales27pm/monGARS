@@ -1,8 +1,7 @@
 # Testing Guidance
 
-The monGARS test suite contains more than five hundred checks covering API
-contracts, orchestration flows, and the embedding services added in the recent
-backend work. Some of these suites (notably the chaos and integration tests)
+The monGARS test suite now exercises more than six hundred checks covering API
+contracts, orchestration flows, reinforcement pipelines, and the embedding services added in the recent backend work. Some of these suites (notably the chaos and integration tests)
 can take several minutes to complete, so it is tempting to interrupt `pytest`
 once local spot checks look healthy.
 
@@ -16,8 +15,7 @@ To execute the full suite locally, run:
 pytest
 ```
 
-On the reference development container this takes roughly a minute and a half
-(~90 seconds) and should complete with all 551 tests passing. If you need a
+On the reference development container this takes roughly one minute and forty-seven seconds (~107 seconds) and should complete with all 631 tests passing. If you need a
 quiet log, you can continue to use the `make test` target which wraps the same
 command with the `-q` flag.
 
