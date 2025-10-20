@@ -513,7 +513,7 @@ async def conversation_history(
             extra={"user": _redact_user_id(user_id)},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="user_id must be a non-empty string",
         )
     normalized_user_id = user_id.strip()
@@ -523,7 +523,7 @@ async def conversation_history(
             extra={"user": _redact_user_id(user_id)},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="user_id must be a non-empty string",
         )
     if not isinstance(limit, int) or limit <= 0:
@@ -532,7 +532,7 @@ async def conversation_history(
             extra={"user": _redact_user_id(normalized_user_id), "limit": limit},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="limit must be a positive integer",
         )
     if normalized_user_id != current_user.get("sub"):
@@ -543,7 +543,7 @@ async def conversation_history(
             extra={"user": _redact_user_id(user_id)},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="user_id must be a non-empty string",
         )
     if not isinstance(limit, int) or limit <= 0:
@@ -552,7 +552,7 @@ async def conversation_history(
             extra={"user": _redact_user_id(user_id), "limit": limit},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="limit must be a positive integer",
         )
     try:
@@ -586,7 +586,7 @@ async def chat(
             extra={"user": _redact_user_id(user_id), "detail": str(exc)},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     try:
         result = await conv.generate_response(

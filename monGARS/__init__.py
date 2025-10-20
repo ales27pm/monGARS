@@ -41,9 +41,9 @@ def _awq_safe_simplefilter(
 
 warnings.simplefilter = _awq_safe_simplefilter
 
-import torch
-from torch import nn
-from transformers import activations as _transformers_activations
+torch = importlib.import_module("torch")
+nn = importlib.import_module("torch.nn")
+_transformers_activations = importlib.import_module("transformers.activations")
 
 if not hasattr(_transformers_activations, "PytorchGELUTanh"):
 

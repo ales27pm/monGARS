@@ -8,6 +8,15 @@ safely offloaded when GPU memory pressure exceeds the configured threshold.
 
 from __future__ import annotations
 
+import logging
+import threading
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+from .persistence import PersistenceManager
+
 # Import Unsloth before torch/transformer ecosystems to activate its patches.
 _UNSLOTH_IMPORT_ERROR: Exception | None = None
 
@@ -19,19 +28,14 @@ except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover
 except Exception as exc:  # pragma: no cover - defensive guardrail
     unsloth = None  # type: ignore[assignment]
     _UNSLOTH_IMPORT_ERROR = exc
+else:
+    _UNSLOTH_IMPORT_ERROR = None
 
 FastLanguageModel = (
     getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
     if "unsloth" in globals() and unsloth is not None
     else None
 )
-
-import logging
-import threading
-from collections.abc import Iterable
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
@@ -45,8 +49,6 @@ try:  # pragma: no cover - optional helper for GPU diagnostics
     import GPUtil  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     GPUtil = None  # type: ignore[assignment]
-
-from .persistence import PersistenceManager
 
 logger = logging.getLogger(__name__)
 

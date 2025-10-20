@@ -133,7 +133,7 @@ class SustainabilityDashboardBridge:
         reports = payload.setdefault("energy_reports", [])
         reports.append(entry)
         if len(reports) > self._max_energy_reports:
-            payload["energy_reports"] = reports[-self._max_energy_reports :]
+            payload["energy_reports"] = reports[-self._max_energy_reports:]
         payload.setdefault("meta", {})["updated_at"] = datetime.now(
             timezone.utc
         ).isoformat()
@@ -155,7 +155,7 @@ class SustainabilityDashboardBridge:
         runs = payload.setdefault("reinforcement_runs", [])
         runs.append(record)
         if len(runs) > self._max_reinforcement_records:
-            payload["reinforcement_runs"] = runs[-self._max_reinforcement_records :]
+            payload["reinforcement_runs"] = runs[-self._max_reinforcement_records:]
         payload["latest_reinforcement_summary"] = record
         meta = payload.setdefault("meta", {})
         meta["updated_at"] = datetime.now(timezone.utc).isoformat()

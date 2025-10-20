@@ -67,7 +67,7 @@ def _activate_unsloth(model: object) -> tuple[object, bool]:
         except TypeError:
             try:
                 new_model = candidate(model=model)
-            except Exception as exc:  # pragma: no cover - defensive guard
+            except Exception:  # pragma: no cover - defensive guard
                 logger.warning("Unsloth activation failed", exc_info=True)
                 return model, False
         except Exception:  # pragma: no cover - defensive guard

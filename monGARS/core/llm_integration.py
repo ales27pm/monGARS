@@ -16,21 +16,7 @@ from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-
-# guard torch as an optional ML dependency that may be absent on CPU-only hosts
-try:  # pragma: no cover - optional dependency for local slot fallback
-    import torch
-except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
-    torch = None  # type: ignore[assignment]
-    _TORCH_IMPORT_ERROR = exc
-else:
-    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 from opentelemetry import metrics
-
-try:  # pragma: no cover - optional dependency during tests
-    import ollama
-except ImportError:  # pragma: no cover - allow tests without ollama
-    ollama = None
 from tenacity import (
     RetryError,
     retry,
@@ -41,8 +27,6 @@ from tenacity import (
 )
 
 from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
-
-_NotImplError = getattr(builtins, "NotImplemented" + "Error")
 from monGARS.config import get_settings
 
 from .inference_utils import (
@@ -55,6 +39,22 @@ from .inference_utils import (
 from .model_manager import LLMModelManager, ModelDefinition
 from .model_slot_manager import ModelSlotManager
 from .ui_events import event_bus, make_event
+
+_NotImplError = getattr(builtins, "NotImplemented" + "Error")
+
+# guard torch as an optional ML dependency that may be absent on CPU-only hosts
+try:  # pragma: no cover - optional dependency for local slot fallback
+    import torch
+except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:
+    _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
+
+try:  # pragma: no cover - optional dependency during tests
+    import ollama
+except ImportError:  # pragma: no cover - allow tests without ollama
+    ollama = None
 
 logger = logging.getLogger(__name__)
 
@@ -1696,7 +1696,7 @@ class LLMIntegration:
         text = response.get("text", "") if isinstance(response, dict) else ""
         if text:
             for start in range(0, len(text), STREAM_CHUNK_SIZE):
-                yield text[start : start + STREAM_CHUNK_SIZE]
+                yield text[start:start + STREAM_CHUNK_SIZE]
 
     async def _inference(self, prompt: str, task_type: str = "general") -> str:
         """Return the full response text for the prompt."""

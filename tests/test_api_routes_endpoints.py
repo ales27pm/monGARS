@@ -625,7 +625,7 @@ async def test_conversation_history_invalid_limit_rejected(
         params={"user_id": "limit", "limit": 0},
         headers=_bearer(token),
     )
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -667,7 +667,7 @@ async def test_chat_validation_error_from_user_input(
         headers=_bearer(token),
         json={"message": "  whitespace  "},
     )
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json()["detail"] == "query rejected"
 
 
@@ -759,7 +759,7 @@ async def test_rag_context_validation_error(api_context: ApiTestContext) -> None
         headers=_bearer(token),
         json={"query": "Check"},
     )
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json()["detail"] == "invalid query"
 
 

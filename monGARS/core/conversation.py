@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from hashlib import blake2s
 from typing import Any, Optional
 
@@ -458,7 +458,7 @@ class ConversationalModule:
         session_id: str | None = None,
         image_data: bytes | None = None,
     ) -> dict:
-        start = datetime.utcnow()
+        start = datetime.now(UTC)
         history_items = await self.memory.history(user_id, limit=5)
         history_pairs = [(m.query, m.response) for m in history_items]
 
@@ -575,7 +575,7 @@ class ConversationalModule:
             original_query,
         )
 
-        processing_time = (datetime.utcnow() - start).total_seconds()
+        processing_time = (datetime.now(UTC) - start).total_seconds()
 
         speech_session_id = session_id or user_id
         speech_turn = await self.speaker.speak(final, session_id=speech_session_id)
