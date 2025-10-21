@@ -3,8 +3,8 @@
 This module provides runtime compatibility shims that need to be in place before
 the broader package is imported. The current shim restores the
 ``PytorchGELUTanh`` activation that AutoAWQ/PEFT expect from older versions of
-🤗 Transformers. The symbol was removed upstream in Transformers >= 4.45, which
-caused AutoAWQ to fail during import and broke our fine-tuning tests.
+Hugging Face Transformers. The symbol was removed upstream in Transformers >= 4.45,
+which caused AutoAWQ to fail during import and broke our fine-tuning tests.
 
 By defining the module here we ensure the symbol is available as soon as the
 ``monGARS`` package loads, keeping the rest of the codebase agnostic of the
@@ -14,35 +14,17 @@ underlying dependency change.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
+import os
+import sys
 import warnings
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
-torch_module: ModuleType | None
-torch_nn: ModuleType | None
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    import torch as torch_module
-    from torch import nn as torch_nn
-else:  # pragma: no cover - optional dependency handling
-    try:
-        import torch as torch_module  # type: ignore[import-not-found]
-        from torch import nn as torch_nn  # type: ignore[import-not-found]
-    except ImportError:
-        torch_module = None
-        torch_nn = None
-
-try:  # pragma: no cover - optional dependency
-    importlib.import_module("unsloth")
-except Exception:  # pragma: no cover - optional dependency missing or failing
-    pass
-
-ModuleBase: type[Any] | None
-if TYPE_CHECKING:
-    ModuleBase = torch_nn.Module
-else:
-    ModuleBase = torch_nn.Module if torch_nn is not None else None
+_RUNNING_STATIC_ANALYSIS = bool(os.environ.get("MYPY")) or any(
+    arg.endswith("mypy") or arg.endswith("mypy.exe") for arg in (sys.argv[0:1] or [])
+)
 
 SimpleFilterAction = Literal[
     "default", "error", "ignore", "always", "all", "module", "once"
@@ -68,28 +50,90 @@ def _awq_safe_simplefilter(
 
 warnings.simplefilter = _awq_safe_simplefilter
 
-_transformers_activations = cast(
-    ModuleType, importlib.import_module("transformers.activations")
-)
+PytorchGELUTanh: type[Any] | None
+ModuleBase: type[Any] | None
 
-if (
-    ModuleBase is not None
-    and torch_module is not None
-    and not hasattr(_transformers_activations, "PytorchGELUTanh")
-):
+torch_module: ModuleType | None
+torch_nn: ModuleType | None
 
-    class PytorchGELUTanh(ModuleBase):
-        """Compatibility shim mirroring the removed Transformers activation."""
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import torch
+    from torch import nn as _torch_nn_module
 
-        def forward(self, input_tensor: "torch.Tensor") -> "torch.Tensor":
-            return torch_module.nn.functional.gelu(  # type: ignore[union-attr]
-                input_tensor,
-                approximate="tanh",
+    class _PytorchGELUTanhStub(_torch_nn_module.Module):
+        """Typing stub mirroring the runtime activation shim."""
+
+        def forward(self, input_tensor: "torch.Tensor") -> "torch.Tensor": ...
+
+    PytorchGELUTanh = _PytorchGELUTanhStub
+    torch_module = cast(ModuleType, torch)
+    torch_nn = cast(ModuleType, _torch_nn_module)
+    ModuleBase = cast("type[Any]", _torch_nn_module.Module)
+else:  # pragma: no cover - optional dependency handling
+    torch_module = None
+    torch_nn = None
+    ModuleBase = None
+    PytorchGELUTanh = None
+
+    if not _RUNNING_STATIC_ANALYSIS and importlib.util.find_spec("torch") is not None:
+        try:
+            torch_module = cast(ModuleType, importlib.import_module("torch"))
+            torch_nn = cast(ModuleType, importlib.import_module("torch.nn"))
+        except Exception:
+            torch_module = None
+            torch_nn = None
+
+    if not _RUNNING_STATIC_ANALYSIS:
+        try:  # pragma: no cover - optional dependency
+            importlib.import_module("unsloth")
+        except Exception:  # pragma: no cover - optional dependency missing or failing
+            pass
+
+    if torch_nn is not None:
+        module_candidate = getattr(torch_nn, "Module", None)
+        if isinstance(module_candidate, type):
+            ModuleBase = cast("type[Any]", module_candidate)
+
+    def _load_transformers_activations() -> ModuleType | None:
+        """Safely resolve the Transformers activation registry."""
+
+        try:
+            return cast(ModuleType, importlib.import_module("transformers.activations"))
+        except ModuleNotFoundError:
+            return None
+        except Exception as exc:  # pragma: no cover - defensive guard
+            warnings.warn(
+                f"Failed to import transformers.activations ({exc!r}); "
+                "PytorchGELUTanh shim will not be installed.",
+                RuntimeWarning,
+                stacklevel=2,
             )
+            return None
 
-    _transformers_activations.PytorchGELUTanh = PytorchGELUTanh
+    transformers_activations: ModuleType | None = None
+    if ModuleBase is not None and torch_module is not None:
+        transformers_activations = _load_transformers_activations()
 
-    symbol_list = list(getattr(_transformers_activations, "__all__", ()))
-    if "PytorchGELUTanh" not in symbol_list:
-        symbol_list.append("PytorchGELUTanh")
-        _transformers_activations.__all__ = symbol_list
+    if (
+        ModuleBase is not None
+        and torch_module is not None
+        and transformers_activations is not None
+        and not hasattr(transformers_activations, "PytorchGELUTanh")
+    ):
+        activations_module = cast(Any, transformers_activations)
+        torch_api = cast(Any, torch_module)
+
+        class _RuntimePytorchGELUTanh(ModuleBase):
+            """Compatibility shim mirroring the removed Transformers activation."""
+
+            def forward(self, input_tensor: "torch.Tensor") -> "torch.Tensor":
+                gelu_fn = getattr(torch_api.nn.functional, "gelu")
+                return gelu_fn(input_tensor, approximate="tanh")
+
+        PytorchGELUTanh = _RuntimePytorchGELUTanh
+        activations_module.PytorchGELUTanh = _RuntimePytorchGELUTanh
+
+        symbol_list = list(getattr(activations_module, "__all__", ()))
+        if "PytorchGELUTanh" not in symbol_list:
+            symbol_list.append("PytorchGELUTanh")
+            activations_module.__all__ = symbol_list
