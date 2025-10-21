@@ -41,7 +41,20 @@ def _coerce_text(value: object | None) -> str:
         return ""
     if isinstance(value, str):
         return value.strip()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        decoded = bytes(value).decode("utf-8", errors="replace")
+        return decoded.strip()
     return str(value).strip()
+
+
+def _coerce_history_pairs(
+    pairs: Sequence[tuple[object, object]] | None,
+) -> list[tuple[str, str]]:
+    """Return conversation history pairs with normalised string values."""
+
+    if not pairs:
+        return []
+    return [(_coerce_text(query), _coerce_text(response)) for query, response in pairs]
 
 
 def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -> str:
@@ -204,14 +217,12 @@ def build_context_prompt(
     """Render a prompt combining chat history, semantic recall, and instructions."""
 
     sections: list[str] = []
-    pairs = history_pairs or ()
+    pairs = _coerce_history_pairs(history_pairs)
     archive = semantic_context or ()
 
     if pairs:
         history_lines: list[str] = []
-        for idx, (query_text, response_text) in enumerate(pairs, start=1):
-            user_line = _coerce_text(query_text)
-            assistant_line = _coerce_text(response_text)
+        for idx, (user_line, assistant_line) in enumerate(pairs, start=1):
             history_lines.append(
                 f"[{idx}] User: {user_line}\n    Assistant: {assistant_line}"
             )
@@ -260,9 +271,10 @@ def build_converged_chat_prompt(
 ) -> ChatPrompt:
     """Return a :class:`ChatPrompt` that mirrors chat preprocessing for embeddings."""
 
+    coerced_history = _coerce_history_pairs(history_pairs)
     context_text = build_context_prompt(
         refined_prompt,
-        history_pairs=history_pairs,
+        history_pairs=coerced_history,
         semantic_context=semantic_context,
         instruction_template=instruction_template,
     )

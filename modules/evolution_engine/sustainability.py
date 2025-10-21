@@ -281,18 +281,9 @@ class CarbonAwarePolicy:
             if timestamp is None:
                 continue
             mapped["recorded_at"] = timestamp
-            raw_pending = mapped.get("approval_pending_final")
-            converted_pending: int | None
-            if raw_pending is None:
-                converted_pending = None
-            elif isinstance(raw_pending, (int, float)):
-                converted_pending = int(raw_pending)
-            else:
-                try:
-                    converted_pending = int(str(raw_pending).strip())
-                except (TypeError, ValueError):
-                    converted_pending = None
-            mapped["approval_pending_final"] = converted_pending
+            mapped["approval_pending_final"] = _coerce_optional_int(
+                mapped.get("approval_pending_final")
+            )
             incidents = mapped.get("incidents")
             if isinstance(incidents, Sequence) and not isinstance(incidents, str):
                 mapped["incidents"] = list(incidents)
@@ -341,12 +332,7 @@ class CarbonAwarePolicy:
     ) -> tuple[int | None, int | None]:
         if not summary:
             return None, None
-        approvals = summary.get("approval_pending_final")
-        if approvals is not None:
-            try:
-                approvals = int(approvals)
-            except (TypeError, ValueError):
-                approvals = None
+        approvals = _coerce_optional_int(summary.get("approval_pending_final"))
         incidents = summary.get("incidents")
         incident_count: int | None
         if isinstance(incidents, Sequence) and not isinstance(incidents, str):
@@ -382,3 +368,21 @@ class CarbonAwarePolicy:
 
 
 __all__ = ["CarbonAwareDecision", "CarbonAwarePolicy"]
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    """Best-effort conversion of telemetry counters to integers."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None

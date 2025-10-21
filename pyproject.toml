@@ -7,11 +7,10 @@ addopts = "-q"
 
 [tool.mypy]
 files = [
-    "modules/evolution_engine/energy.py",
-    "modules/evolution_engine/sustainability.py",
+    "modules/evolution_engine",
     "monGARS/core/inference_utils.py",
     "monGARS/utils/database.py",
 ]
-exclude = '^(?!\.?/?modules/evolution_engine/energy\.py$|\.?/?modules/evolution_engine/sustainability\.py$|\.?/?monGARS/core/inference_utils\.py$|\.?/?monGARS/utils/database\.py$).+'
 mypy_path = ["typings"]
+explicit_package_bases = true
 
