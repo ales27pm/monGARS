@@ -37,10 +37,7 @@ from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
 from modules.ray_service import update_ray_deployment
 from monGARS.config import get_settings
 from monGARS.core.model_slot_manager import ModelSlotManager
-from monGARS.core.operator_approvals import (
-    ApprovalPolicy,
-    OperatorApprovalRegistry,
-)
+from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)

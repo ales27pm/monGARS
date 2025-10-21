@@ -28,11 +28,7 @@ from ..init_db import (
     UserPreferences,
     async_session_factory,
 )
-from .embeddings import (
-    EmbeddingBackendError,
-    LLM2VecEmbedder,
-    get_llm2vec_embedder,
-)
+from .embeddings import EmbeddingBackendError, LLM2VecEmbedder, get_llm2vec_embedder
 from .inference_utils import render_chat_prompt_from_text
 
 try:  # pragma: no cover - optional dependency

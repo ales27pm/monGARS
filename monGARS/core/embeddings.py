@@ -188,7 +188,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = list(cleaned[start:start + batch_size])
+            chunk = list(cleaned[start : start + batch_size])
             (
                 chunk_vectors,
                 backend_indices,
@@ -247,7 +247,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = list(cleaned[start:start + batch_size])
+            chunk = list(cleaned[start : start + batch_size])
             (
                 chunk_vectors,
                 backend_indices,
@@ -552,7 +552,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = list(cleaned[start:start + batch_size])
+            chunk = list(cleaned[start : start + batch_size])
             chunk_vectors: list[list[float] | None] = [None] * len(chunk)
             encode_indices: list[int] = []
             encode_payloads: list[str] = []
@@ -816,7 +816,7 @@ class Dolphin3Embedder:
         system_prompt = getattr(self._settings, "llm2vec_instruction", None)
 
         for start in range(0, len(texts), self._batch_size):
-            chunk = [str(text) for text in texts[start:start + self._batch_size]]
+            chunk = [str(text) for text in texts[start : start + self._batch_size]]
             formatted_chunk = [
                 render_chat_prompt_from_text(
                     text,

@@ -138,7 +138,7 @@ class WebSocketManager:
                 if sender is not current:
                     with contextlib.suppress(asyncio.CancelledError):
                         await sender
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await ws.close(code=code)
 
     async def send_event(self, ev: Event) -> None:
@@ -245,7 +245,7 @@ class WebSocketManager:
                 with contextlib.suppress(asyncio.CancelledError):
                     await sender
         for ws in sockets:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
                 await ws.close()
 
 
