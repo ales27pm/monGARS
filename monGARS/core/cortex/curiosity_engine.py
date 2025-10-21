@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - SQLAlchemy not installed in tests
 from opentelemetry import metrics
 
 from monGARS.config import get_settings
+from monGARS.core.cortex.prompt_enricher import build_context_snippet
 from monGARS.core.iris import Iris
 from monGARS.core.neurones import EmbeddingSystem
 from monGARS.core.search import (
@@ -28,6 +29,7 @@ from monGARS.core.search import (
     SearchOrchestrator,
     VerifiedBundle,
     Verifier,
+    parse_schema_org,
 )
 
 try:  # pragma: no cover - optional dependency at import time
@@ -145,6 +147,83 @@ class CuriosityEngine:
             research_cache=self._research_cache,
             research_cache_lock=self._research_cache_lock,
         )
+
+    async def build_prompt_context(
+        self, question: str, *, lang: str = "en"
+    ) -> dict[str, object]:
+        """Return enriched research context for ``question`` suitable for prompts."""
+
+        normalised_question = (question or "").strip()
+        if not normalised_question:
+            return {"error": "empty query"}
+
+        hits = await self._search_orchestrator.search(
+            normalised_question, lang=lang, max_results=20
+        )
+        bundle = self._verifier.cross_check(normalised_question, hits)
+
+        if not hits:
+            return {"error": "no results"}
+
+        metadata_hit = None
+        if bundle.primary_citation:
+            metadata_hit = next(
+                (hit for hit in hits if hit.url == bundle.primary_citation),
+                None,
+            )
+        if metadata_hit is None and hits:
+            metadata_hit = hits[0]
+
+        if metadata_hit is None:
+            return {"error": "no results"}
+
+        top_url = metadata_hit.url
+        try:
+            document = await self.iris.fetch_document(top_url)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - network dependent
+            logger.debug(
+                "curiosity.prompt_enrich.document_error",
+                exc_info=True,
+                extra={"url": top_url},
+            )
+            document = None
+
+        if document and document.published_at is None:
+            try:
+                async with self._http_client_factory() as client:
+                    response = await client.get(top_url)
+                    response.raise_for_status()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover - network dependent
+                logger.debug(
+                    "curiosity.prompt_enrich.schema_fetch_error",
+                    exc_info=True,
+                    extra={"url": top_url},
+                )
+            else:
+                schema = parse_schema_org(response.text)
+                if schema:
+                    if schema.date_published and document.published_at is None:
+                        document.published_at = schema.date_published
+                    if schema.date_modified and document.modified_at is None:
+                        document.modified_at = schema.date_modified
+                    if schema.event_start and document.event_start is None:
+                        document.event_start = schema.event_start
+                    if schema.event_end and document.event_end is None:
+                        document.event_end = schema.event_end
+                    if schema.authors and not document.authors:
+                        document.authors = list(schema.authors)
+                    if schema.publisher and document.publisher is None:
+                        document.publisher = schema.publisher
+                    if schema.organization and document.organization is None:
+                        document.organization = schema.organization
+                    if schema.location_name and document.location_name is None:
+                        document.location_name = schema.location_name
+
+        return dict(build_context_snippet(document, bundle))
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
