@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from monGARS.config import get_settings
+
 from .contracts import NormalizedHit, VerifiedBundle
+
+logger = logging.getLogger(__name__)
 
 _ENTITY_PATTERN = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b")
 _DATE_PATTERN = re.compile(
@@ -14,7 +19,7 @@ _DATE_PATTERN = re.compile(
 )
 _NUMBER_PATTERN = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\b")
 _FIELD_ALIASES = {"entities": "entity", "dates": "date", "numbers": "number"}
-_TRUST_WEIGHT_BONUS = 0.35
+_DEFAULT_TRUST_WEIGHT_BONUS = 0.35
 
 
 class Verifier:
@@ -22,8 +27,34 @@ class Verifier:
 
     def __init__(self, *, minimum_agreement: int = 2) -> None:
         self._minimum_agreement = max(1, minimum_agreement)
+        settings = get_settings()
+        configured_bonus = getattr(settings, "verifier_trust_weight_bonus", None)
+        if configured_bonus is None:
+            self._trust_weight_bonus = _DEFAULT_TRUST_WEIGHT_BONUS
+        else:
+            try:
+                self._trust_weight_bonus = float(configured_bonus)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "search.verifier.invalid_trust_bonus",
+                    extra={"provided": configured_bonus},
+                )
+                self._trust_weight_bonus = _DEFAULT_TRUST_WEIGHT_BONUS
 
     def cross_check(self, query: str, hits: Sequence[NormalizedHit]) -> VerifiedBundle:
+        normalised_query = (query or "").strip()
+        hit_count = len(hits)
+        if not normalised_query:
+            logger.warning(
+                "search.verifier.empty_query",
+                extra={"hit_count": hit_count},
+            )
+        if hit_count == 0:
+            logger.info(
+                "search.verifier.no_hits",
+                extra={"query_len": len(normalised_query)},
+            )
+
         facts = self._extract_claims((hit.snippet or hit.title or "") for hit in hits)
         agreed = self._select_agreements(facts)
         disagreements = self._collect_disagreements(facts, agreed)
@@ -39,6 +70,17 @@ class Verifier:
                 primary = hit.url
         if primary is None and hits:
             primary = hits[0].url or None
+
+        logger.info(
+            "search.verifier.completed",
+            extra={
+                "query_len": len(normalised_query),
+                "hit_count": hit_count,
+                "agreed_facts": len(agreed),
+                "disagreements": len(disagreements),
+                "confidence": confidence,
+            },
+        )
         return VerifiedBundle(
             query=query,
             hits=list(hits),
@@ -138,7 +180,7 @@ class Verifier:
             if not text:
                 continue
             field_values = self._extract_field_values(text)
-            weight = 1.0 + (_TRUST_WEIGHT_BONUS if hit.is_trustworthy() else 0.0)
+            weight = 1.0 + (self._trust_weight_bonus if hit.is_trustworthy() else 0.0)
             source = hit.source_domain
             for field, values in field_values.items():
                 if not values:
