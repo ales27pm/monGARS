@@ -15,7 +15,9 @@ from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Mapping
+from typing import Any, List, Mapping, Optional
+
+import numpy as np
 
 try:  # pragma: no cover - optional dependency
     from httpx import HTTPError as HTTPXError
@@ -42,9 +44,16 @@ from monGARS.core.inference_utils import (
 )
 
 try:  # pragma: no cover - optional heavy dependency
-    from sentence_transformers import SentenceTransformer
+    import torch
 except ImportError:  # pragma: no cover - dependency absent in some environments
-    SentenceTransformer = None  # type: ignore[assignment]
+    torch = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional heavy dependency
+    from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+except ImportError:  # pragma: no cover - dependency absent in some environments
+    AutoModel = None  # type: ignore[assignment]
+    AutoModelForCausalLM = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +78,10 @@ class EmbeddingBackendError(RuntimeError):
     """Raised when the embedding backend cannot produce vectors."""
 
 
+_TRANSFORMERS_COMPONENT_CACHE: dict[tuple[str, str], tuple[Any, Any, Any, int]] = {}
+_TRANSFORMERS_COMPONENT_LOCK = threading.Lock()
+
+
 _KNOWN_MANAGER_EXCEPTIONS = _exception_tuple(
     EmbeddingBackendError,
     RuntimeError,
@@ -87,6 +100,236 @@ _OLLAMA_TRANSPORT_ERRORS = _exception_tuple(
     RequestsHTTPError,
     HTTPXError,
 )
+
+
+def _resolve_transformers_device(
+    settings: Settings,
+):
+    if torch is None:  # pragma: no cover - dependency missing
+        raise EmbeddingBackendError("transformers backend requires torch")
+
+    requested = getattr(settings, "transformers_embedding_device", None)
+    if requested:
+        try:
+            device = torch.device(str(requested))
+        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+            raise EmbeddingBackendError(
+                f"Invalid transformers embedding device: {requested!r}"
+            ) from exc
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise EmbeddingBackendError("CUDA requested but not available")
+        return device
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():  # type: ignore[attr-defined]
+        return torch.device("mps")
+
+    return torch.device("cpu")
+
+
+def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, int]:
+    model_id = str(getattr(settings, "transformers_embedding_model", "").strip())
+    if not model_id:
+        raise EmbeddingBackendError("transformers embedding model is not configured")
+
+    if (
+        AutoTokenizer is None or AutoModelForCausalLM is None
+    ):  # pragma: no cover - dependency missing
+        raise EmbeddingBackendError("transformers library is not available")
+    if torch is None:  # pragma: no cover - dependency missing
+        raise EmbeddingBackendError("PyTorch is required for transformers embeddings")
+
+    device = _resolve_transformers_device(settings)
+    cache_key = (model_id, str(device))
+
+    with _TRANSFORMERS_COMPONENT_LOCK:
+        cached = _TRANSFORMERS_COMPONENT_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+    except Exception as exc:  # pragma: no cover - network/config errors are rare
+        logger.exception(
+            "llm2vec.transformers.tokenizer_load_failed",
+            extra={"model": model_id},
+        )
+        raise EmbeddingBackendError("Failed to load transformers tokenizer") from exc
+
+    if (
+        getattr(tokenizer, "pad_token", None) is None
+        and getattr(tokenizer, "eos_token", None) is not None
+    ):
+        tokenizer.pad_token = tokenizer.eos_token
+    if getattr(tokenizer, "pad_token", None) is None:
+        raise EmbeddingBackendError("Tokenizer does not define a pad token")
+    if getattr(tokenizer, "pad_token_id", None) is None:
+        tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+    tokenizer.padding_side = "right"
+
+    if device.type == "cuda":
+        dtype = torch.float16
+    elif device.type == "mps":  # pragma: no cover - macOS specific
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+
+    model = None
+    load_errors: list[Exception] = []
+    loaders: tuple[tuple[str, Any | None], ...] = (
+        ("AutoModel", AutoModel),
+        ("AutoModelForCausalLM", AutoModelForCausalLM),
+    )
+
+    for loader_name, loader in loaders:
+        if loader is None:
+            continue
+        try:
+            model = loader.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+            )
+            break
+        except Exception as exc:  # pragma: no cover - network/config errors are rare
+            load_errors.append(exc)
+            logger.debug(
+                "llm2vec.transformers.model_loader_failed",
+                extra={"model": model_id, "loader": loader_name},
+                exc_info=exc,
+            )
+
+    if model is None:
+        last_error = load_errors[-1] if load_errors else None
+        if last_error is not None:
+            logger.error(
+                "llm2vec.transformers.model_load_failed",
+                extra={"model": model_id},
+                exc_info=(
+                    last_error.__class__,
+                    last_error,
+                    last_error.__traceback__,
+                ),
+            )
+        else:
+            logger.error(
+                "llm2vec.transformers.model_loader_unavailable",
+                extra={"model": model_id},
+            )
+        raise EmbeddingBackendError(
+            "Failed to load transformers embedding model"
+        ) from last_error
+
+    model.to(device)
+    model.eval()
+
+    hidden_size = getattr(getattr(model, "config", None), "hidden_size", None)
+    if hidden_size is None:
+        raise EmbeddingBackendError("Model configuration missing hidden_size")
+
+    components = (tokenizer, model, device, int(hidden_size))
+    with _TRANSFORMERS_COMPONENT_LOCK:
+        _TRANSFORMERS_COMPONENT_CACHE[cache_key] = components
+    return components
+
+
+def _encode_with_transformers(
+    texts: List[str], instruction: Optional[str], settings: Settings | None = None
+) -> np.ndarray:
+    resolved_settings = settings or get_settings()
+    tokenizer, model, device, hidden_size = _ensure_transformers_components(
+        resolved_settings
+    )
+
+    if not texts:
+        return np.zeros((0, hidden_size), dtype=np.float32)
+
+    if torch is None:  # pragma: no cover - dependency missing
+        raise EmbeddingBackendError("PyTorch is required for transformers embeddings")
+
+    batch_size = max(
+        1, int(getattr(resolved_settings, "transformers_embedding_batch_size", 1))
+    )
+    max_length = max(
+        1, int(getattr(resolved_settings, "transformers_embedding_max_length", 1))
+    )
+    system_prompt = instruction
+
+    pooled_results: list[np.ndarray] = []
+
+    for start in range(0, len(texts), batch_size):
+        chunk = [str(text) for text in texts[start : start + batch_size]]
+        formatted: list[str]
+        if system_prompt is None:
+            formatted = chunk
+        else:
+            instruction_text = str(system_prompt).strip()
+            formatted = [
+                f"{instruction_text}\n\n{candidate}" if instruction_text else candidate
+                for candidate in chunk
+            ]
+        try:
+            encoded = tokenizer(
+                formatted,
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt",
+            )
+        except Exception as exc:  # pragma: no cover - tokenizer failures are rare
+            logger.exception(
+                "llm2vec.transformers.tokenizer_encode_failed",
+                extra={"chunk_size": len(chunk), "max_length": max_length},
+            )
+            raise EmbeddingBackendError(
+                "Tokenization failed for transformers embeddings"
+            ) from exc
+
+        encoded = {key: value.to(device) for key, value in encoded.items()}
+
+        with torch.inference_mode():
+            outputs = model(**encoded, output_hidden_states=True)
+
+        hidden_states = getattr(outputs, "hidden_states", None)
+        if not hidden_states:
+            raise EmbeddingBackendError(
+                "Transformers model did not return hidden states"
+            )
+
+        final_hidden = hidden_states[-1]
+        attention_mask = encoded.get("attention_mask")
+        if attention_mask is None:
+            mask = torch.ones(
+                final_hidden.shape[:2],
+                dtype=final_hidden.dtype,
+                device=final_hidden.device,
+            )
+        else:
+            mask = attention_mask.to(final_hidden.dtype)
+        mask = mask.unsqueeze(-1)
+
+        masked_hidden = final_hidden * mask
+        token_counts = mask.sum(dim=1).clamp_min(1.0)
+        pooled = masked_hidden.sum(dim=1) / token_counts
+
+        if hasattr(torch, "linalg") and hasattr(torch.linalg, "norm"):
+            norms = torch.linalg.norm(pooled, ord=2, dim=1, keepdim=True)
+        else:  # pragma: no cover - compatibility fallback
+            norms = torch.norm(pooled, p=2, dim=1, keepdim=True)
+        safe_norms = torch.where(norms > 0, norms, torch.ones_like(norms))
+        normalized = pooled / safe_norms
+
+        pooled_results.append(
+            normalized.detach().cpu().numpy().astype(np.float32, copy=False)
+        )
+
+    return (
+        np.concatenate(pooled_results, axis=0)
+        if pooled_results
+        else np.zeros((0, hidden_size), dtype=np.float32)
+    )
 
 
 class LLM2VecEmbedder:
@@ -121,8 +364,6 @@ class LLM2VecEmbedder:
         self._ollama_module_unavailable = False
         self._ollama_client: Any | None = None
         self._ollama_client_lock = asyncio.Lock()
-        self._transformers_model: Any | None = None
-        self._transformers_model_lock = asyncio.Lock()
 
     @property
     def backend(self) -> str:
@@ -161,7 +402,11 @@ class LLM2VecEmbedder:
         if self._backend == "ollama":
             batch = await self._encode_with_ollama(cleaned, prompt)
         elif self._backend == "transformers":
-            batch = await self._encode_with_transformers(cleaned, prompt)
+            batch = await self._encode_with_transformers(
+                cleaned,
+                prompt,
+                instruction,
+            )
         else:
             batch = await self._encode_with_huggingface(cleaned, prompt)
 
@@ -535,27 +780,20 @@ class LLM2VecEmbedder:
         )
 
     async def _encode_with_transformers(
-        self, cleaned: Sequence[str], prompt: str
+        self,
+        cleaned: Sequence[str],
+        prompt: str,
+        instruction: str | None,
     ) -> EmbeddingBatch:
-        try:
-            model = await self._ensure_transformers_model()
-        except EmbeddingBackendError:
-            logger.warning(
-                "llm2vec.transformers.model_unavailable",
-                extra={"payload_count": len(cleaned)},
-            )
-            vectors = [self._fallback_vector(prompt, text) for text in cleaned]
-            return EmbeddingBatch(vectors=vectors, used_fallback=True)
-
         aggregate_vectors: list[list[float]] = []
         used_fallback = False
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
             chunk = list(cleaned[start : start + batch_size])
-            chunk_vectors: list[list[float] | None] = [None] * len(chunk)
             encode_indices: list[int] = []
             encode_payloads: list[str] = []
+            chunk_vectors: list[list[float] | None] = [None] * len(chunk)
 
             for index, text in enumerate(chunk):
                 if not text.strip():
@@ -565,15 +803,25 @@ class LLM2VecEmbedder:
                     encode_indices.append(index)
                     encode_payloads.append(str(text))
 
-            raw_vectors: Sequence[Sequence[float]] | None = None
+            embeddings_array: np.ndarray | None = None
             if encode_payloads:
                 try:
                     async with self._semaphore:
-                        raw_vectors = await asyncio.to_thread(
-                            self._transformers_encode_sync,
-                            model,
+                        embeddings_array = await asyncio.to_thread(
+                            _encode_with_transformers,
                             encode_payloads,
+                            instruction,
+                            self._settings,
                         )
+                except EmbeddingBackendError:
+                    logger.warning(
+                        "llm2vec.transformers.encode_unavailable",
+                        extra={
+                            "chunk_size": len(chunk),
+                            "payload_count": len(encode_payloads),
+                        },
+                    )
+                    embeddings_array = None
                 except Exception:  # pragma: no cover - encode failures are rare
                     logger.exception(
                         "llm2vec.transformers.encode_failed",
@@ -582,14 +830,15 @@ class LLM2VecEmbedder:
                             "payload_count": len(encode_payloads),
                         },
                     )
-                    raw_vectors = None
+                    embeddings_array = None
 
             for relative_index, index in enumerate(encode_indices):
-                candidate = (
-                    raw_vectors[relative_index]
-                    if raw_vectors is not None and relative_index < len(raw_vectors)
-                    else None
-                )
+                candidate: Sequence[float] | None = None
+                if (
+                    embeddings_array is not None
+                    and relative_index < embeddings_array.shape[0]
+                ):
+                    candidate = embeddings_array[relative_index].tolist()
                 prepared = self._normalise_dimensions(candidate)
                 if prepared is None:
                     chunk_vectors[index] = self._fallback_vector(prompt, chunk[index])
@@ -663,48 +912,6 @@ class LLM2VecEmbedder:
         if not model:
             raise EmbeddingBackendError("Ollama embedding model is not configured")
         return str(model).strip()
-
-    async def _ensure_transformers_model(self) -> Any:
-        if self._transformers_model is not None:
-            return self._transformers_model
-
-        if SentenceTransformer is None:
-            raise EmbeddingBackendError(
-                "sentence-transformers library is not available"
-            )
-
-        async with self._transformers_model_lock:
-            if self._transformers_model is not None:
-                return self._transformers_model
-
-            model_name = getattr(
-                self._settings,
-                "transformers_embedding_model",
-                "sentence-transformers/all-MiniLM-L6-v2",
-            )
-            try:
-                model = await asyncio.to_thread(SentenceTransformer, str(model_name))
-            except Exception as exc:  # pragma: no cover - model load errors are rare
-                logger.exception(
-                    "llm2vec.transformers.model_load_failed",
-                    extra={"model": model_name},
-                )
-                raise EmbeddingBackendError(
-                    "Failed to load transformers embedding model"
-                ) from exc
-            self._transformers_model = model
-            return model
-
-    @staticmethod
-    def _transformers_encode_sync(
-        model: Any, payloads: Sequence[str]
-    ) -> list[list[float]]:
-        result = model.encode(  # type: ignore[call-arg]
-            list(payloads), convert_to_numpy=True, normalize_embeddings=False
-        )
-        if hasattr(result, "tolist"):
-            return result.tolist()
-        return [[float(component) for component in sequence] for sequence in result]
 
     def _resolve_ollama_dimensions(self) -> int | None:
         try:
@@ -1031,6 +1238,7 @@ __all__ = [
     "EmbeddingBatch",
     "Dolphin3Embedder",
     "LLM2VecEmbedder",
+    "_encode_with_transformers",
     "get_dolphin3_embedder",
     "get_llm2vec_embedder",
 ]
