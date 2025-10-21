@@ -11,6 +11,8 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from monGARS.core.cortex import curiosity_engine as curiosity_module
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
+from monGARS.core.iris import IrisDocument
+from monGARS.core.search import NormalizedHit, VerifiedBundle
 
 
 def _enable_vector_mode(engine: CuriosityEngine) -> None:
@@ -196,6 +198,113 @@ async def test_coerce_row_handles_unexpected_iterable_shapes(caplog):
 
     assert coerced == {}
     assert "coercion_error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_context_enriches_metadata():
+    hit = NormalizedHit(
+        provider="ddg",
+        title="Europa Clipper",
+        url="https://www.nasa.gov/europa-clipper",
+        snippet="Europa Clipper details",
+        published_at=None,
+        event_date=None,
+        source_domain="",
+        lang="en",
+        raw={},
+    )
+
+    doc = IrisDocument(
+        url=hit.url,
+        text="Europa Clipper text",
+        summary="Europa Clipper summary",
+        title="Europa Clipper Mission Overview",
+    )
+
+    class _FakeIris:
+        async def fetch_document(self, url: str) -> IrisDocument:
+            assert url == doc.url
+            return doc
+
+    class _FakeVerifier:
+        def cross_check(
+            self, query: str, hits: Sequence[NormalizedHit]
+        ) -> VerifiedBundle:
+            return VerifiedBundle(
+                query=query,
+                hits=list(hits),
+                agreed_facts={"entities": "Europa Clipper"},
+                disagreements={},
+                confidence=0.91,
+                primary_citation=hits[0].url if hits else None,
+                citations=[h.url for h in hits],
+            )
+
+    class _FakeOrchestrator:
+        def __init__(self, hits: Sequence[NormalizedHit]):
+            self._hits = list(hits)
+
+        async def search(
+            self, query: str, *, lang: str, max_results: int
+        ) -> Sequence[NormalizedHit]:
+            assert query
+            assert lang == "en"
+            assert max_results == 20
+            return list(self._hits)
+
+    schema_payload = """
+    <html>
+        <head>
+            <script type="application/ld+json">
+                {
+                    "@context": "https://schema.org",
+                    "@type": "NewsArticle",
+                    "datePublished": "2025-10-19T14:05:00Z",
+                    "dateModified": "2025-10-20T10:00:00Z",
+                    "author": [{"@type": "Person", "name": "NASA Science"}],
+                    "publisher": {"@type": "Organization", "name": "NASA"},
+                    "sourceOrganization": {"@type": "Organization", "name": "Jet Propulsion Laboratory"},
+                    "locationCreated": {"@type": "Place", "name": "Cape Canaveral, FL"}
+                }
+            </script>
+        </head>
+    </html>
+    """
+
+    class _FakeResponse:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _FakeClient:
+        async def get(self, url: str) -> _FakeResponse:  # type: ignore[name-defined]
+            assert url == hit.url
+            return _FakeResponse(schema_payload)
+
+    @asynccontextmanager
+    async def _fake_http_client_factory():
+        yield _FakeClient()
+
+    engine = CuriosityEngine(
+        iris=_FakeIris(),
+        http_client_factory=_fake_http_client_factory,
+        search_orchestrator=_FakeOrchestrator([hit]),
+        verifier=_FakeVerifier(),
+    )
+
+    result = await engine.build_prompt_context("What is Europa Clipper?")
+
+    metadata = result["metadata"]
+    assert metadata["badge"] == "Government"
+    assert metadata["trust_level"] == "trust-high"
+    assert metadata["authors"] == ["NASA Science"]
+    assert metadata["published_at"].startswith("2025-10-19")
+    assert metadata["organization"] == "Jet Propulsion Laboratory"
+    assert metadata["publisher"] == "NASA"
+    assert metadata["location_name"] == "Cape Canaveral, FL"
+    assert result["citations"] == [hit.url]
 
 
 @pytest.mark.asyncio

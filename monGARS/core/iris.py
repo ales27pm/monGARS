@@ -18,7 +18,8 @@ import httpx
 import trafilatura
 from bs4 import BeautifulSoup
 
-from .search.metadata import parse_date_from_text, parse_schema_dates
+from .search.metadata import parse_date_from_text
+from .search.schema_org import parse_schema_org
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,13 @@ class IrisDocument:
     language: str | None = None
     event_date: datetime | None = None
     published_at: datetime | None = None
+    modified_at: datetime | None = None
+    event_start: datetime | None = None
+    event_end: datetime | None = None
+    authors: list[str] | None = None
+    publisher: str | None = None
+    organization: str | None = None
+    location_name: str | None = None
 
 
 class Iris:
@@ -374,7 +382,6 @@ class Iris:
                 extra={"error": str(exc)},
             )
 
-        event_dt, pub_dt = parse_schema_dates(response.text)
         document_data: Mapping[str, object] | None = None
         if extracted_json:
             try:
@@ -422,9 +429,42 @@ class Iris:
         if document is None:
             return None
 
-        document.published_at = pub_dt
+        schema_meta = parse_schema_org(response.text)
+        if schema_meta:
+            if schema_meta.date_published and document.published_at is None:
+                document.published_at = schema_meta.date_published
+            if schema_meta.date_modified and document.modified_at is None:
+                document.modified_at = schema_meta.date_modified
+            if schema_meta.event_start and document.event_start is None:
+                document.event_start = schema_meta.event_start
+            if schema_meta.event_end and document.event_end is None:
+                document.event_end = schema_meta.event_end
+            if schema_meta.authors:
+                if document.authors:
+                    existing = {author.lower() for author in document.authors}
+                    for author in schema_meta.authors:
+                        lowered = author.lower()
+                        if lowered not in existing:
+                            document.authors.append(author)
+                            existing.add(lowered)
+                else:
+                    document.authors = list(schema_meta.authors)
+            if schema_meta.publisher and document.publisher is None:
+                document.publisher = schema_meta.publisher
+            if schema_meta.organization and document.organization is None:
+                document.organization = schema_meta.organization
+            if schema_meta.location_name and document.location_name is None:
+                document.location_name = schema_meta.location_name
+
         fallback_source = document.summary or (document.text or "")[:800]
-        document.event_date = event_dt or parse_date_from_text(fallback_source)
+        if document.published_at is None:
+            fallback_document_date = parse_date_from_text(fallback_source)
+            if fallback_document_date is not None:
+                document.published_at = fallback_document_date
+        if document.event_date is None:
+            document.event_date = document.event_start or parse_date_from_text(
+                fallback_source
+            )
         return document
 
     def _fallback_text(self, response: httpx.Response) -> str | None:

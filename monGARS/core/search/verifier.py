@@ -201,3 +201,15 @@ class Verifier:
             return round(min(confidence, 0.8), 3)
         confidence = 0.5 + (weighted_agreement / weighted_total)
         return round(min(confidence, 1.0), 3)
+
+
+def cross_check(
+    query: str,
+    hits: Sequence[NormalizedHit],
+    *,
+    verifier: Verifier | None = None,
+) -> VerifiedBundle:
+    """Convenience wrapper around :class:`Verifier` for functional usage."""
+
+    active_verifier = verifier or Verifier()
+    return active_verifier.cross_check(query, hits)
