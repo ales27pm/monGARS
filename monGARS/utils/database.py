@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Mapping, Protocol
+from typing import AsyncContextManager, AsyncIterator, Mapping, Protocol
 
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +38,7 @@ def apply_database_url_overrides(
 
     field_sources = field_sources or {}
 
-    overrides: dict[str, object] = {}
+    overrides: dict[str, str | int] = {}
 
     norm_username = _normalize_text(username)
     if norm_username and norm_username != url.username:
@@ -89,13 +89,26 @@ def apply_database_url_overrides(
     if not overrides:
         return url
 
-    return url.set(**overrides)
+    updated = url
+    if "username" in overrides:
+        updated = updated.set(username=str(overrides["username"]))
+    if "password" in overrides:
+        updated = updated.set(password=str(overrides["password"]))
+    if "host" in overrides:
+        updated = updated.set(host=str(overrides["host"]))
+    if "port" in overrides:
+        updated = updated.set(port=int(overrides["port"]))
+    if "database" in overrides:
+        updated = updated.set(database=str(overrides["database"]))
+    return updated
 
 
 class AsyncSessionFactory(Protocol):
     """Protocol describing the async session factory used across the app."""
 
-    def __call__(self) -> AsyncIterator[AsyncSession]:  # pragma: no cover - typing aid
+    def __call__(
+        self,
+    ) -> AsyncContextManager[AsyncSession]:  # pragma: no cover - typing aid
         ...
 
 
