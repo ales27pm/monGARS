@@ -77,7 +77,7 @@ class EmbeddingBackendError(RuntimeError):
     """Raised when the embedding backend cannot produce vectors."""
 
 
-_TRANSFORMERS_COMPONENT_CACHE: dict[str, tuple[Any, Any, Any, int]] = {}
+_TRANSFORMERS_COMPONENT_CACHE: dict[tuple[str, str], tuple[Any, Any, Any, int]] = {}
 _TRANSFORMERS_COMPONENT_LOCK = threading.Lock()
 
 
@@ -133,17 +133,20 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
     if not model_id:
         raise EmbeddingBackendError("transformers embedding model is not configured")
 
-    with _TRANSFORMERS_COMPONENT_LOCK:
-        cached = _TRANSFORMERS_COMPONENT_CACHE.get(model_id)
-        if cached is not None:
-            return cached
-
     if (
         AutoTokenizer is None or AutoModelForCausalLM is None
     ):  # pragma: no cover - dependency missing
         raise EmbeddingBackendError("transformers library is not available")
     if torch is None:  # pragma: no cover - dependency missing
         raise EmbeddingBackendError("PyTorch is required for transformers embeddings")
+
+    device = _resolve_transformers_device(settings)
+    cache_key = (model_id, str(device))
+
+    with _TRANSFORMERS_COMPONENT_LOCK:
+        cached = _TRANSFORMERS_COMPONENT_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -165,7 +168,12 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
         tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
     tokenizer.padding_side = "right"
 
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    if device.type == "cuda":
+        dtype = torch.float16
+    elif device.type == "mps":  # pragma: no cover - macOS specific
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
 
     try:
         model = AutoModelForCausalLM.from_pretrained(
@@ -182,7 +190,6 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
             "Failed to load transformers embedding model"
         ) from exc
 
-    device = _resolve_transformers_device(settings)
     model.to(device)
     model.eval()
 
@@ -192,7 +199,7 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
 
     components = (tokenizer, model, device, int(hidden_size))
     with _TRANSFORMERS_COMPONENT_LOCK:
-        _TRANSFORMERS_COMPONENT_CACHE[model_id] = components
+        _TRANSFORMERS_COMPONENT_CACHE[cache_key] = components
     return components
 
 
