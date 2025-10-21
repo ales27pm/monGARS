@@ -15,9 +15,6 @@ import httpx
 from cachetools import TTLCache
 
 from .contracts import NormalizedHit, SearchProvider
-from .providers.ddg import DDGProvider
-from .providers.gnews import GNewsProvider
-from .providers.wikipedia import WikipediaProvider
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +155,24 @@ class SearchOrchestrator:
             )
 
         async with self._http_client_factory() as client:
+            from .providers.ddg import DDGProvider
+            from .providers.wikipedia import WikipediaProvider
+
             built_providers: list[SearchProvider] = [
                 DDGProvider(client, timeout=self._timeout),
                 WikipediaProvider(client, timeout=self._timeout),
-                GNewsProvider(timeout=self._timeout),
             ]
+
+            try:
+                from .providers.gnews import GNewsProvider
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                logger.warning(
+                    "search.provider.optional_missing",
+                    extra={"provider": "GNewsProvider", "error": str(exc)},
+                    exc_info=True,
+                )
+            else:
+                built_providers.append(GNewsProvider(timeout=self._timeout))
             return await self._collect_from_providers(
                 built_providers, query, lang=lang, max_results=max_results
             )
