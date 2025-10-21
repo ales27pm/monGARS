@@ -156,6 +156,7 @@ class SearchOrchestrator:
         robots_user_agent: str = "IrisBot/1.0",
         document_fetcher: DocumentFetcher | None = None,
         enrichment_limit: int = 5,
+        document_fetch_timeout: float | None = None,
     ) -> None:
         self._timeout = timeout
         self._providers = list(providers) if providers is not None else None
@@ -167,6 +168,9 @@ class SearchOrchestrator:
         self._robots_cache = robots_cache
         self._document_fetcher = document_fetcher
         self._enrichment_limit = max(0, enrichment_limit)
+        self._document_fetch_timeout = (
+            timeout if document_fetch_timeout is None else document_fetch_timeout
+        )
         if client is not None and http_client_factory is not None:
             raise ValueError(
                 "Provide either an httpx.AsyncClient or an http_client_factory, not both."
@@ -384,7 +388,19 @@ class SearchOrchestrator:
         if self._document_fetcher is None:
             return
         try:
-            document = await self._document_fetcher(hit.url)
+            document = await asyncio.wait_for(
+                self._document_fetcher(hit.url),
+                timeout=self._document_fetch_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.debug(
+                "search.orchestrator.document_fetch_timeout",
+                extra={
+                    "url": hit.url,
+                    "timeout_s": self._document_fetch_timeout,
+                },
+            )
+            return
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug(
                 "search.orchestrator.document_fetch_failed",
