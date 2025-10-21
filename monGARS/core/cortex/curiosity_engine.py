@@ -133,7 +133,8 @@ class CuriosityEngine:
             self._http_client_factory = http_client_factory
 
         self._search_orchestrator = search_orchestrator or SearchOrchestrator(
-            http_client_factory=self._http_client_factory
+            http_client_factory=self._http_client_factory,
+            document_fetcher=self.iris.fetch_document,
         )
         self._verifier = verifier or Verifier()
         self._research_workflow = ResearchWorkflow(
