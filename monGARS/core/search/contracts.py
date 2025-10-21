@@ -48,7 +48,7 @@ class VerifiedBundle:
     agreed_facts: Dict[str, str]
     disagreements: Dict[str, List[str]]
     confidence: float
-    primary_citation: str
+    primary_citation: Optional[str]
     citations: List[str]
 
 

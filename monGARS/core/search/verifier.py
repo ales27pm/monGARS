@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from .contracts import NormalizedHit, VerifiedBundle
 
@@ -26,9 +26,20 @@ class Verifier:
         facts = self._extract_claims((hit.snippet or hit.title or "") for hit in hits)
         agreed = self._select_agreements(facts)
         disagreements = self._collect_disagreements(facts, agreed)
-        confidence = self._calculate_confidence(facts, agreed)
-        citations = [hit.url for hit in hits]
-        primary = hits[0].url if hits else ""
+        confidence = self._calculate_confidence(hits, facts, agreed)
+        seen: set[str] = set()
+        citations: List[str] = []
+        for hit in hits:
+            if hit.url and hit.url not in seen:
+                citations.append(hit.url)
+                seen.add(hit.url)
+        primary: Optional[str] = None
+        for hit in hits:
+            if hit.url and hit.is_trustworthy():
+                primary = hit.url
+                break
+        if primary is None and hits:
+            primary = hits[0].url or None
         return VerifiedBundle(
             query=query,
             hits=list(hits),
@@ -79,12 +90,25 @@ class Verifier:
             alternatives = [
                 value for value, _ in counter.most_common(3) if value != agreed_value
             ]
-            disagreements[key] = alternatives
+            if not alternatives:
+                continue
+            existing = disagreements.get(alias, [])
+            for value in alternatives:
+                if value not in existing:
+                    existing.append(value)
+            disagreements[alias] = existing
         return disagreements
 
     def _calculate_confidence(
-        self, buckets: Dict[str, Counter[str]], agreed: Dict[str, str]
+        self,
+        hits: Sequence[NormalizedHit],
+        buckets: Dict[str, Counter[str]],
+        agreed: Dict[str, str],
     ) -> float:
+        if not hits:
+            return 0.0
+        if len(hits) == 1:
+            return 1.0
         total_candidates = sum(sum(counter.values()) for counter in buckets.values())
         if total_candidates == 0:
             return 0.5

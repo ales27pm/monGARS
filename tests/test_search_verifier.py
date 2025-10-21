@@ -47,8 +47,8 @@ def test_verifier_collects_disagreements() -> None:
 
     assert "number" not in bundle.agreed_facts
     assert bundle.confidence == pytest.approx(0.5)
-    assert "numbers" in bundle.disagreements
-    assert set(bundle.disagreements["numbers"]) == {"10", "12"}
+    assert "number" in bundle.disagreements
+    assert set(bundle.disagreements["number"]) == {"10", "12"}
 
 
 def test_verifier_handles_empty_hits() -> None:

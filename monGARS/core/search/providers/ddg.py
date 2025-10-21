@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -48,24 +48,35 @@ class DDGProvider:
             href = anchor.get("href")
             if not href:
                 continue
+            resolved_href = href
+            try:
+                parts = urlsplit(href)
+                if parts.netloc.endswith("duckduckgo.com") and parts.path.startswith(
+                    "/l/"
+                ):
+                    target = parse_qs(parts.query).get("uddg", [None])[0]
+                    if target:
+                        resolved_href = unquote(target)
+            except Exception:  # pragma: no cover - defensive parsing
+                resolved_href = href
             title = anchor.get_text(" ", strip=True)
             snippet = (
                 snippet_node.get_text(" ", strip=True)
                 if snippet_node is not None
                 else ""
             )
-            domain = urlparse(href).netloc
+            domain = urlparse(resolved_href).netloc
             results.append(
                 NormalizedHit(
                     provider="ddg",
                     title=title,
-                    url=href,
+                    url=resolved_href,
                     snippet=snippet,
                     published_at=None,
                     event_date=None,
                     source_domain=domain,
                     lang=lang,
-                    raw={"title": title, "snippet": snippet},
+                    raw={"title": title, "snippet": snippet, "href": href},
                 )
             )
             if len(results) >= max_results:

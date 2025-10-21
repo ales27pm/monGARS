@@ -90,7 +90,9 @@ def _event_bonus(event_date: Optional[datetime], *, now: datetime) -> float:
 
 def _canonical_url(url: str) -> str:
     pieces = urlsplit(url)
-    return f"{pieces.scheme}://{pieces.netloc}{pieces.path}".lower()
+    scheme = pieces.scheme.lower()
+    host = pieces.netloc.lower()
+    return f"{scheme}://{host}{pieces.path}"
 
 
 class SearchOrchestrator:
@@ -187,6 +189,8 @@ class SearchOrchestrator:
                 provider_name = tasks[task]
                 try:
                     provider_hits = await task
+                except asyncio.CancelledError:
+                    raise
                 except asyncio.TimeoutError:
                     logger.warning(
                         "search.provider.timeout",
@@ -200,6 +204,7 @@ class SearchOrchestrator:
                     logger.warning(
                         "search.provider.http_timeout",
                         extra={"provider": provider_name, "error": str(exc)},
+                        exc_info=True,
                     )
                     continue
                 except httpx.HTTPStatusError as exc:
@@ -209,18 +214,21 @@ class SearchOrchestrator:
                             "provider": provider_name,
                             "status_code": exc.response.status_code,
                         },
+                        exc_info=True,
                     )
                     continue
                 except httpx.HTTPError as exc:
                     logger.warning(
                         "search.provider.network_error",
                         extra={"provider": provider_name, "error": str(exc)},
+                        exc_info=True,
                     )
                     continue
                 except Exception as exc:  # pragma: no cover - provider-dependent
                     logger.warning(
                         "search.provider.failure",
                         extra={"provider": provider_name, "error": str(exc)},
+                        exc_info=True,
                     )
                     continue
                 hits.extend(provider_hits)
@@ -233,6 +241,8 @@ class SearchOrchestrator:
             for task in tasks:
                 if not task.done():
                     task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks.keys(), return_exceptions=True)
         return hits
 
     def _build_provider_kwargs(
