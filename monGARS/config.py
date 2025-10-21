@@ -431,8 +431,26 @@ class Settings(BaseSettings):
         description="Model identifier requested from Ollama when embedding_backend='ollama'.",
     )
     transformers_embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="Model identifier requested when embedding_backend='transformers'.",
+        default="meta-llama/Meta-Llama-3.1-8B-Instruct",
+        description=(
+            "Hugging Face model identifier used when embedding_backend='transformers'."
+        ),
+    )
+    transformers_embedding_max_length: int = Field(
+        default=4096,
+        ge=1,
+        description="Maximum sequence length applied during transformers embedding tokenisation.",
+    )
+    transformers_embedding_batch_size: int = Field(
+        default=2,
+        ge=1,
+        description="Batch size used when pooling transformers embeddings.",
+    )
+    transformers_embedding_device: str | None = Field(
+        default=None,
+        description=(
+            "Optional torch device override (e.g. 'cuda', 'cpu', 'mps') for transformers embeddings."
+        ),
     )
 
     @field_validator("embedding_backend", mode="before")
