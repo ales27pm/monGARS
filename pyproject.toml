@@ -6,13 +6,15 @@ build-backend = "setuptools.build_meta"
 addopts = "-q"
 
 [tool.mypy]
-packages = ["modules.evolution_engine"]
-modules = [
-    "monGARS.core.inference_utils",
-    "monGARS.utils.database",
+files = [
+    "modules/evolution_engine",
+    "monGARS/__init__.py",
+    "monGARS/core/inference_utils.py",
+    "monGARS/utils/database.py",
 ]
 mypy_path = ["typings"]
 explicit_package_bases = true
+python_version = "3.11"
 
 [[tool.mypy.overrides]]
 module = [

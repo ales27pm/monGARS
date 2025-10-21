@@ -39,12 +39,13 @@ def _coerce_text(value: object | None) -> str:
 
     if value is None:
         return ""
-    if isinstance(value, str):
-        return value.strip()
+
     if isinstance(value, (bytes, bytearray, memoryview)):
-        decoded = bytes(value).decode("utf-8", errors="replace")
-        return decoded.strip()
-    return str(value).strip()
+        value = bytes(value).decode("utf-8", errors="replace")
+    elif not isinstance(value, str):
+        value = str(value)
+
+    return value.strip()
 
 
 def _coerce_history_pairs(
