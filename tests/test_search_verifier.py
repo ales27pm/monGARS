@@ -71,5 +71,5 @@ def test_verifier_handles_single_hit() -> None:
 
     assert bundle.primary_citation == hit.url
     assert bundle.citations == [hit.url]
-    assert bundle.confidence == pytest.approx(1.0)
+    assert bundle.confidence == pytest.approx(0.5)
     assert isinstance(bundle.agreed_facts, dict)

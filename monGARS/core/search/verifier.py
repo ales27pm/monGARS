@@ -107,10 +107,11 @@ class Verifier:
     ) -> float:
         if not hits:
             return 0.0
-        if len(hits) == 1:
-            return 1.0
         total_candidates = sum(sum(counter.values()) for counter in buckets.values())
         if total_candidates == 0:
             return 0.5
+        if len(hits) == 1:
+            confidence = 0.5 + (min(len(agreed), 1) / max(total_candidates, 3))
+            return round(min(confidence, 1.0), 3)
         confidence = 0.5 + (len(agreed) / total_candidates)
         return round(min(confidence, 1.0), 3)
