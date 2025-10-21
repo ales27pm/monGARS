@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -15,6 +16,20 @@ class DummyProvider:
         self, query: str, *, lang: str | None = None, max_results: int = 8
     ):
         return list(self._hits)[:max_results]
+
+
+class FailingProvider:
+    async def search(
+        self, query: str, *, lang: str | None = None, max_results: int = 8
+    ):
+        raise RuntimeError("Provider failure")
+
+
+class TimeoutProvider:
+    async def search(
+        self, query: str, *, lang: str | None = None, max_results: int = 8
+    ):
+        raise asyncio.TimeoutError
 
 
 @pytest.mark.asyncio
@@ -84,3 +99,38 @@ async def test_orchestrator_deduplicates_urls() -> None:
 
     assert len(results) == 1
     assert results[0].url.startswith("https://example.com/article")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_handles_provider_failure() -> None:
+    now = datetime.now(timezone.utc)
+    healthy_hit = NormalizedHit(
+        provider="wikipedia",
+        title="Encyclopedic entry",
+        url="https://wikipedia.org/wiki/Entry",
+        snippet="Authoritative information.",
+        published_at=now,
+        event_date=None,
+        source_domain="wikipedia.org",
+        lang="en",
+        raw={},
+    )
+    orchestrator = SearchOrchestrator(
+        providers=[FailingProvider(), DummyProvider([healthy_hit])]
+    )
+
+    results = await orchestrator.search("test", lang="en")
+
+    assert results == [healthy_hit]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_handles_provider_timeout() -> None:
+    orchestrator = SearchOrchestrator(
+        providers=[TimeoutProvider(), DummyProvider([])],
+        timeout=0.1,
+    )
+
+    results = await orchestrator.search("timeout", lang="en")
+
+    assert results == []

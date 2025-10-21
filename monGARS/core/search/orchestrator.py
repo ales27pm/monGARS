@@ -50,10 +50,14 @@ def _domain_weight(domain: str) -> float:
     for suffix in (".gov", ".edu", ".gouv", ".gouv.fr"):
         if domain.endswith(suffix):
             return 0.4 if suffix == ".gov" else 0.35
-    for key, weight in TRUSTED_DOMAIN_WEIGHTS.items():
-        if domain == key or domain.endswith(f".{key}"):
-            return weight
-    return 0.0
+    return next(
+        (
+            weight
+            for key, weight in TRUSTED_DOMAIN_WEIGHTS.items()
+            if domain == key or domain.endswith(f".{key}")
+        ),
+        0.0,
+    )
 
 
 def _recency_weight(published_at: Optional[datetime], *, now: datetime) -> float:
@@ -69,9 +73,7 @@ def _recency_weight(published_at: Optional[datetime], *, now: datetime) -> float
         return 0.3
     if days <= 30:
         return 0.2
-    if days <= 180:
-        return 0.1
-    return 0.02
+    return 0.1 if days <= 180 else 0.02
 
 
 def _event_bonus(event_date: Optional[datetime], *, now: datetime) -> float:
@@ -83,9 +85,7 @@ def _event_bonus(event_date: Optional[datetime], *, now: datetime) -> float:
         return 0.0
     if (now - event_date).days <= 7:
         return 0.08
-    if (now - event_date).days <= 30:
-        return 0.04
-    return 0.0
+    return 0.04 if (now - event_date).days <= 30 else 0.0
 
 
 def _canonical_url(url: str) -> str:
@@ -132,7 +132,7 @@ class SearchOrchestrator:
                 "search.orchestrator.cache_hit",
                 extra={"query_len": len(normalized_query), "lang": lang},
             )
-            return [hit for hit in cached_hits]
+            return list(cached_hits)
 
         logger.debug(
             "search.orchestrator.cache_miss",
@@ -173,22 +173,54 @@ class SearchOrchestrator:
         lang: str,
         max_results: int,
     ) -> List[NormalizedHit]:
-        tasks: list[asyncio.Task[Sequence[NormalizedHit]]] = []
+        tasks: dict[asyncio.Task[Sequence[NormalizedHit]], str] = {}
         for provider in providers:
             kwargs = self._build_provider_kwargs(
                 provider, lang=lang, max_results=max_results
             )
-            tasks.append(asyncio.create_task(provider.search(query, **kwargs)))
+            task = asyncio.create_task(provider.search(query, **kwargs))
+            tasks[task] = provider.__class__.__name__
 
         hits: list[NormalizedHit] = []
         try:
             for task in asyncio.as_completed(tasks, timeout=self._timeout + 2):
+                provider_name = tasks[task]
                 try:
                     provider_hits = await task
-                except Exception as exc:  # pragma: no cover - network dependent
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "search.provider.timeout",
+                        extra={
+                            "provider": provider_name,
+                            "timeout_s": self._timeout,
+                        },
+                    )
+                    continue
+                except httpx.TimeoutException as exc:
+                    logger.warning(
+                        "search.provider.http_timeout",
+                        extra={"provider": provider_name, "error": str(exc)},
+                    )
+                    continue
+                except httpx.HTTPStatusError as exc:
+                    logger.warning(
+                        "search.provider.http_error",
+                        extra={
+                            "provider": provider_name,
+                            "status_code": exc.response.status_code,
+                        },
+                    )
+                    continue
+                except httpx.HTTPError as exc:
+                    logger.warning(
+                        "search.provider.network_error",
+                        extra={"provider": provider_name, "error": str(exc)},
+                    )
+                    continue
+                except Exception as exc:  # pragma: no cover - provider-dependent
                     logger.warning(
                         "search.provider.failure",
-                        extra={"error": str(exc)},
+                        extra={"provider": provider_name, "error": str(exc)},
                     )
                     continue
                 hits.extend(provider_hits)

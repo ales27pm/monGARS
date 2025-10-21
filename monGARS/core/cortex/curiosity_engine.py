@@ -6,7 +6,7 @@ import logging
 import math
 import types
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Callable
 
 import httpx
@@ -136,6 +136,14 @@ class CuriosityEngine:
             http_client_factory=self._http_client_factory
         )
         self._verifier = verifier or Verifier()
+        self._research_workflow = ResearchWorkflow(
+            search_orchestrator=self._search_orchestrator,
+            verifier=self._verifier,
+            iris=self.iris,
+            http_client_factory=self._http_client_factory,
+            research_cache=self._research_cache,
+            research_cache_lock=self._research_cache_lock,
+        )
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
@@ -739,11 +747,40 @@ class CuriosityEngine:
     async def _perform_research(self, query: str) -> str:
         """Fetch fresh context, verify it, and return annotated summaries."""
 
+        return await self._research_workflow.run(
+            query,
+            lang=getattr(settings, "curiosity_research_lang", "en"),
+        )
+
+
+class ResearchWorkflow:
+    """Encapsulate the external research workflow for the curiosity engine."""
+
+    _DEFAULT_FALLBACK = "Aucun contexte supplémentaire trouvé."
+
+    def __init__(
+        self,
+        *,
+        search_orchestrator: SearchOrchestrator,
+        verifier: Verifier,
+        iris: Iris,
+        http_client_factory: AsyncClientFactory,
+        research_cache: TTLCache[str, str],
+        research_cache_lock: asyncio.Lock,
+    ) -> None:
+        self._search_orchestrator = search_orchestrator
+        self._verifier = verifier
+        self._iris = iris
+        self._http_client_factory = http_client_factory
+        self._research_cache = research_cache
+        self._research_cache_lock = research_cache_lock
+
+    async def run(self, query: str, *, lang: str) -> str:
         normalised_query = query.strip()
         if not normalised_query:
-            return "Aucun contexte supplémentaire trouvé."
+            return self._DEFAULT_FALLBACK
 
-        cached_response = await self._get_cached_research(normalised_query)
+        cached_response = await self._get_cached(normalised_query)
         if cached_response is not None:
             _research_cache_counter.add(1, {"event": "hit"})
             return cached_response
@@ -757,27 +794,39 @@ class CuriosityEngine:
 
         search_results = await self._search_orchestrator.search(
             normalised_query,
-            lang=getattr(settings, "curiosity_research_lang", "en"),
+            lang=lang,
         )
         verification_bundle = self._verifier.cross_check(
             normalised_query, search_results
         )
 
         top_hit = verification_bundle.hits[0] if verification_bundle.hits else None
-        iris_summary = await self._resolve_primary_summary(top_hit)
+        iris_summary_task = asyncio.create_task(
+            self._resolve_primary_summary(top_hit)
+        )
+        document_summary_task = asyncio.create_task(
+            self._fetch_document_summary(normalised_query)
+        )
+        iris_snippet_task = asyncio.create_task(
+            self._safe_iris_search(normalised_query)
+        )
 
-        _external_research_counter.add(1, {"channel": "document_service"})
-        document_summary = await self._fetch_document_summary(normalised_query)
+        iris_summary, document_summary = await asyncio.gather(
+            iris_summary_task, document_summary_task
+        )
 
-        iris_search_snippet = ""
-        if not document_summary:
-            _external_research_counter.add(1, {"channel": "iris"})
-            iris_search_snippet = await self.iris.search(normalised_query) or ""
+        iris_search_snippet: str | None = None
+        if document_summary:
+            iris_snippet_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await iris_snippet_task
+        else:
+            iris_search_snippet = await iris_snippet_task
 
         combined_summary = self._combine_summaries(
             document_summary,
             iris_summary,
-            iris_search_snippet,
+            iris_search_snippet or "",
             fallback=top_hit.snippet if top_hit else "",
         )
 
@@ -786,21 +835,36 @@ class CuriosityEngine:
                 "curiosity.research.no_summary",
                 extra={"query_len": len(normalised_query)},
             )
-            if not iris_search_snippet:
-                _external_research_counter.add(1, {"channel": "iris"})
-                iris_search_snippet = await self.iris.search(normalised_query) or ""
-            combined_summary = iris_search_snippet
+            if iris_search_snippet is None:
+                iris_search_snippet = await self._safe_iris_search(normalised_query)
+            combined_summary = iris_search_snippet or self._DEFAULT_FALLBACK
 
         enriched = self._render_research_response(
             combined_summary,
             verification_bundle,
         )
-        await self._set_cached_research(normalised_query, enriched)
+        await self._set_cached(normalised_query, enriched)
         return enriched
+
+    async def _safe_iris_search(self, query: str) -> str:
+        try:
+            _external_research_counter.add(1, {"channel": "iris"})
+            result = await self._iris.search(query)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - network dependent
+            logger.debug(
+                "curiosity.iris_search.error",
+                exc_info=True,
+                extra={"query_len": len(query)},
+            )
+            return ""
+        return result or ""
 
     async def _fetch_document_summary(self, query: str) -> str:
         """Return a concatenated summary from the document retrieval service."""
 
+        _external_research_counter.add(1, {"channel": "document_service"})
         try:
             async with self._http_client_factory() as client:
                 response = await client.post(
@@ -825,21 +889,15 @@ class CuriosityEngine:
 
         return self._summarise_documents(documents)
 
-    async def _get_cached_research(self, query: str) -> str | None:
-        """Return a cached research result for ``query`` if available."""
-
+    async def _get_cached(self, query: str) -> str | None:
         async with self._research_cache_lock:
             return self._research_cache.get(query)
 
-    async def _set_cached_research(self, query: str, value: str) -> None:
-        """Store ``value`` in the research cache for ``query``."""
-
+    async def _set_cached(self, query: str, value: str) -> None:
         async with self._research_cache_lock:
             self._research_cache[query] = value
 
     def _summarise_documents(self, documents: Sequence[Mapping[str, Any]]) -> str:
-        """Combine document summaries into a compact string."""
-
         cleaned_summaries: list[str] = []
         for document in documents:
             if not isinstance(document, Mapping):
@@ -857,7 +915,16 @@ class CuriosityEngine:
 
         document = None
         try:
-            document = await self.iris.fetch_document(hit.url)
+            document = await asyncio.wait_for(
+                self._iris.fetch_document(hit.url),
+                timeout=10,
+            )
+        except asyncio.TimeoutError:
+            logger.debug(
+                "curiosity.iris_document_fetch_timeout",
+                extra={"url": hit.url},
+                exc_info=True,
+            )
         except Exception:  # pragma: no cover - network dependent
             logger.debug(
                 "curiosity.iris_document_fetch_error",
@@ -879,10 +946,8 @@ class CuriosityEngine:
         for value in summaries:
             if value and (stripped := value.strip()):
                 components.append(stripped)
-        if not components and fallback:
-            stripped = fallback.strip()
-            if stripped:
-                components.append(stripped)
+        if not components and fallback and (stripped := fallback.strip()):
+            components.append(stripped)
         deduped = list(dict.fromkeys(components))
         return " ".join(deduped)
 
@@ -891,7 +956,7 @@ class CuriosityEngine:
         if summary:
             lines.append(f"Contexte supplémentaire: {summary}")
         else:
-            lines.append("Aucun contexte supplémentaire trouvé.")
+            lines.append(self._DEFAULT_FALLBACK)
 
         if bundle.agreed_facts:
             facts = "; ".join(
@@ -899,11 +964,11 @@ class CuriosityEngine:
             )
             lines.append(f"Points confirmés: {facts}")
 
-        disagreement_snippets: list[str] = []
-        for key, values in bundle.disagreements.items():
-            if values:
-                disagreement_snippets.append(f"{key}: {values[0]}")
-        if disagreement_snippets:
+        if disagreement_snippets := [
+            f"{key}: {values[0]}"
+            for key, values in bundle.disagreements.items()
+            if values
+        ]:
             lines.append("Divergences relevées: " + "; ".join(disagreement_snippets))
 
         if bundle.citations:

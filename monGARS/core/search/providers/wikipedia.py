@@ -43,21 +43,20 @@ class WikipediaProvider:
         urls = payload[3] if len(payload) > 3 else []
         descriptions = payload[2] if len(payload) > 2 else []
 
-        results: list[NormalizedHit] = []
-        for title, url, description in zip(titles, urls, descriptions):
-            results.append(
-                NormalizedHit(
-                    provider="wikipedia",
-                    title=title,
-                    url=url,
-                    snippet=description or "",
-                    published_at=None,
-                    event_date=None,
-                    source_domain="wikipedia.org",
-                    lang=lang,
-                    raw={"title": title, "description": description},
-                )
+        results = [
+            NormalizedHit(
+                provider="wikipedia",
+                title=title,
+                url=url,
+                snippet=description or "",
+                published_at=None,
+                event_date=None,
+                source_domain="wikipedia.org",
+                lang=lang,
+                raw={"title": title, "description": description},
             )
+            for title, url, description in zip(titles, urls, descriptions)
+        ]
 
         logger.debug(
             "wikipedia.search.completed",

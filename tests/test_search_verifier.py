@@ -49,3 +49,27 @@ def test_verifier_collects_disagreements() -> None:
     assert bundle.confidence == pytest.approx(0.5)
     assert "numbers" in bundle.disagreements
     assert set(bundle.disagreements["numbers"]) == {"10", "12"}
+
+
+def test_verifier_handles_empty_hits() -> None:
+    verifier = Verifier()
+
+    bundle = verifier.cross_check("empty", [])
+
+    assert bundle.agreed_facts == {}
+    assert bundle.disagreements == {}
+    assert bundle.confidence == 0.0
+    assert bundle.primary_citation is None
+    assert bundle.citations == []
+
+
+def test_verifier_handles_single_hit() -> None:
+    verifier = Verifier()
+    hit = _make_hit("Single source confirms 42 units sold on 2024-11-01")
+
+    bundle = verifier.cross_check("single", [hit])
+
+    assert bundle.primary_citation == hit.url
+    assert bundle.citations == [hit.url]
+    assert bundle.confidence == pytest.approx(1.0)
+    assert isinstance(bundle.agreed_facts, dict)
