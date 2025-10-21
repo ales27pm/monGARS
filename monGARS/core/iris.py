@@ -9,7 +9,7 @@ import re
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from time import monotonic
 from typing import Any, Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
@@ -34,6 +34,14 @@ _DEFAULT_HEADERS: Mapping[str, str] = {
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 MAX_SNIPPET_LENGTH = 500
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass(slots=True)
@@ -460,11 +468,13 @@ class Iris:
         if document.published_at is None:
             fallback_document_date = parse_date_from_text(fallback_source)
             if fallback_document_date is not None:
-                document.published_at = fallback_document_date
+                document.published_at = _ensure_utc(fallback_document_date)
         if document.event_date is None:
-            document.event_date = document.event_start or parse_date_from_text(
+            derived_event = document.event_start or parse_date_from_text(
                 fallback_source
             )
+            if derived_event is not None:
+                document.event_date = _ensure_utc(derived_event)
         return document
 
     def _fallback_text(self, response: httpx.Response) -> str | None:

@@ -28,8 +28,8 @@ _PROVIDER_BADGES: dict[str, tuple[str, str]] = {
     "pubmed": ("Scientific", "trust-high"),
     "arxiv": ("Scientific", "trust-high"),
     "gnews": ("News", "trust-medium"),
-    "ddg": ("News", "trust-medium"),
-    "wikipedia": ("News", "trust-medium"),
+    "ddg": ("Search", "trust-medium"),
+    "wikipedia": ("Reference", "trust-medium"),
 }
 
 

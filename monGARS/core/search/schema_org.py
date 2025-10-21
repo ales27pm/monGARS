@@ -46,7 +46,7 @@ def _ensure_timezone(dt: datetime | None) -> datetime | None:
         return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
-    return dt
+    return dt.astimezone(timezone.utc)
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -222,6 +222,8 @@ def parse_schema_org(html: str) -> SchemaOrgMetadata | None:
 
     if metadata.date_published is None or metadata.event_start is None:
         fallback_event, fallback_pub = parse_schema_dates(html)
+        fallback_event = _ensure_timezone(fallback_event)
+        fallback_pub = _ensure_timezone(fallback_pub)
         if metadata.date_published is None:
             metadata.date_published = fallback_pub
         if metadata.event_start is None:

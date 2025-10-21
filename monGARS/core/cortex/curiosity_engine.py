@@ -165,23 +165,35 @@ class CuriosityEngine:
         if not hits:
             return {"error": "no results"}
 
-        top_hit = hits[0]
+        metadata_hit = None
+        if bundle.primary_citation:
+            metadata_hit = next(
+                (hit for hit in hits if hit.url == bundle.primary_citation),
+                None,
+            )
+        if metadata_hit is None and hits:
+            metadata_hit = hits[0]
+
+        if metadata_hit is None:
+            return {"error": "no results"}
+
+        top_url = metadata_hit.url
         try:
-            document = await self.iris.fetch_document(top_hit.url)
+            document = await self.iris.fetch_document(top_url)
         except asyncio.CancelledError:
             raise
         except Exception:  # pragma: no cover - network dependent
             logger.debug(
                 "curiosity.prompt_enrich.document_error",
                 exc_info=True,
-                extra={"url": top_hit.url},
+                extra={"url": top_url},
             )
             document = None
 
         if document and document.published_at is None:
             try:
                 async with self._http_client_factory() as client:
-                    response = await client.get(top_hit.url)
+                    response = await client.get(top_url)
                     response.raise_for_status()
             except asyncio.CancelledError:
                 raise
@@ -189,7 +201,7 @@ class CuriosityEngine:
                 logger.debug(
                     "curiosity.prompt_enrich.schema_fetch_error",
                     exc_info=True,
-                    extra={"url": top_hit.url},
+                    extra={"url": top_url},
                 )
             else:
                 schema = parse_schema_org(response.text)
