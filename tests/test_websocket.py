@@ -13,11 +13,7 @@ from fastapi.testclient import TestClient
 
 import monGARS.api.ws_manager as ws_module
 from monGARS.api.dependencies import hippocampus
-from monGARS.api.web_api import (
-    app,
-    reset_chat_rate_limiter_async,
-    ws_manager,
-)
+from monGARS.api.web_api import app, reset_chat_rate_limiter_async, ws_manager
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.ui_events import make_event

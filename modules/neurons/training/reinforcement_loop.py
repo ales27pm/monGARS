@@ -81,10 +81,7 @@ except ModuleNotFoundError:  # pragma: no cover - datasets optional
 from modules.neurons.registry import update_manifest
 from monGARS.core.model_slot_manager import ModelSlotManager
 from monGARS.core.monitor import get_tracer
-from monGARS.core.operator_approvals import (
-    ApprovalPolicy,
-    OperatorApprovalRegistry,
-)
+from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)

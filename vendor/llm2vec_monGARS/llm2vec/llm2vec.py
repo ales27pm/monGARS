@@ -21,12 +21,7 @@ from transformers import (
     Qwen2Config,
 )
 
-from .models import (
-    GemmaBiModel,
-    LlamaBiModel,
-    MistralBiModel,
-    Qwen2BiModel,
-)
+from .models import GemmaBiModel, LlamaBiModel, MistralBiModel, Qwen2BiModel
 
 logger = logging.getLogger(__name__)
 
