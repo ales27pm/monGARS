@@ -14,6 +14,7 @@ _DATE_PATTERN = re.compile(
 )
 _NUMBER_PATTERN = re.compile(r"\b(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\b")
 _FIELD_ALIASES = {"entities": "entity", "dates": "date", "numbers": "number"}
+_TRUST_WEIGHT_BONUS = 0.35
 
 
 class Verifier:
@@ -29,15 +30,13 @@ class Verifier:
         confidence = self._calculate_confidence(hits, facts, agreed)
         seen: set[str] = set()
         citations: List[str] = []
+        primary: Optional[str] = None
         for hit in hits:
             if hit.url and hit.url not in seen:
                 citations.append(hit.url)
                 seen.add(hit.url)
-        primary: Optional[str] = None
-        for hit in hits:
-            if hit.url and hit.is_trustworthy():
+            if primary is None and hit.url and hit.is_trustworthy():
                 primary = hit.url
-                break
         if primary is None and hits:
             primary = hits[0].url or None
         return VerifiedBundle(
@@ -59,13 +58,34 @@ class Verifier:
         for text in texts:
             if not text:
                 continue
-            for match in _ENTITY_PATTERN.finditer(text):
-                buckets["entities"][match.group(1)] += 1
-            for match in _DATE_PATTERN.finditer(text):
-                buckets["dates"][match.group(0)] += 1
-            for match in _NUMBER_PATTERN.finditer(text):
-                buckets["numbers"][match.group(1)] += 1
+            field_values = self._extract_field_values(text)
+            for field, values in field_values.items():
+                for value in values:
+                    buckets[field][value] += 1
         return buckets
+
+    def _extract_field_values(self, text: str) -> Dict[str, List[str]]:
+        values: Dict[str, List[str]] = {
+            "entities": [],
+            "dates": [],
+            "numbers": [],
+        }
+        for match in _ENTITY_PATTERN.finditer(text):
+            values["entities"].append(match.group(1))
+        date_matches = list(_DATE_PATTERN.finditer(text))
+        for match in date_matches:
+            values["dates"].append(match.group(0))
+        date_spans = [match.span(0) for match in date_matches]
+        for match in _NUMBER_PATTERN.finditer(text):
+            number_span = match.span(0)
+            if any(
+                span[0] <= number_span[0] < span[1]
+                or span[0] < number_span[1] <= span[1]
+                for span in date_spans
+            ):
+                continue
+            values["numbers"].append(match.group(1))
+        return values
 
     def _select_agreements(self, buckets: Dict[str, Counter[str]]) -> Dict[str, str]:
         agreed: Dict[str, str] = {}
@@ -87,16 +107,16 @@ class Verifier:
                 continue
             alias = _FIELD_ALIASES.get(key, key)
             agreed_value = agreed.get(alias)
-            alternatives = [
-                value for value, _ in counter.most_common(3) if value != agreed_value
-            ]
+            alternatives: List[str] = []
+            for value, _ in counter.most_common():
+                if value == agreed_value:
+                    continue
+                alternatives.append(value)
+                if len(alternatives) == 3:
+                    break
             if not alternatives:
                 continue
-            existing = disagreements.get(alias, [])
-            for value in alternatives:
-                if value not in existing:
-                    existing.append(value)
-            disagreements[alias] = existing
+            disagreements[alias] = alternatives
         return disagreements
 
     def _calculate_confidence(
@@ -110,8 +130,32 @@ class Verifier:
         total_candidates = sum(sum(counter.values()) for counter in buckets.values())
         if total_candidates == 0:
             return 0.5
+        weighted_total = 0.0
+        weighted_agreement = 0.0
+        seen_candidates: set[tuple[str, str, str]] = set()
+        for hit in hits:
+            text = hit.snippet or hit.title or ""
+            if not text:
+                continue
+            field_values = self._extract_field_values(text)
+            weight = 1.0 + (_TRUST_WEIGHT_BONUS if hit.is_trustworthy() else 0.0)
+            source = hit.source_domain
+            for field, values in field_values.items():
+                if not values:
+                    continue
+                alias = _FIELD_ALIASES.get(field, field)
+                for value in set(values):
+                    key = (alias, source, value)
+                    if key in seen_candidates:
+                        continue
+                    seen_candidates.add(key)
+                    weighted_total += weight
+                    if agreed.get(alias) == value:
+                        weighted_agreement += weight
+        if weighted_total == 0:
+            return 0.5
         if len(hits) == 1:
-            confidence = 0.5 + (min(len(agreed), 1) / max(total_candidates, 3))
-            return round(min(confidence, 1.0), 3)
-        confidence = 0.5 + (len(agreed) / total_candidates)
+            confidence = 0.5 + (weighted_agreement / max(weighted_total, 3.0))
+            return round(min(confidence, 0.8), 3)
+        confidence = 0.5 + (weighted_agreement / weighted_total)
         return round(min(confidence, 1.0), 3)

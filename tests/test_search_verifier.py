@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from monGARS.core.search import NormalizedHit, Verifier
 
 
 def _make_hit(snippet: str, *, provider: str = "gnews") -> NormalizedHit:
+    digest = hashlib.sha256(snippet.encode("utf-8")).hexdigest()[:16]
     return NormalizedHit(
         provider=provider,
         title="Headline",
-        url=f"https://example.com/{hash(snippet)}",
+        url=f"https://example.com/{digest}",
         snippet=snippet,
         published_at=None,
         event_date=None,
