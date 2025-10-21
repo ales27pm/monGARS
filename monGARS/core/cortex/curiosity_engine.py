@@ -752,6 +752,11 @@ class CuriosityEngine:
             lang=getattr(settings, "curiosity_research_lang", "en"),
         )
 
+    def _summarise_documents(self, documents: Sequence[Mapping[str, Any]]) -> str:
+        """Expose document summarisation for backwards compatibility in tests."""
+
+        return self._research_workflow._summarise_documents(documents)
+
 
 class ResearchWorkflow:
     """Encapsulate the external research workflow for the curiosity engine."""
@@ -805,26 +810,19 @@ class ResearchWorkflow:
         document_summary_task = asyncio.create_task(
             self._fetch_document_summary(normalised_query)
         )
-        iris_snippet_task = asyncio.create_task(
-            self._safe_iris_search(normalised_query)
-        )
 
         iris_summary, document_summary = await asyncio.gather(
             iris_summary_task, document_summary_task
         )
 
-        iris_search_snippet: str | None = None
-        if document_summary:
-            iris_snippet_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await iris_snippet_task
-        else:
-            iris_search_snippet = await iris_snippet_task
+        iris_search_snippet = ""
+        if not document_summary:
+            iris_search_snippet = await self._safe_iris_search(normalised_query)
 
         combined_summary = self._combine_summaries(
             document_summary,
             iris_summary,
-            iris_search_snippet or "",
+            iris_search_snippet,
             fallback=top_hit.snippet if top_hit else "",
         )
 
@@ -833,7 +831,7 @@ class ResearchWorkflow:
                 "curiosity.research.no_summary",
                 extra={"query_len": len(normalised_query)},
             )
-            if iris_search_snippet is None:
+            if not iris_search_snippet:
                 iris_search_snippet = await self._safe_iris_search(normalised_query)
             combined_summary = iris_search_snippet or self._DEFAULT_FALLBACK
 

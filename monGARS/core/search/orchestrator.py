@@ -185,74 +185,88 @@ class SearchOrchestrator:
         lang: str,
         max_results: int,
     ) -> List[NormalizedHit]:
-        tasks: dict[asyncio.Task[Sequence[NormalizedHit]], str] = {}
+        task_to_provider: dict[asyncio.Task[Sequence[NormalizedHit]], str] = {}
         for provider in providers:
             kwargs = self._build_provider_kwargs(
                 provider, lang=lang, max_results=max_results
             )
             task = asyncio.create_task(provider.search(query, **kwargs))
-            tasks[task] = provider.__class__.__name__
+            task_to_provider[task] = provider.__class__.__name__
 
+        created_tasks = list(task_to_provider.keys())
+        pending = set(created_tasks)
         hits: list[NormalizedHit] = []
         try:
-            for task in asyncio.as_completed(tasks, timeout=self._timeout + 2):
-                provider_name = tasks[task]
-                try:
-                    provider_hits = await task
-                except asyncio.CancelledError:
-                    raise
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "search.provider.timeout",
-                        extra={
-                            "provider": provider_name,
-                            "timeout_s": self._timeout,
-                        },
-                    )
-                    continue
-                except httpx.TimeoutException as exc:
-                    logger.warning(
-                        "search.provider.http_timeout",
-                        extra={"provider": provider_name, "error": str(exc)},
-                        exc_info=True,
-                    )
-                    continue
-                except httpx.HTTPStatusError as exc:
-                    logger.warning(
-                        "search.provider.http_error",
-                        extra={
-                            "provider": provider_name,
-                            "status_code": exc.response.status_code,
-                        },
-                        exc_info=True,
-                    )
-                    continue
-                except httpx.HTTPError as exc:
-                    logger.warning(
-                        "search.provider.network_error",
-                        extra={"provider": provider_name, "error": str(exc)},
-                        exc_info=True,
-                    )
-                    continue
-                except Exception as exc:  # pragma: no cover - provider-dependent
-                    logger.warning(
-                        "search.provider.failure",
-                        extra={"provider": provider_name, "error": str(exc)},
-                        exc_info=True,
-                    )
-                    continue
-                hits.extend(provider_hits)
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending,
+                    timeout=self._timeout + 2,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    raise asyncio.TimeoutError
+                for task in done:
+                    provider_name = task_to_provider.get(task, "unknown")
+                    try:
+                        provider_hits = task.result()
+                    except asyncio.CancelledError:
+                        raise
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "search.provider.timeout",
+                            extra={
+                                "provider": provider_name,
+                                "timeout_s": self._timeout,
+                            },
+                        )
+                        continue
+                    except httpx.TimeoutException as exc:
+                        logger.warning(
+                            "search.provider.http_timeout",
+                            extra={"provider": provider_name, "error": str(exc)},
+                            exc_info=True,
+                        )
+                        continue
+                    except httpx.HTTPStatusError as exc:
+                        logger.warning(
+                            "search.provider.http_error",
+                            extra={
+                                "provider": provider_name,
+                                "status_code": exc.response.status_code,
+                            },
+                            exc_info=True,
+                        )
+                        continue
+                    except httpx.HTTPError as exc:
+                        logger.warning(
+                            "search.provider.network_error",
+                            extra={"provider": provider_name, "error": str(exc)},
+                            exc_info=True,
+                        )
+                        continue
+                    except Exception as exc:  # pragma: no cover - provider-dependent
+                        logger.warning(
+                            "search.provider.failure",
+                            extra={"provider": provider_name, "error": str(exc)},
+                            exc_info=True,
+                        )
+                        continue
+                    if provider_hits:
+                        hits.extend(provider_hits)
         except asyncio.TimeoutError:
             logger.warning(
                 "search.providers.timeout",
-                extra={"timeout_s": self._timeout + 2, "task_count": len(tasks)},
+                extra={
+                    "timeout_s": self._timeout + 2,
+                    "task_count": len(task_to_provider),
+                },
             )
         finally:
-            for task in tasks:
+            for task in pending:
                 if not task.done():
                     task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks.keys(), return_exceptions=True)
+            if created_tasks:
+                await asyncio.gather(*created_tasks, return_exceptions=True)
         return hits
 
     def _build_provider_kwargs(
