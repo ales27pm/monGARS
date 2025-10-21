@@ -6,6 +6,9 @@
 
 Applies to every repository change. Nested AGENTS.md files add stricter rules; this root charter
 highlights the non-negotiable guardrails and shared context.
+Placeholders, stubs, mocks, incomplete or simplified code is not allowed. 
+Only refine full working logic and code will be accepted.
+
 
 ## Automation
 
