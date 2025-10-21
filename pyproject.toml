@@ -6,11 +6,20 @@ build-backend = "setuptools.build_meta"
 addopts = "-q"
 
 [tool.mypy]
-files = [
-    "modules/evolution_engine",
-    "monGARS/core/inference_utils.py",
-    "monGARS/utils/database.py",
+packages = ["modules.evolution_engine"]
+modules = [
+    "monGARS.core.inference_utils",
+    "monGARS.utils.database",
 ]
 mypy_path = ["typings"]
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "transformers.*",
+    "PIL.*",
+    "redis.*",
+]
+ignore_missing_imports = true
 

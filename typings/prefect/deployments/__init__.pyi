@@ -13,7 +13,6 @@ class Deployment:
         parameters: Mapping[str, Any] | None = ...,
         tags: list[str] | None = ...,
     ) -> Deployment: ...
-
     def apply(self) -> None: ...
 
 __all__ = ["Deployment"]

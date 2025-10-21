@@ -7,7 +7,12 @@ class SamplingParams:
 
 class LLM:
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
-    def generate(self, prompts: Sequence[str], sampling_params: SamplingParams, *args: Any, **kwargs: Any) -> Any: ...
+    def generate(
+        self,
+        prompts: Sequence[str],
+        sampling_params: SamplingParams,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any: ...
 
 __all__ = ["LLM", "SamplingParams"]

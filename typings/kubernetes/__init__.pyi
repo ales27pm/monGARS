@@ -16,7 +16,6 @@ class AppsV1Api:
         *args: Any,
         **kwargs: Any,
     ) -> _Deployment: ...
-
     def patch_namespaced_deployment(
         self,
         name: str,
@@ -26,8 +25,7 @@ class AppsV1Api:
         **kwargs: Any,
     ) -> Any: ...
 
-class _ApiException(Exception):
-    ...
+class _ApiException(Exception): ...
 
 class _ClientExceptionsModule:
     ApiException: type[_ApiException]
@@ -36,14 +34,12 @@ class _ClientModule:
     AppsV1Api: type[AppsV1Api]
     exceptions: _ClientExceptionsModule
 
-class _ConfigException(Exception):
-    ...
+class _ConfigException(Exception): ...
 
 class _ConfigModule:
     ConfigException: type[_ConfigException]
 
     def load_incluster_config(self) -> None: ...
-
     def load_kube_config(self) -> None: ...
 
 client: _ClientModule

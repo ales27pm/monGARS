@@ -10,7 +10,6 @@ class _TrainerProtocol(Protocol):
 
 class SFTTrainer:
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
     def train(self) -> Any: ...
 
 __all__ = ["SFTConfig", "SFTTrainer"]

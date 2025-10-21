@@ -8,9 +8,7 @@ class EmissionsTracker:
         *args: Any,
         **kwargs: Any,
     ) -> None: ...
-
     def start(self) -> None: ...
-
     def stop(self) -> Any: ...
 
 __all__ = ["EmissionsTracker"]
