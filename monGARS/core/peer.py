@@ -77,7 +77,11 @@ class PeerCommunicator:
             except httpx.HTTPError as exc:
                 logger.error(
                     "peer.message_send_failed",
-                    extra={"peer": url, "error": str(exc), "error_type": type(exc).__name__},
+                    extra={
+                        "peer": url,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 return False
 

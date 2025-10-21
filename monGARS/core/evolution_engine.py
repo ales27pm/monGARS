@@ -571,7 +571,7 @@ def _detect_cpu_pressure(samples: list[float]) -> PerformanceIssue | None:
     if not samples:
         return None
 
-    window = samples[-min(len(samples), 3):]
+    window = samples[-min(len(samples), 3) :]
     if window and min(window) > 85.0:
         severity = "critical" if fmean(window) >= 95.0 else "high"
         return PerformanceIssue(
@@ -600,7 +600,7 @@ def _detect_memory_pressure(samples: list[float]) -> PerformanceIssue | None:
     if not samples:
         return None
 
-    window = samples[-min(len(samples), 3):]
+    window = samples[-min(len(samples), 3) :]
     latest = samples[-1]
     if window and fmean(window) >= 90.0:
         severity = "critical" if latest >= 95.0 else "high"
@@ -637,7 +637,7 @@ def _detect_memory_leak(samples: list[float]) -> PerformanceIssue | None:
 def _detect_gpu_pressure(
     usage_samples: list[float], gpu_mem_samples: list[float]
 ) -> PerformanceIssue | None:
-    window = usage_samples[-min(len(usage_samples), 3):] if usage_samples else []
+    window = usage_samples[-min(len(usage_samples), 3) :] if usage_samples else []
     usage_latest = usage_samples[-1] if usage_samples else None
     memory_latest = gpu_mem_samples[-1] if gpu_mem_samples else None
 
