@@ -6,7 +6,7 @@ import logging
 import math
 import types
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from typing import Any, Callable
 
 import httpx
@@ -921,6 +921,8 @@ class ResearchWorkflow:
                 extra={"url": hit.url},
                 exc_info=True,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception:  # pragma: no cover - network dependent
             logger.debug(
                 "curiosity.iris_document_fetch_error",
