@@ -16,18 +16,29 @@ from __future__ import annotations
 import importlib
 import inspect
 import warnings
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Callable, cast
+
+if TYPE_CHECKING:  # pragma: no cover - only imported for typing
+    import torch as torch_module
+    from torch import nn as torch_nn
+
+    ModuleBase = torch_nn.Module
+else:  # pragma: no cover - executed at runtime only
+    nn = importlib.import_module("torch.nn")
+    ModuleBase = cast(type, getattr(nn, "Module"))
 
 try:  # pragma: no cover - optional dependency
     importlib.import_module("unsloth")
 except Exception:  # pragma: no cover - optional dependency missing or failing
     pass
 
-_original_simplefilter = warnings.simplefilter
+_original_simplefilter: Any = warnings.simplefilter
 
 
 def _awq_safe_simplefilter(
     action: str,
-    category: type[Warning] | None = None,
+    category: type[Warning] = Warning,
     lineno: int = 0,
     append: bool = False,
 ) -> None:
@@ -42,22 +53,28 @@ def _awq_safe_simplefilter(
 warnings.simplefilter = _awq_safe_simplefilter
 
 torch = importlib.import_module("torch")
-nn = importlib.import_module("torch.nn")
-_transformers_activations = importlib.import_module("transformers.activations")
+
+_transformers_activations = cast(
+    ModuleType, importlib.import_module("transformers.activations")
+)
 
 if not hasattr(_transformers_activations, "PytorchGELUTanh"):
 
-    class PytorchGELUTanh(nn.Module):
+    class PytorchGELUTanh(ModuleBase):
         """Compatibility shim mirroring the removed Transformers activation."""
 
-        def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        def forward(self, input_tensor: "torch_module.Tensor") -> "torch_module.Tensor":
             return torch.nn.functional.gelu(input_tensor, approximate="tanh")
 
-    _transformers_activations.PytorchGELUTanh = PytorchGELUTanh
+    setattr(_transformers_activations, "PytorchGELUTanh", PytorchGELUTanh)
 
     symbols = getattr(_transformers_activations, "__all__", None)
-    if symbols is not None and "PytorchGELUTanh" not in symbols:
-        if isinstance(symbols, tuple):
-            _transformers_activations.__all__ = (*symbols, "PytorchGELUTanh")
-        else:
-            symbols.append("PytorchGELUTanh")
+    if isinstance(symbols, tuple):
+        if "PytorchGELUTanh" not in symbols:
+            setattr(
+                _transformers_activations,
+                "__all__",
+                (*symbols, "PytorchGELUTanh"),
+            )
+    elif isinstance(symbols, list) and "PytorchGELUTanh" not in symbols:
+        symbols.append("PytorchGELUTanh")

@@ -34,6 +34,16 @@ def _normalise_text(value: str) -> str:
     return value.strip() if value else ""
 
 
+def _coerce_text(value: object | None) -> str:
+    """Return a normalised string representation for ``value``."""
+
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
 def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -> str:
     normalized_role = role.strip().lower() or "user"
     normalized_content = _normalise_text(content)
@@ -187,7 +197,7 @@ def prepare_tokenizer_inputs(
 def build_context_prompt(
     refined_prompt: str,
     *,
-    history_pairs: Sequence[tuple[str, str]] | None = None,
+    history_pairs: Sequence[tuple[object, object]] | None = None,
     semantic_context: Sequence[Mapping[str, object]] | None = None,
     instruction_template: str | None = None,
 ) -> str:
@@ -200,8 +210,8 @@ def build_context_prompt(
     if pairs:
         history_lines: list[str] = []
         for idx, (query_text, response_text) in enumerate(pairs, start=1):
-            user_line = (query_text or "").strip()
-            assistant_line = (response_text or "").strip()
+            user_line = _coerce_text(query_text)
+            assistant_line = _coerce_text(response_text)
             history_lines.append(
                 f"[{idx}] User: {user_line}\n    Assistant: {assistant_line}"
             )
@@ -219,8 +229,8 @@ def build_context_prompt(
                 if isinstance(similarity, float)
                 else ""
             )
-            query_text = (entry.get("query") or "").strip()
-            response_text = (entry.get("response") or "").strip()
+            query_text = _coerce_text(entry.get("query"))
+            response_text = _coerce_text(entry.get("response"))
             semantic_lines.append(
                 f"[{idx}]{similarity_text} User: {query_text}\n    Assistant: {response_text}"
             )
@@ -242,7 +252,7 @@ def build_context_prompt(
 def build_converged_chat_prompt(
     refined_prompt: str,
     *,
-    history_pairs: Sequence[tuple[str, str]] | None = None,
+    history_pairs: Sequence[tuple[object, object]] | None = None,
     semantic_context: Sequence[Mapping[str, object]] | None = None,
     instruction_template: str | None = None,
     system_prompt: str | None = None,

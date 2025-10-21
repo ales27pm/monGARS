@@ -6,9 +6,14 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import psutil
+
+if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from codecarbon import EmissionsTracker as CodeCarbonTracker
+else:
+    CodeCarbonTracker = object
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +54,7 @@ class EnergyTracker:
         self._process = process or psutil.Process()
         self._start_cpu: float | None = None
         self._start_time: float | None = None
-        self._tracker = None
+        self._tracker: CodeCarbonTracker | None = None
         self._backend = "psutil"
         self._last_report: EnergyUsageReport | None = None
 
