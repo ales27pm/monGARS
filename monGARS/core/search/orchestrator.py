@@ -9,7 +9,15 @@ import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
 from urllib.parse import urlsplit
 
 import httpx
@@ -27,6 +35,12 @@ from .providers import (
     WikipediaProvider,
 )
 from .robots import RobotsCache
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from monGARS.core.iris import IrisDocument
+
+
+DocumentFetcher = Callable[[str], Awaitable["IrisDocument | None"]]
 
 try:  # pragma: no cover - optional dependency
     from .providers.gnews import GNewsProvider
@@ -130,6 +144,7 @@ class SearchOrchestrator:
 
     def __init__(
         self,
+        client: httpx.AsyncClient | None = None,
         *,
         http_client_factory: Optional[AsyncClientFactory] = None,
         providers: Optional[Sequence[SearchProvider]] = None,
@@ -139,6 +154,9 @@ class SearchOrchestrator:
         policy: DomainPolicy | None = None,
         robots_cache: RobotsCache | None = None,
         robots_user_agent: str = "IrisBot/1.0",
+        document_fetcher: DocumentFetcher | None = None,
+        enrichment_limit: int = 5,
+        document_fetch_timeout: float | None = None,
     ) -> None:
         self._timeout = timeout
         self._providers = list(providers) if providers is not None else None
@@ -148,7 +166,18 @@ class SearchOrchestrator:
             per_host_budget=60,
         )
         self._robots_cache = robots_cache
-        if http_client_factory is None:
+        self._document_fetcher = document_fetcher
+        self._enrichment_limit = max(0, enrichment_limit)
+        self._document_fetch_timeout = (
+            timeout if document_fetch_timeout is None else document_fetch_timeout
+        )
+        if client is not None and http_client_factory is not None:
+            raise ValueError(
+                "Provide either an httpx.AsyncClient or an http_client_factory, not both."
+            )
+        if client is not None:
+            self._http_client_factory = self._build_singleton_factory(client)
+        elif http_client_factory is None:
             self._http_client_factory = self._build_default_client_factory(timeout)
         else:
             self._http_client_factory = http_client_factory
@@ -190,6 +219,7 @@ class SearchOrchestrator:
             )
             robots_cache = self._robots_cache or RobotsCache(client)
             filtered = await self._filter_hits(hits, robots_cache)
+            await self._enrich_hits(filtered)
         ranked = self._rank_hits(filtered, max_results=max_results)
         await self._set_cached(cache_key, tuple(ranked))
         return ranked
@@ -336,6 +366,63 @@ class SearchOrchestrator:
             filtered.append(hit)
         return _dedupe_hits(filtered)
 
+    async def _enrich_hits(self, hits: Sequence[NormalizedHit]) -> None:
+        if not hits or self._document_fetcher is None or self._enrichment_limit <= 0:
+            return
+        tasks: List[asyncio.Task[None]] = []
+        for hit in hits[: self._enrichment_limit]:
+            if hit.published_at and hit.event_date and hit.lang:
+                continue
+            tasks.append(asyncio.create_task(self._enrich_single_hit(hit)))
+        if not tasks:
+            return
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.debug(
+                    "search.orchestrator.enrich_failed",
+                    extra={"error": str(result)},
+                )
+
+    async def _enrich_single_hit(self, hit: NormalizedHit) -> None:
+        if self._document_fetcher is None:
+            return
+        try:
+            document = await asyncio.wait_for(
+                self._document_fetcher(hit.url),
+                timeout=self._document_fetch_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.debug(
+                "search.orchestrator.document_fetch_timeout",
+                extra={
+                    "url": hit.url,
+                    "timeout_s": self._document_fetch_timeout,
+                },
+            )
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "search.orchestrator.document_fetch_failed",
+                extra={"error": str(exc), "url": hit.url},
+            )
+            return
+        if document is None:
+            return
+        published_at = getattr(document, "published_at", None)
+        event_date = getattr(document, "event_date", None)
+        language = getattr(document, "language", None)
+        if hit.published_at is None and isinstance(published_at, datetime):
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            hit.published_at = published_at
+        if hit.event_date is None and isinstance(event_date, datetime):
+            if event_date.tzinfo is None:
+                event_date = event_date.replace(tzinfo=timezone.utc)
+            hit.event_date = event_date
+        if hit.lang is None and isinstance(language, str) and language:
+            hit.lang = language
+
     def _rank_hits(
         self, hits: Sequence[NormalizedHit], *, max_results: int
     ) -> List[NormalizedHit]:
@@ -383,6 +470,14 @@ class SearchOrchestrator:
                 timeout=timeout, follow_redirects=True
             ) as client:
                 yield client
+
+        return _factory
+
+    @staticmethod
+    def _build_singleton_factory(client: httpx.AsyncClient) -> AsyncClientFactory:
+        @asynccontextmanager
+        async def _factory() -> AsyncIterator[httpx.AsyncClient]:
+            yield client
 
         return _factory
 

@@ -145,3 +145,49 @@ async def test_orchestrator_handles_provider_timeout() -> None:
     results = await orchestrator.search("timeout", lang="en")
 
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_enriches_missing_dates() -> None:
+    now = datetime.now(timezone.utc)
+
+    class DummyDocument:
+        def __init__(self) -> None:
+            self.published_at = now
+            self.event_date = now - timedelta(days=1)
+            self.language = "en"
+
+    missing_dates = NormalizedHit(
+        provider="ddg",
+        title="Update",
+        url="https://example.org/story",
+        snippet="",
+        published_at=None,
+        event_date=None,
+        source_domain="example.org",
+        lang=None,
+        raw={},
+    )
+
+    calls = 0
+
+    async def fetch_document(url: str) -> DummyDocument | None:
+        nonlocal calls
+        calls += 1
+        assert url == missing_dates.url
+        return DummyDocument()
+
+    orchestrator = SearchOrchestrator(
+        providers=[DummyProvider([missing_dates])],
+        robots_cache=AllowRobotsCache(),
+        document_fetcher=fetch_document,
+    )
+
+    results = await orchestrator.search("story", lang="en")
+
+    assert results
+    enriched = results[0]
+    assert enriched.published_at == now
+    assert enriched.event_date == now - timedelta(days=1)
+    assert enriched.lang == "en"
+    assert calls == 1
