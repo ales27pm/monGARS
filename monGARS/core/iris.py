@@ -9,6 +9,7 @@ import re
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from time import monotonic
 from typing import Any, Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
@@ -16,6 +17,8 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
 import httpx
 import trafilatura
 from bs4 import BeautifulSoup
+
+from .search.metadata import parse_date_from_text, parse_schema_dates
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +44,8 @@ class IrisDocument:
     title: str | None = None
     summary: str | None = None
     language: str | None = None
+    event_date: datetime | None = None
+    published_at: datetime | None = None
 
 
 class Iris:
@@ -369,6 +374,7 @@ class Iris:
                 extra={"error": str(exc)},
             )
 
+        event_dt, pub_dt = parse_schema_dates(response.text)
         document_data: Mapping[str, object] | None = None
         if extracted_json:
             try:
@@ -380,6 +386,7 @@ class Iris:
                 )
 
         fallback_text = None
+        document: IrisDocument | None = None
         if document_data:
             text = document_data.get("text")
             summary = document_data.get("summary")
@@ -394,27 +401,31 @@ class Iris:
                 else None
             )
             if cleaned_text or cleaned_summary or isinstance(title, str):
-                return IrisDocument(
+                document = IrisDocument(
                     url=str(response.request.url),
                     text=cleaned_text,
                     summary=cleaned_summary,
                     title=title if isinstance(title, str) else None,
                     language=language if isinstance(language, str) else None,
                 )
+        if document is None:
             fallback_text = self._fallback_text(response)
-        else:
-            fallback_text = self._fallback_text(response)
+            if fallback_text:
+                document = IrisDocument(
+                    url=str(response.request.url),
+                    text=fallback_text,
+                    summary=None,
+                    title=None,
+                    language=None,
+                )
 
-        if fallback_text:
-            return IrisDocument(
-                url=str(response.request.url),
-                text=fallback_text,
-                summary=None,
-                title=None,
-                language=None,
-            )
+        if document is None:
+            return None
 
-        return None
+        document.published_at = pub_dt
+        fallback_source = document.summary or (document.text or "")[:800]
+        document.event_date = event_dt or parse_date_from_text(fallback_source)
+        return document
 
     def _fallback_text(self, response: httpx.Response) -> str | None:
         soup = BeautifulSoup(response.text, "html.parser")

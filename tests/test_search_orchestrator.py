@@ -8,6 +8,13 @@ import pytest
 from monGARS.core.search import NormalizedHit, SearchOrchestrator
 
 
+class AllowRobotsCache:
+    async def can_fetch(
+        self, user_agent: str, url: str
+    ) -> bool:  # pragma: no cover - trivial
+        return True
+
+
 class DummyProvider:
     def __init__(self, hits: list[NormalizedHit]) -> None:
         self._hits = hits
@@ -58,7 +65,8 @@ async def test_orchestrator_prioritises_trust_and_recency() -> None:
         raw={},
     )
     orchestrator = SearchOrchestrator(
-        providers=[DummyProvider([stale_generic, trusted_recent])]
+        providers=[DummyProvider([stale_generic, trusted_recent])],
+        robots_cache=AllowRobotsCache(),
     )
 
     results = await orchestrator.search("vaccine guidance", lang="en")
@@ -92,7 +100,8 @@ async def test_orchestrator_deduplicates_urls() -> None:
         raw={},
     )
     orchestrator = SearchOrchestrator(
-        providers=[DummyProvider([duplicate_a, duplicate_b])]
+        providers=[DummyProvider([duplicate_a, duplicate_b])],
+        robots_cache=AllowRobotsCache(),
     )
 
     results = await orchestrator.search("news", lang="en")
@@ -116,7 +125,8 @@ async def test_orchestrator_handles_provider_failure() -> None:
         raw={},
     )
     orchestrator = SearchOrchestrator(
-        providers=[FailingProvider(), DummyProvider([healthy_hit])]
+        providers=[FailingProvider(), DummyProvider([healthy_hit])],
+        robots_cache=AllowRobotsCache(),
     )
 
     results = await orchestrator.search("test", lang="en")
@@ -129,6 +139,7 @@ async def test_orchestrator_handles_provider_timeout() -> None:
     orchestrator = SearchOrchestrator(
         providers=[TimeoutProvider(), DummyProvider([])],
         timeout=0.1,
+        robots_cache=AllowRobotsCache(),
     )
 
     results = await orchestrator.search("timeout", lang="en")

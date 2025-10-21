@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+from .arxiv import ArxivProvider
+from .crossref import CrossrefProvider
 from .ddg import DDGProvider
+from .factcheckers import PolitiFactProvider, SnopesProvider
+from .pubmed import PubMedProvider
 from .wikipedia import WikipediaProvider
 
-__all__ = ["DDGProvider", "WikipediaProvider"]
+__all__ = [
+    "ArxivProvider",
+    "CrossrefProvider",
+    "DDGProvider",
+    "PolitiFactProvider",
+    "PubMedProvider",
+    "SnopesProvider",
+    "WikipediaProvider",
+]
 
 try:  # pragma: no cover - optional dependency
     from .gnews import GNewsProvider

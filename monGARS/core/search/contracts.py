@@ -36,6 +36,7 @@ class NormalizedHit:
             or domain.endswith(".gouv.fr")
             or domain.endswith(".edu")
             or domain.endswith(".ac.uk")
+            or domain.endswith(".eu")
         )
 
 
