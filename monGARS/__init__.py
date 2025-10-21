@@ -17,17 +17,32 @@ import importlib
 import inspect
 import warnings
 from types import ModuleType
-from typing import Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
-import torch
-from torch import nn
+torch_module: ModuleType | None
+torch_nn: ModuleType | None
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import torch as torch_module
+    from torch import nn as torch_nn
+else:  # pragma: no cover - optional dependency handling
+    try:
+        import torch as torch_module  # type: ignore[import-not-found]
+        from torch import nn as torch_nn  # type: ignore[import-not-found]
+    except ImportError:
+        torch_module = None
+        torch_nn = None
 
 try:  # pragma: no cover - optional dependency
     importlib.import_module("unsloth")
 except Exception:  # pragma: no cover - optional dependency missing or failing
     pass
 
-ModuleBase = nn.Module
+ModuleBase: type[Any] | None
+if TYPE_CHECKING:
+    ModuleBase = torch_nn.Module
+else:
+    ModuleBase = torch_nn.Module if torch_nn is not None else None
 
 SimpleFilterAction = Literal[
     "default", "error", "ignore", "always", "all", "module", "once"
@@ -57,18 +72,24 @@ _transformers_activations = cast(
     ModuleType, importlib.import_module("transformers.activations")
 )
 
-if not hasattr(_transformers_activations, "PytorchGELUTanh"):
+if (
+    ModuleBase is not None
+    and torch_module is not None
+    and not hasattr(_transformers_activations, "PytorchGELUTanh")
+):
 
     class PytorchGELUTanh(ModuleBase):
         """Compatibility shim mirroring the removed Transformers activation."""
 
-        def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
-            return torch.nn.functional.gelu(input_tensor, approximate="tanh")
+        def forward(self, input_tensor: "torch.Tensor") -> "torch.Tensor":
+            return torch_module.nn.functional.gelu(  # type: ignore[union-attr]
+                input_tensor,
+                approximate="tanh",
+            )
 
-    setattr(_transformers_activations, "PytorchGELUTanh", PytorchGELUTanh)
+    _transformers_activations.PytorchGELUTanh = PytorchGELUTanh
 
-    symbols = getattr(_transformers_activations, "__all__", ())
-    symbol_list = list(symbols) if symbols is not None else []
+    symbol_list = list(getattr(_transformers_activations, "__all__", ()))
     if "PytorchGELUTanh" not in symbol_list:
         symbol_list.append("PytorchGELUTanh")
-        setattr(_transformers_activations, "__all__", symbol_list)
+        _transformers_activations.__all__ = symbol_list

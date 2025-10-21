@@ -1,3 +1,5 @@
 from __future__ import annotations
 
-__all__: list[str] = []
+from .async_driver import AsyncGraphDatabase
+
+__all__ = ["AsyncGraphDatabase"]
