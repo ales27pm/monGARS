@@ -104,7 +104,7 @@ _OLLAMA_TRANSPORT_ERRORS = _exception_tuple(
 
 def _resolve_transformers_device(
     settings: Settings,
-):  # noqa: ANN201 - torch device runtime
+):
     if torch is None:  # pragma: no cover - dependency missing
         raise EmbeddingBackendError("transformers backend requires torch")
 
