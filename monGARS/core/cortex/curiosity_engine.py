@@ -801,9 +801,7 @@ class ResearchWorkflow:
         )
 
         top_hit = verification_bundle.hits[0] if verification_bundle.hits else None
-        iris_summary_task = asyncio.create_task(
-            self._resolve_primary_summary(top_hit)
-        )
+        iris_summary_task = asyncio.create_task(self._resolve_primary_summary(top_hit))
         document_summary_task = asyncio.create_task(
             self._fetch_document_summary(normalised_query)
         )
