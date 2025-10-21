@@ -23,6 +23,12 @@ from opentelemetry import metrics
 from monGARS.config import get_settings
 from monGARS.core.iris import Iris
 from monGARS.core.neurones import EmbeddingSystem
+from monGARS.core.search import (
+    NormalizedHit,
+    SearchOrchestrator,
+    VerifiedBundle,
+    Verifier,
+)
 
 try:  # pragma: no cover - optional dependency at import time
     from ...init_db import ConversationHistory, async_session_factory
@@ -69,6 +75,8 @@ class CuriosityEngine:
         iris: Iris | None = None,
         *,
         http_client_factory: AsyncClientFactory | None = None,
+        search_orchestrator: SearchOrchestrator | None = None,
+        verifier: Verifier | None = None,
     ) -> None:
         """Initialise the curiosity engine with NLP and embedding utilities."""
 
@@ -123,6 +131,11 @@ class CuriosityEngine:
             self._http_client_factory = default_http_client_factory
         else:
             self._http_client_factory = http_client_factory
+
+        self._search_orchestrator = search_orchestrator or SearchOrchestrator(
+            http_client_factory=self._http_client_factory
+        )
+        self._verifier = verifier or Verifier()
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
@@ -724,7 +737,7 @@ class CuriosityEngine:
         return " ".join(normalised)
 
     async def _perform_research(self, query: str) -> str:
-        """Fetch additional context from the document service or Iris."""
+        """Fetch fresh context, verify it, and return annotated summaries."""
 
         normalised_query = query.strip()
         if not normalised_query:
@@ -736,27 +749,54 @@ class CuriosityEngine:
             return cached_response
 
         _research_cache_counter.add(1, {"event": "miss"})
-        _external_research_counter.add(1, {"channel": "document_service"})
 
-        document_summary = await self._fetch_document_summary(normalised_query)
-        if document_summary:
-            enriched = f"Contexte supplémentaire: {document_summary}"
-            await self._set_cached_research(normalised_query, enriched)
-            return enriched
-
-        logger.info(
-            "curiosity.iris_fallback",
+        logger.debug(
+            "curiosity.research.search_start",
             extra={"query_len": len(normalised_query)},
         )
-        _external_research_counter.add(1, {"channel": "iris"})
-        result = await self.iris.search(normalised_query)
-        if result:
-            enriched = f"Contexte supplémentaire: {result}"
-            await self._set_cached_research(normalised_query, enriched)
-            return enriched
-        fallback = "Aucun contexte supplémentaire trouvé."
-        await self._set_cached_research(normalised_query, fallback)
-        return fallback
+
+        search_results = await self._search_orchestrator.search(
+            normalised_query,
+            lang=getattr(settings, "curiosity_research_lang", "en"),
+        )
+        verification_bundle = self._verifier.cross_check(
+            normalised_query, search_results
+        )
+
+        top_hit = verification_bundle.hits[0] if verification_bundle.hits else None
+        iris_summary = await self._resolve_primary_summary(top_hit)
+
+        _external_research_counter.add(1, {"channel": "document_service"})
+        document_summary = await self._fetch_document_summary(normalised_query)
+
+        iris_search_snippet = ""
+        if not document_summary:
+            _external_research_counter.add(1, {"channel": "iris"})
+            iris_search_snippet = await self.iris.search(normalised_query) or ""
+
+        combined_summary = self._combine_summaries(
+            document_summary,
+            iris_summary,
+            iris_search_snippet,
+            fallback=top_hit.snippet if top_hit else "",
+        )
+
+        if not combined_summary:
+            logger.info(
+                "curiosity.research.no_summary",
+                extra={"query_len": len(normalised_query)},
+            )
+            if not iris_search_snippet:
+                _external_research_counter.add(1, {"channel": "iris"})
+                iris_search_snippet = await self.iris.search(normalised_query) or ""
+            combined_summary = iris_search_snippet
+
+        enriched = self._render_research_response(
+            combined_summary,
+            verification_bundle,
+        )
+        await self._set_cached_research(normalised_query, enriched)
+        return enriched
 
     async def _fetch_document_summary(self, query: str) -> str:
         """Return a concatenated summary from the document retrieval service."""
@@ -808,3 +848,67 @@ class CuriosityEngine:
             if isinstance(summary, str) and (stripped := summary.strip()):
                 cleaned_summaries.append(stripped)
         return " ".join(cleaned_summaries)
+
+    async def _resolve_primary_summary(self, hit: NormalizedHit | None) -> str:
+        if hit is None:
+            return ""
+        if hit.snippet and (stripped := hit.snippet.strip()):
+            return stripped
+
+        document = None
+        try:
+            document = await self.iris.fetch_document(hit.url)
+        except Exception:  # pragma: no cover - network dependent
+            logger.debug(
+                "curiosity.iris_document_fetch_error",
+                extra={"url": hit.url},
+                exc_info=True,
+            )
+        if document:
+            for candidate in (document.summary, document.text):
+                if isinstance(candidate, str) and (stripped := candidate.strip()):
+                    return stripped
+        return ""
+
+    def _combine_summaries(
+        self,
+        *summaries: str,
+        fallback: str = "",
+    ) -> str:
+        components: list[str] = []
+        for value in summaries:
+            if value and (stripped := value.strip()):
+                components.append(stripped)
+        if not components and fallback:
+            stripped = fallback.strip()
+            if stripped:
+                components.append(stripped)
+        deduped = list(dict.fromkeys(components))
+        return " ".join(deduped)
+
+    def _render_research_response(self, summary: str, bundle: VerifiedBundle) -> str:
+        lines: list[str] = []
+        if summary:
+            lines.append(f"Contexte supplémentaire: {summary}")
+        else:
+            lines.append("Aucun contexte supplémentaire trouvé.")
+
+        if bundle.agreed_facts:
+            facts = "; ".join(
+                f"{key}: {value}" for key, value in bundle.agreed_facts.items()
+            )
+            lines.append(f"Points confirmés: {facts}")
+
+        disagreement_snippets: list[str] = []
+        for key, values in bundle.disagreements.items():
+            if values:
+                disagreement_snippets.append(f"{key}: {values[0]}")
+        if disagreement_snippets:
+            lines.append("Divergences relevées: " + "; ".join(disagreement_snippets))
+
+        if bundle.citations:
+            citations = ", ".join(bundle.citations[:6])
+            lines.append(f"Sources: {citations}")
+
+        lines.append(f"Confiance: {bundle.confidence:.2f}")
+        return "\n".join(lines)
