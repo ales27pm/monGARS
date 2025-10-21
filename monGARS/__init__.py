@@ -20,11 +20,59 @@ import os
 import sys
 import warnings
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence, cast
 
-_RUNNING_STATIC_ANALYSIS = bool(os.environ.get("MYPY")) or any(
-    arg.endswith("mypy") or arg.endswith("mypy.exe") for arg in (sys.argv[0:1] or [])
-)
+
+def _is_static_analysis_process(argv: Sequence[str], env: Mapping[str, str]) -> bool:
+    """Best-effort detection for type-checker invocations.
+
+    The previous heuristic only inspected the executable name, which missed
+    `python -m mypy` and language-server launches. Those cases pulled optional
+    dependencies (Torch, Unsloth) into type-checker sessions and caused
+    aggressive startup delays. This helper cross-references common environment
+    flags alongside the argument vector so static analyzers never trigger
+    heavy imports.
+    """
+
+    if not argv and not env:
+        return False
+
+    analysis_env_flags = (
+        "MYPY",
+        "MYPY_FORCE_COLOR",
+        "MYPY_FORCE_TERMINAL_WIDTH",
+        "PYRIGHT_VERSION_INFO",
+        "PYTYPE_ANALYZE",
+    )
+    if any(flag in env for flag in analysis_env_flags):
+        return True
+
+    analyzer_tokens = {
+        "dmypy",
+        "mypy",
+        "pyre",
+        "pyright",
+        "stubgen",
+        "stubtest",
+    }
+
+    for arg in argv:
+        if arg == "-m":
+            continue
+        token = os.path.basename(arg) if arg else ""
+        if not token:
+            continue
+        if token in analyzer_tokens:
+            return True
+        if token.endswith((".exe", ".py")):
+            stripped = token.rsplit(".", 1)[0]
+            if stripped in analyzer_tokens:
+                return True
+
+    return False
+
+
+_RUNNING_STATIC_ANALYSIS = _is_static_analysis_process(tuple(sys.argv), os.environ)
 
 SimpleFilterAction = Literal[
     "default", "error", "ignore", "always", "all", "module", "once"
