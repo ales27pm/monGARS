@@ -49,8 +49,9 @@ except ImportError:  # pragma: no cover - dependency absent in some environments
     torch = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional heavy dependency
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 except ImportError:  # pragma: no cover - dependency absent in some environments
+    AutoModel = None  # type: ignore[assignment]
     AutoModelForCausalLM = None  # type: ignore[assignment]
     AutoTokenizer = None  # type: ignore[assignment]
 
@@ -175,20 +176,51 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
     else:
         dtype = torch.float32
 
-    try:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            low_cpu_mem_usage=True,
-        )
-    except Exception as exc:  # pragma: no cover - network/config errors are rare
-        logger.exception(
-            "llm2vec.transformers.model_load_failed",
-            extra={"model": model_id},
-        )
+    model = None
+    load_errors: list[Exception] = []
+    loaders: tuple[tuple[str, Any | None], ...] = (
+        ("AutoModel", AutoModel),
+        ("AutoModelForCausalLM", AutoModelForCausalLM),
+    )
+
+    for loader_name, loader in loaders:
+        if loader is None:
+            continue
+        try:
+            model = loader.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+            )
+            break
+        except Exception as exc:  # pragma: no cover - network/config errors are rare
+            load_errors.append(exc)
+            logger.debug(
+                "llm2vec.transformers.model_loader_failed",
+                extra={"model": model_id, "loader": loader_name},
+                exc_info=exc,
+            )
+
+    if model is None:
+        last_error = load_errors[-1] if load_errors else None
+        if last_error is not None:
+            logger.error(
+                "llm2vec.transformers.model_load_failed",
+                extra={"model": model_id},
+                exc_info=(
+                    last_error.__class__,
+                    last_error,
+                    last_error.__traceback__,
+                ),
+            )
+        else:
+            logger.error(
+                "llm2vec.transformers.model_loader_unavailable",
+                extra={"model": model_id},
+            )
         raise EmbeddingBackendError(
             "Failed to load transformers embedding model"
-        ) from exc
+        ) from last_error
 
     model.to(device)
     model.eval()
@@ -204,10 +236,12 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
 
 
 def _encode_with_transformers(
-    texts: List[str], instruction: Optional[str]
+    texts: List[str], instruction: Optional[str], settings: Settings | None = None
 ) -> np.ndarray:
-    settings = get_settings()
-    tokenizer, model, device, hidden_size = _ensure_transformers_components(settings)
+    resolved_settings = settings or get_settings()
+    tokenizer, model, device, hidden_size = _ensure_transformers_components(
+        resolved_settings
+    )
 
     if not texts:
         return np.zeros((0, hidden_size), dtype=np.float32)
@@ -215,26 +249,27 @@ def _encode_with_transformers(
     if torch is None:  # pragma: no cover - dependency missing
         raise EmbeddingBackendError("PyTorch is required for transformers embeddings")
 
-    batch_size = max(1, int(getattr(settings, "transformers_embedding_batch_size", 1)))
-    max_length = max(1, int(getattr(settings, "transformers_embedding_max_length", 1)))
-    system_prompt = (
-        instruction
-        if instruction is not None
-        else getattr(settings, "llm2vec_instruction", None)
+    batch_size = max(
+        1, int(getattr(resolved_settings, "transformers_embedding_batch_size", 1))
     )
+    max_length = max(
+        1, int(getattr(resolved_settings, "transformers_embedding_max_length", 1))
+    )
+    system_prompt = instruction
 
     pooled_results: list[np.ndarray] = []
 
     for start in range(0, len(texts), batch_size):
         chunk = [str(text) for text in texts[start : start + batch_size]]
-        formatted = [
-            render_chat_prompt_from_text(
-                text,
-                system_prompt=system_prompt,
-                include_assistant_stub=False,
-            ).chatml
-            for text in chunk
-        ]
+        formatted: list[str]
+        if system_prompt is None:
+            formatted = chunk
+        else:
+            instruction_text = str(system_prompt).strip()
+            formatted = [
+                f"{instruction_text}\n\n{candidate}" if instruction_text else candidate
+                for candidate in chunk
+            ]
         try:
             encoded = tokenizer(
                 formatted,
@@ -367,7 +402,11 @@ class LLM2VecEmbedder:
         if self._backend == "ollama":
             batch = await self._encode_with_ollama(cleaned, prompt)
         elif self._backend == "transformers":
-            batch = await self._encode_with_transformers(cleaned, prompt)
+            batch = await self._encode_with_transformers(
+                cleaned,
+                prompt,
+                instruction,
+            )
         else:
             batch = await self._encode_with_huggingface(cleaned, prompt)
 
@@ -741,7 +780,10 @@ class LLM2VecEmbedder:
         )
 
     async def _encode_with_transformers(
-        self, cleaned: Sequence[str], prompt: str
+        self,
+        cleaned: Sequence[str],
+        prompt: str,
+        instruction: str | None,
     ) -> EmbeddingBatch:
         aggregate_vectors: list[list[float]] = []
         used_fallback = False
@@ -768,7 +810,8 @@ class LLM2VecEmbedder:
                         embeddings_array = await asyncio.to_thread(
                             _encode_with_transformers,
                             encode_payloads,
-                            prompt,
+                            instruction,
+                            self._settings,
                         )
                 except EmbeddingBackendError:
                     logger.warning(
