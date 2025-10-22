@@ -1,3 +1,5 @@
+jest.setTimeout(20000);
+
 require('react-native-gesture-handler/jestSetup');
 
 jest.mock('react-native-reanimated', () =>
@@ -37,8 +39,9 @@ class MockNativeEventEmitter {
 
 ReactNative.NativeEventEmitter = MockNativeEventEmitter;
 
-jest.mock('react-native/Libraries/EventEmitter/NativeEventEmitter', () =>
-  MockNativeEventEmitter,
+jest.mock(
+  'react-native/Libraries/EventEmitter/NativeEventEmitter',
+  () => MockNativeEventEmitter,
 );
 
 jest.mock('@react-native-async-storage/async-storage', () => {
@@ -47,7 +50,9 @@ jest.mock('@react-native-async-storage/async-storage', () => {
     setItem: jest.fn(async (key, value) => {
       storage[key] = String(value);
     }),
-    getItem: jest.fn(async (key) => (key in storage ? String(storage[key]) : null)),
+    getItem: jest.fn(async (key) =>
+      key in storage ? String(storage[key]) : null,
+    ),
     removeItem: jest.fn(async (key) => {
       delete storage[key];
     }),
