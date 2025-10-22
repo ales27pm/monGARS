@@ -16,7 +16,7 @@ type ChatState = {
   error: string | null;
   token: string | null;
   initialize: () => Promise<void>;
-  setToken: (token: string) => void;
+  setToken: (token: string | null) => void;
   sendMessage: (content: string, mode: 'chat' | 'embedding') => Promise<void>;
   pushMessage: (message: Message) => void;
   clearError: () => void;
@@ -59,7 +59,22 @@ export const useChatStore = create<ChatState>()(
           set({ error: 'Unable to load history', loading: false });
         }
       },
-      setToken: (token) => set({ token }),
+      setToken: (token) => {
+        const previous = get().token;
+        set({ token });
+
+        if (token && token !== previous) {
+          get()
+            .initialize()
+            .catch((error) => {
+              console.error('[ChatStore] initialize failure', error);
+            });
+        }
+
+        if (!token) {
+          set({ messages: [] });
+        }
+      },
       sendMessage: async (content, mode) => {
         const { token } = get();
         if (!token) {
@@ -130,27 +145,32 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'mongars-chat',
-      storage: createJSONStorage(() => AsyncStorage),
-      version: 1,
+      storage: createJSONStorage(() => AsyncStorage, {
+        reviver: (key, value) => {
+          if (key === 'createdAt' && typeof value === 'string') {
+            const parsed = new Date(value);
+            return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+          }
+          return value;
+        },
+      }),
+      version: 2,
       migrate: (persistedState) => {
         if (!persistedState) {
           return persistedState as unknown as {
             messages?: Message[];
-            token?: string | null;
           };
         }
 
         const state = persistedState as {
           messages?: Array<Partial<Message> & { createdAt?: string | Date }>;
-          token?: string | null;
         };
 
         if (!state.messages) {
-          return state;
+          return { messages: [] };
         }
 
         return {
-          token: state.token ?? null,
           messages: state.messages.map((message) => ({
             ...message,
             createdAt: message.createdAt
@@ -159,7 +179,7 @@ export const useChatStore = create<ChatState>()(
           })) as Message[],
         };
       },
-      partialize: (state) => ({ messages: state.messages, token: state.token }),
+      partialize: (state) => ({ messages: state.messages }),
     },
   ),
 );

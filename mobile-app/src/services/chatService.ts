@@ -50,17 +50,41 @@ export async function streamChatReply({
     let currentId: string | null = null;
     let buffer = '';
     let settled = false;
-    const timeoutMs = 20000;
-    const timer = setTimeout(() => {
-      closeWith(new Error('WebSocket timeout'));
-    }, timeoutMs);
+    const connectTimeoutMs = 20000;
+    const idleTimeoutMs = 60000;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const toDate = (value: unknown) => {
+      if (value instanceof Date && !Number.isNaN(value.getTime())) {
+        return value;
+      }
+      if (typeof value === 'string' || typeof value === 'number') {
+        const parsed = new Date(value);
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed;
+        }
+      }
+      return new Date();
+    };
+
+    const clearTimers = () => {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
 
     const closeWith = (error?: Error) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       try {
         ws.close();
       } catch (closeError) {
@@ -68,6 +92,19 @@ export async function streamChatReply({
       }
       error ? reject(error) : resolve();
     };
+
+    const bumpIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
+      idleTimer = setTimeout(() => {
+        closeWith(new Error('WebSocket idle timeout'));
+      }, idleTimeoutMs);
+    };
+
+    connectTimer = setTimeout(() => {
+      closeWith(new Error('WebSocket connect timeout'));
+    }, connectTimeoutMs);
 
     ws.onerror = (event) => {
       const details =
@@ -78,7 +115,11 @@ export async function streamChatReply({
     };
 
     ws.onopen = () => {
-      clearTimeout(timer);
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      bumpIdleTimer();
       ws.send(
         JSON.stringify({
           type: 'prompt',
@@ -92,6 +133,7 @@ export async function streamChatReply({
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+        bumpIdleTimer();
         if (message.type === 'ticket') {
           ws.send(
             JSON.stringify({
@@ -102,21 +144,31 @@ export async function streamChatReply({
           return;
         }
         if (message.type === 'chunk') {
-          currentId = message.payload.id;
-          buffer += message.payload.content;
+          const payload = message.payload ?? {};
+          const chunkId = payload.id ?? currentId ?? `${Date.now()}`;
+          const chunkContent =
+            typeof payload.content === 'string' ? payload.content : '';
+          currentId = chunkId;
+          buffer += chunkContent;
           onToken({
-            id: currentId ?? `${Date.now()}`,
+            id: chunkId,
             role: 'assistant',
             content: buffer,
-            createdAt: new Date(message.payload.timestamp),
+            createdAt: toDate(payload.timestamp),
           });
         }
         if (message.type === 'final') {
+          const payload = message.payload ?? {};
+          const finalId = payload.id ?? currentId ?? `${Date.now()}`;
+          const finalContent =
+            typeof payload.content === 'string' && payload.content.length > 0
+              ? payload.content
+              : buffer;
           onToken({
-            id: message.payload.id ?? currentId ?? `${Date.now()}`,
+            id: finalId,
             role: 'assistant',
-            content: message.payload.content ?? buffer,
-            createdAt: new Date(message.payload.timestamp),
+            content: finalContent,
+            createdAt: toDate(payload.timestamp),
           });
           closeWith();
         }
