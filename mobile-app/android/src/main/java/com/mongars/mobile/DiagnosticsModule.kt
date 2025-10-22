@@ -43,7 +43,7 @@ class DiagnosticsModule(private val reactContext: ReactApplicationContext) :
       map.putArray("interfaces", interfaces)
       map.putBoolean("vpnActive", capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true)
       map.putBoolean("cellularActive", capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true)
-      map.putString("ssid", wifiManager.connectionInfo?.ssid)
+      map.putString("ssid", sanitizeSsid(wifiManager.connectionInfo?.ssid))
       map.putString("ip", wifiManager.connectionInfo?.ipAddress?.let { intToIp(it) })
       promise.resolve(map)
     } catch (error: Exception) {
@@ -142,5 +142,12 @@ class DiagnosticsModule(private val reactContext: ReactApplicationContext) :
 
   private fun intToIp(ip: Int): String {
     return ((ip and 0xFF).toString() + "." + (ip shr 8 and 0xFF) + "." + (ip shr 16 and 0xFF) + "." + (ip shr 24 and 0xFF))
+  }
+
+  private fun sanitizeSsid(value: String?): String? {
+    if (value.isNullOrBlank() || value == "<unknown ssid>") {
+      return null
+    }
+    return value.trim('"')
   }
 }
