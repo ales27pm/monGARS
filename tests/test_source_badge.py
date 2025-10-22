@@ -1,19 +1,37 @@
 from monGARS.core.search.source_badge import source_badge
 
 
-def test_source_badge_recognises_government_domain():
-    badge, trust = source_badge("https://www.nasa.gov/europa-clipper")
-    assert badge == "Government"
-    assert trust == "trust-high"
+def test_gov_badge():
+    assert source_badge("https://www.cdc.gov/page") == ("Government", "trust-high")
 
 
-def test_source_badge_falls_back_to_provider():
-    badge, trust = source_badge("", provider="crossref")
-    assert badge == "Scientific"
-    assert trust == "trust-high"
+def test_science_badge_by_domain():
+    assert source_badge("https://www.nature.com/articles/xyz") == (
+        "Scientific",
+        "trust-high",
+    )
 
 
-def test_source_badge_defaults_to_unclassified():
-    badge, trust = source_badge("https://example.com/blog", provider="unknown")
-    assert badge == "Unclassified"
-    assert trust == "trust-low"
+def test_science_badge_by_provider():
+    assert source_badge("https://foo.example/item", provider="arxiv") == (
+        "Scientific",
+        "trust-high",
+    )
+
+
+def test_blog_badge():
+    assert source_badge("https://myproject.medium.com/post") == ("Blog", "trust-low")
+
+
+def test_reference_badge():
+    assert source_badge("https://en.wikipedia.org/wiki/Test") == (
+        "Reference",
+        "trust-medium",
+    )
+
+
+def test_unclassified_fallback():
+    assert source_badge("https://unknownsite.example/post") == (
+        "Unclassified",
+        "trust-low",
+    )
