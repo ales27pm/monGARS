@@ -16,8 +16,8 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
 
 import httpx
 import trafilatura
-from trafilatura import metadata as trafilatura_metadata
 from bs4 import BeautifulSoup
+from trafilatura import metadata as trafilatura_metadata
 
 from monGARS.core.search import NormalizedHit
 
