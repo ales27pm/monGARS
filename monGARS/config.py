@@ -550,6 +550,124 @@ class Settings(BaseSettings):
         ge=1,
         description="Minimum number of missing entities detected in the knowledge graph before triggering research.",
     )
+    search_searx_enabled: EnvBool = Field(
+        default=True,
+        description=(
+            "Enable the SearxNG search provider so the orchestrator can query a self-hosted instance."
+        ),
+    )
+    search_searx_base_url: AnyUrl | None = Field(
+        default="http://localhost:8080",
+        description="Base URL for the SearxNG deployment, e.g. https://searx.example.com.",
+    )
+    search_searx_api_key: str | None = Field(
+        default=None,
+        description="Optional API key or token expected by the SearxNG instance.",
+    )
+    search_searx_categories: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of SearxNG categories to query (e.g. ['general', 'news']). Leave empty to use server defaults."
+        ),
+    )
+    search_searx_safesearch: int | None = Field(
+        default=None,
+        ge=0,
+        le=2,
+        description=(
+            "Optional SearxNG safesearch level (0=off, 1=moderate, 2=strict). Leave unset to defer to server defaults."
+        ),
+    )
+    search_searx_default_language: str | None = Field(
+        default="en",
+        description=(
+            "Fallback language passed to SearxNG when the orchestrator does not supply an explicit locale."
+        ),
+    )
+    search_searx_result_cap: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description="Upper bound on SearxNG results processed per query before local ranking and truncation.",
+    )
+    search_searx_timeout_seconds: float = Field(
+        default=6.0,
+        ge=1.0,
+        le=60.0,
+        description=(
+            "Per-request timeout when querying SearxNG. Increase for slower upstream engines or reduce to enforce snappier cutoffs."
+        ),
+    )
+    search_searx_engines: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of SearxNG engines to target (e.g. ['google', 'bing']). Leave empty to use the server defaults."
+        ),
+    )
+    search_searx_time_range: str | None = Field(
+        default=None,
+        description=(
+            "Optional time range filter passed to SearxNG (e.g. 'day', 'week', 'month', 'year')."
+        ),
+    )
+    search_searx_sitelimit: str | None = Field(
+        default=None,
+        description="Restrict SearxNG results to a specific domain or hostname (e.g. 'site:example.com').",
+    )
+    search_searx_page_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description=(
+            "Override the per-page result count requested from SearxNG. Leave unset to allow the orchestrator to adapt automatically."
+        ),
+    )
+    search_searx_max_pages: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description=(
+            "Maximum number of result pages to fetch from SearxNG for a single query before ranking locally."
+        ),
+    )
+    search_searx_language_strict: EnvBool = Field(
+        default=True,
+        description=(
+            "Force the Accept-Language header to match the orchestrator locale so SearxNG favours language-specific engines."
+        ),
+    )
+
+    # --- SearxNG helpers ---
+    @field_validator("search_searx_categories", "search_searx_engines", mode="before")
+    @classmethod
+    def _parse_searx_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return []
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return [item.strip() for item in s.split(",") if item.strip()]
+            if isinstance(parsed, str):
+                return [parsed.strip()] if parsed.strip() else []
+            if isinstance(parsed, Sequence):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return []
+        if isinstance(value, Sequence):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+    @model_validator(mode="after")
+    def _validate_searx_config(self) -> "Settings":
+        if self.search_searx_enabled and not self.search_searx_base_url:
+            raise ValueError(
+                "search_searx_base_url must be set when search_searx_enabled=True"
+            )
+        return self
+
     MLFLOW_TRACKING_URI: str = Field(default="http://localhost:5000")
     FASTAPI_URL: str = Field(default="http://localhost:8000")
 

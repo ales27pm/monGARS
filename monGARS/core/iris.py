@@ -7,16 +7,21 @@ import json
 import logging
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
 
 import httpx
 import trafilatura
 from bs4 import BeautifulSoup
+
+from monGARS.core.search import NormalizedHit
+
+if TYPE_CHECKING:  # pragma: no cover - circular import guard
+    from monGARS.core.search.orchestrator import SearchOrchestrator
 
 from .search.metadata import parse_date_from_text
 from .search.schema_org import parse_schema_org
@@ -81,6 +86,9 @@ class Iris:
         document_cache_ttl: float | None = 900.0,
         document_cache_size: int = 128,
         client_factory: Callable[..., httpx.AsyncClient] | None = None,
+        search_orchestrator: "SearchOrchestrator | None" = None,
+        search_language: str | None = "en",
+        orchestrator_result_limit: int = 5,
     ) -> None:
         if max_concurrency <= 0:
             msg = "max_concurrency must be a positive integer"
@@ -102,6 +110,9 @@ class Iris:
             raise ValueError(msg)
         if document_cache_size <= 0:
             msg = "document_cache_size must be a positive integer"
+            raise ValueError(msg)
+        if orchestrator_result_limit <= 0:
+            msg = "orchestrator_result_limit must be a positive integer"
             raise ValueError(msg)
 
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -136,6 +147,9 @@ class Iris:
         self._client_factory = client_factory or httpx.AsyncClient
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+        self._search_orchestrator: "SearchOrchestrator | None" = search_orchestrator
+        self._search_language = search_language
+        self._orchestrator_result_limit = orchestrator_result_limit
 
     async def __aenter__(self) -> "Iris":
         return self
@@ -186,12 +200,76 @@ class Iris:
             logger.debug("iris.search.empty_query")
             return None
 
-        search_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
         cache_key = query.casefold()
 
         cached = await self._get_cached_snippet(cache_key)
         if cached is not None:
             return cached
+
+        orchestrated = await self._search_with_orchestrator(query, cache_key)
+        if orchestrated is not None:
+            return orchestrated
+
+        return await self._search_with_duckduckgo(query, cache_key)
+
+    def attach_search_orchestrator(
+        self, orchestrator: "SearchOrchestrator | None"
+    ) -> None:
+        """Attach or replace the search orchestrator used for snippets."""
+
+        self._search_orchestrator = orchestrator
+
+    async def _search_with_orchestrator(self, query: str, cache_key: str) -> str | None:
+        orchestrator = self._search_orchestrator
+        if orchestrator is None:
+            return None
+        lang = self._search_language or "en"
+        try:
+            hits: Sequence[NormalizedHit] = await orchestrator.search(
+                query,
+                lang=lang,
+                max_results=self._orchestrator_result_limit,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - network dependent
+            logger.debug(
+                "iris.search.orchestrator_error",
+                extra={"error": str(exc)},
+                exc_info=True,
+            )
+            return None
+
+        for hit in hits:
+            snippet_candidate = self._truncate_snippet(hit.snippet)
+            if snippet_candidate:
+                await self._store_cached_snippet(cache_key, snippet_candidate)
+                return snippet_candidate
+
+            url = hit.url
+            if not url:
+                continue
+            try:
+                document = await self.fetch_document(url)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - network dependent
+                logger.debug(
+                    "iris.search.orchestrator_document_error",
+                    extra={"url": url, "error": str(exc)},
+                )
+                continue
+            if document is None:
+                continue
+            selected = self._select_snippet(document, hit.snippet)
+            if selected:
+                await self._store_cached_snippet(cache_key, selected)
+                return selected
+
+        return None
+
+    async def _search_with_duckduckgo(self, query: str, cache_key: str) -> str | None:
+        search_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
 
         async with self._semaphore:
             response = await self._request_with_retries("GET", search_url)

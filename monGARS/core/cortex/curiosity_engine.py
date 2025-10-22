@@ -138,6 +138,9 @@ class CuriosityEngine:
             http_client_factory=self._http_client_factory,
             document_fetcher=self.iris.fetch_document,
         )
+        attach = getattr(self.iris, "attach_search_orchestrator", None)
+        if callable(attach):
+            attach(self._search_orchestrator)
         self._verifier = verifier or Verifier()
         self._research_workflow = ResearchWorkflow(
             search_orchestrator=self._search_orchestrator,

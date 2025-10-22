@@ -7,6 +7,7 @@ from .crossref import CrossrefProvider
 from .ddg import DDGProvider
 from .factcheckers import PolitiFactProvider, SnopesProvider
 from .pubmed import PubMedProvider
+from .searxng import SearxNGConfig, SearxNGProvider
 from .wikipedia import WikipediaProvider
 
 __all__ = [
@@ -17,6 +18,8 @@ __all__ = [
     "PubMedProvider",
     "SnopesProvider",
     "WikipediaProvider",
+    "SearxNGProvider",
+    "SearxNGConfig",
 ]
 
 try:  # pragma: no cover - optional dependency

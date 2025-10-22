@@ -30,12 +30,14 @@ set.
 Within the cognition pipeline, Iris is instantiated by the `CuriosityEngine` (`monGARS/core/cortex/
 curiosity_engine.py`). During a conversation, the engine first attempts to satisfy information gaps
 through the internal document retrieval service. When that service does not return data, the engine
-falls back to `Iris.search`, which issues a DuckDuckGo lookup, resolves the first result, and calls
-`Iris.fetch_document` to extract a concise snippet. The retrieved context flows through the new
-document cache so repeated questions reuse previous research, and OpenTelemetry counters are
-incremented to distinguish between successful document service hits and Iris fallbacks. This
-workflow allows monGARS to enrich conversations with up-to-date public information while still
-preferring curated internal knowledge.
+falls back to `Iris.search`, which now reuses the shared `SearchOrchestrator` pipeline. SearxNG is
+treated as the primary search backend; its multi-engine JSON results, infobox metadata, and
+time-range filters are normalised before DuckDuckGo is consulted as a safety net. The orchestrator-
+sourced hit is resolved and passed to `Iris.fetch_document` to extract a concise snippet. The
+retrieved context flows through the new document cache so repeated questions reuse previous
+research, and OpenTelemetry counters are incremented to distinguish between successful document
+service hits and Iris fallbacks. This workflow allows monGARS to enrich conversations with
+up-to-date public information while still preferring curated internal knowledge.
 
 ## Runtime Optimisations
 
@@ -49,6 +51,13 @@ their workloads:
   fetches while keeping enough concurrency to hide latency.
 - Persistent HTTP client lifecycle (`aclose` / async context manager): amortises TLS handshakes and
   allows deterministic shutdown when Iris is embedded in longer-lived services.
+- `search_searx_enabled`, `search_searx_base_url`, `search_searx_categories`,
+  `search_searx_engines`, `search_searx_time_range`, `search_searx_sitelimit`,
+  `search_searx_safesearch`, `search_searx_default_language`, `search_searx_page_size`,
+  `search_searx_max_pages`, `search_searx_language_strict`, `search_searx_timeout_seconds`, and
+  `search_searx_result_cap`: govern the SearxNG integration so operators can steer queries through a
+  self-hosted meta-search instance with explicit safety, engine, and recency controls while leaving
+  DuckDuckGo as an automated fallback when SearxNG cannot satisfy the query.
 
 These controls make it easy to tune Iris for aggressive live research (short TTLs with smaller
 caches) or high-throughput assistants that revisit topics frequently (longer TTLs and larger cache
