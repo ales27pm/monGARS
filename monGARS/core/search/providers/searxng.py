@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from collections.abc import Mapping, Sequence
 from typing import Iterable, Optional
 from urllib.parse import urlparse
 

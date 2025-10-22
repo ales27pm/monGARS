@@ -32,9 +32,9 @@ from .providers import (
     CrossrefProvider,
     DDGProvider,
     PolitiFactProvider,
+    PubMedProvider,
     SearxNGConfig,
     SearxNGProvider,
-    PubMedProvider,
     SnopesProvider,
     WikipediaProvider,
 )

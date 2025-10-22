@@ -7,8 +7,8 @@ from .crossref import CrossrefProvider
 from .ddg import DDGProvider
 from .factcheckers import PolitiFactProvider, SnopesProvider
 from .pubmed import PubMedProvider
-from .wikipedia import WikipediaProvider
 from .searxng import SearxNGConfig, SearxNGProvider
+from .wikipedia import WikipediaProvider
 
 __all__ = [
     "ArxivProvider",
