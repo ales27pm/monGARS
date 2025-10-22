@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 import httpx
 from cachetools import TTLCache
 
+from monGARS.config import get_settings
+
 from .contracts import NormalizedHit, SearchProvider
 from .policy import DomainPolicy
 from .providers import (
@@ -30,6 +32,8 @@ from .providers import (
     CrossrefProvider,
     DDGProvider,
     PolitiFactProvider,
+    SearxNGConfig,
+    SearxNGProvider,
     PubMedProvider,
     SnopesProvider,
     WikipediaProvider,
@@ -54,7 +58,8 @@ AsyncClientFactory = Callable[[], AsyncIterator[httpx.AsyncClient]]
 TRUST_PRIORS: Dict[str, float] = {
     "gnews": 0.35,
     "wikipedia": 0.25,
-    "ddg": 0.15,
+    "ddg": 0.1,
+    "searxng": 0.3,
     "crossref": 0.35,
     "arxiv": 0.3,
     "pubmed": 0.35,
@@ -171,6 +176,7 @@ class SearchOrchestrator:
         self._document_fetch_timeout = (
             timeout if document_fetch_timeout is None else document_fetch_timeout
         )
+        self._searx_warned_missing = False
         if client is not None and http_client_factory is not None:
             raise ValueError(
                 "Provide either an httpx.AsyncClient or an http_client_factory, not both."
@@ -226,7 +232,7 @@ class SearchOrchestrator:
             providers = self._providers
             if providers is None:
                 providers = self._build_default_providers(client)
-            hits = await self._collect_from_providers(
+            hits = await self._collect_hits(
                 providers, normalised_query, lang=lang, max_results=max_results
             )
             robots_cache = self._robots_cache or RobotsCache(client)
@@ -239,18 +245,98 @@ class SearchOrchestrator:
     def _build_default_providers(
         self, client: httpx.AsyncClient
     ) -> List[SearchProvider]:
-        providers: List[SearchProvider] = [
-            DDGProvider(client, timeout=self._timeout),
-            WikipediaProvider(client, timeout=self._timeout),
-            CrossrefProvider(client, timeout=self._timeout),
-            PubMedProvider(client, timeout=self._timeout),
-            ArxivProvider(timeout=self._timeout),
-            PolitiFactProvider(),
-            SnopesProvider(),
-        ]
+        settings = get_settings()
+        providers: List[SearchProvider] = []
+        if settings.search_searx_enabled:
+            base_url = settings.search_searx_base_url
+            if base_url:
+                config = SearxNGConfig(
+                    base_url=str(base_url),
+                    api_key=settings.search_searx_api_key,
+                    categories=tuple(settings.search_searx_categories) or None,
+                    safesearch=settings.search_searx_safesearch,
+                    default_language=settings.search_searx_default_language,
+                    max_results=settings.search_searx_result_cap,
+                    engines=tuple(settings.search_searx_engines) or None,
+                    time_range=settings.search_searx_time_range,
+                    sitelimit=settings.search_searx_sitelimit,
+                    page_size=settings.search_searx_page_size,
+                    max_pages=settings.search_searx_max_pages,
+                    language_strict=settings.search_searx_language_strict,
+                )
+                providers.append(
+                    SearxNGProvider(
+                        client,
+                        config=config,
+                        timeout=settings.search_searx_timeout_seconds or self._timeout,
+                    )
+                )
+            else:
+                if not self._searx_warned_missing:
+                    logger.warning(
+                        "search.searxng.missing_base_url",
+                        extra={"enabled": True},
+                    )
+                    self._searx_warned_missing = True
+        providers.extend(
+            [
+                WikipediaProvider(client, timeout=self._timeout),
+                CrossrefProvider(client, timeout=self._timeout),
+                PubMedProvider(client, timeout=self._timeout),
+                ArxivProvider(timeout=self._timeout),
+                PolitiFactProvider(),
+                SnopesProvider(),
+            ]
+        )
+        providers.append(DDGProvider(client, timeout=self._timeout))
         if GNewsProvider is not None:
             providers.append(GNewsProvider(timeout=self._timeout))
         return providers
+
+    async def _collect_hits(
+        self,
+        providers: Sequence[SearchProvider],
+        query: str,
+        *,
+        lang: str,
+        max_results: int,
+    ) -> List[NormalizedHit]:
+        if not providers:
+            return []
+        primary: list[SearchProvider] = []
+        fallback: list[SearchProvider] = []
+        for provider in providers:
+            if isinstance(provider, DDGProvider):
+                fallback.append(provider)
+            else:
+                primary.append(provider)
+
+        hits: list[NormalizedHit] = []
+        fallback_reason: str | None = None
+        if primary:
+            primary_hits = await self._collect_from_providers(
+                primary, query, lang=lang, max_results=max_results
+            )
+            hits.extend(primary_hits)
+            searx_hits = [hit for hit in primary_hits if hit.provider == "searxng"]
+            if not searx_hits:
+                fallback_reason = "no_searx_hits"
+            elif all(not (hit.snippet or "").strip() for hit in searx_hits):
+                fallback_reason = "blank_searx_snippets"
+        else:
+            primary_hits = []
+            fallback_reason = "no_primary"
+
+        if fallback and fallback_reason:
+            logger.debug(
+                "search.providers.ddg_fallback",
+                extra={"query_len": len(query), "reason": fallback_reason},
+            )
+            fallback_hits = await self._collect_from_providers(
+                fallback, query, lang=lang, max_results=max_results
+            )
+            hits.extend(fallback_hits)
+        return hits
 
     async def _collect_from_providers(
         self,

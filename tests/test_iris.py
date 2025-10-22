@@ -88,6 +88,20 @@ def patch_dependencies(monkeypatch):
                 curiosity_kg_cache_max_entries=512,
                 curiosity_research_cache_ttl=900,
                 curiosity_research_cache_max_entries=256,
+                search_searx_enabled=False,
+                search_searx_base_url=None,
+                search_searx_api_key=None,
+                search_searx_categories=[],
+                search_searx_safesearch=None,
+                search_searx_default_language="en",
+                search_searx_result_cap=10,
+                search_searx_timeout_seconds=6.0,
+                search_searx_engines=[],
+                search_searx_time_range=None,
+                search_searx_sitelimit=None,
+                search_searx_page_size=None,
+                search_searx_max_pages=1,
+                search_searx_language_strict=False,
             )
         ),
     )
@@ -330,6 +344,102 @@ async def test_search_cache_expires(monkeypatch):
     second = await iris.search("Cache Example")
     assert second == "Snippet 2"
     assert len(factory.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_uses_orchestrator_when_available(monkeypatch):
+    from monGARS.core.iris import Iris
+    from monGARS.core.search import NormalizedHit
+
+    class DummyOrchestrator:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        async def search(self, query: str, *, lang: str, max_results: int):
+            self.calls.append((query, lang, max_results))
+            return [
+                NormalizedHit(
+                    provider="searxng",
+                    title="Example",
+                    url="https://example.com/article",
+                    snippet="Example snippet from orchestrator.",
+                    published_at=None,
+                    event_date=None,
+                    source_domain="example.com",
+                    lang=lang,
+                    raw={},
+                )
+            ]
+
+    orchestrator = DummyOrchestrator()
+    iris = Iris(client_factory=ClientFactory(responses=[]))
+    iris.attach_search_orchestrator(orchestrator)
+
+    async def fail_fallback(query: str, cache_key: str):
+        raise AssertionError(
+            "Fallback should not run when orchestrator returns a snippet"
+        )
+
+    monkeypatch.setattr(iris, "_search_with_duckduckgo", fail_fallback)
+
+    result = await iris.search("Example query")
+    assert result == "Example snippet from orchestrator."
+    assert orchestrator.calls == [("Example query", "en", 5)]
+
+    cached = await iris.search("Example query")
+    assert cached == result
+    assert orchestrator.calls == [("Example query", "en", 5)]
+
+
+@pytest.mark.asyncio
+async def test_search_orchestrator_falls_back_to_document(monkeypatch):
+    from monGARS.core.iris import Iris, IrisDocument
+    from monGARS.core.search import NormalizedHit
+
+    class DummyOrchestrator:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        async def search(self, query: str, *, lang: str, max_results: int):
+            self.calls.append((query, lang, max_results))
+            return [
+                NormalizedHit(
+                    provider="searxng",
+                    title="Example",
+                    url="https://example.com/full",
+                    snippet="",
+                    published_at=None,
+                    event_date=None,
+                    source_domain="example.com",
+                    lang=lang,
+                    raw={},
+                )
+            ]
+
+    orchestrator = DummyOrchestrator()
+    iris = Iris(client_factory=ClientFactory(responses=[]))
+    iris.attach_search_orchestrator(orchestrator)
+
+    fetch_calls = 0
+
+    async def fake_fetch_document(url: str) -> IrisDocument | None:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return IrisDocument(url=url, summary="Document summary", text="Document text")
+
+    monkeypatch.setattr(iris, "fetch_document", fake_fetch_document)
+
+    async def fail_fallback(query: str, cache_key: str):
+        raise AssertionError(
+            "Fallback should not run when orchestrator resolves the snippet"
+        )
+
+    monkeypatch.setattr(iris, "_search_with_duckduckgo", fail_fallback)
+
+    result = await iris.search("Need context")
+    assert result == "Document summary"
+    assert fetch_calls == 1
+    assert orchestrator.calls == [("Need context", "en", 5)]
 
 
 @pytest.mark.asyncio

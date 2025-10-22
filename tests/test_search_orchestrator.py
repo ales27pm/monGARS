@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from monGARS.core.search import NormalizedHit, SearchOrchestrator
+from monGARS.core.search.providers.ddg import DDGProvider
 
 
 class AllowRobotsCache:
@@ -37,6 +38,35 @@ class TimeoutProvider:
         self, query: str, *, lang: str | None = None, max_results: int = 8
     ):
         raise asyncio.TimeoutError
+
+
+class EmptySearxProvider:
+    async def search(
+        self, query: str, *, lang: str | None = None, max_results: int = 8
+    ) -> list[NormalizedHit]:
+        return []
+
+
+class DummyDDGProvider(DDGProvider):
+    def __init__(self, hits: list[NormalizedHit]) -> None:
+        self._hits = hits
+        self.calls = 0
+
+    async def search(
+        self, query: str, *, lang: str | None = None, max_results: int = 8
+    ) -> list[NormalizedHit]:
+        self.calls += 1
+        return list(self._hits)[:max_results]
+
+
+class SnippetSearxProvider:
+    def __init__(self, hits: list[NormalizedHit]) -> None:
+        self._hits = hits
+
+    async def search(
+        self, query: str, *, lang: str | None = None, max_results: int = 8
+    ) -> list[NormalizedHit]:
+        return list(self._hits)[:max_results]
 
 
 @pytest.mark.asyncio
@@ -191,3 +221,67 @@ async def test_orchestrator_enriches_missing_dates() -> None:
     assert enriched.event_date == now - timedelta(days=1)
     assert enriched.lang == "en"
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_ddg_when_searx_returns_nothing() -> None:
+    ddg_hit = NormalizedHit(
+        provider="ddg",
+        title="Fallback result",
+        url="https://example.com/fallback",
+        snippet="DuckDuckGo snippet",
+        published_at=None,
+        event_date=None,
+        source_domain="example.com",
+        lang="en",
+        raw={},
+    )
+    fallback_provider = DummyDDGProvider([ddg_hit])
+    orchestrator = SearchOrchestrator(
+        providers=[EmptySearxProvider(), fallback_provider],
+        robots_cache=AllowRobotsCache(),
+    )
+
+    results = await orchestrator.search("ddg fallback", lang="en")
+
+    assert results
+    assert results[0].provider == "ddg"
+    assert fallback_provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_skips_ddg_when_searx_snippet_available() -> None:
+    now = datetime.now(timezone.utc)
+    searx_hit = NormalizedHit(
+        provider="searxng",
+        title="Primary result",
+        url="https://example.org/primary",
+        snippet="Authoritative summary",
+        published_at=now,
+        event_date=None,
+        source_domain="example.org",
+        lang="en",
+        raw={},
+    )
+    fallback_hit = NormalizedHit(
+        provider="ddg",
+        title="Fallback",
+        url="https://example.com/fallback",
+        snippet="",
+        published_at=None,
+        event_date=None,
+        source_domain="example.com",
+        lang="en",
+        raw={},
+    )
+    fallback_provider = DummyDDGProvider([fallback_hit])
+    orchestrator = SearchOrchestrator(
+        providers=[SnippetSearxProvider([searx_hit]), fallback_provider],
+        robots_cache=AllowRobotsCache(),
+    )
+
+    results = await orchestrator.search("prefer searx", lang="en")
+
+    assert results
+    assert results[0].provider == "searxng"
+    assert fallback_provider.calls == 0
