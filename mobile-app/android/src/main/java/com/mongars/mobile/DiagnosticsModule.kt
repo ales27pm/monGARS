@@ -3,15 +3,10 @@ package com.mongars.mobile
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
-import android.net.LinkAddress
-import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkInterface
 import android.net.VpnService
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.Environment
-import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -84,7 +79,13 @@ class DiagnosticsModule(private val reactContext: ReactApplicationContext) :
 
     val intent = VpnService.prepare(reactContext)
     if (intent != null) {
-      currentActivity?.startActivityForResult(intent, PacketCaptureService.REQUEST_CODE)
+      captureSessions.remove(captureId)
+      promise.reject(
+        "capture_error",
+        "VPN permission required. Call prepare() and obtain consent before startCapture.",
+        null,
+      )
+      return
     }
 
     val serviceIntent = Intent(reactContext, PacketCaptureService::class.java)
@@ -102,6 +103,10 @@ class DiagnosticsModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun stopCapture(captureId: String, promise: Promise) {
     val output = captureSessions[captureId]
+      ?: run {
+        promise.reject("stop_error", IllegalArgumentException("Capture not found"))
+        return
+      }
     val serviceIntent = Intent(reactContext, PacketCaptureService::class.java)
     serviceIntent.action = PacketCaptureService.ACTION_STOP
     reactContext.startService(serviceIntent)

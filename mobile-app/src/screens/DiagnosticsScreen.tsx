@@ -20,6 +20,7 @@ const DiagnosticsScreen: React.FC = () => {
     loading,
   } = useDiagnostics();
   const [duration] = useState(120);
+  const [refreshing, setRefreshing] = useState(false);
 
   const interfaces = useMemo(() => snapshot?.interfaces ?? [], [snapshot]);
 
@@ -36,8 +37,12 @@ const DiagnosticsScreen: React.FC = () => {
     if (!capture) {
       return;
     }
-    const status = await stopCapture();
-    Alert.alert('Capture terminée', status?.path ?? '');
+    try {
+      const status = await stopCapture();
+      Alert.alert('Capture terminée', status?.path ?? '');
+    } catch (err) {
+      Alert.alert('Erreur', (err as Error).message);
+    }
   };
 
   return (
@@ -46,11 +51,20 @@ const DiagnosticsScreen: React.FC = () => {
         <Text style={styles.title}>État réseau</Text>
         <Pressable
           style={styles.refreshButton}
-          onPress={refresh}
-          disabled={loading}
+          onPress={async () => {
+            setRefreshing(true);
+            try {
+              await refresh();
+            } catch (err) {
+              Alert.alert('Erreur', (err as Error).message);
+            } finally {
+              setRefreshing(false);
+            }
+          }}
+          disabled={loading || refreshing}
         >
           <Text style={styles.refreshText}>
-            {loading ? 'Actualisation…' : 'Actualiser'}
+            {refreshing ? 'Actualisation…' : 'Actualiser'}
           </Text>
         </Pressable>
       </View>
@@ -80,6 +94,7 @@ const DiagnosticsScreen: React.FC = () => {
           <Pressable
             style={styles.captureButton}
             onPress={() => handleStart(item.name)}
+            disabled={!!capture || loading}
           >
             <Text style={styles.captureText}>Sniffer</Text>
           </Pressable>

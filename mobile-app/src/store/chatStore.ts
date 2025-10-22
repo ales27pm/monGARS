@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { produce } from 'immer';
 import { z } from 'zod';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   fetchChatHistory,
   sendChatMessage,
@@ -129,6 +130,35 @@ export const useChatStore = create<ChatState>()(
     }),
     {
       name: 'mongars-chat',
+      storage: createJSONStorage(() => AsyncStorage),
+      version: 1,
+      migrate: (persistedState) => {
+        if (!persistedState) {
+          return persistedState as unknown as {
+            messages?: Message[];
+            token?: string | null;
+          };
+        }
+
+        const state = persistedState as {
+          messages?: Array<Partial<Message> & { createdAt?: string | Date }>;
+          token?: string | null;
+        };
+
+        if (!state.messages) {
+          return state;
+        }
+
+        return {
+          token: state.token ?? null,
+          messages: state.messages.map((message) => ({
+            ...message,
+            createdAt: message.createdAt
+              ? new Date(message.createdAt)
+              : new Date(),
+          })) as Message[],
+        };
+      },
       partialize: (state) => ({ messages: state.messages, token: state.token }),
     },
   ),

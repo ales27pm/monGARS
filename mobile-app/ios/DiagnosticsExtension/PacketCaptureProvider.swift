@@ -5,6 +5,8 @@ class PacketCaptureProvider: NEPacketTunnelProvider {
   private let logger = Logger(subsystem: "com.mongars.mobile", category: "PacketCapture")
   private var fileHandle: FileHandle?
   private var stopWorkItem: DispatchWorkItem?
+  private var captureWorkItem: DispatchWorkItem?
+  private var isCapturing = false
 
   override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
     logger.log("Starting packet tunnel with options: \(String(describing: options), privacy: .public)")
@@ -26,6 +28,9 @@ class PacketCaptureProvider: NEPacketTunnelProvider {
 
   override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
     logger.log("Stopping packet tunnel: \(reason.rawValue)")
+    isCapturing = false
+    captureWorkItem?.cancel()
+    captureWorkItem = nil
     stopWorkItem?.cancel()
     stopWorkItem = nil
     do {
@@ -46,59 +51,70 @@ class PacketCaptureProvider: NEPacketTunnelProvider {
       writePcapHeader()
     } catch {
       logger.error("Unable to open capture file: \(error.localizedDescription, privacy: .public)")
+      return
     }
 
     let duration = options?["duration"] as? Double ?? 300
+    isCapturing = true
     let workItem = DispatchWorkItem { [weak self] in
-      self?.packetFlow.readPackets { packets, protocols in
-        guard let self else { return }
-        for (index, packet) in packets.enumerated() {
-          self.writePacket(packet, protocolFamily: protocols[index])
-        }
+      guard let self else { return }
+      func loopRead() {
         self.packetFlow.readPackets { packets, protocols in
-          guard let self else { return }
+          guard self.isCapturing else { return }
           for (index, packet) in packets.enumerated() {
             self.writePacket(packet, protocolFamily: protocols[index])
           }
+          if self.isCapturing {
+            loopRead()
+          }
         }
       }
+      loopRead()
     }
+    captureWorkItem = workItem
     stopWorkItem = DispatchWorkItem { [weak self] in
       self?.cancelTunnelWithError(nil)
     }
     DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
-    DispatchQueue.global().asyncAfter(deadline: .now() + duration, execute: stopWorkItem!)
+    if let stopWorkItem {
+      let deadline = DispatchTime.now() + .milliseconds(Int(duration * 1000))
+      DispatchQueue.global().asyncAfter(deadline: deadline, execute: stopWorkItem)
+    }
   }
 
   private func writePcapHeader() {
     guard let fileHandle else { return }
-    var header = pcap_file_header(
+    var header = PcapFileHeader(
       magic: 0xa1b2c3d4,
       version_major: 2,
       version_minor: 4,
       thiszone: 0,
       sigfigs: 0,
       snaplen: 65535,
-      linktype: 1
+      linktype: 101 // LINKTYPE_RAW
     )
-    let data = Data(bytes: &header, count: MemoryLayout<pcap_file_header>.size)
+    let data = withUnsafeBytes(of: &header) { Data($0) }
     fileHandle.write(data)
   }
 
   private func writePacket(_ packet: Data, protocolFamily: NSNumber) {
     guard let fileHandle else { return }
-    var header = pcap_sf_pkthdr(
-      ts: timeval(tv_sec: time(nil), tv_usec: 0),
+    let now = Date().timeIntervalSince1970
+    let seconds = UInt32(now)
+    let microseconds = UInt32((now - Double(seconds)) * 1_000_000)
+    var header = PcapPacketHeader(
+      ts_sec: seconds,
+      ts_usec: microseconds,
       caplen: UInt32(packet.count),
       len: UInt32(packet.count)
     )
-    let headerData = Data(bytes: &header, count: MemoryLayout<pcap_sf_pkthdr>.size)
+    let headerData = withUnsafeBytes(of: &header) { Data($0) }
     fileHandle.write(headerData)
     fileHandle.write(packet)
   }
 }
 
-struct pcap_file_header {
+struct PcapFileHeader {
   var magic: UInt32
   var version_major: UInt16
   var version_minor: UInt16
@@ -108,8 +124,9 @@ struct pcap_file_header {
   var linktype: UInt32
 }
 
-struct pcap_sf_pkthdr {
-  var ts: timeval
+struct PcapPacketHeader {
+  var ts_sec: UInt32
+  var ts_usec: UInt32
   var caplen: UInt32
   var len: UInt32
 }

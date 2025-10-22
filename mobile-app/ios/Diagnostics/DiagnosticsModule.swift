@@ -141,10 +141,16 @@ class DiagnosticsModule: NSObject, RCTTurboModule {
       snapshot["interfaces"] = try enumerateInterfaces()
     }
 
+    let group = DispatchGroup()
+    group.enter()
+    var currentNetwork: NEHotspotNetwork?
     fetchCurrentNetwork { network in
-      snapshot["ssid"] = network?.ssid
-      snapshot["bssid"] = network?.bssid
+      currentNetwork = network
+      group.leave()
     }
+    _ = group.wait(timeout: .now() + 1)
+    snapshot["ssid"] = currentNetwork?.ssid ?? NSNull()
+    snapshot["bssid"] = currentNetwork?.bssid ?? NSNull()
 
     snapshot["vpnActive"] = self.snapshot["vpnActive"] ?? false
     snapshot["cellularActive"] = self.snapshot["cellularActive"] ?? false
@@ -153,7 +159,7 @@ class DiagnosticsModule: NSObject, RCTTurboModule {
 
   private func enumerateInterfaces() throws -> [[String: Any]] {
     var result: [[String: Any]] = []
-    var addressList: UnsafeMutablePointer<ifaddrs>? = nil
+    var addressList: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&addressList) == 0, let firstAddress = addressList else {
       throw NSError(domain: "Diagnostics", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unable to enumerate interfaces"])
     }
@@ -163,10 +169,10 @@ class DiagnosticsModule: NSObject, RCTTurboModule {
     while true {
       let name = String(cString: pointer.pointee.ifa_name)
       var addressString: String?
-      if pointer.pointee.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
-        var address = pointer.pointee.ifa_addr.pointee
+      if let addrPtr = pointer.pointee.ifa_addr, addrPtr.pointee.sa_family == UInt8(AF_INET) {
+        var address = addrPtr.pointee
         var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        getnameinfo(&address, socklen_t(pointer.pointee.ifa_addr.pointee.sa_len), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+        getnameinfo(&address, socklen_t(addrPtr.pointee.sa_len), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
         addressString = String(cString: hostname)
       }
       result.append([

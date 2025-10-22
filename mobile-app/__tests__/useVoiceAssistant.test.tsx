@@ -53,7 +53,7 @@ const createComponent = (
 
 describe('useVoiceAssistant', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
+    jest.clearAllMocks();
   });
 
   it('starts and stops listening while updating state', async () => {

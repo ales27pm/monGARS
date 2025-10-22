@@ -16,7 +16,7 @@ class VoiceModule: RCTEventEmitter, RCTTurboModule {
 
   private let logger = Logger(subsystem: "com.mongars.mobile", category: "Voice")
   private let audioEngine = AVAudioEngine()
-  private let speechRecognizer = SFSpeechRecognizer()
+  private var speechRecognizer: SFSpeechRecognizer? = SFSpeechRecognizer()
   private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
   private var recognitionTask: SFSpeechRecognitionTask?
 
@@ -42,6 +42,15 @@ class VoiceModule: RCTEventEmitter, RCTTurboModule {
 
   @objc func startListening(_ locale: NSString?, resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     requestPermissions()
+    guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
+      reject("voice_error", "Speech recognition permission not granted", nil)
+      return
+    }
+    guard AVAudioSession.sharedInstance().recordPermission == .granted else {
+      reject("voice_error", "Microphone permission not granted", nil)
+      return
+    }
+
     recognitionTask?.cancel()
     recognitionTask = nil
 
@@ -50,7 +59,17 @@ class VoiceModule: RCTEventEmitter, RCTTurboModule {
     recognitionRequest = request
 
     if let localeIdentifier = locale as String? {
-      speechRecognizer?.locale = Locale(identifier: localeIdentifier)
+      let locale = Locale(identifier: localeIdentifier)
+      guard let recognizer = SFSpeechRecognizer(locale: locale) else {
+        reject("voice_error", "Unsupported locale: \(localeIdentifier)", nil)
+        return
+      }
+      speechRecognizer = recognizer
+    }
+
+    guard speechRecognizer?.isAvailable == true else {
+      reject("voice_error", "Speech recognizer unavailable", nil)
+      return
     }
 
     recognitionTask = speechRecognizer?.recognitionTask(with: request) { result, error in

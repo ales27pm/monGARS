@@ -42,26 +42,43 @@ export async function streamChatReply({
   content,
   onToken,
 }: StreamHandler) {
-  const ws = new WebSocket(`${settings.websocketUrl}?token=${token}`);
+  const url = new URL(settings.websocketUrl);
+  url.searchParams.set('token', encodeURIComponent(token));
+  const ws = new WebSocket(url.toString());
 
   return new Promise<void>((resolve, reject) => {
     let currentId: string | null = null;
     let buffer = '';
+    let settled = false;
+    const timeoutMs = 20000;
+    const timer = setTimeout(() => {
+      closeWith(new Error('WebSocket timeout'));
+    }, timeoutMs);
 
     const closeWith = (error?: Error) => {
-      ws.close();
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
+      if (settled) {
+        return;
       }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch (closeError) {
+        console.warn('[chatService] ws close error', closeError);
+      }
+      error ? reject(error) : resolve();
     };
 
     ws.onerror = (event) => {
-      closeWith(new Error(`WebSocket error: ${JSON.stringify(event)}`));
+      const details =
+        (event as any)?.message ??
+        (event as any)?.reason ??
+        JSON.stringify(event);
+      closeWith(new Error(`WebSocket error: ${details}`));
     };
 
     ws.onopen = () => {
+      clearTimeout(timer);
       ws.send(
         JSON.stringify({
           type: 'prompt',
@@ -113,8 +130,12 @@ export async function streamChatReply({
 
     ws.onclose = (event) => {
       const closeEvent = event as WebSocketCloseEventLike;
-      if (closeEvent.wasClean === false) {
-        reject(new Error(`Connection closed: ${closeEvent.code}`));
+      if (!settled) {
+        const err =
+          closeEvent?.wasClean === false
+            ? new Error(`Connection closed: ${closeEvent.code}`)
+            : undefined;
+        closeWith(err);
       }
     };
   });

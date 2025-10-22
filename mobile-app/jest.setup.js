@@ -43,11 +43,11 @@ jest.mock('react-native/Libraries/EventEmitter/NativeEventEmitter', () =>
 
 jest.mock('@react-native-async-storage/async-storage', () => {
   let storage = {};
-  return {
+  const mock = {
     setItem: jest.fn(async (key, value) => {
-      storage[key] = value;
+      storage[key] = String(value);
     }),
-    getItem: jest.fn(async (key) => storage[key] ?? null),
+    getItem: jest.fn(async (key) => (key in storage ? String(storage[key]) : null)),
     removeItem: jest.fn(async (key) => {
       delete storage[key];
     }),
@@ -55,6 +55,7 @@ jest.mock('@react-native-async-storage/async-storage', () => {
       storage = {};
     }),
   };
+  return { __esModule: true, default: mock, ...mock };
 });
 
 NativeModules.RNGestureHandlerModule = NativeModules.RNGestureHandlerModule || {

@@ -1,3 +1,5 @@
+const path = require('path');
+
 module.exports = {
   project: {
     ios: {
@@ -14,5 +16,5 @@ module.exports = {
       },
     },
   },
-  reactNativePath: require.resolve("react-native"),
+  reactNativePath: path.dirname(require.resolve('react-native/package.json')),
 };

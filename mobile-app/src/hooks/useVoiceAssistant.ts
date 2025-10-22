@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import VoiceControl from '../native/voice';
 import { settings } from '../services/config';
@@ -37,14 +37,14 @@ export const createUseVoiceAssistant = (
       listening: false,
       transcript: '',
     });
-    const eventEmitter = useRef<NativeEventEmitter | null>(null);
+    const isSupportedPlatform =
+      deps.platform.OS === 'ios' || deps.platform.OS === 'android';
 
     useEffect(() => {
-      if (deps.platform.OS !== 'ios') {
+      if (!isSupportedPlatform) {
         return;
       }
       const emitter = deps.createEmitter();
-      eventEmitter.current = emitter;
 
       const resultListener = emitter.addListener('onTranscript', (event) => {
         setState((current) => ({ ...current, transcript: event.text }));
@@ -69,10 +69,10 @@ export const createUseVoiceAssistant = (
         errorListener.remove();
         deps.voiceControl.removeOnResultListener();
       };
-    }, [onFinalText]);
+    }, [isSupportedPlatform, onFinalText]);
 
     const start = async () => {
-      if (deps.platform.OS !== 'ios') {
+      if (!isSupportedPlatform) {
         return;
       }
       await deps.voiceControl.startListening(settings.voiceLocale);
@@ -80,7 +80,7 @@ export const createUseVoiceAssistant = (
     };
 
     const stop = async () => {
-      if (deps.platform.OS !== 'ios') {
+      if (!isSupportedPlatform) {
         return;
       }
       await deps.voiceControl.stopListening();

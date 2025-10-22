@@ -1,4 +1,3 @@
-import 'react-native-gesture-handler';
 import { AppState, Platform } from 'react-native';
 import Diagnostics from './diagnostics';
 import VoiceControl from './voice';
@@ -6,18 +5,22 @@ import VoiceControl from './voice';
 diagnosticsWarmup();
 voiceWarmup();
 
+let appStateSubscription: { remove: () => void } | null = null;
+
 function diagnosticsWarmup() {
   Diagnostics.prepare().catch((error) => {
     console.warn('[Diagnostics] Failed to prepare module', error);
   });
 
-  AppState.addEventListener('change', (state) => {
-    if (state === 'active') {
-      Diagnostics.refreshNetworkSnapshot().catch((err) => {
-        console.warn('[Diagnostics] Unable to refresh snapshot', err);
-      });
-    }
-  });
+  if (!appStateSubscription) {
+    appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        Diagnostics.refreshNetworkSnapshot().catch((err) => {
+          console.warn('[Diagnostics] Unable to refresh snapshot', err);
+        });
+      }
+    });
+  }
 }
 
 function voiceWarmup() {

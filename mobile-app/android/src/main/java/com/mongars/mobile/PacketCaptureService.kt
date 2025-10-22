@@ -7,6 +7,7 @@ import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import kotlin.jvm.Volatile
 
 class PacketCaptureService : VpnService() {
   companion object {
@@ -20,7 +21,7 @@ class PacketCaptureService : VpnService() {
   private val executor = Executors.newSingleThreadExecutor()
   private var vpnInterface: ParcelFileDescriptor? = null
   private var captureFile: File? = null
-  private var shouldRun = true
+  @Volatile private var shouldRun = true
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
@@ -44,14 +45,16 @@ class PacketCaptureService : VpnService() {
       builder.addAddress("10.0.0.2", 32)
       builder.addRoute("0.0.0.0", 0)
       vpnInterface = builder.establish()
+      val pfd = vpnInterface ?: return
       FileOutputStream(captureFile).use { stream ->
         val buffer = ByteArray(32768)
-        val input = ParcelFileDescriptor.AutoCloseInputStream(vpnInterface)
-        val start = System.currentTimeMillis()
-        while (shouldRun && System.currentTimeMillis() - start < duration * 1000) {
-          val read = input.read(buffer)
-          if (read > 0) {
-            stream.write(buffer, 0, read)
+        ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
+          val start = System.currentTimeMillis()
+          while (shouldRun && System.currentTimeMillis() - start < duration * 1000) {
+            val read = input.read(buffer)
+            if (read > 0) {
+              stream.write(buffer, 0, read)
+            }
           }
         }
       }
