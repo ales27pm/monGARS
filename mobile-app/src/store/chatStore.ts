@@ -15,11 +15,13 @@ type ChatState = {
   loading: boolean;
   error: string | null;
   token: string | null;
+  messageCounter: number;
   initialize: () => Promise<void>;
   setToken: (token: string | null) => void;
   sendMessage: (content: string, mode: 'chat' | 'embedding') => Promise<void>;
   pushMessage: (message: Message) => void;
   clearError: () => void;
+  generateMessageId: () => string;
 };
 
 const historySchema = z.object({
@@ -36,6 +38,7 @@ export const useChatStore = create<ChatState>()(
       loading: false,
       error: null,
       token: null,
+      messageCounter: 0,
       initialize: async () => {
         const token = get().token;
         if (!token) {
@@ -78,11 +81,13 @@ export const useChatStore = create<ChatState>()(
       sendMessage: async (content, mode) => {
         const { token } = get();
         if (!token) {
-          set({ error: 'Token missing' });
-          return;
+          const error = new Error('Token missing');
+          set({ error: error.message });
+          throw error;
         }
+        const messageId = get().generateMessageId();
         const userMessage: Message = {
-          id: `${Date.now()}`,
+          id: messageId,
           role: 'user',
           content,
           createdAt: new Date(),
@@ -141,6 +146,12 @@ export const useChatStore = create<ChatState>()(
             draft.messages.push(message);
           }),
         ),
+      generateMessageId: () => {
+        const nextCounter = get().messageCounter + 1;
+        const id = `${Date.now()}-${nextCounter}`;
+        set({ messageCounter: nextCounter });
+        return id;
+      },
       clearError: () => set({ error: null }),
     }),
     {

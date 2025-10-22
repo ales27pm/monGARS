@@ -17,6 +17,7 @@ import {
 describe('chatStore', () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    (fetchChatHistory as jest.Mock).mockResolvedValue([]);
     const storage = {
       getItem: jest.fn().mockResolvedValue(null),
       setItem: jest.fn().mockResolvedValue(undefined),
@@ -28,11 +29,13 @@ describe('chatStore', () => {
       loading: false,
       error: null,
       token: null,
+      messageCounter: 0,
       initialize: useChatStore.getState().initialize,
       setToken: useChatStore.getState().setToken,
       sendMessage: useChatStore.getState().sendMessage,
       pushMessage: useChatStore.getState().pushMessage,
       clearError: useChatStore.getState().clearError,
+      generateMessageId: useChatStore.getState().generateMessageId,
     });
     useChatStore.persist?.clearStorage?.();
   });
@@ -62,7 +65,9 @@ describe('chatStore', () => {
 
   it('records an error when trying to send without a token', async () => {
     await act(async () => {
-      await useChatStore.getState().sendMessage('hello', 'chat');
+      await expect(
+        useChatStore.getState().sendMessage('hello', 'chat'),
+      ).rejects.toThrow('Token missing');
     });
 
     expect(useChatStore.getState().error).toBe('Token missing');
@@ -83,6 +88,7 @@ describe('chatStore', () => {
 
     await act(async () => {
       useChatStore.getState().setToken('token');
+      await useChatStore.getState().initialize();
       await useChatStore.getState().sendMessage('hello', 'chat');
     });
 
@@ -103,6 +109,7 @@ describe('chatStore', () => {
 
     await act(async () => {
       useChatStore.getState().setToken('token');
+      await useChatStore.getState().initialize();
       await useChatStore.getState().sendMessage('embed me', 'embedding');
     });
 
