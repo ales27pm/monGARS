@@ -13,7 +13,7 @@ from .contracts import NormalizedHit, VerifiedBundle
 
 logger = logging.getLogger(__name__)
 
-_ENTITY_PATTERN = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b")
+_ENTITY_PATTERN = re.compile(r"\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\b")
 _DATE_PATTERN = re.compile(
     r"\b(20\d{2}|19\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b"
 )
@@ -203,6 +203,42 @@ class Verifier:
         return round(min(confidence, 1.0), 3)
 
 
+def extract_claims(texts: Iterable[str]) -> Dict[str, Counter[str]]:
+    """Public helper to extract structured claims from raw texts."""
+
+    verifier = Verifier()
+    return verifier._extract_claims(texts)
+
+
+def agreement_score(
+    counts: Dict[str, Counter[str]], *, k_min: int = 2
+) -> tuple[Dict[str, str], float]:
+    """Compute the agreed claims and a coarse confidence score."""
+
+    verifier = Verifier(minimum_agreement=k_min)
+    agreed = verifier._select_agreements(counts)
+    result = dict(agreed)
+    for plural, singular in _FIELD_ALIASES.items():
+        if singular in agreed and plural not in result:
+            result[plural] = agreed[singular]
+    total_votes = 0
+    winning_votes = 0
+    for field, counter in counts.items():
+        if not counter:
+            continue
+        alias = _FIELD_ALIASES.get(field, field)
+        total_votes += sum(counter.values())
+        selected = agreed.get(alias)
+        if selected:
+            winning_votes += counter.get(selected, 0)
+    if total_votes == 0:
+        confidence = 0.0
+    else:
+        ratio = winning_votes / total_votes
+        confidence = round(0.5 + 0.5 * ratio, 3)
+    return result, confidence
+
+
 def cross_check(
     query: str,
     hits: Sequence[NormalizedHit],
@@ -213,3 +249,6 @@ def cross_check(
 
     active_verifier = verifier or Verifier()
     return active_verifier.cross_check(query, hits)
+
+
+__all__ = ["Verifier", "cross_check", "extract_claims", "agreement_score"]

@@ -24,6 +24,8 @@ class SchemaOrgMetadata:
     publisher: str | None = None
     organization: str | None = None
     location_name: str | None = None
+    type: str | None = None
+    headline: str | None = None
 
     def is_empty(self) -> bool:
         return all(
@@ -37,8 +39,32 @@ class SchemaOrgMetadata:
                 self.publisher,
                 self.organization,
                 self.location_name,
+                self.type,
+                self.headline,
             )
         )
+
+    def model_dump(self) -> dict[str, object]:
+        """Serialize the metadata into JSON-friendly primitives."""
+
+        def serialise_datetime(dt: datetime | None) -> str | None:
+            if dt is None:
+                return None
+            ensured = _ensure_timezone(dt)
+            return ensured.isoformat() if ensured else None
+
+        return {
+            "date_published": serialise_datetime(self.date_published),
+            "date_modified": serialise_datetime(self.date_modified),
+            "event_start": serialise_datetime(self.event_start),
+            "event_end": serialise_datetime(self.event_end),
+            "authors": list(self.authors) if self.authors else None,
+            "publisher": self.publisher,
+            "organization": self.organization,
+            "location_name": self.location_name,
+            "type": self.type,
+            "headline": self.headline,
+        }
 
 
 def _ensure_timezone(dt: datetime | None) -> datetime | None:
@@ -154,6 +180,20 @@ def parse_schema_org(html: str) -> SchemaOrgMetadata | None:
         for block in _flatten_payload(payload):
             if not isinstance(block, Mapping):
                 continue
+            schema_type = block.get("@type")
+            type_value: str | None = None
+            if isinstance(schema_type, str):
+                candidate = schema_type.strip()
+                type_value = candidate or None
+            elif isinstance(schema_type, Sequence) and not isinstance(
+                schema_type, (str, bytes)
+            ):
+                for candidate in schema_type:
+                    if isinstance(candidate, str) and candidate.strip():
+                        type_value = candidate.strip()
+                        break
+            if type_value and metadata.type is None:
+                metadata.type = type_value
             published = block.get("datePublished") or block.get("dateCreated")
             modified = block.get("dateModified") or block.get("lastReviewed")
             start = (
@@ -171,6 +211,10 @@ def parse_schema_org(html: str) -> SchemaOrgMetadata | None:
                 or block.get("provider")
             )
             location_name = _extract_location(block)
+            headline_candidates: list[str] = []
+            for key in ("headline", "name", "title"):
+                if key in block:
+                    headline_candidates.extend(_extract_names(block[key]))
 
             metadata.date_published = metadata.date_published or _parse_datetime(
                 published
@@ -200,6 +244,10 @@ def parse_schema_org(html: str) -> SchemaOrgMetadata | None:
 
             if location_name and metadata.location_name is None:
                 metadata.location_name = location_name
+
+            headline = _coalesce(headline_candidates)
+            if headline and metadata.headline is None:
+                metadata.headline = headline
 
     if metadata.is_empty():
         # Fall back to basic meta tags if JSON-LD was absent or empty

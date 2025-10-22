@@ -80,7 +80,7 @@ TRUST_DOMAINS: Dict[str, float] = {
 }
 
 
-def _domain_weight(domain: str) -> float:
+def domain_weight(domain: str) -> float:
     domain = domain.lower()
     for suffix, weight in TRUST_DOMAINS.items():
         if suffix.startswith("."):
@@ -91,7 +91,7 @@ def _domain_weight(domain: str) -> float:
     return 0.0
 
 
-def _recency_weight(published_at: Optional[datetime], now: datetime) -> float:
+def recency_weight(published_at: Optional[datetime], now: datetime) -> float:
     if published_at is None:
         return 0.0
     if published_at.tzinfo is None:
@@ -189,6 +189,18 @@ class SearchOrchestrator:
         )
         self._cache_lock = asyncio.Lock()
         self._robots_user_agent = robots_user_agent
+
+    @property
+    def providers(self) -> Sequence[SearchProvider] | None:
+        """Return the configured provider list."""
+
+        return self._providers
+
+    @providers.setter
+    def providers(self, value: Sequence[SearchProvider] | None) -> None:
+        """Set the provider list, normalising to a concrete list."""
+
+        self._providers = list(value) if value is not None else None
 
     async def search(
         self, query: str, *, lang: str = "en", max_results: int = 16
@@ -435,8 +447,8 @@ class SearchOrchestrator:
         scored: List[tuple[float, NormalizedHit]] = []
         for hit in deduped.values():
             score = TRUST_PRIORS.get(hit.provider, 0.1)
-            score += _domain_weight(hit.source_domain)
-            score += _recency_weight(hit.published_at, now)
+            score += domain_weight(hit.source_domain)
+            score += recency_weight(hit.published_at, now)
             score += _event_bonus(hit.event_date, now=now)
             if (
                 hit.event_date
@@ -482,4 +494,4 @@ class SearchOrchestrator:
         return _factory
 
 
-__all__ = ["SearchOrchestrator"]
+__all__ = ["SearchOrchestrator", "domain_weight", "recency_weight"]
