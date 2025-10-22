@@ -1,6 +1,5 @@
 from monGARS.core.search.schema_org import parse_schema_org
 
-
 HTML_ARTICLE = """
 <html><head>
 <title>Sample News</title>
