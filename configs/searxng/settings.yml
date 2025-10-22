@@ -1,0 +1,21 @@
+use_default_settings: true
+general:
+  instance_name: "monGARS SearxNG"
+  contact_url: "https://example.com/contact"
+server:
+  bind_address: 0.0.0.0
+  port: 8080
+  base_url: "${SEARXNG_BASE_URL}"
+  secret_key: "${SEARXNG_SECRET}"
+  limiter: false
+  image_proxy: true
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json
+  default_lang: en
+  max_results: 20
+ui:
+  static_use_hash: true
+  query_in_title: true
