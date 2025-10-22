@@ -2,10 +2,12 @@ import asyncio
 import json
 import sys
 import types
+from datetime import datetime, timezone
 
 import httpx
 import pytest
 import trafilatura
+from trafilatura import metadata as trafilatura_metadata
 
 
 def make_response(
@@ -110,6 +112,11 @@ def patch_dependencies(monkeypatch):
         "monGARS.core.neurones",
         types.SimpleNamespace(EmbeddingSystem=lambda *a, **k: None),
     )
+    monkeypatch.setattr(
+        trafilatura_metadata,
+        "extract_metadata",
+        lambda *args, **kwargs: types.SimpleNamespace(as_dict=lambda: {}),
+    )
     yield
 
 
@@ -190,6 +197,146 @@ async def test_fetch_text_honours_max_content_length(monkeypatch):
     )
     iris = Iris(max_content_length=5, client_factory=factory)
     assert await iris.fetch_text("http://example.com/long") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_populates_metadata(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    metadata_result = {
+        "title": "Metadata Title",
+        "author": "Alice; Bob",
+        "description": "Metadata summary",
+        "text": "Metadata text body",
+        "language": "en",
+        "date": "2024-03-01",
+        "filedate": "2024-03-02",
+        "sitename": "Example Publisher",
+        "hostname": "example.com",
+        "url": "https://example.com/canonical",
+        "tags": ["Science", "Space"],
+        "categories": "Research; Space",
+        "pagetype": "article",
+        "image": "https://example.com/cover.png",
+        "fingerprint": "abc123",
+        "comments": "Insightful analysis",
+    }
+
+    class _Metadata:
+        def __init__(self, data):
+            self._data = data
+
+        def as_dict(self):
+            return self._data
+
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda html, **_: json.dumps({"text": None, "summary": None, "title": None}),
+    )
+    monkeypatch.setattr(
+        trafilatura_metadata,
+        "extract_metadata",
+        lambda *args, **kwargs: _Metadata(metadata_result),
+    )
+
+    factory = ClientFactory(
+        responses=[
+            make_response(
+                "https://example.com/original",
+                "<html><body><p>fallback</p></body></html>",
+            )
+        ]
+    )
+    iris = Iris(client_factory=factory)
+    document = await iris.fetch_document("https://example.com/original")
+
+    assert document is not None
+    assert document.title == "Metadata Title"
+    assert document.summary == "Metadata summary"
+    assert document.text == "Metadata text body"
+    assert document.language == "en"
+    assert document.publisher == "Example Publisher"
+    assert document.organization == "example.com"
+    assert document.url == "https://example.com/canonical"
+    assert document.authors == ["Alice", "Bob"]
+    assert document.published_at == datetime(2024, 3, 1, tzinfo=timezone.utc)
+    assert document.modified_at == datetime(2024, 3, 2, tzinfo=timezone.utc)
+    assert document.tags == ["Science", "Space"]
+    assert document.categories == ["Research", "Space"]
+    assert document.page_type == "article"
+    assert document.image_url == "https://example.com/cover.png"
+    assert document.fingerprint == "abc123"
+    assert document.comments == "Insightful analysis"
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_enriches_from_trafilatura_json(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    trafilatura_payload = {
+        "title": "Trafilatura Title",
+        "text": "  JSON text body  ",
+        "excerpt": " JSON summary snippet ",
+        "language": "en",
+        "source": "https://example.com/canonical",
+        "source-hostname": "Example Publisher",
+        "hostname": "example.com",
+        "date": "2024-04-01",
+        "filedate": "2024-04-02",
+        "author": ["Alice", "Bob"],
+        "tags": "Topic1; Topic2",
+        "categories": ["News", "World"],
+        "image": "https://example.com/feature.png",
+        "pagetype": "article",
+        "fingerprint": "fingerprint-456",
+        "comments": "First comment\nSecond comment",
+    }
+
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda html, **_: json.dumps(trafilatura_payload),
+    )
+
+    class _Metadata:
+        def as_dict(self):
+            return {}
+
+    monkeypatch.setattr(
+        trafilatura_metadata,
+        "extract_metadata",
+        lambda *args, **kwargs: _Metadata(),
+    )
+
+    factory = ClientFactory(
+        responses=[
+            make_response(
+                "https://example.com/original",
+                "<html><body><p>fallback</p></body></html>",
+            )
+        ]
+    )
+    iris = Iris(client_factory=factory)
+    document = await iris.fetch_document("https://example.com/original")
+
+    assert document is not None
+    assert document.url == "https://example.com/canonical"
+    assert document.title == "Trafilatura Title"
+    assert document.summary == "JSON summary snippet"
+    assert document.text == "JSON text body"
+    assert document.language == "en"
+    assert document.publisher == "Example Publisher"
+    assert document.organization == "example.com"
+    assert document.authors == ["Alice", "Bob"]
+    assert document.tags == ["Topic1", "Topic2"]
+    assert document.categories == ["News", "World"]
+    assert document.image_url == "https://example.com/feature.png"
+    assert document.page_type == "article"
+    assert document.fingerprint == "fingerprint-456"
+    assert document.comments == "First comment Second comment"
+    assert document.published_at == datetime(2024, 4, 1, tzinfo=timezone.utc)
+    assert document.modified_at == datetime(2024, 4, 2, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio

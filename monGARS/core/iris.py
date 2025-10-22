@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
 
 import httpx
 import trafilatura
+from trafilatura import metadata as trafilatura_metadata
 from bs4 import BeautifulSoup
 
 from monGARS.core.search import NormalizedHit
@@ -38,6 +39,8 @@ _DEFAULT_HEADERS: Mapping[str, str] = {
 }
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_AUTHOR_SPLIT_RE = re.compile(r"[,;]|\band\b", re.IGNORECASE)
+_TOPIC_SPLIT_RE = re.compile(r"[,;/]")
 MAX_SNIPPET_LENGTH = 500
 
 
@@ -67,6 +70,12 @@ class IrisDocument:
     publisher: str | None = None
     organization: str | None = None
     location_name: str | None = None
+    comments: str | None = None
+    tags: list[str] | None = None
+    categories: list[str] | None = None
+    image_url: str | None = None
+    page_type: str | None = None
+    fingerprint: str | None = None
 
 
 class Iris:
@@ -453,22 +462,27 @@ class Iris:
         extracted_json: str | None = None
         try:
             html_text = response.text
+            metadata_payload = await self._extract_trafilatura_metadata(
+                html_text, str(response.request.url)
+            )
             extracted_json = await asyncio.to_thread(
                 trafilatura.extract,
                 html_text,
-                include_comments=False,
+                include_comments=True,
                 include_tables=False,
                 favor_precision=True,
                 output_format="json",
                 url=str(response.request.url),
+                with_metadata=True,
             )
         except Exception as exc:  # pragma: no cover - library edge case
             logger.debug(
                 "iris.fetch_text.trafilatura_failed",
                 extra={"error": str(exc)},
             )
+            metadata_payload = None
 
-        document_data: Mapping[str, object] | None = None
+        document_data: Mapping[str, Any] | None = None
         if extracted_json:
             try:
                 document_data = json.loads(extracted_json)
@@ -481,26 +495,13 @@ class Iris:
         fallback_text = None
         document: IrisDocument | None = None
         if document_data:
-            text = document_data.get("text")
-            summary = document_data.get("summary")
-            title = document_data.get("title")
-            language = document_data.get("language")
-            cleaned_text = (
-                self._normalise_whitespace(text) if isinstance(text, str) else None
+            document = self._document_from_trafilatura_json(
+                document_data, str(response.request.url)
             )
-            cleaned_summary = (
-                self._normalise_whitespace(summary)
-                if isinstance(summary, str)
-                else None
+        if document is None and metadata_payload:
+            document = self._document_from_metadata(
+                metadata_payload, str(response.request.url)
             )
-            if cleaned_text or cleaned_summary or isinstance(title, str):
-                document = IrisDocument(
-                    url=str(response.request.url),
-                    text=cleaned_text,
-                    summary=cleaned_summary,
-                    title=title if isinstance(title, str) else None,
-                    language=language if isinstance(language, str) else None,
-                )
         if document is None:
             fallback_text = self._fallback_text(response)
             if fallback_text:
@@ -514,6 +515,13 @@ class Iris:
 
         if document is None:
             return None
+
+        if document_data:
+            self._enrich_document_from_trafilatura_json(
+                document, document_data, str(response.request.url)
+            )
+        if metadata_payload:
+            self._enrich_document_from_metadata(document, metadata_payload)
 
         schema_meta = parse_schema_org(response.text)
         if schema_meta:
@@ -554,6 +562,376 @@ class Iris:
             if derived_event is not None:
                 document.event_date = _ensure_utc(derived_event)
         return document
+
+    async def _extract_trafilatura_metadata(
+        self, html_text: str, url: str
+    ) -> Mapping[str, Any] | None:
+        try:
+            metadata_document = await asyncio.to_thread(
+                trafilatura_metadata.extract_metadata,
+                html_text,
+                default_url=url,
+            )
+        except Exception as exc:  # pragma: no cover - library edge case
+            logger.debug(
+                "iris.fetch_text.metadata_failed",
+                extra={"error": str(exc)},
+            )
+            return None
+        if metadata_document is None:
+            return None
+        try:
+            raw_metadata = metadata_document.as_dict()
+        except Exception as exc:  # pragma: no cover - unexpected payload
+            logger.debug(
+                "iris.fetch_text.metadata_invalid",
+                extra={"error": str(exc)},
+            )
+            return None
+        filtered: dict[str, Any] = {}
+        for key in (
+            "title",
+            "author",
+            "url",
+            "hostname",
+            "sitename",
+            "date",
+            "filedate",
+            "language",
+            "description",
+            "text",
+            "raw_text",
+            "excerpt",
+            "source",
+            "source-hostname",
+            "image",
+            "pagetype",
+            "categories",
+            "tags",
+            "fingerprint",
+            "comments",
+        ):
+            if key in raw_metadata:
+                filtered[key] = raw_metadata[key]
+        return filtered
+
+    def _document_from_trafilatura_json(
+        self, data: Mapping[str, Any], fallback_url: str
+    ) -> IrisDocument | None:
+        text = self._string_from_metadata_field(
+            data.get("text") or data.get("raw_text")
+        )
+        summary = self._string_from_metadata_field(
+            data.get("summary") or data.get("excerpt") or data.get("description")
+        )
+        title = self._string_from_metadata_field(data.get("title"))
+        language = self._string_from_metadata_field(data.get("language"))
+        canonical_url = (
+            self._string_from_metadata_field(data.get("source"))
+            or self._string_from_metadata_field(data.get("url"))
+            or fallback_url
+        )
+        if not (text or summary or title):
+            return None
+        document = IrisDocument(
+            url=canonical_url,
+            text=text,
+            summary=summary,
+            title=title,
+            language=language,
+        )
+        self._enrich_document_from_trafilatura_json(document, data, fallback_url)
+        return document
+
+    def _enrich_document_from_trafilatura_json(
+        self,
+        document: IrisDocument,
+        data: Mapping[str, Any],
+        fallback_url: str,
+    ) -> None:
+        canonical_url = self._string_from_metadata_field(
+            data.get("source")
+        ) or self._string_from_metadata_field(data.get("url"))
+        if canonical_url:
+            document.url = canonical_url
+        else:
+            document.url = document.url or fallback_url
+
+        if not document.title:
+            title = self._string_from_metadata_field(data.get("title"))
+            if title:
+                document.title = title
+
+        if not document.summary:
+            summary = self._string_from_metadata_field(
+                data.get("summary") or data.get("excerpt") or data.get("description")
+            )
+            if summary:
+                document.summary = summary
+
+        if not document.text:
+            text = self._string_from_metadata_field(
+                data.get("text") or data.get("raw_text")
+            )
+            if text:
+                document.text = text
+
+        if not document.language:
+            language = self._string_from_metadata_field(data.get("language"))
+            if language:
+                document.language = language
+
+        authors = self._parse_authors(data.get("author"))
+        if authors:
+            if document.authors:
+                existing = {author.casefold() for author in document.authors}
+                for author in authors:
+                    lowered = author.casefold()
+                    if lowered not in existing:
+                        document.authors.append(author)
+                        existing.add(lowered)
+            else:
+                document.authors = authors
+
+        publisher = self._string_from_metadata_field(
+            data.get("source-hostname") or data.get("sitename")
+        )
+        if publisher and not document.publisher:
+            document.publisher = publisher
+
+        organization = self._string_from_metadata_field(data.get("hostname"))
+        if organization and not document.organization:
+            document.organization = organization
+
+        if document.published_at is None:
+            published = data.get("date")
+            if isinstance(published, str):
+                parsed = parse_date_from_text(published)
+                if parsed is not None:
+                    document.published_at = _ensure_utc(parsed)
+
+        if document.modified_at is None:
+            modified = data.get("filedate")
+            if isinstance(modified, str):
+                parsed = parse_date_from_text(modified)
+                if parsed is not None:
+                    document.modified_at = _ensure_utc(parsed)
+
+        comments = self._string_from_metadata_field(data.get("comments"))
+        if comments and not document.comments:
+            document.comments = comments
+
+        categories = self._parse_topics(data.get("categories"))
+        if categories:
+            if document.categories:
+                self._extend_unique(document.categories, categories)
+            else:
+                document.categories = categories
+
+        tags = self._parse_topics(data.get("tags"))
+        if tags:
+            if document.tags:
+                self._extend_unique(document.tags, tags)
+            else:
+                document.tags = tags
+
+        image_url = self._string_from_metadata_field(data.get("image"))
+        if image_url and not document.image_url:
+            document.image_url = image_url
+
+        page_type = self._string_from_metadata_field(data.get("pagetype"))
+        if page_type and not document.page_type:
+            document.page_type = page_type
+
+        fingerprint = self._string_from_metadata_field(data.get("fingerprint"))
+        if fingerprint and not document.fingerprint:
+            document.fingerprint = fingerprint
+
+    def _document_from_metadata(
+        self, metadata: Mapping[str, Any], fallback_url: str
+    ) -> IrisDocument | None:
+        text = self._string_from_metadata_field(
+            metadata.get("text") or metadata.get("raw_text")
+        )
+        summary = self._string_from_metadata_field(metadata.get("description"))
+        title = self._string_from_metadata_field(metadata.get("title"))
+        language = self._string_from_metadata_field(metadata.get("language"))
+        canonical_url = (
+            self._string_from_metadata_field(metadata.get("url")) or fallback_url
+        )
+        comments = self._string_from_metadata_field(metadata.get("comments"))
+        image_url = self._string_from_metadata_field(metadata.get("image"))
+        page_type = self._string_from_metadata_field(metadata.get("pagetype"))
+        fingerprint = self._string_from_metadata_field(metadata.get("fingerprint"))
+        tags = self._parse_topics(metadata.get("tags"))
+        categories = self._parse_topics(metadata.get("categories"))
+        if text or summary or title:
+            document = IrisDocument(
+                url=canonical_url,
+                text=text,
+                summary=summary,
+                title=title,
+                language=language,
+                comments=comments,
+                image_url=image_url,
+                page_type=page_type,
+                fingerprint=fingerprint,
+            )
+            if tags:
+                document.tags = tags
+            if categories:
+                document.categories = categories
+            return document
+        return None
+
+    def _enrich_document_from_metadata(
+        self, document: IrisDocument, metadata: Mapping[str, Any]
+    ) -> None:
+        canonical_url = self._string_from_metadata_field(metadata.get("url"))
+        if canonical_url:
+            document.url = canonical_url
+        else:
+            canonical_source = self._string_from_metadata_field(metadata.get("source"))
+            if canonical_source:
+                document.url = canonical_source
+
+        if not document.title:
+            title = self._string_from_metadata_field(metadata.get("title"))
+            if title:
+                document.title = title
+
+        if not document.summary:
+            summary = self._string_from_metadata_field(metadata.get("description"))
+            if summary:
+                document.summary = summary
+
+        if not document.text:
+            text = self._string_from_metadata_field(
+                metadata.get("text") or metadata.get("raw_text")
+            )
+            if text:
+                document.text = text
+
+        if not document.language:
+            language = self._string_from_metadata_field(metadata.get("language"))
+            if language:
+                document.language = language
+
+        authors = self._parse_authors(metadata.get("author"))
+        if authors:
+            if document.authors:
+                self._extend_unique(document.authors, authors)
+            else:
+                document.authors = authors
+
+        publisher = self._string_from_metadata_field(
+            metadata.get("sitename") or metadata.get("source-hostname")
+        )
+        if publisher and not document.publisher:
+            document.publisher = publisher
+
+        organization = self._string_from_metadata_field(metadata.get("hostname"))
+        if organization and not document.organization:
+            document.organization = organization
+
+        comments = self._string_from_metadata_field(metadata.get("comments"))
+        if comments and not document.comments:
+            document.comments = comments
+
+        categories = self._parse_topics(metadata.get("categories"))
+        if categories:
+            if document.categories:
+                self._extend_unique(document.categories, categories)
+            else:
+                document.categories = categories
+
+        tags = self._parse_topics(metadata.get("tags"))
+        if tags:
+            if document.tags:
+                self._extend_unique(document.tags, tags)
+            else:
+                document.tags = tags
+
+        image_url = self._string_from_metadata_field(metadata.get("image"))
+        if image_url and not document.image_url:
+            document.image_url = image_url
+
+        page_type = self._string_from_metadata_field(metadata.get("pagetype"))
+        if page_type and not document.page_type:
+            document.page_type = page_type
+
+        fingerprint = self._string_from_metadata_field(metadata.get("fingerprint"))
+        if fingerprint and not document.fingerprint:
+            document.fingerprint = fingerprint
+
+        if document.published_at is None:
+            published = metadata.get("date")
+            if isinstance(published, str):
+                parsed = parse_date_from_text(published)
+                if parsed is not None:
+                    document.published_at = _ensure_utc(parsed)
+
+        if document.modified_at is None:
+            modified = metadata.get("filedate")
+            if isinstance(modified, str):
+                parsed = parse_date_from_text(modified)
+                if parsed is not None:
+                    document.modified_at = _ensure_utc(parsed)
+
+    def _string_from_metadata_field(self, value: Any) -> str | None:
+        if isinstance(value, str):
+            return self._normalise_whitespace(value)
+        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+            for item in value:
+                if isinstance(item, str):
+                    normalised = self._normalise_whitespace(item)
+                    if normalised:
+                        return normalised
+        return None
+
+    def _parse_authors(self, value: Any) -> list[str] | None:
+        return self._parse_string_list(value, _AUTHOR_SPLIT_RE)
+
+    def _parse_topics(self, value: Any) -> list[str] | None:
+        return self._parse_string_list(value, _TOPIC_SPLIT_RE)
+
+    def _parse_string_list(
+        self, value: Any, splitter: re.Pattern[str]
+    ) -> list[str] | None:
+        if not value:
+            return None
+        candidates: list[str] = []
+        if isinstance(value, str):
+            candidates = splitter.split(value)
+        elif isinstance(value, Sequence) and not isinstance(
+            value, (bytes, bytearray, str)
+        ):
+            for entry in value:
+                if isinstance(entry, str):
+                    candidates.extend(splitter.split(entry))
+        else:
+            return None
+
+        results: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalised = self._normalise_whitespace(candidate)
+            if not normalised:
+                continue
+            lowered = normalised.casefold()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            results.append(normalised)
+        return results or None
+
+    def _extend_unique(self, target: list[str], additions: Sequence[str]) -> None:
+        seen = {entry.casefold() for entry in target}
+        for addition in additions:
+            lowered = addition.casefold()
+            if lowered not in seen:
+                target.append(addition)
+                seen.add(lowered)
 
     def _fallback_text(self, response: httpx.Response) -> str | None:
         soup = BeautifulSoup(response.text, "html.parser")
