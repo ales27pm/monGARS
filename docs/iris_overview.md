@@ -5,9 +5,11 @@
 Iris is a fully implemented asynchronous web retrieval helper that ships with the core cognition
 stack. The implementation at `monGARS/core/iris.py` provides typed document models, bounded
 concurrency, retry-aware HTTP fetching via a pooled `httpx.AsyncClient`, content-type validation,
-trafilatura-based extraction, and BeautifulSoup fallbacks so responses degrade gracefully whenever
-the primary extractor struggles. Input validation guards against invalid URLs, oversized payloads,
-and non-textual responses, while cooperative throttling limits outbound request volume.
+trafilatura-based extraction, metadata enrichment (authors, canonical URLs, publication dates,
+site branding, canonical imagery, topic tags, categories, and article fingerprints), and
+BeautifulSoup fallbacks so responses degrade gracefully whenever the primary extractor struggles.
+Input validation guards against invalid URLs, oversized payloads, and non-textual responses, while
+cooperative throttling limits outbound request volume.
 
 The latest refactor layers in two additional capabilities that align Iris with modern search
 helpers:
@@ -18,6 +20,11 @@ helpers:
   request rather than stampeding an origin server.
 - **Snippet intelligence** — Normalised summaries and sentence-aware snippet selection keep the
   returned context concise and relevant, trimming overly long extracts automatically.
+- **Rich trafilatura metadata** — Iris now consumes the full JSON output from trafilatura and its
+  metadata API, surfacing categories, keyword tags, page type hints, hero imagery, fingerprints, and
+  cleaned comment streams alongside canonical publishing timestamps. These signals flow directly
+  into `IrisDocument`, giving downstream enrichment stages significantly more context without any
+  additional scraping.
 
 The behaviour is verified through dedicated unit tests in `tests/test_iris.py`, which now cover
 concurrency coalescing, cache reuse/expiry, success paths, retry handling, invalid inputs, and
