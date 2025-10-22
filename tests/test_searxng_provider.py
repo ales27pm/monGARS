@@ -46,6 +46,7 @@ async def test_searxng_provider_normalises_payload() -> None:
             client,
             config=SearxNGConfig(
                 base_url="https://searx.local",
+                api_key="Bearer test-token",
                 categories=("general", "news"),
                 safesearch=1,
                 default_language="en",
@@ -70,6 +71,7 @@ async def test_searxng_provider_normalises_payload() -> None:
     assert captured["query"]["count"] == "7"
     assert captured["query"]["pageno"] == "1"
     assert captured_headers["accept-language"] == "fr"
+    assert captured_headers["authorization"] == "Bearer test-token"
 
     assert len(results) == 2
     first, second = results

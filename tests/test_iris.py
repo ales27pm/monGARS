@@ -375,10 +375,8 @@ async def test_search_uses_orchestrator_when_available(monkeypatch):
     iris = Iris(client_factory=ClientFactory(responses=[]))
     iris.attach_search_orchestrator(orchestrator)
 
-    async def fail_fallback(query: str, cache_key: str):
-        raise AssertionError(
-            "Fallback should not run when orchestrator returns a snippet"
-        )
+    async def fail_fallback(_query: str, _cache_key: str):
+        pytest.fail("Fallback should not run when orchestrator returns a snippet")
 
     monkeypatch.setattr(iris, "_search_with_duckduckgo", fail_fallback)
 
@@ -429,10 +427,8 @@ async def test_search_orchestrator_falls_back_to_document(monkeypatch):
 
     monkeypatch.setattr(iris, "fetch_document", fake_fetch_document)
 
-    async def fail_fallback(query: str, cache_key: str):
-        raise AssertionError(
-            "Fallback should not run when orchestrator resolves the snippet"
-        )
+    async def fail_fallback(_query: str, _cache_key: str):
+        pytest.fail("Fallback should not run when orchestrator resolves the snippet")
 
     monkeypatch.setattr(iris, "_search_with_duckduckgo", fail_fallback)
 
