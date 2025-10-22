@@ -144,7 +144,6 @@ class SearxNGProvider:
         params: dict[str, object] = {
             "q": query,
             "format": "json",
-            "page": page,
             "pageno": page,
             "count": per_page,
         }

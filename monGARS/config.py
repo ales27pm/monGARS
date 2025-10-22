@@ -557,7 +557,7 @@ class Settings(BaseSettings):
         ),
     )
     search_searx_base_url: AnyUrl | None = Field(
-        default=None,
+        default="http://localhost:8080",
         description="Base URL for the SearxNG deployment, e.g. https://searx.example.com.",
     )
     search_searx_api_key: str | None = Field(
@@ -636,6 +636,38 @@ class Settings(BaseSettings):
             "Force the Accept-Language header to match the orchestrator locale so SearxNG favours language-specific engines."
         ),
     )
+
+    # --- SearxNG helpers ---
+    @field_validator("search_searx_categories", "search_searx_engines", mode="before")
+    @classmethod
+    def _parse_searx_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return []
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return [item.strip() for item in s.split(",") if item.strip()]
+            if isinstance(parsed, str):
+                return [parsed.strip()] if parsed.strip() else []
+            if isinstance(parsed, Sequence):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return []
+        if isinstance(value, Sequence):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+    @model_validator(mode="after")
+    def _validate_searx_config(self) -> "Settings":
+        if self.search_searx_enabled and not self.search_searx_base_url:
+            raise ValueError(
+                "search_searx_base_url must be set when search_searx_enabled=True"
+            )
+        return self
+
     MLFLOW_TRACKING_URI: str = Field(default="http://localhost:5000")
     FASTAPI_URL: str = Field(default="http://localhost:8000")
 

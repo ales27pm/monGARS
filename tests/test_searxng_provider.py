@@ -68,7 +68,6 @@ async def test_searxng_provider_normalises_payload() -> None:
     assert captured["query"]["time_range"] == "day"
     assert captured["query"]["sitelimit"] == "site:example.com"
     assert captured["query"]["count"] == "7"
-    assert captured["query"]["page"] == "1"
     assert captured["query"]["pageno"] == "1"
     assert captured_headers["accept-language"] == "fr"
 
@@ -165,8 +164,8 @@ async def test_searxng_provider_fetches_multiple_pages() -> None:
 
     assert len(results) == 2
     assert {hit.title for hit in results} == {"First", "Second"}
-    assert calls[0]["page"] == "1"
-    assert calls[1]["page"] == "2"
+    assert calls[0]["pageno"] == "1"
+    assert calls[1]["pageno"] == "2"
 
 
 @pytest.mark.asyncio

@@ -305,11 +305,15 @@ class SearchOrchestrator:
             return []
         primary: list[SearchProvider] = []
         fallback: list[SearchProvider] = []
+        searx_present = False
         for provider in providers:
             if isinstance(provider, DDGProvider):
                 fallback.append(provider)
             else:
                 primary.append(provider)
+            provider_name = provider.__class__.__name__.lower()
+            if isinstance(provider, SearxNGProvider) or "searx" in provider_name:
+                searx_present = True
 
         hits: list[NormalizedHit] = []
         fallback_reason: str | None = None
@@ -318,11 +322,12 @@ class SearchOrchestrator:
                 primary, query, lang=lang, max_results=max_results
             )
             hits.extend(primary_hits)
-            searx_hits = [hit for hit in primary_hits if hit.provider == "searxng"]
-            if not searx_hits:
-                fallback_reason = "no_searx_hits"
-            elif all(not (hit.snippet or "").strip() for hit in searx_hits):
-                fallback_reason = "blank_searx_snippets"
+            if searx_present:
+                searx_hits = [hit for hit in primary_hits if hit.provider == "searxng"]
+                if not searx_hits:
+                    fallback_reason = "no_searx_hits"
+                elif all(not (hit.snippet or "").strip() for hit in searx_hits):
+                    fallback_reason = "blank_searx_snippets"
         else:
             primary_hits = []
             fallback_reason = "no_primary"
