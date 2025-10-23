@@ -6,6 +6,8 @@ import importlib
 import logging
 import shutil
 import subprocess
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -22,6 +24,35 @@ _GGUF_EXPORTER_CANDIDATES: tuple[str, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class GGUFExporterInfo:
+    """Metadata about a discovered GGUF exporter implementation."""
+
+    qualified_name: str
+    factory: Callable[..., Any]
+
+    def create(self, *args: Any, **kwargs: Any) -> Any:
+        """Instantiate the exporter using the recorded factory."""
+
+        return self.factory(*args, **kwargs)
+
+
+@dataclass(frozen=True)
+class GGUFExportResult:
+    """Details about a GGUF export invocation."""
+
+    path: Path
+    exporter: str
+    method: str
+    quantization_method: str | None
+
+    def __fspath__(self) -> str:
+        return str(self.path)
+
+    def __str__(self) -> str:  # pragma: no cover - debug convenience
+        return str(self.path)
+
+
 def _locate_symbol(path: str) -> Any | None:
     """Import ``path`` and return the referenced attribute if it exists."""
 
@@ -35,16 +66,31 @@ def _locate_symbol(path: str) -> Any | None:
     return getattr(module, attribute, None)
 
 
+def _normalise_candidates(candidates: Iterable[str] | None) -> tuple[str, ...]:
+    if candidates is None:
+        return _GGUF_EXPORTER_CANDIDATES
+    if isinstance(candidates, tuple):
+        return candidates
+    return tuple(candidates)
+
+
+@lru_cache(maxsize=8)
+def _load_gguf_exporter_cached(candidates: tuple[str, ...]) -> GGUFExporterInfo | None:
+    for path in candidates:
+        exporter = _locate_symbol(path)
+        if exporter is None or not callable(exporter):
+            continue
+        return GGUFExporterInfo(qualified_name=path, factory=exporter)
+    return None
+
+
 def _load_gguf_exporter(
     candidates: Iterable[str] | None = None,
-) -> Callable[..., Any] | None:
-    """Return the first available GGUF exporter implementation."""
+) -> GGUFExporterInfo | None:
+    """Return metadata for the first available GGUF exporter implementation."""
 
-    for path in candidates or _GGUF_EXPORTER_CANDIDATES:
-        exporter = _locate_symbol(path)
-        if exporter is not None:
-            return exporter
-    return None
+    normalised = _normalise_candidates(candidates)
+    return _load_gguf_exporter_cached(normalised)
 
 
 def merge_lora_adapters(
@@ -117,7 +163,7 @@ def export_to_gguf(
     output_path: str,
     *,
     quantization_method: str | None = None,
-) -> Path:
+) -> GGUFExportResult:
     """Load ``model_name`` with Transformers and export it in GGUF format."""
 
     try:
@@ -125,15 +171,20 @@ def export_to_gguf(
     except Exception as exc:  # pragma: no cover - dependency missing
         raise RuntimeError("transformers is required for GGUF export") from exc
 
-    exporter_cls = _load_gguf_exporter()
-    if exporter_cls is None:
+    exporter_info = _load_gguf_exporter()
+    if exporter_info is None:
         raise RuntimeError(
             "No GGUF exporter available. Install a transformers release that "
             "includes GgufExporter or provide llama.cpp conversion tools."
         )
 
     logger.info(
-        "Preparing GGUF export", extra={"model": model_name, "output": output_path}
+        "Preparing GGUF export",
+        extra={
+            "model": model_name,
+            "output": output_path,
+            "exporter": exporter_info.qualified_name,
+        },
     )
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto")
     try:  # pragma: no branch - defensive CPU migration
@@ -150,7 +201,12 @@ def export_to_gguf(
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
 
-    exporter = exporter_cls(model=model, tokenizer=tokenizer)
+    try:
+        exporter = exporter_info.create(model=model, tokenizer=tokenizer)
+    except TypeError as exc:  # pragma: no cover - unexpected init signature
+        raise RuntimeError(
+            "Unable to instantiate GGUF exporter; unexpected constructor signature"
+        ) from exc
 
     def _invoke(method_name: str) -> bool:
         method = getattr(exporter, method_name, None)
@@ -170,19 +226,31 @@ def export_to_gguf(
                 raise
         return True
 
-    if _invoke("export"):
-        pass
-    elif _invoke("export_model"):
-        pass
-    elif _invoke("save_pretrained"):
-        pass
-    else:  # pragma: no cover - unexpected interface
+    method_used: str | None = None
+    for method_name in ("export", "export_model", "save_pretrained"):
+        if _invoke(method_name):
+            method_used = method_name
+            break
+
+    if method_used is None:  # pragma: no cover - unexpected interface
         raise RuntimeError(
             "Unsupported GGUF exporter interface; expected export/export_model/save_pretrained"
         )
 
-    logger.info("GGUF model written", extra={"path": str(destination)})
-    return destination
+    logger.info(
+        "GGUF model written",
+        extra={
+            "path": str(destination),
+            "export_method": method_used,
+            "exporter": exporter_info.qualified_name,
+        },
+    )
+    return GGUFExportResult(
+        path=destination,
+        exporter=exporter_info.qualified_name,
+        method=method_used,
+        quantization_method=quantization_method,
+    )
 
 
 def export_to_ollama(model_name: str, output_dir: str | Path) -> Path:
