@@ -45,10 +45,7 @@ def test_simulate_settings_flags_missing_secret(tmp_path, monkeypatch) -> None:
 
     assert any(
         issue.severity == "error"
-        and (
-            "SECRET_KEY" in issue.message
-            or "SECRET_KEY" in repr(issue.context)
-        )
+        and ("SECRET_KEY" in issue.message or "SECRET_KEY" in repr(issue.context))
         for issue in issues
     ), [issue.as_dict() for issue in issues]
 

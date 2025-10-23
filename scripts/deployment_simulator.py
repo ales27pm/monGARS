@@ -22,7 +22,6 @@ from sqlalchemy.exc import ArgumentError
 
 from monGARS.config import Settings, ensure_secret_key, validate_jwt_configuration
 
-
 Severity = Literal["error", "warning", "info"]
 
 
