@@ -8,6 +8,7 @@ django>=5.2
 fastapi>=0.116
 python-multipart>=0.0.20
 python-dotenv>=1.0.1,<2.0
+pyyaml>=6.0
 GPUtil>=1.4.0
 httpx>=0.28.1
 feedparser>=6.0.11
