@@ -37,6 +37,21 @@ def test_evaluate_compose_detects_common_misconfigurations(tmp_path) -> None:
     assert "Service is missing both image and build directives." not in messages
 
 
+def test_evaluate_compose_handles_non_mapping_top_level(tmp_path) -> None:
+    simulator = DeploymentSimulator(root=tmp_path)
+
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text("- not-a-mapping")
+
+    loaded = yaml.safe_load(compose_path.read_text())
+    issues = simulator._evaluate_compose_dict(loaded, compose_path)
+
+    assert any(
+        issue.severity == "error" and "must be a mapping" in issue.message
+        for issue in issues
+    ), issues
+
+
 def test_simulate_settings_flags_missing_secret(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SECRET_KEY", "")
     (tmp_path / ".env").write_text("")

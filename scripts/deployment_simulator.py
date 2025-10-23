@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal, Sequence
 
 import yaml
+from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -107,7 +108,11 @@ class DeploymentSimulator:
 
         try:
             settings = Settings(_env_file=env_file_arg)
-        except Exception as exc:  # pragma: no cover - configuration errors are surfaced
+        except (
+            ValidationError,
+            ValueError,
+            TypeError,
+        ) as exc:  # pragma: no cover - configuration errors are surfaced
             issues.append(
                 DeploymentIssue(
                     "error",
@@ -214,9 +219,19 @@ class DeploymentSimulator:
         return issues
 
     def _evaluate_compose_dict(
-        self, compose: dict[str, Any], origin: Path
+        self, compose: Any, origin: Path
     ) -> list[DeploymentIssue]:
         issues: list[DeploymentIssue] = []
+        if not isinstance(compose, dict):
+            issues.append(
+                DeploymentIssue(
+                    "error",
+                    "Compose file must be a mapping at the top level.",
+                    {"path": str(origin), "type": type(compose).__name__},
+                )
+            )
+            return issues
+
         services = compose.get("services", {})
 
         if not isinstance(services, dict):
