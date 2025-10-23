@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 defaults:
   run:
@@ -40,7 +41,7 @@ jobs:
           fetch-depth: 0
 
       - id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
         with:
           filters: |
             python:
@@ -131,7 +132,9 @@ jobs:
 
   python-typecheck:
     name: Python type checking
-    needs: python-quality
+    needs:
+      - changes
+      - python-quality
     runs-on: ubuntu-latest
     if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
     steps:
@@ -166,7 +169,9 @@ jobs:
 
   python-tests:
     name: Backend tests (pytest)
-    needs: python-typecheck
+    needs:
+      - changes
+      - python-typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 90
     if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
@@ -199,6 +204,11 @@ jobs:
         run: |
           set -euo pipefail
           coverage run -m pytest
+
+      - name: Enforce coverage threshold
+        run: |
+          set -euo pipefail
+          coverage report --fail-under=90
 
       - name: Generate coverage reports
         run: |
@@ -263,7 +273,7 @@ jobs:
           CI: "true"
         run: |
           set -euo pipefail
-          npm run jest -- --ci --runInBand --coverage
+          npm run jest -- --ci --runInBand --coverage --coverageThreshold='{"global": {"branches": 80, "functions": 80, "lines": 80, "statements": 80}}'
 
       - name: Build production bundle
         env:
@@ -327,7 +337,7 @@ jobs:
           CI: "true"
         run: |
           set -euo pipefail
-          npm test -- --ci --runInBand --coverage
+          npm test -- --ci --runInBand --coverage --coverageThreshold='{"global": {"branches": 80, "functions": 80, "lines": 80, "statements": 80}}'
 
       - name: Upload mobile Jest results
         if: always()
@@ -430,7 +440,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
 
       - name: Build runtime image for validation
         env:
@@ -445,7 +455,8 @@ jobs:
       - name: Smoke test container pytest
         run: |
           set -euo pipefail
-          docker run --rm mongars-ci pytest --maxfail=1 --disable-warnings -k "not long" || {
+          # Ensure critical long-haul coverage still executes by including explicit allow-list
+          docker run --rm mongars-ci pytest --maxfail=1 --disable-warnings -k "not long or long_haul or longhaul" || {
             echo "Dockerized pytest smoke run failed" >> "$GITHUB_STEP_SUMMARY";
             exit 1;
           }
