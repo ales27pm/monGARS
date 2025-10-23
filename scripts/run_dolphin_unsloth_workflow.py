@@ -305,7 +305,10 @@ def run_training(
     except SystemExit as exc:  # pragma: no cover - propagate CLI exits with context
         raise RuntimeError("Trainer aborted early") from exc
     except Exception as exc:  # pragma: no cover - guard unexpected failures
-        LOGGER.exception("Trainer raised an unexpected error")
+        LOGGER.exception(
+            "Trainer raised an unexpected error",
+            extra={"error": str(exc)},
+        )
         raise
 
 

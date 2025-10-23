@@ -141,8 +141,10 @@ class LlamaBiModel(LlamaModel):
         causal_mask *= torch.arange(
             target_length, device=device
         ) > cache_position.reshape(-1, 1)
-        causal_mask = causal_mask[None, None, :, :].expand(
-            input_tensor.shape[0], 1, -1, -1
+        causal_mask = (
+            causal_mask.unsqueeze(0)
+            .unsqueeze(0)
+            .expand(input_tensor.shape[0], 1, -1, -1)
         )
         if attention_mask is not None:
             causal_mask = (
@@ -150,12 +152,14 @@ class LlamaBiModel(LlamaModel):
             )  # copy to contiguous memory for in-place edit
             if attention_mask.dim() == 2:
                 mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[..., :mask_length].eq(0.0) * attention_mask[
-                    :, None, None, :
+                last_dim_slice = slice(0, mask_length)
+                causal_slice = (slice(None), slice(None), slice(None), last_dim_slice)
+                padding_mask = causal_mask[causal_slice].eq(0.0) * attention_mask[
+                    (slice(None), None, None, slice(None))
                 ].eq(0.0)
-                causal_mask[..., :mask_length] = causal_mask[
-                    ..., :mask_length
-                ].masked_fill(padding_mask, min_dtype)
+                causal_mask[causal_slice] = causal_mask[causal_slice].masked_fill(
+                    padding_mask, min_dtype
+                )
             elif attention_mask.dim() == 4:
                 # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
                 # cache. In that case, the 4D attention mask attends to the newest tokens only.

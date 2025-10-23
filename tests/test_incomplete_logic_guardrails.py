@@ -4,8 +4,6 @@ import io
 import tokenize
 from pathlib import Path
 
-import pytest
-
 THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[1]
 

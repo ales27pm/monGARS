@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import os
 import types
-
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-os.environ.setdefault("SECRET_KEY", "test")
 
 import pytest
 from fastapi.testclient import TestClient

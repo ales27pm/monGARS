@@ -1,10 +1,6 @@
 import asyncio
-import os
 
 import pytest
-
-os.environ.setdefault("DEBUG", "True")
-os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from monGARS.core.caching.tiered_cache import SimpleDiskCache, TieredCache
 

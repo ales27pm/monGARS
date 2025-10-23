@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-from functools import partial
 from typing import Dict, List, Optional, Union
 
 import numpy as np
@@ -201,17 +200,15 @@ class LLM2Vec(nn.Module):
             )
             if embed_mask is None:
                 e_m = torch.zeros_like(original["attention_mask"][t_i])
-                if len(ids["input_ids"][0]) > 0:
-                    e_m[-len(ids["input_ids"][0]) :] = torch.ones(
-                        len(ids["input_ids"][0])
-                    )
+                token_length = len(ids["input_ids"][0])
+                if token_length > 0:
+                    e_m[slice(-token_length, None)] = torch.ones(token_length)
                 embed_mask = e_m.unsqueeze(0)
             else:
                 e_m = torch.zeros_like(original["attention_mask"][t_i])
-                if len(ids["input_ids"][0]) > 0:
-                    e_m[-len(ids["input_ids"][0]) :] = torch.ones(
-                        len(ids["input_ids"][0])
-                    )
+                token_length = len(ids["input_ids"][0])
+                if token_length > 0:
+                    e_m[slice(-token_length, None)] = torch.ones(token_length)
                 embed_mask = torch.cat((embed_mask, e_m.unsqueeze(0)), dim=0)
 
         original["embed_mask"] = embed_mask
@@ -241,13 +238,15 @@ class LLM2Vec(nn.Module):
             self._skip_instruction(features)
         seq_lengths = features["attention_mask"].sum(dim=-1)
         if self.pooling_mode == "mean":
-            return torch.stack(
-                [
-                    last_hidden_states[i, -length:, :].mean(dim=0)
-                    for i, length in enumerate(seq_lengths)
-                ],
-                dim=0,
-            )
+            embeddings = []
+            for i, length in enumerate(seq_lengths):
+                length_int = int(length)
+                if length_int > 0:
+                    span = last_hidden_states[i, slice(-length_int, None)]
+                else:
+                    span = last_hidden_states[i, slice(None)]
+                embeddings.append(span.mean(dim=0))
+            return torch.stack(embeddings, dim=0)
         elif self.pooling_mode == "weighted_mean":
             bs, l, _ = last_hidden_states.shape
             complete_weights = torch.zeros(bs, l, device=last_hidden_states.device)
@@ -360,7 +359,7 @@ class LLM2Vec(nn.Module):
                 disable=not show_progress_bar,
             ):
                 sentences_batch = sentences_sorted[
-                    start_index : start_index + batch_size
+                    slice(start_index, start_index + batch_size)
                 ]
                 embeddings = self._encode(
                     sentences_batch, device=device, convert_to_numpy=convert_to_numpy
@@ -371,7 +370,7 @@ class LLM2Vec(nn.Module):
             cuda_compatible_multiprocess = mp.get_context("spawn")
             with cuda_compatible_multiprocess.Pool(num_proc) as p:
                 sentences_batches = [
-                    sentences_sorted[start_index : start_index + batch_size]
+                    sentences_sorted[slice(start_index, start_index + batch_size)]
                     for start_index in range(0, len(sentences), batch_size)
                 ]
 

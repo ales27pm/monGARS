@@ -335,7 +335,7 @@ async def test_encode_batch_records_chatml_for_fallback_vectors(
     assert len(captured) % len(payloads) == 0
     block_count = len(captured) // len(payloads)
     blocks = [
-        captured[index * len(payloads) : (index + 1) * len(payloads)]
+        captured[slice(index * len(payloads), (index + 1) * len(payloads))]
         for index in range(block_count)
     ]
 

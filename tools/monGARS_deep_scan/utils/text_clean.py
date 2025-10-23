@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Sequence
+from typing import List, Sequence
 
 PARAGRAPH_MIN_LENGTH = 60
 

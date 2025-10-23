@@ -1,10 +1,5 @@
-import os
-
 import pytest
 from fastapi.testclient import TestClient
-
-os.environ.setdefault("SECRET_KEY", "test")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 from monGARS.api.dependencies import hippocampus
 from monGARS.api.web_api import app

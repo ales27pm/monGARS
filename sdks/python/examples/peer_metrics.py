@@ -58,7 +58,9 @@ async def publish_loop(base_url: str, username: str, password: str) -> None:
                     MAX_BACKOFF_SECONDS,
                 )
                 logger.exception(
-                    "Unexpected telemetry failure (attempt %s)", consecutive_errors
+                    "Unexpected telemetry failure (attempt %s)",
+                    consecutive_errors,
+                    extra={"error": str(exc)},
                 )
                 await asyncio.sleep(backoff)
                 continue
