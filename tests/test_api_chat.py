@@ -1,11 +1,7 @@
 import asyncio
-import os
 import sys
 import types
 from datetime import datetime, timezone
-
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-os.environ.setdefault("SECRET_KEY", "test")
 
 import pytest
 import pytest_asyncio

@@ -10,6 +10,33 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from modules.neurons.registry import update_manifest
+from monGARS.mlops.artifacts import (
+    WrapperConfig,
+    build_adapter_summary,
+    render_output_bundle_readme,
+    write_wrapper_bundle,
+)
+from monGARS.mlops.dataset import prepare_instruction_dataset
+from monGARS.mlops.diagnostics.analysis import analyse_cuda_state
+from monGARS.mlops.diagnostics.cuda_metrics import gather_cuda_metrics
+from monGARS.mlops.exporters import export_to_gguf, merge_lora_adapters
+from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
+from monGARS.mlops.training import (
+    LoraHyperParams,
+    TrainerConfig,
+    disable_training_mode,
+    prepare_lora_model_light,
+    save_lora_artifacts,
+    train_qlora,
+)
+from monGARS.mlops.utils import (
+    configure_cuda_allocator,
+    describe_environment,
+    ensure_dependencies,
+    ensure_directory,
+)
+
 OVR_ENV_MAP = {
     "per_device_train_batch_size": "OVR_PER_DEVICE_TRAIN_BATCH_SIZE",
     "gradient_accumulation_steps": "OVR_GRAD_ACCUM_STEPS",
@@ -69,33 +96,6 @@ def _env_flag(name: str, default: bool) -> bool:
         return False
     return default
 
-
-from modules.neurons.registry import update_manifest
-from monGARS.mlops.artifacts import (
-    WrapperConfig,
-    build_adapter_summary,
-    render_output_bundle_readme,
-    write_wrapper_bundle,
-)
-from monGARS.mlops.dataset import prepare_instruction_dataset
-from monGARS.mlops.diagnostics.analysis import analyse_cuda_state
-from monGARS.mlops.diagnostics.cuda_metrics import gather_cuda_metrics
-from monGARS.mlops.exporters import export_to_gguf, merge_lora_adapters
-from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
-from monGARS.mlops.training import (
-    LoraHyperParams,
-    TrainerConfig,
-    disable_training_mode,
-    prepare_lora_model_light,
-    save_lora_artifacts,
-    train_qlora,
-)
-from monGARS.mlops.utils import (
-    configure_cuda_allocator,
-    describe_environment,
-    ensure_dependencies,
-    ensure_directory,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +200,15 @@ REQUIRED_PACKAGES = [
     "autoawq",
 ]
 OPTIONAL_PACKAGES = ["unsloth"]
+
+
+def _gather_default_cuda_metrics(module: Any) -> dict[str, Any] | None:
+    """Collect CUDA diagnostics for all available devices."""
+
+    def device_indices() -> list[int]:
+        return list(range(module.cuda.device_count()))
+
+    return gather_cuda_metrics(module, device_indices)
 
 
 def _locate_adapter_weights(adapter_dir: Path) -> Path | None:
@@ -434,9 +443,7 @@ def evaluate_oom_headroom(
     else:
         metrics_fn = gather_metrics
         if metrics_fn is None:
-            metrics_fn = lambda module: gather_cuda_metrics(  # type: ignore[assignment]
-                module, lambda: list(range(module.cuda.device_count()))
-            )
+            metrics_fn = _gather_default_cuda_metrics
         cuda_payload = metrics_fn(torch_module)
         if cuda_payload is None:
             skip_reason = "cuda_metrics_unavailable"

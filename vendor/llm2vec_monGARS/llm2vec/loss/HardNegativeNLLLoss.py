@@ -21,7 +21,7 @@ class HardNegativeNLLLoss:
         d_reps_neg: Tensor = None,
     ):
         if d_reps_neg is None:
-            d_reps_neg = d_reps_pos[:0, :]
+            d_reps_neg = d_reps_pos[slice(0, 0)]
 
         if torch.distributed.is_initialized():
             full_d_reps_pos = mismatched_sizes_all_gather(d_reps_pos)

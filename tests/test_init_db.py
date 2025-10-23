@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 from sqlalchemy.engine import make_url
 
-os.environ.setdefault("SECRET_KEY", "unit-test-secret")
 from monGARS import init_db
 
 

@@ -1,11 +1,8 @@
 import asyncio
 import importlib
-import os
 
 import aiohttp
 import pytest
-
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from monGARS.core import security, social
 

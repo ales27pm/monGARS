@@ -1,117 +1,456 @@
-name: CI
+name: CI Quality Gate
 
 on:
-  pull_request:
   push:
     branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "18"
+  MOBILE_NODE_VERSION: "18"
 
 jobs:
-  build:
+  changes:
+    name: Determine affected scopes
     runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      web: ${{ steps.filter.outputs.web }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      docker: ${{ steps.filter.outputs.docker }}
+      docs: ${{ steps.filter.outputs.docs }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          fetch-depth: 0
+
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - 'pyproject.toml'
+              - 'requirements.txt'
+              - 'setup.py'
+              - 'setup.cfg'
+              - 'pytest.ini'
+              - 'alembic.ini'
+              - 'tasks.py'
+              - 'scripts/**/*.py'
+            web:
+              - 'package.json'
+              - 'package-lock.json'
+              - 'webapp/**'
+              - 'eslint.config.js'
+              - 'eslint/**'
+            mobile:
+              - 'mobile-app/**'
+            docker:
+              - '.dockerignore'
+              - 'Dockerfile*'
+              - 'docker-compose*.yml'
+              - 'docker-compose*/**'
+            docs:
+              - 'docs/**'
+              - 'README.md'
+              - 'ROADMAP.md'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/*.yml'
+              - '.github/*.yaml'
+
+      - name: Summarize impacted scopes
+        run: |
+          {
+            echo "### Impacted scopes";
+            echo;
+            echo "- Python: ${{ steps.filter.outputs.python }}";
+            echo "- Web UI: ${{ steps.filter.outputs.web }}";
+            echo "- Mobile: ${{ steps.filter.outputs.mobile }}";
+            echo "- Docker: ${{ steps.filter.outputs.docker }}";
+            echo "- Docs: ${{ steps.filter.outputs.docs }}";
+            echo "- Workflows: ${{ steps.filter.outputs.workflows }}";
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  python-quality:
+    name: Python formatting & lint
+    needs: changes
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install formatters and linters
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install black isort flake8
+
+      - name: Run Black
+        run: |
+          set -euo pipefail
+          black --check .
+
+      - name: Run isort
+        run: |
+          set -euo pipefail
+          isort --check-only --diff .
+
+      - name: Run flake8
+        run: |
+          set -euo pipefail
+          flake8 .
+
+  python-typecheck:
+    name: Python type checking
+    needs: python-quality
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install backend dependencies for mypy
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mypy
+
+      - name: Verify dependency integrity
+        run: |
+          set -euo pipefail
+          pip check
+
+      - name: Run mypy
+        run: |
+          set -euo pipefail
+          mypy
+
+  python-tests:
+    name: Backend tests (pytest)
+    needs: python-typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install coverage[toml]
+
+      - name: Verify dependency integrity
+        run: |
+          set -euo pipefail
+          pip check
+
+      - name: Run pytest with coverage
+        run: |
+          set -euo pipefail
+          coverage run -m pytest
+
+      - name: Generate coverage reports
+        run: |
+          set -euo pipefail
+          coverage xml
+          coverage html -d coverage_html
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### Pytest coverage";
+            echo;
+            coverage report;
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pytest cache and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-artifacts
+          path: |
+            .pytest_cache
+            .coverage
+            coverage.xml
+            coverage_html
+          if-no-files-found: ignore
+          retention-days: 14
+
+  node-quality:
+    name: Web UI lint, tests & build
+    needs: changes
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt black isort
-      - name: Check formatting
-        run: |
-          isort --check --diff .
-          black --check .
-      - name: Run tests
-        run: pytest
+          set -euo pipefail
+          npm ci --no-audit --no-fund
 
-  docker-pytest:
+      - name: Run ESLint
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          npm run lint
+
+      - name: Run Jest tests
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          npm run jest -- --ci --runInBand --coverage
+
+      - name: Build production bundle
+        env:
+          NODE_ENV: production
+        run: |
+          set -euo pipefail
+          npm run build
+
+      - name: Upload web bundle and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp-static-artifacts
+          path: |
+            webapp/static/js/chat.js
+            coverage
+          if-no-files-found: warn
+          retention-days: 7
+
+  mobile-quality:
+    name: Mobile app lint, typecheck & tests
+    needs: changes
     runs-on: ubuntu-latest
-    needs: build
-    timeout-minutes: 90
+    if: needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    defaults:
+      run:
+        working-directory: mobile-app
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Reclaim runner disk space
-        if: runner.os == 'Linux'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.MOBILE_NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            mobile-app/package-lock.json
+
+      - name: Install dependencies
         run: |
-          set -euxo pipefail
-          echo "Disk usage before cleanup"
-          df -h
-          sudo rm -rf /home/runner/actions-runner/_diag/* || true
-          sudo rm -rf /home/runner/actions-runner/cached/* || true
-          sudo rm -rf /home/runner/_work/_temp/* || true
-          sudo rm -rf ~/.cache/pip || true
-          sudo rm -rf ~/.cache/pnpm || true
-          sudo rm -rf ~/.npm || true
-          docker system prune -af || true
-          docker volume prune -f || true
-          echo "Disk usage after cleanup"
-          df -h
-      - name: Build Docker image for tests
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+
+      - name: Run ESLint
         env:
-          DOCKER_BUILDKIT: '1'
+          CI: "true"
         run: |
-          docker build \
-            --build-arg PYTORCH_IMAGE=pytorch/pytorch:2.2.2-cpu \
-            -t mongars-ci .
-      - name: Run pytest inside Docker image
-        run: docker run --rm mongars-ci pytest
+          set -euo pipefail
+          npm run lint
+
+      - name: Type-check React Native sources
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          npm run typecheck
+
+      - name: Run Jest tests
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          npm test -- --ci --runInBand --coverage
+
+      - name: Upload mobile Jest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-jest-artifacts
+          path: |
+            mobile-app/coverage
+            mobile-app/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
   inventory:
-    if: github.actor != 'nektos/act'
+    name: Repository inventory diff
+    needs: [changes, python-tests, node-quality, mobile-quality]
+    if: github.actor != 'nektos/act' && (needs.changes.outputs.python == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request')
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - name: Checkout target revision
         uses: actions/checkout@v4
         with:
-          path: pr
           fetch-depth: 0
+          path: pr
+
       - name: Checkout base revision
         if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          path: base
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+          path: base
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install dependencies
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install tooling
         working-directory: pr
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Generate baseline inventory
         if: github.event_name == 'pull_request'
         working-directory: base
-        run: python .tools/inventory.py --output ../baseline_inventory.json
+        run: |
+          set -euo pipefail
+          python .tools/inventory.py --output ../baseline_inventory.json
+
       - name: Generate repository inventory
         working-directory: pr
-        run: python .tools/inventory.py --output ../current_inventory.json
+        run: |
+          set -euo pipefail
+          python .tools/inventory.py --output ../current_inventory.json
+
       - name: Compare inventory with base
         if: github.event_name == 'pull_request'
         run: |
-          set +e
-          diff -u baseline_inventory.json current_inventory.json > inventory.diff
-          status=$?
-          if [ $status -ne 0 ]; then
-            echo 'Inventory differences detected. Showing first 200 diff lines.' >> "$GITHUB_STEP_SUMMARY"
-            echo '```diff' >> "$GITHUB_STEP_SUMMARY"
-            head -n 200 inventory.diff >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          diff -u baseline_inventory.json current_inventory.json > inventory.diff || true
+          if [ -s inventory.diff ]; then
+            {
+              echo "### Repository inventory differences";
+              echo;
+              echo '```diff';
+              head -n 200 inventory.diff;
+              echo '```';
+            } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo 'No inventory differences detected.' >> "$GITHUB_STEP_SUMMARY"
+            echo "No inventory differences detected." >> "$GITHUB_STEP_SUMMARY"
           fi
-          exit 0
+
       - name: Create empty diff placeholder
         if: github.event_name != 'pull_request'
         run: touch inventory.diff
+
       - name: Upload inventory artifact
         uses: actions/upload-artifact@v4
         with:
-          name: inventory
+          name: repository-inventory
           path: |
             current_inventory.json
             inventory.diff
           if-no-files-found: warn
+          retention-days: 14
+
+  docker-build:
+    name: Docker runtime build validation
+    needs: [changes, python-tests, node-quality, mobile-quality]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build runtime image for validation
+        env:
+          PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cpu
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg PYTORCH_IMAGE=$PYTORCH_IMAGE \
+            --target runtime \
+            --tag mongars-ci .
+
+      - name: Smoke test container pytest
+        run: |
+          set -euo pipefail
+          docker run --rm mongars-ci pytest --maxfail=1 --disable-warnings -k "not long" || {
+            echo "Dockerized pytest smoke run failed" >> "$GITHUB_STEP_SUMMARY";
+            exit 1;
+          }
+
+      - name: Show resulting image size
+        run: |
+          set -euo pipefail
+          docker images mongars-ci

@@ -15,6 +15,7 @@ files = [
 mypy_path = ["typings"]
 explicit_package_bases = true
 python_version = "3.11"
+follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = [

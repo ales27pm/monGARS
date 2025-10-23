@@ -6,27 +6,14 @@ import json
 import logging
 import os
 import random
+from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 from uuid import uuid4
 
 import psutil
-
-try:  # pragma: no cover - optional dependency in lightweight environments
-    import torch
-except ModuleNotFoundError:  # pragma: no cover - torch may be absent in CI
-    torch = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - Prefect is optional but preferred for orchestration
-    from prefect import flow as prefect_flow
-    from prefect.deployments import Deployment
-    from prefect.server.schemas.schedules import IntervalSchedule
-except Exception:  # pragma: no cover - gracefully degrade when Prefect missing
-    prefect_flow = None  # type: ignore[assignment]
-    Deployment = None  # type: ignore[assignment]
-    IntervalSchedule = None  # type: ignore[assignment]
 
 from modules.evolution_engine.energy import EnergyTracker, EnergyUsageReport
 from modules.evolution_engine.self_training import collect_curated_data
@@ -39,6 +26,33 @@ from monGARS.config import get_settings
 from monGARS.core.model_slot_manager import ModelSlotManager
 from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
+
+torch: Any | None
+try:  # pragma: no cover - optional dependency in lightweight environments
+    import torch as _torch
+except ModuleNotFoundError:  # pragma: no cover - torch may be absent in CI
+    torch = None
+else:
+    torch = cast(Any, _torch)
+
+prefect_flow: Callable[..., Any] | None
+Deployment: type[Any] | None
+IntervalSchedule: type[Any] | None
+
+try:  # pragma: no cover - Prefect is optional but preferred for orchestration
+    from prefect import flow as _prefect_flow
+    from prefect.deployments import Deployment as _PrefectDeployment
+    from prefect.server.schemas.schedules import (
+        IntervalSchedule as _PrefectIntervalSchedule,
+    )
+except Exception:  # pragma: no cover - gracefully degrade when Prefect missing
+    prefect_flow = None
+    Deployment = None
+    IntervalSchedule = None
+else:
+    prefect_flow = cast(Callable[..., Any], _prefect_flow)
+    Deployment = cast(type[Any], _PrefectDeployment)
+    IntervalSchedule = cast(type[Any], _PrefectIntervalSchedule)
 
 logger = logging.getLogger(__name__)
 
@@ -529,7 +543,12 @@ class EvolutionOrchestrator:
         path.write_text(json.dumps(summary, indent=2, sort_keys=True))
 
     def _write_energy_report(self, run_dir: Path, report: EnergyUsageReport) -> None:
-        payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+        if hasattr(report, "to_dict"):
+            payload = cast(Any, report).to_dict()
+        elif isinstance(report, MappingABC):
+            payload = dict(report)
+        else:  # pragma: no cover - defensive guard
+            raise TypeError("Energy usage report must be serialisable")
         path = run_dir / ENERGY_REPORT_FILENAME
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -552,7 +571,12 @@ class EvolutionOrchestrator:
 
     def _system_is_idle(self) -> bool:
         try:
-            cpu_percent = float(psutil.cpu_percent(interval=1))
+            cpu_percent_raw = psutil.cpu_percent(interval=1)
+            cpu_percent = (
+                float(cpu_percent_raw[0])
+                if isinstance(cpu_percent_raw, SequenceABC)
+                else float(cpu_percent_raw)
+            )
         except Exception as exc:
             logger.warning("Failed to measure CPU utilisation", exc_info=exc)
             return False

@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import httpx
 import pytest
-
-os.environ.setdefault("SECRET_KEY", "test")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
 
 from monGARS.api.dependencies import get_persistence_repository, hippocampus
 from monGARS.api.web_api import app, get_conversational_module
@@ -61,7 +57,9 @@ async def test_post_chat_message_success(monkeypatch: pytest.MonkeyPatch) -> Non
         200, {"response": "pong", "confidence": 0.9, "processing_time": 1.2}
     )
 
-    async_client_factory = lambda *args, **kwargs: DummyAsyncClient(response, recorder)
+    def async_client_factory(*args, **kwargs):
+        return DummyAsyncClient(response, recorder)
+
     monkeypatch.setattr(services, "FASTAPI_URL", "http://api")
     monkeypatch.setattr(services.httpx, "AsyncClient", async_client_factory)
 
@@ -80,7 +78,9 @@ async def test_post_chat_message_error(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder: dict[str, object] = {}
     response = DummyResponse(503, {"detail": "maintenance"})
 
-    async_client_factory = lambda *args, **kwargs: DummyAsyncClient(response, recorder)
+    def async_client_factory(*args, **kwargs):
+        return DummyAsyncClient(response, recorder)
+
     monkeypatch.setattr(services, "FASTAPI_URL", "http://api")
     monkeypatch.setattr(services.httpx, "AsyncClient", async_client_factory)
 
@@ -188,8 +188,14 @@ async def test_services_roundtrip_against_fastapi(
     )
     convo = _StubConversationalModule()
 
-    app.dependency_overrides[get_persistence_repository] = lambda: repo
-    app.dependency_overrides[get_conversational_module] = lambda: convo
+    def provide_repo() -> _InMemoryRepo:
+        return repo
+
+    def provide_conversational_module() -> _StubConversationalModule:
+        return convo
+
+    app.dependency_overrides[get_persistence_repository] = provide_repo
+    app.dependency_overrides[get_conversational_module] = provide_conversational_module
 
     original_async_client = httpx.AsyncClient
 

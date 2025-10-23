@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import os
 import sys
 import types
@@ -16,7 +17,7 @@ metric_module.OTLPMetricExporter = lambda *a, **k: types.SimpleNamespace(
 )
 sys.modules["opentelemetry.exporter.otlp.proto.http.metric_exporter"] = metric_module
 
-from monGARS.core.caching.tiered_cache import TieredCache
+TieredCache = importlib.import_module("monGARS.core.caching.tiered_cache").TieredCache
 
 
 @pytest.mark.asyncio

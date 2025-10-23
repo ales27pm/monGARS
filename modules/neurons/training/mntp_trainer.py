@@ -1,5 +1,26 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
+import logging
+import math
+import random
+import statistics
+import time
+from dataclasses import asdict, dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Any, Iterable, Sequence
+
+from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import (
+    TRAINING_CYCLE_COUNTER,
+    TRAINING_FAILURE_COUNTER,
+    TRAINING_TOKEN_COUNTER,
+)
+from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
+
 # Import Unsloth as early as possible to ensure its patches activate before
 # transformers/peft modules are loaded.
 try:  # pragma: no cover - optional dependency
@@ -17,19 +38,6 @@ FastLanguageModel = (
     if "unsloth" in globals() and unsloth is not None
     else None
 )
-
-import hashlib
-import inspect
-import json
-import logging
-import math
-import random
-import statistics
-import time
-from dataclasses import asdict, dataclass
-from enum import Enum
-from pathlib import Path
-from typing import Any, Iterable, Sequence
 
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
@@ -59,14 +67,6 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - fallback when TRL missing
     SFTConfig = None  # type: ignore[assignment]
     SFTTrainer = None  # type: ignore[assignment]
-
-from monGARS.core.model_slot_manager import ModelSlotManager
-from monGARS.core.monitor import (
-    TRAINING_CYCLE_COUNTER,
-    TRAINING_FAILURE_COUNTER,
-    TRAINING_TOKEN_COUNTER,
-)
-from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -1284,7 +1284,7 @@ class MNTPTrainer:
         layers = self._ordered_transformer_layers(model)
         if not layers:
             return
-        keep = set(layers[-max(1, keep_last_layers) :])
+        keep = set(layers[slice(-max(1, keep_last_layers), None)])
         for name, parameter in model.named_parameters():
             if not hasattr(parameter, "requires_grad"):
                 continue

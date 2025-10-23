@@ -2,8 +2,6 @@ import asyncio
 import sys
 import types
 
-import pytest
-
 
 def test_system_monitor_collects_stats(monkeypatch):
     """Verify SystemMonitor aggregates system metrics correctly."""
