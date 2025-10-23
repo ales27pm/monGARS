@@ -1,27 +1,18 @@
 from os import PathLike
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Union
 
-import torch
 from peft import PeftModel
 from torch import nn
 from transformers import Qwen2Config, Qwen2ForCausalLM, Qwen2Model, Qwen2PreTrainedModel
-from transformers.cache_utils import Cache, DynamicCache
-from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Attention,
     Qwen2DecoderLayer,
     Qwen2FlashAttention2,
-    Qwen2MLP,
     Qwen2RMSNorm,
     Qwen2SdpaAttention,
 )
 from transformers.utils import logging
-
-from .attn_mask_utils import (
-    _prepare_4d_causal_attention_mask,
-    _prepare_4d_causal_attention_mask_for_sdpa,
-)
 
 logger = logging.get_logger(__name__)
 

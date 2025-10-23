@@ -165,12 +165,13 @@ class LlamaBiModel(LlamaModel):
                     offset = 0
                 mask_shape = attention_mask.shape
                 mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-                causal_mask[
-                    : mask_shape[0],
-                    : mask_shape[1],
-                    offset : mask_shape[2] + offset,
-                    : mask_shape[3],
-                ] = mask_slice
+                mask_indices = (
+                    slice(None, mask_shape[0]),
+                    slice(None, mask_shape[1]),
+                    slice(offset, mask_shape[2] + offset),
+                    slice(None, mask_shape[3]),
+                )
+                causal_mask[mask_indices] = mask_slice
 
         if (
             self.config._attn_implementation == "sdpa"
