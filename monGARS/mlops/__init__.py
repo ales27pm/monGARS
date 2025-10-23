@@ -22,6 +22,7 @@ from .dataset import (
     prepare_local_instruction_dataset,
 )
 from .exporters import (
+    GGUFExportResult,
     export_gguf,
     export_to_gguf,
     merge_lora_adapters,
@@ -65,6 +66,7 @@ __all__ = [
     "build_strategy_recommendation",
     "LLMUsage",
     "ModuleInteraction",
+    "GGUFExportResult",
     "export_gguf",
     "export_to_gguf",
     "merge_lora_adapters",

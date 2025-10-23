@@ -80,7 +80,11 @@ from monGARS.mlops.artifacts import (
 from monGARS.mlops.dataset import prepare_instruction_dataset
 from monGARS.mlops.diagnostics.analysis import analyse_cuda_state
 from monGARS.mlops.diagnostics.cuda_metrics import gather_cuda_metrics
-from monGARS.mlops.exporters import export_to_gguf, merge_lora_adapters
+from monGARS.mlops.exporters import (
+    GGUFExportResult,
+    export_to_gguf,
+    merge_lora_adapters,
+)
 from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
 from monGARS.mlops.training import (
     LoraHyperParams,
@@ -271,6 +275,56 @@ def export_awq_quantized_model(
     return True
 
 
+def _attach_gguf_summary(
+    summary: dict[str, Any],
+    *,
+    gguf_result: GGUFExportResult,
+    requested_method: str | None,
+) -> None:
+    artifacts = summary.setdefault("artifacts", {})
+    artifacts["gguf"] = str(gguf_result.path)
+
+    labels = summary.setdefault("labels", {})
+    if requested_method:
+        labels["gguf_method"] = requested_method
+    if gguf_result.quantization_method:
+        labels.setdefault("gguf_quantization", gguf_result.quantization_method)
+    labels["gguf_export_interface"] = gguf_result.method
+    labels["gguf_exporter"] = gguf_result.exporter
+
+    metrics = summary.setdefault("metrics", {})
+    if gguf_result.quantization_method:
+        metrics.setdefault("gguf_quantization_method", gguf_result.quantization_method)
+    try:
+        metrics.setdefault("gguf_file_size_bytes", gguf_result.path.stat().st_size)
+    except OSError:
+        logger.debug(
+            "Unable to stat GGUF artifact", extra={"path": str(gguf_result.path)}
+        )
+
+
+def _attach_awq_summary(summary: dict[str, Any], *, awq_dir: Path) -> None:
+    artifacts = summary.setdefault("artifacts", {})
+    artifacts["awq"] = str(awq_dir)
+
+    labels = summary.setdefault("labels", {})
+    labels.setdefault("awq_version", AWQ_VERSION)
+    labels.setdefault("awq_precision", f"{AWQ_W_BITS}-bit")
+
+    quant_summary = summary.setdefault("quantization", {})
+    awq_config = {
+        "w_bit": AWQ_W_BITS,
+        "q_group_size": AWQ_GROUP_SIZE,
+        "zero_point": AWQ_ZERO_POINT,
+        "version": AWQ_VERSION,
+        "calib_samples": AWQ_CALIB_SAMPLES,
+        "calib_seq_len": AWQ_CALIB_SEQ_LEN,
+    }
+    if AWQ_CALIB_DATASET:
+        awq_config["calib_dataset"] = AWQ_CALIB_DATASET
+    quant_summary["awq"] = awq_config
+
+
 def _assemble_training_summary(
     *,
     adapter_dir: Path,
@@ -279,7 +333,8 @@ def _assemble_training_summary(
     merged_dir: Path,
     merged: bool,
     gguf_enabled: bool,
-    gguf_method: str,
+    gguf_requested_method: str | None,
+    gguf_result: GGUFExportResult | None,
     awq_dir: Path,
     awq_enabled: bool,
     dataset_len: int,
@@ -320,26 +375,14 @@ def _assemble_training_summary(
     artifacts = summary.setdefault("artifacts", {})
     if merged:
         artifacts["merged_fp16"] = str(merged_dir)
-    if gguf_enabled and merged:
-        artifacts["gguf"] = str(GGUF_DIR)
-        summary.setdefault("labels", {})["gguf_method"] = gguf_method
+    if gguf_enabled and merged and gguf_result is not None:
+        _attach_gguf_summary(
+            summary,
+            gguf_result=gguf_result,
+            requested_method=gguf_requested_method,
+        )
     if awq_enabled:
-        artifacts["awq"] = str(awq_dir)
-        labels = summary.setdefault("labels", {})
-        labels.setdefault("awq_version", AWQ_VERSION)
-        labels.setdefault("awq_precision", f"{AWQ_W_BITS}-bit")
-        quant_summary = summary.setdefault("quantization", {})
-        awq_config = {
-            "w_bit": AWQ_W_BITS,
-            "q_group_size": AWQ_GROUP_SIZE,
-            "zero_point": AWQ_ZERO_POINT,
-            "version": AWQ_VERSION,
-            "calib_samples": AWQ_CALIB_SAMPLES,
-            "calib_seq_len": AWQ_CALIB_SEQ_LEN,
-        }
-        if AWQ_CALIB_DATASET:
-            awq_config["calib_dataset"] = AWQ_CALIB_DATASET
-        quant_summary["awq"] = awq_config
+        _attach_awq_summary(summary, awq_dir=awq_dir)
 
     summary.setdefault("analysis", {})["oom_risk"] = oom_analysis
 
@@ -514,6 +557,7 @@ def main() -> None:
 
     merged_dir = OUTPUT_DIR / "merged_fp16"
     merged = False
+    gguf_export: GGUFExportResult | None = None
     if EXPORT_MERGED_FP16:
         merged = merge_lora_adapters(MODEL_ID, adapters_dir, output_dir=merged_dir)
 
@@ -539,7 +583,7 @@ def main() -> None:
     if EXPORT_GGUF:
         if not merged:
             raise RuntimeError("EXPORT_GGUF requires EXPORT_MERGED_FP16=1")
-        export_to_gguf(
+        gguf_export = export_to_gguf(
             str(merged_dir),
             str(GGUF_DIR),
             quantization_method=GGUF_METHOD,
@@ -571,7 +615,8 @@ def main() -> None:
         merged_dir=merged_dir,
         merged=merged,
         gguf_enabled=EXPORT_GGUF,
-        gguf_method=GGUF_METHOD,
+        gguf_requested_method=GGUF_METHOD if EXPORT_GGUF else None,
+        gguf_result=gguf_export,
         awq_dir=AWQ_DIR,
         awq_enabled=awq_exported,
         dataset_len=len(dataset),
@@ -587,7 +632,8 @@ def main() -> None:
     if awq_exported:
         print(f"- AWQ quantized model: {AWQ_DIR}")
     if EXPORT_GGUF and merged:
-        print(f"- GGUF export: {GGUF_DIR}")
+        gguf_path_display = gguf_export.path if gguf_export is not None else GGUF_DIR
+        print(f"- GGUF export: {gguf_path_display}")
     print(f"- Wrapper module: {wrapper_dir / 'project_wrapper.py'}")
     print(f"- Training summary: {summary_path}")
     _maybe_update_registry(REGISTRY_PATH, summary)
