@@ -23,6 +23,12 @@ _GGUF_EXPORTER_CANDIDATES: tuple[str, ...] = (
     "transformers.exporters.gguf.GGUFExporter",
 )
 
+_GGUF_EXPORTER_METHODS: tuple[str, ...] = (
+    "export",
+    "export_model",
+    "save_pretrained",
+)
+
 
 @dataclass(frozen=True)
 class GGUFExporterInfo:
@@ -66,12 +72,10 @@ def _locate_symbol(path: str) -> Any | None:
     return getattr(module, attribute, None)
 
 
-def _normalise_candidates(candidates: Iterable[str] | None) -> tuple[str, ...]:
+def _normalize_candidates(candidates: Iterable[str] | None) -> tuple[str, ...]:
     if candidates is None:
         return _GGUF_EXPORTER_CANDIDATES
-    if isinstance(candidates, tuple):
-        return candidates
-    return tuple(candidates)
+    return candidates if isinstance(candidates, tuple) else tuple(candidates)
 
 
 @lru_cache(maxsize=8)
@@ -89,8 +93,8 @@ def _load_gguf_exporter(
 ) -> GGUFExporterInfo | None:
     """Return metadata for the first available GGUF exporter implementation."""
 
-    normalised = _normalise_candidates(candidates)
-    return _load_gguf_exporter_cached(normalised)
+    normalized = _normalize_candidates(candidates)
+    return _load_gguf_exporter_cached(normalized)
 
 
 def merge_lora_adapters(
@@ -207,6 +211,8 @@ def export_to_gguf(
         raise RuntimeError(
             "Unable to instantiate GGUF exporter; unexpected constructor signature"
         ) from exc
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError("Unable to instantiate GGUF exporter") from exc
 
     def _invoke(method_name: str) -> bool:
         method = getattr(exporter, method_name, None)
@@ -227,7 +233,7 @@ def export_to_gguf(
         return True
 
     method_used: str | None = None
-    for method_name in ("export", "export_model", "save_pretrained"):
+    for method_name in _GGUF_EXPORTER_METHODS:
         if _invoke(method_name):
             method_used = method_name
             break

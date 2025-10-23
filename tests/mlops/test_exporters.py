@@ -146,6 +146,51 @@ def test_export_to_gguf_falls_back_to_export_model(monkeypatch, tmp_path):
     assert result.exporter == "transformers.GgufExporter"
 
 
+def test_export_to_gguf_falls_back_to_save_pretrained(monkeypatch, tmp_path):
+    from monGARS.mlops import exporters
+
+    exporters._load_gguf_exporter_cached.cache_clear()
+
+    calls: dict[str, object] = {}
+
+    class DummyExporter:
+        def __init__(self, *, model, tokenizer):  # pragma: no cover - kwargs only
+            calls["model"] = model
+            calls["tokenizer"] = tokenizer
+
+        def save_pretrained(
+            self, destination: str, *, quantization_method: str | None = None
+        ) -> None:
+            calls["destination"] = destination
+            calls["quantization_method"] = quantization_method
+            calls["method"] = "save_pretrained"
+            Path(destination).write_bytes(b"GGUF")
+
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained",
+        lambda name, **_: object(),
+    )
+    monkeypatch.setattr(
+        "transformers.AutoTokenizer.from_pretrained",
+        lambda name, **_: object(),
+    )
+    monkeypatch.setattr("transformers.GgufExporter", DummyExporter, raising=False)
+
+    result = exporters.export_to_gguf(
+        "dummy/model",
+        tmp_path / "gguf",
+        quantization_method="q8_0",
+    )
+
+    assert result.path.exists()
+    assert result.path.read_bytes() == b"GGUF"
+    assert calls["method"] == "save_pretrained"
+    assert calls["quantization_method"] == "q8_0"
+    assert result.method == "save_pretrained"
+    assert result.quantization_method == "q8_0"
+    assert result.exporter == "transformers.GgufExporter"
+
+
 def test_export_to_gguf_missing_exporter(monkeypatch):
     from monGARS.mlops import exporters
 

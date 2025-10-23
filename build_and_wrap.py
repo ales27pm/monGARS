@@ -275,6 +275,56 @@ def export_awq_quantized_model(
     return True
 
 
+def _attach_gguf_summary(
+    summary: dict[str, Any],
+    *,
+    gguf_result: GGUFExportResult,
+    requested_method: str | None,
+) -> None:
+    artifacts = summary.setdefault("artifacts", {})
+    artifacts["gguf"] = str(gguf_result.path)
+
+    labels = summary.setdefault("labels", {})
+    if requested_method:
+        labels["gguf_method"] = requested_method
+    if gguf_result.quantization_method:
+        labels.setdefault("gguf_quantization", gguf_result.quantization_method)
+    labels["gguf_export_interface"] = gguf_result.method
+    labels["gguf_exporter"] = gguf_result.exporter
+
+    metrics = summary.setdefault("metrics", {})
+    if gguf_result.quantization_method:
+        metrics.setdefault("gguf_quantization_method", gguf_result.quantization_method)
+    try:
+        metrics.setdefault("gguf_file_size_bytes", gguf_result.path.stat().st_size)
+    except OSError:
+        logger.debug(
+            "Unable to stat GGUF artifact", extra={"path": str(gguf_result.path)}
+        )
+
+
+def _attach_awq_summary(summary: dict[str, Any], *, awq_dir: Path) -> None:
+    artifacts = summary.setdefault("artifacts", {})
+    artifacts["awq"] = str(awq_dir)
+
+    labels = summary.setdefault("labels", {})
+    labels.setdefault("awq_version", AWQ_VERSION)
+    labels.setdefault("awq_precision", f"{AWQ_W_BITS}-bit")
+
+    quant_summary = summary.setdefault("quantization", {})
+    awq_config = {
+        "w_bit": AWQ_W_BITS,
+        "q_group_size": AWQ_GROUP_SIZE,
+        "zero_point": AWQ_ZERO_POINT,
+        "version": AWQ_VERSION,
+        "calib_samples": AWQ_CALIB_SAMPLES,
+        "calib_seq_len": AWQ_CALIB_SEQ_LEN,
+    }
+    if AWQ_CALIB_DATASET:
+        awq_config["calib_dataset"] = AWQ_CALIB_DATASET
+    quant_summary["awq"] = awq_config
+
+
 def _assemble_training_summary(
     *,
     adapter_dir: Path,
@@ -326,42 +376,13 @@ def _assemble_training_summary(
     if merged:
         artifacts["merged_fp16"] = str(merged_dir)
     if gguf_enabled and merged and gguf_result is not None:
-        artifacts["gguf"] = str(gguf_result.path)
-        labels = summary.setdefault("labels", {})
-        if gguf_requested_method:
-            labels["gguf_method"] = gguf_requested_method
-        if gguf_result.quantization_method:
-            labels.setdefault("gguf_quantization", gguf_result.quantization_method)
-        labels["gguf_export_interface"] = gguf_result.method
-        labels["gguf_exporter"] = gguf_result.exporter
-        metrics = summary.setdefault("metrics", {})
-        if gguf_result.quantization_method:
-            metrics.setdefault(
-                "gguf_quantization_method", gguf_result.quantization_method
-            )
-        try:
-            metrics.setdefault("gguf_file_size_bytes", gguf_result.path.stat().st_size)
-        except OSError:
-            logger.debug(
-                "Unable to stat GGUF artifact", extra={"path": str(gguf_result.path)}
-            )
+        _attach_gguf_summary(
+            summary,
+            gguf_result=gguf_result,
+            requested_method=gguf_requested_method,
+        )
     if awq_enabled:
-        artifacts["awq"] = str(awq_dir)
-        labels = summary.setdefault("labels", {})
-        labels.setdefault("awq_version", AWQ_VERSION)
-        labels.setdefault("awq_precision", f"{AWQ_W_BITS}-bit")
-        quant_summary = summary.setdefault("quantization", {})
-        awq_config = {
-            "w_bit": AWQ_W_BITS,
-            "q_group_size": AWQ_GROUP_SIZE,
-            "zero_point": AWQ_ZERO_POINT,
-            "version": AWQ_VERSION,
-            "calib_samples": AWQ_CALIB_SAMPLES,
-            "calib_seq_len": AWQ_CALIB_SEQ_LEN,
-        }
-        if AWQ_CALIB_DATASET:
-            awq_config["calib_dataset"] = AWQ_CALIB_DATASET
-        quant_summary["awq"] = awq_config
+        _attach_awq_summary(summary, awq_dir=awq_dir)
 
     summary.setdefault("analysis", {})["oom_risk"] = oom_analysis
 

@@ -8,6 +8,15 @@ from pathlib import Path
 from monGARS.mlops import artifacts
 
 
+def _read_wrapper_bundle(
+    outputs: dict[str, Path],
+) -> tuple[str, dict[str, object], str]:
+    module_source = outputs["module"].read_text(encoding="utf-8")
+    config_data = json.loads(outputs["config"].read_text(encoding="utf-8"))
+    readme_contents = outputs["readme"].read_text(encoding="utf-8")
+    return module_source, config_data, readme_contents
+
+
 def test_build_adapter_summary_collects_metadata(tmp_path):
     adapter_dir = tmp_path / "adapter"
     weights_path = tmp_path / "weights.bin"
@@ -58,15 +67,13 @@ def test_write_wrapper_bundle_generates_expected_files(tmp_path):
         "readme": wrapper_dir / "README_integration.md",
     }
 
-    module_source = outputs["module"].read_text(encoding="utf-8")
+    module_source, config_data, readme_contents = _read_wrapper_bundle(outputs)
     assert "ChatAndEmbed" in module_source
     assert str(config.lora_dir) in module_source
 
-    config_data = json.loads(outputs["config"].read_text(encoding="utf-8"))
     assert config_data["base_model_id"] == "dummy/model"
     assert config_data["lora_dir"] == str(config.lora_dir)
     assert config_data["vram_budget_mb"] == config.vram_budget_mb
 
-    readme_contents = outputs["readme"].read_text(encoding="utf-8")
     assert "Wrapper Integration" in readme_contents
     assert str(config.lora_dir) in readme_contents
