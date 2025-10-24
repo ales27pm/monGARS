@@ -1,5 +1,7 @@
 # Iris Retrieval Service Overview
 
+> **Last updated:** 2025-10-22 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Implementation Status
 
 Iris is a fully implemented asynchronous web retrieval helper that ships with the core cognition

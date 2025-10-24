@@ -1,5 +1,7 @@
 # Incomplete Logic Audit
 
+> **Last updated:** 2025-10-20 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Date: 2024-06-23
 
 This follow-up audit re-runs and expands the repository-wide scan for patterns

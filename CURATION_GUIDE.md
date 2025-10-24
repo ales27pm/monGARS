@@ -1,5 +1,7 @@
 # Dataset Curation Guide
 
+> **Last updated:** 2025-10-07 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This guide explains how to triage and curate the datasets emitted by the monGARS Deep Scanner.
 
 ## 1. Review the QA report

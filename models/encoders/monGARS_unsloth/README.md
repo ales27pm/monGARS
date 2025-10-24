@@ -1,5 +1,7 @@
 # monGARS Unsloth Pipeline Outputs
 
+> **Last updated:** 2025-10-14 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This directory hosts the LoRA adapters, merged checkpoints, and wrapper module
 produced by the `unsloth-trainer` Docker Compose profile. The runtime services
 mount this path so newly trained artefacts become available without rebuilding

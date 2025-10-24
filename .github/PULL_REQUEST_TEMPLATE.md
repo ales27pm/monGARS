@@ -1,4 +1,6 @@
 ## Summary
+> **Last updated:** 2025-09-30 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 - [ ] Linked issue or roadmap item:
 - [ ] Short description of the change:
 

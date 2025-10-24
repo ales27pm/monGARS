@@ -5,6 +5,8 @@ labels: bug
 ---
 
 ## Summary
+> **Last updated:** 2025-09-30 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 <!-- Briefly describe the bug and why it matters. -->
 
 ## Environment
