@@ -93,14 +93,25 @@ jobs:
     name: Python formatting & lint
     needs: changes
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    outputs:
+      should-run: ${{ steps.python_guard.outputs.should-run }}
     steps:
+      - name: Evaluate Python quality scope
+        id: python_guard
+        run: echo "should-run=${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
+        if: steps.python_guard.outputs.should-run == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Skip Python formatting & lint
+        if: steps.python_guard.outputs.should-run != 'true'
+        run: echo "Skipping Python formatting & lint because no Python-affecting changes were detected."
+
       - name: Set up Python
+        if: steps.python_guard.outputs.should-run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -110,22 +121,26 @@ jobs:
             pyproject.toml
 
       - name: Install formatters and linters
+        if: steps.python_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install black isort flake8
 
       - name: Run Black
+        if: steps.python_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           black --check .
 
       - name: Run isort
+        if: steps.python_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           isort --check-only --diff .
 
       - name: Run flake8
+        if: steps.python_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           flake8 .
@@ -136,12 +151,23 @@ jobs:
       - changes
       - python-quality
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    outputs:
+      should-run: ${{ steps.python_type_guard.outputs.should-run }}
     steps:
+      - name: Evaluate Python type-check scope
+        id: python_type_guard
+        run: echo "should-run=${{ needs.python-quality.outputs.should-run == 'true' }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
+        if: steps.python_type_guard.outputs.should-run == 'true'
         uses: actions/checkout@v4
 
+      - name: Skip Python type checking
+        if: steps.python_type_guard.outputs.should-run != 'true'
+        run: echo "Skipping Python type checking because no Python-affecting changes were detected."
+
       - name: Set up Python
+        if: steps.python_type_guard.outputs.should-run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -151,6 +177,7 @@ jobs:
             pyproject.toml
 
       - name: Install backend dependencies for mypy
+        if: steps.python_type_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -158,11 +185,13 @@ jobs:
           pip install mypy
 
       - name: Verify dependency integrity
+        if: steps.python_type_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           pip check
 
       - name: Run mypy
+        if: steps.python_type_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           mypy
@@ -171,15 +200,27 @@ jobs:
     name: Backend tests (pytest)
     needs:
       - changes
+      - python-quality
       - python-typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    outputs:
+      should-run: ${{ steps.python_test_guard.outputs.should-run }}
     steps:
+      - name: Evaluate backend test scope
+        id: python_test_guard
+        run: echo "should-run=${{ needs.python-quality.outputs.should-run == 'true' && needs.python-typecheck.outputs.should-run == 'true' }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
+        if: steps.python_test_guard.outputs.should-run == 'true'
         uses: actions/checkout@v4
 
+      - name: Skip backend tests
+        if: steps.python_test_guard.outputs.should-run != 'true'
+        run: echo "Skipping backend pytest suite because no Python-affecting changes were detected."
+
       - name: Set up Python
+        if: steps.python_test_guard.outputs.should-run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -189,6 +230,7 @@ jobs:
             pyproject.toml
 
       - name: Install backend dependencies
+        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -196,16 +238,19 @@ jobs:
           pip install coverage[toml]
 
       - name: Verify dependency integrity
+        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           pip check
 
       - name: Run pytest with coverage
+        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           coverage run -m pytest
 
       - name: Enforce coverage threshold
+        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           # Calibrated to the current backend baseline (≈84%) so the gate flags
@@ -214,6 +259,7 @@ jobs:
           coverage report --fail-under=84
 
       - name: Generate coverage reports
+        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           coverage xml
@@ -226,11 +272,15 @@ jobs:
           {
             echo "### Pytest coverage";
             echo;
-            coverage report;
+            if [[ "${{ steps.python_test_guard.outputs.should-run }}" == 'true' ]]; then
+              coverage report;
+            else
+              echo "Pytest skipped because no Python-affecting changes were detected.";
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload pytest cache and reports
-        if: always()
+        if: steps.python_test_guard.outputs.should-run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pytest-artifacts
@@ -246,12 +296,23 @@ jobs:
     name: Web UI lint, tests & build
     needs: changes
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    outputs:
+      should-run: ${{ steps.web_guard.outputs.should-run }}
     steps:
+      - name: Evaluate web quality scope
+        id: web_guard
+        run: echo "should-run=${{ needs.changes.outputs.web == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
+        if: steps.web_guard.outputs.should-run == 'true'
         uses: actions/checkout@v4
 
+      - name: Skip web lint, tests & build
+        if: steps.web_guard.outputs.should-run != 'true'
+        run: echo "Skipping web lint/tests/build because no web or workflow changes were detected."
+
       - name: Set up Node.js
+        if: steps.web_guard.outputs.should-run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -260,11 +321,13 @@ jobs:
             package-lock.json
 
       - name: Install dependencies
+        if: steps.web_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
 
       - name: Run ESLint
+        if: steps.web_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         run: |
@@ -272,6 +335,7 @@ jobs:
           npm run lint
 
       - name: Run Jest tests
+        if: steps.web_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         run: |
@@ -279,6 +343,7 @@ jobs:
           npm run jest -- --ci --runInBand --coverage
 
       - name: Build production bundle
+        if: steps.web_guard.outputs.should-run == 'true'
         env:
           NODE_ENV: production
         run: |
@@ -286,7 +351,7 @@ jobs:
           npm run build
 
       - name: Upload web bundle and coverage
-        if: always()
+        if: steps.web_guard.outputs.should-run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: webapp-static-artifacts
@@ -300,15 +365,26 @@ jobs:
     name: Mobile app lint, typecheck & tests
     needs: changes
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    outputs:
+      should-run: ${{ steps.mobile_guard.outputs.should-run }}
     defaults:
       run:
         working-directory: mobile-app
     steps:
+      - name: Evaluate mobile quality scope
+        id: mobile_guard
+        run: echo "should-run=${{ needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Skip mobile lint, typecheck & tests
+        if: steps.mobile_guard.outputs.should-run != 'true'
+        working-directory: ${{ github.workspace }}
+        run: echo "Skipping mobile lint/typecheck/tests because no mobile or workflow changes were detected."
+
       - name: Set up Node.js
+        if: steps.mobile_guard.outputs.should-run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.MOBILE_NODE_VERSION }}
@@ -317,11 +393,13 @@ jobs:
             mobile-app/package-lock.json
 
       - name: Install dependencies
+        if: steps.mobile_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
 
       - name: Run ESLint
+        if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         run: |
@@ -329,6 +407,7 @@ jobs:
           npm run lint
 
       - name: Type-check React Native sources
+        if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         run: |
@@ -336,6 +415,7 @@ jobs:
           npm run typecheck
 
       - name: Run Jest tests
+        if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         run: |
@@ -343,7 +423,7 @@ jobs:
           npm test -- --ci --runInBand --coverage
 
       - name: Upload mobile Jest results
-        if: always()
+        if: steps.mobile_guard.outputs.should-run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mobile-jest-artifacts
