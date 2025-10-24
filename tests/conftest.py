@@ -11,6 +11,7 @@ import pytest_asyncio
 # test suite always overrides CI-provided connection strings.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./mongars_test.db"
 os.environ["SECRET_KEY"] = "test-secret-key"
+os.environ["DJANGO_SECRET_KEY"] = "test-django-secret-key"
 os.environ["JWT_ALGORITHM"] = "HS256"
 
 warnings.filterwarnings(
