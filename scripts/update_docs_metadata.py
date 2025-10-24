@@ -16,7 +16,6 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAST_UPDATED_PREFIX = "> **Last updated:** "
 INSTRUCTION_SUFFIX = " _(auto-synced; run `python scripts/update_docs_metadata.py`)_"
