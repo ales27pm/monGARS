@@ -61,6 +61,9 @@ The installer performs the following actions:
    `up -d` with `docker-compose.searxng.yml` layered on top of
    `docker-compose.yml` when SearxNG is enabled, mirroring the
    production-oriented profile used by `scripts/docker_menu.py` option 11.
+   The overlay pins `searxng/searxng:2025.10.24-2cdbbb249` because the
+   upstream 2024.6.9 series was withdrawn from Docker Hub, ensuring
+   `docker compose pull` succeeds during automated deployments.
 
 Each step key matches the `--only` flag values: `prerequisites`, `env`,
 `python`, `root-node`, `mobile`, `searxng`, and `containers`.
