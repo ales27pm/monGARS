@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import random
-from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
