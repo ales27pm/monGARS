@@ -1,6 +1,6 @@
 services:
   searxng:
-    image: searxng/searxng:2024.6.9-1-3.4
+    image: searxng/searxng:2025.10.24-2cdbbb249
     restart: unless-stopped
     env_file:
       - .env
