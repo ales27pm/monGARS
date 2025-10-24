@@ -160,7 +160,8 @@ MAX_STEPS = int(os.environ.get("MAX_STEPS", "-1"))
 VRAM_BUDGET_MB = int(os.environ.get("VRAM_BUDGET_MB", "7300"))
 ACTIVATION_BUFFER_MB = int(
     os.environ.get(
-        "ACTIVATION_BUFFER_MB", os.environ.get("VRAM_ACTIVATION_BUFFER_MB", "1024")
+        "ACTIVATION_BUFFER_MB",
+        os.environ.get("VRAM_ACTIVATION_BUFFER_MB", "1024"),
     )
 )
 RUNTIME_BUFFER_MB = int(
@@ -308,7 +309,8 @@ def _attach_gguf_summary(
         metrics.setdefault("gguf_file_size_bytes", gguf_result.path.stat().st_size)
     except OSError:
         logger.debug(
-            "Unable to stat GGUF artifact", extra={"path": str(gguf_result.path)}
+            "Unable to stat GGUF artifact",
+            extra={"path": str(gguf_result.path)},
         )
 
 
