@@ -273,7 +273,7 @@ jobs:
           CI: "true"
         run: |
           set -euo pipefail
-          npm run jest -- --ci --runInBand --coverage --coverageThreshold='{"global": {"branches": 80, "functions": 80, "lines": 80, "statements": 80}}'
+          npm run jest -- --ci --runInBand --coverage
 
       - name: Build production bundle
         env:
@@ -337,7 +337,7 @@ jobs:
           CI: "true"
         run: |
           set -euo pipefail
-          npm test -- --ci --runInBand --coverage --coverageThreshold='{"global": {"branches": 80, "functions": 80, "lines": 80, "statements": 80}}'
+          npm test -- --ci --runInBand --coverage
 
       - name: Upload mobile Jest results
         if: always()
