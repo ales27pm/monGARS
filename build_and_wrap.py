@@ -20,7 +20,7 @@ from monGARS.mlops.artifacts import (
 from monGARS.mlops.dataset import prepare_instruction_dataset
 from monGARS.mlops.diagnostics.analysis import analyse_cuda_state
 from monGARS.mlops.diagnostics.cuda_metrics import gather_cuda_metrics
-from monGARS.mlops.exporters import export_to_gguf, merge_lora_adapters
+from monGARS.mlops.exporters import GGUFExportResult, export_to_gguf, merge_lora_adapters
 from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
 from monGARS.mlops.training import (
     LoraHyperParams,
@@ -96,37 +96,6 @@ def _env_flag(name: str, default: bool) -> bool:
         return False
     return default
 
-
-from modules.neurons.registry import update_manifest
-from monGARS.mlops.artifacts import (
-    WrapperConfig,
-    build_adapter_summary,
-    render_output_bundle_readme,
-    write_wrapper_bundle,
-)
-from monGARS.mlops.dataset import prepare_instruction_dataset
-from monGARS.mlops.diagnostics.analysis import analyse_cuda_state
-from monGARS.mlops.diagnostics.cuda_metrics import gather_cuda_metrics
-from monGARS.mlops.exporters import (
-    GGUFExportResult,
-    export_to_gguf,
-    merge_lora_adapters,
-)
-from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
-from monGARS.mlops.training import (
-    LoraHyperParams,
-    TrainerConfig,
-    disable_training_mode,
-    prepare_lora_model_light,
-    save_lora_artifacts,
-    train_qlora,
-)
-from monGARS.mlops.utils import (
-    configure_cuda_allocator,
-    describe_environment,
-    ensure_dependencies,
-    ensure_directory,
-)
 
 logger = logging.getLogger(__name__)
 
