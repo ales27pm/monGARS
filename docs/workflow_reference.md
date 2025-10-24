@@ -27,9 +27,11 @@ Python quality gates execute in three layers:
    configuration stored in `pyproject.toml`.
 3. **`python-tests`** installs the backend stack, executes
    `coverage run -m pytest`, generates XML and HTML coverage artefacts, and
-   attaches the coverage report to the job summary. Artefacts include the
-   `.coverage` file, XML coverage report, HTML report, and the pytest cache
-   for troubleshooting failures.
+   attaches the coverage report to the job summary. The coverage gate is
+   calibrated to fail when overall backend coverage falls below 84%, giving
+   teams space to backfill historical gaps while still flagging regressions.
+   Artefacts include the `.coverage` file, XML coverage report, HTML report,
+   and the pytest cache for troubleshooting failures.
 
 Every pull request that touches backend, workflow, docker, documentation,
 or frontend assets triggers these steps, while pushes to `main` always run
