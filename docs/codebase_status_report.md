@@ -1,5 +1,7 @@
 # Codebase Status Report
 
+> **Last updated:** 2025-10-13 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Purpose
 
 This document captures the verified state of the monGARS repository as of the

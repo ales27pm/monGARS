@@ -1,5 +1,7 @@
 # monGARS API Catalogue
 
+> **Last updated:** 2025-09-30 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This directory contains the generated OpenAPI specification and example client
 implementations for the FastAPI surface exposed by `monGARS.api.web_api`.
 

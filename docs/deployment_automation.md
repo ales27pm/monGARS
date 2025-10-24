@@ -1,10 +1,14 @@
 # Full-Stack Deployment Automation
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 The `scripts/full_stack_visual_deploy.py` helper orchestrates every
 prerequisite required to bring the monGARS research stack online. It
 wraps environment bootstrapping, dependency installation, optional
 SearxNG provisioning, and container launch into a guided, visual
-terminal experience.
+terminal experience. The script is wired into the
+[`docs/index.md`](index.md) hub under Operations so engineers can spot
+updates at a glance.
 
 ## Visual flow
 
@@ -55,7 +59,11 @@ The installer performs the following actions:
    SearxNG instance.
 7. **Launch containers** – executes `docker compose pull`, `build`, and
    `up -d` with `docker-compose.searxng.yml` layered on top of
-   `docker-compose.yml` when SearxNG is enabled.
+   `docker-compose.yml` when SearxNG is enabled, mirroring the
+   production-oriented profile used by `scripts/docker_menu.py` option 11.
+
+Each step key matches the `--only` flag values: `prerequisites`, `env`,
+`python`, `root-node`, `mobile`, `searxng`, and `containers`.
 
 ## React Native build tips
 
@@ -84,4 +92,13 @@ python scripts/full_stack_visual_deploy.py --only containers --non-interactive
 ```
 
 Logs remain in `deployment.log`, ensuring parity between interactive
-runs and automated CI usage.
+runs and automated CI usage. Attach that log to incident tickets so the
+operations team can compare it with the CI artefacts produced by the
+`docker-build` workflow job described in [docs/workflow_reference.md](workflow_reference.md).
+
+## Keeping this runbook current
+- Update the step descriptions when `scripts/full_stack_visual_deploy.py`
+  changes; mention new CLI flags in both this document and the script docstring.
+- Verify the Mermaid flow mirrors the order in `_build_steps()` after any edit.
+- When Compose files or secrets management workflows move, cross-link the
+  updated locations and bump the "Last updated" banner.

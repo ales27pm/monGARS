@@ -1,5 +1,7 @@
 # Code Audit Summary — 2025-05-20
 
+> **Last updated:** 2025-10-03 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Scope
 - Executed the full `pytest` suite to surface runtime defects and confirm Ray
   Serve fallbacks (`tests/test_llm_ray.py`, `tests/test_llm_adapter_refresh.py`).

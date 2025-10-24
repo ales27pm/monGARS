@@ -1,5 +1,7 @@
 # monGARS
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 **monGARS** (Modular Neural Guardian for Autonomous Research & Support) is a
 privacy-first AI assistant designed for resilient deployment on workstations,
 edge appliances, and research clusters. The project combines a FastAPI service,
@@ -332,22 +334,40 @@ can be extended to register additional Ollama models or alternate providers.
   files or sample secrets.
 
 ## Documentation Map
+Start with the curated [docs/index.md](docs/index.md) hub for an audience-focused
+navigation of every runbook. The tables below highlight frequently referenced
+entries for quick access. Keep the documentation set dynamic by running
+`python scripts/update_docs_metadata.py` before opening a PR; the script refreshes
+`Last updated` banners across all Markdown files using Git history.
+
+### Architecture & Core Services
+| Topic | Location |
+| --- | --- |
+| System diagrams and component walkthrough | [docs/architecture/](docs/architecture/README.md) |
+| Conversation pipeline deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
+| Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
+| Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
+
+### Operations & Delivery
+| Topic | Location |
+| --- | --- |
+| Visual deployment orchestrator | [docs/deployment_automation.md](docs/deployment_automation.md) |
+| Ray Serve deployment guide | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
+| Workflow automation reference | [docs/workflow_reference.md](docs/workflow_reference.md) |
+| Codebase status audits | [docs/codebase_status_report.md](docs/codebase_status_report.md) |
+| Documentation maintenance checklist | [docs/documentation_maintenance.md](docs/documentation_maintenance.md) |
+
+### Research & SDKs
 | Topic | Location |
 | --- | --- |
 | Implementation status & roadmap alignment | [docs/implementation_status.md](docs/implementation_status.md) |
-| Advanced fine-tuning plan | [docs/advanced_fine_tuning.md](docs/advanced_fine_tuning.md) |
-| Code audit notes | [docs/code_audit_summary.md](docs/code_audit_summary.md) |
-| Codebase status audit | [docs/codebase_status_report.md](docs/codebase_status_report.md) |
-| Ray Serve deployment | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
-| Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
+| Advanced fine-tuning and distributed inference plan | [docs/advanced_fine_tuning.md](docs/advanced_fine_tuning.md) |
 | RAG context enrichment | [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md) |
-| Dolphin 3 chat/embedding reuse & service runbook | [docs/dolphin3_chat_embeddings.md](docs/dolphin3_chat_embeddings.md) |
-| API specification & clients | [docs/api/](docs/api/README.md) |
-| SDK overview & reference clients | [docs/sdk-overview.md](docs/sdk-overview.md) |
-| SDK release guide | [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |
-| Conversation workflow deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
-| Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
-| Future milestones | [ROADMAP.md](ROADMAP.md) |
+| Dolphin 3 chat/embedding reuse | [docs/dolphin3_chat_embeddings.md](docs/dolphin3_chat_embeddings.md) |
+| SDK overview & release workflow | [docs/sdk-overview.md](docs/sdk-overview.md), [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |
+| API specification & client stubs | [docs/api/](docs/api/README.md) |
+
+Future milestones continue to live in [ROADMAP.md](ROADMAP.md).
 
 ## Contributing
 Read the scoped contribution rules in `AGENTS.md` files before changing code.
