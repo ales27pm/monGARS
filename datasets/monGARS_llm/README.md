@@ -1,6 +1,6 @@
 # monGARS LLM Alignment Dataset
 
-> **Last updated:** 2025-10-14 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This dataset captures high-signal instruction/response pairs tailored to monGARS so fine-tuning runs can reason about the platform's cognition pipeline, API surface, memory layout, and operational runbooks.
 

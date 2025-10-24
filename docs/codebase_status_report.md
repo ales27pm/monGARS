@@ -1,6 +1,6 @@
 # Codebase Status Report
 
-> **Last updated:** 2025-10-13 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 ## Purpose
 

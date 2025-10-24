@@ -8,6 +8,7 @@ instructions dynamic by recording the current matrix, runtime expectations, and
 the command variants that engineering and operations rely on.
 
 ## End-to-end test matrix
+
 | Layer | Command | Expected duration | Notes |
 | --- | --- | --- | --- |
 | Backend (FastAPI, cognition, evolution engine) | `pytest` | ~110 s | Runs 631 tests covering API contracts, curiosity heuristics, reinforcement loops, and adapter manifests. Mirrors the CI `python-tests` job. |

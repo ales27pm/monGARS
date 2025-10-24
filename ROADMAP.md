@@ -1,6 +1,6 @@
 # monGARS Roadmap
 
-> **Last updated:** 2025-10-09 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This roadmap reflects the verified state of the codebase and the milestones
 required to reach production readiness.

@@ -1,6 +1,6 @@
 # Code Audit Summary — 2025-05-20
 
-> **Last updated:** 2025-10-03 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 ## Scope
 - Executed the full `pytest` suite to surface runtime defects and confirm Ray

@@ -341,14 +341,16 @@ entries for quick access. Keep the documentation set dynamic by running
 `Last updated` banners across all Markdown files using Git history.
 
 ### Architecture & Core Services
+
 | Topic | Location |
 | --- | --- |
-| System diagrams and component walkthrough | [docs/architecture/](docs/architecture/README.md) |
+| System diagrams and component walkthrough | [docs/architecture/module_interactions.md](docs/architecture/module_interactions.md) |
 | Conversation pipeline deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
 | Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
 | Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
 
 ### Operations & Delivery
+
 | Topic | Location |
 | --- | --- |
 | Visual deployment orchestrator | [docs/deployment_automation.md](docs/deployment_automation.md) |
@@ -358,6 +360,7 @@ entries for quick access. Keep the documentation set dynamic by running
 | Documentation maintenance checklist | [docs/documentation_maintenance.md](docs/documentation_maintenance.md) |
 
 ### Research & SDKs
+
 | Topic | Location |
 | --- | --- |
 | Implementation status & roadmap alignment | [docs/implementation_status.md](docs/implementation_status.md) |

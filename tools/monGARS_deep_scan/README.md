@@ -1,6 +1,6 @@
 # monGARS Deep Scanner
 
-> **Last updated:** 2025-10-07 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The monGARS Deep Scanner is a local-only CLI that inspects a repository (or a zipped copy),
 extracts user-facing artefacts, and assembles three datasets alongside provenance and QA reports.

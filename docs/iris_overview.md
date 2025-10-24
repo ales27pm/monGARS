@@ -1,6 +1,6 @@
 # Iris Retrieval Service Overview
 
-> **Last updated:** 2025-10-22 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 ## Implementation Status
 

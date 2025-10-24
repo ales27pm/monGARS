@@ -1,6 +1,6 @@
 # monGARS TypeScript SDK
 
-> **Last updated:** 2025-10-06 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This package exposes a modern, Promise-based wrapper around the monGARS REST
 API. It runs in both browser and Node.js environments by using

@@ -26,20 +26,55 @@ DEFAULT_SECTION_TITLES = {
 }
 
 
-def iter_markdown_files(paths: Iterable[Path]) -> Iterable[Path]:
+def normalize_heading(title: str) -> str:
+    """Return a string guaranteed to be a Markdown heading."""
+
+    cleaned = title.strip()
+    if not cleaned:
+        return "# Untitled"
+    if not cleaned.startswith("#"):
+        return f"# {cleaned}"
+    return cleaned
+
+
+def iter_markdown_files(paths: Iterable[Path] | None) -> Iterable[Path]:
     """Yield Markdown files under the provided paths."""
 
     if not paths:
         paths = [REPO_ROOT]
 
+    excluded_parts = {
+        "node_modules",
+        "vendor",
+        "build",
+        "dist",
+        ".git",
+        "venv",
+        ".venv",
+    }
+    allowed_exts = {".md", ".mdx"}
+
     for base in paths:
-        for path in base.rglob("*.md"):
-            if path.name in SKIP_FILENAMES:
-                continue
-            if any(
-                part in {"node_modules", "vendor", "build", "dist", ".git"}
-                for part in path.parts
+        base = (base if base.is_absolute() else (Path.cwd() / base)).resolve()
+        if not base.exists():
+            continue
+        if base.is_file():
+            if (
+                base.suffix.lower() in allowed_exts
+                and base.name not in SKIP_FILENAMES
+                and not any(part in excluded_parts for part in base.parts)
             ):
+                yield base
+            continue
+
+        for path in base.rglob("*"):
+            if any(part in excluded_parts for part in path.parts):
+                continue
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in allowed_exts:
+                continue
+            if path.name in SKIP_FILENAMES:
                 continue
             yield path
 
@@ -48,6 +83,7 @@ def git_last_updated(path: Path) -> str:
     """Return the last commit date for `path` in ISO format."""
 
     try:
+        rel_path = path.relative_to(REPO_ROOT)
         out = subprocess.check_output(
             [
                 "git",
@@ -55,12 +91,12 @@ def git_last_updated(path: Path) -> str:
                 "-1",
                 "--date=short",
                 "--format=%cd",
-                str(path.relative_to(REPO_ROOT)),
+                str(rel_path),
             ],
             cwd=REPO_ROOT,
             stderr=subprocess.DEVNULL,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
         out = b""
 
     date_str = out.decode().strip()
@@ -89,16 +125,17 @@ def ensure_last_updated(path: Path) -> bool:
     lines = original_text.splitlines()
 
     if not lines:
-        lines = [DEFAULT_SECTION_TITLES.get(path.name, f"# {path.stem.title()}")]
+        default_title = DEFAULT_SECTION_TITLES.get(path.name, path.stem.title())
+        lines = [normalize_heading(default_title)]
 
     heading_idx = find_heading_index(lines)
 
     if heading_idx is None:
         # Prepend a generated heading if missing.
         generated_heading = DEFAULT_SECTION_TITLES.get(
-            path.name, f"# {path.stem.replace('_', ' ').title()}"
+            path.name, path.stem.replace("_", " ").title()
         )
-        lines.insert(0, generated_heading)
+        lines.insert(0, normalize_heading(generated_heading))
         heading_idx = 0
 
     metadata_line = f"{LAST_UPDATED_PREFIX}{git_last_updated(path)}{INSTRUCTION_SUFFIX}"
@@ -129,12 +166,22 @@ def ensure_last_updated(path: Path) -> bool:
         lines.insert(insert_idx, metadata_line)
         modified = True
 
-    # Drop redundant banner immediately following the metadata line.
+    # Remove any duplicate canonical banners elsewhere in the document.
+    duplicate_indices = [
+        idx for idx, line in enumerate(lines) if line.startswith(LAST_UPDATED_PREFIX)
+    ]
+    for idx in reversed(duplicate_indices):
+        if idx == insert_idx:
+            continue
+        lines.pop(idx)
+        modified = True
+
+    # Drop redundant banner immediately following the metadata line even if formatted differently.
     redundant_idx = insert_idx + 1
     while redundant_idx < len(lines) and not lines[redundant_idx].strip():
         redundant_idx += 1
     if redundant_idx < len(lines):
-        candidate = lines[redundant_idx].strip().lower().strip("*_ ")
+        candidate = lines[redundant_idx].strip().lower().lstrip(">*_ ").strip()
         if candidate.startswith("last updated"):
             lines.pop(redundant_idx)
             modified = True
@@ -164,7 +211,7 @@ def main() -> int:
     args = parser.parse_args()
 
     changed = 0
-    for md_file in iter_markdown_files(args.paths or [REPO_ROOT]):
+    for md_file in iter_markdown_files(args.paths):
         if ensure_last_updated(md_file):
             changed += 1
 

@@ -1,6 +1,6 @@
 # RAG Context Enrichment
 
-> **Last updated:** 2025-10-06 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 ## Overview
 

@@ -1,6 +1,6 @@
 # monGARS Module Interaction Analysis
 
-> **Last updated:** 2025-10-14 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 ## Overview
 monGARS layers a FastAPI surface over a cognition core that composes curiosity detection, neuro-symbolic reasoning, adaptive personality shaping, and mimicry-driven style control before persisting each interaction. The `Orchestrator` wires these collaborators together, enriching user prompts with image captions, curiosity hints, and reasoning output prior to invoking the LLM, then shapes the reply through personality analysis and mimicry before logging telemetry.【F:monGARS/core/orchestrator.py†L21-L185】 The higher-level `ConversationalModule` expands on this flow by coordinating memory services, speech synthesis, and evolution feedback loops so that conversation state feeds downstream self-improvement routines.【F:monGARS/core/conversation.py†L25-L164】

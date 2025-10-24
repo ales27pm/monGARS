@@ -1,6 +1,6 @@
 # Repository ↔ Memory Alignment
 
-> **Last updated:** 2025-10-09 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 Use this mapping to translate long-term project memory references into concrete
 code locations inside the monGARS repository. Update the table whenever

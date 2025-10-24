@@ -20,14 +20,16 @@ audiences, and calls out the live sources of truth inside the repository.
   history.
 
 ## Architecture & Core Services
+
 | Reference | Purpose |
 | --- | --- |
-| [architecture/](architecture/README.md) | Diagrams and component-level walkthroughs for the FastAPI, cognition, and UI layers. |
+| [architecture/module_interactions.md](architecture/module_interactions.md) | Diagrams and component-level walkthroughs for the FastAPI, cognition, and UI layers. |
 | [conversation_workflow.md](conversation_workflow.md) | End-to-end chat pipeline tracing OAuth, memory enrichment, adaptive response synthesis, and WebSocket streaming. |
 | [model_management.md](model_management.md) | Manifest structure, model lifecycle, and adapter provisioning hooks in `monGARS/core/model_manager.py`. |
 | [repo_memory_alignment.md](repo_memory_alignment.md) | Mapping between repository modules and persisted state in Hippocampus/SQLModel. |
 
 ## Developer Essentials
+
 | Reference | Why it matters |
 | --- | --- |
 | [testing.md](testing.md) | Complete test matrix, coverage thresholds, and targeted command recipes. |
@@ -38,6 +40,7 @@ audiences, and calls out the live sources of truth inside the repository.
 | [documentation_maintenance.md](documentation_maintenance.md) | Style rules, review hooks, and "Last updated" expectations that keep guidance dynamic. |
 
 ## Deployment & Operations
+
 | Runbook | Highlights |
 | --- | --- |
 | [deployment_automation.md](deployment_automation.md) | Guided visual installer, command switches, and hand-off into manual workflows. |
@@ -47,6 +50,7 @@ audiences, and calls out the live sources of truth inside the repository.
 | [security guidance in README](../README.md#security--observability) | Baseline operational hardening steps for secrets, WebSockets, and telemetry. |
 
 ## Research & ML Tooling
+
 | Document | Scope |
 | --- | --- |
 | [rag_context_enrichment.md](rag_context_enrichment.md) | How RAG enrichment integrates with FastAPI review flows and fallback behaviour. |
@@ -56,6 +60,7 @@ audiences, and calls out the live sources of truth inside the repository.
 | [advanced_fine_tuning.md](advanced_fine_tuning.md) | (Also in Developer Essentials) — adapter training and Ray Serve automation backlog. |
 
 ## SDKs & Client Integrations
+
 | Reference | Details |
 | --- | --- |
 | [sdk-overview.md](sdk-overview.md) | Supported languages, feature parity, and release cadence. |

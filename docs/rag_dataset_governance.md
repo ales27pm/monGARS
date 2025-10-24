@@ -1,6 +1,6 @@
 # RAG Dataset Governance
 
-> **Last updated:** 2025-10-06 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The curated datasets produced by `SelfTrainingEngine` now include structured
 governance metadata and automated scrubbing checks so that partner exports stay

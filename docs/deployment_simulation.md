@@ -1,6 +1,6 @@
 # Deployment Simulation Runbook
 
-> **Last updated:** 2025-10-22 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The deployment simulator provides a fast, deterministic pre-flight check for
 operators who want to validate configuration before promoting a build to

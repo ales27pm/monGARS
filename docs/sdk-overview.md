@@ -1,6 +1,6 @@
 # monGARS SDK Overview
 
-> **Last updated:** 2025-10-06 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The monGARS platform now ships with first-party SDKs for Python and TypeScript.
 These libraries wrap the public FastAPI surface with strong typing, resilient

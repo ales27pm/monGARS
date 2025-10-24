@@ -1,6 +1,6 @@
 # Model Configuration & Provisioning
 
-> **Last updated:** 2025-10-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The LLM runtime is configured through a manifest located at
 `configs/llm_models.json`. Profiles group related model roles (for example

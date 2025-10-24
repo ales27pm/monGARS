@@ -19,7 +19,7 @@ fresh instructions that match the shipped code.
 1. **Track scope** – List every affected guide in your pull request description
    and mention the owner who should review the change (ops, SDK, research, etc.).
 2. **Refresh the banner** – Run `python scripts/update_docs_metadata.py` to
-   sync the `Last updated` line for every Markdown file you touched. The script
+   sync the `Last updated` line for every Markdown or MDX file you touched. The script
    derives timestamps from Git history and removes stale manual banners.
 3. **Validate links** – Run `npx markdownlint-cli@0.39.0 "docs/**/*.md" "README.md"` to enforce shared formatting rules and
    follow it with `npx markdown-link-check -q README.md` plus `npx markdown-link-check -q docs/index.md` for external link verification.

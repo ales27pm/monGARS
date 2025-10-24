@@ -1,6 +1,6 @@
 # TypeScript Client Example
 
-> **Last updated:** 2025-10-03 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 Generate a typed SDK for monGARS using
 [`openapi-typescript-codegen`](https://www.npmjs.com/package/openapi-typescript-codegen).

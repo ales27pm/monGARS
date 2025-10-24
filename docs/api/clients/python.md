@@ -1,6 +1,6 @@
 # Python Client Example
 
-> **Last updated:** 2025-10-03 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 Use [`httpx`](https://www.python-httpx.org/) and
 [`pydantic`](https://docs.pydantic.dev/) to interact with the monGARS API. The

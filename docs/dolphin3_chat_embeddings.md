@@ -1,6 +1,6 @@
 # Reusing Dolphin 3.0 for Chat and Embeddings
 
-> **Last updated:** 2025-10-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The Dolphin 3.0 (Llama-3.1-8B) checkpoint already powers monGARS chat flows via
 Ollama. This guide explains how to reuse the very same weights for retrieval
