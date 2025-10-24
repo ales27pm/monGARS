@@ -367,9 +367,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should-run: ${{ steps.mobile_guard.outputs.should-run }}
-    defaults:
-      run:
-        working-directory: mobile-app
     steps:
       - name: Evaluate mobile quality scope
         id: mobile_guard
@@ -394,6 +391,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.mobile_guard.outputs.should-run == 'true'
+        working-directory: mobile-app
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
@@ -402,6 +400,7 @@ jobs:
         if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
+        working-directory: mobile-app
         run: |
           set -euo pipefail
           npm run lint
@@ -410,6 +409,7 @@ jobs:
         if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
+        working-directory: mobile-app
         run: |
           set -euo pipefail
           npm run typecheck
@@ -418,6 +418,7 @@ jobs:
         if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
+        working-directory: mobile-app
         run: |
           set -euo pipefail
           npm test -- --ci --runInBand --coverage
