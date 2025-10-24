@@ -1,5 +1,7 @@
 # monGARS Python SDK
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 The official Python helper library for interacting with the monGARS FastAPI
 service. It provides both synchronous and asynchronous clients built on top of
 [`httpx`](https://www.python-httpx.org/), typed request/response models, and

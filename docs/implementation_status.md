@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-Last updated: 2026-02-18
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans

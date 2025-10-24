@@ -1,5 +1,7 @@
 # Workflow reference
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 The repository ships two GitHub workflows that back day-to-day delivery:
 `CI Quality Gate` (`.github/workflows/ci.yml`) and `Generate signing CSR`
 (`.github/workflows/Csr.yml`). This note documents what each job enforces,

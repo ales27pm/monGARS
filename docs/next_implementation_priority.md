@@ -1,5 +1,7 @@
 # Next Implementation Priority
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Summary
 
 Reinforcement validation is automated and the sustainability dashboards now

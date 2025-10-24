@@ -1,5 +1,7 @@
 # Ray Serve Deployment Guide
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This guide outlines how to provision Ray Serve for monGARS, configure the
 application, and understand fallback behaviour when the cluster is unavailable.
 It assumes Ray 2.x, Python 3.11, and optional Docker/Kubernetes familiarity.

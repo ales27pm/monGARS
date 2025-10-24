@@ -5,6 +5,8 @@ labels: enhancement
 ---
 
 ## Problem Statement
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 <!-- What challenge are you trying to solve? -->
 
 ## Proposed Solution
