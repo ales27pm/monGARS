@@ -1,5 +1,7 @@
 # monGARS SDK Release Guide
 
+> **Last updated:** 2025-10-06 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This guide documents the end-to-end process for publishing the Python and
 TypeScript SDKs. Follow it whenever you cut a release so external consumers
 receive reproducible packages that match the deployed FastAPI contract.

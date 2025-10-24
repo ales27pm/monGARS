@@ -1,5 +1,7 @@
 # RAG Context Enrichment
 
+> **Last updated:** 2025-10-06 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Overview
 
 RAG context enrichment augments monGARS chat and review workflows with references
