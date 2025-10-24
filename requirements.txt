@@ -55,5 +55,6 @@ trl>=0.23.1 ; extra == "grpo"
 vllm>=0.4.2,<0.5 ; extra == "grpo"
 pytest
 pytest-asyncio>=0.23.8,<0.25
+coverage[toml]>=7.6.0
 alembic>=1.13.2
 psycopg[binary]>=3.2
