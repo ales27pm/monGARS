@@ -34,7 +34,7 @@ class ReinforcementObservabilityStore:
             runs = self._load().get("runs", [])
             runs.append(self._build_record(summary))
             if len(runs) > self._max_records:
-                runs = runs[-self._max_records :]
+                runs = runs[slice(-self._max_records, None)]
             payload = {
                 "meta": {
                     "version": 1,

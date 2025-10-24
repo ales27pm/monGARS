@@ -3,8 +3,6 @@ from typing import Any
 
 import pytest
 
-os.environ.setdefault("DJANGO_SECRET_KEY", "test-secret-key")
-
 from webapp.webapp import settings
 
 

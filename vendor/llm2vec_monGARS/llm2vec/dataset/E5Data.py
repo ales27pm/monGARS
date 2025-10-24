@@ -131,7 +131,7 @@ class E5Data(Dataset):
         for dataset in datasets:
             dataset_samples = data_map[dataset]
             for i in range(0, len(dataset_samples), self.effective_batch_size):
-                batch = dataset_samples[i : i + self.effective_batch_size]
+                batch = dataset_samples[slice(i, i + self.effective_batch_size)]
                 if len(batch) == self.effective_batch_size:
                     all_batches.append(batch)
                 else:

@@ -493,7 +493,10 @@ class RayLLMDeployment:
         try:
             data = await request.json()
         except Exception as exc:  # pragma: no cover - defensive parsing
-            logger.exception("llm.ray.invalid_request")
+            logger.exception(
+                "llm.ray.invalid_request",
+                extra={"error": str(exc)},
+            )
             return {
                 "content": "",
                 "error": "invalid_request",

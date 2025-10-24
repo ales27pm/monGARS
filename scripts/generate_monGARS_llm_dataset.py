@@ -1215,7 +1215,7 @@ def build_api_examples(doc: dict[str, Any] | None) -> list[dict[str, Any]]:
                 """
             ).strip()
             testing_response = textwrap.dedent(
-                f"""
+                """
                 Suggested tests:
                 - Happy path with valid authentication and payload.
                 - Authentication failure resulting in 401.

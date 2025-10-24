@@ -152,7 +152,7 @@ async def test_factcheck_providers_include_verdict(provider_cls: type) -> None:
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
-            f"monGARS.core.search.providers.factcheckers.feedparser.parse",
+            "monGARS.core.search.providers.factcheckers.feedparser.parse",
             lambda *_: feed,
         )
         provider = provider_cls()

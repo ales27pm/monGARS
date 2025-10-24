@@ -1,8 +1,3 @@
-import os
-
-os.environ.setdefault("SECRET_KEY", "test")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-
 import asyncio
 import uuid
 from datetime import datetime, timezone

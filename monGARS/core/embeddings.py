@@ -260,7 +260,7 @@ def _encode_with_transformers(
     pooled_results: list[np.ndarray] = []
 
     for start in range(0, len(texts), batch_size):
-        chunk = [str(text) for text in texts[start : start + batch_size]]
+        chunk = [str(text) for text in texts[slice(start, start + batch_size)]]
         formatted: list[str]
         if system_prompt is None:
             formatted = chunk
@@ -433,7 +433,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = list(cleaned[start : start + batch_size])
+            chunk = list(cleaned[slice(start, start + batch_size)])
             (
                 chunk_vectors,
                 backend_indices,
@@ -492,7 +492,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = list(cleaned[start : start + batch_size])
+            chunk = list(cleaned[slice(start, start + batch_size)])
             (
                 chunk_vectors,
                 backend_indices,
@@ -790,7 +790,7 @@ class LLM2VecEmbedder:
         batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
 
         for start in range(0, len(cleaned), batch_size):
-            chunk = list(cleaned[start : start + batch_size])
+            chunk = list(cleaned[slice(start, start + batch_size)])
             encode_indices: list[int] = []
             encode_payloads: list[str] = []
             chunk_vectors: list[list[float] | None] = [None] * len(chunk)
@@ -1023,7 +1023,9 @@ class Dolphin3Embedder:
         system_prompt = getattr(self._settings, "llm2vec_instruction", None)
 
         for start in range(0, len(texts), self._batch_size):
-            chunk = [str(text) for text in texts[start : start + self._batch_size]]
+            chunk = [
+                str(text) for text in texts[slice(start, start + self._batch_size)]
+            ]
             formatted_chunk = [
                 render_chat_prompt_from_text(
                     text,

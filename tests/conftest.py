@@ -3,12 +3,16 @@
 import os
 import warnings
 
+import pytest_asyncio
+
 # Ensure the lightweight sqlite backend is used for tests to avoid external
 # database dependencies while pgvector-backed code paths remain exercised in
 # unit tests through mocks. ``setdefault`` is intentionally avoided so the
 # test suite always overrides CI-provided connection strings.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./mongars_test.db"
 os.environ["SECRET_KEY"] = "test-secret-key"
+os.environ["DJANGO_SECRET_KEY"] = "test-django-secret-key"
+os.environ["JWT_ALGORITHM"] = "HS256"
 
 warnings.filterwarnings(
     "ignore",
@@ -16,15 +20,13 @@ warnings.filterwarnings(
     module=r"^awq(\.|$)",
 )
 
-import pytest_asyncio
-
-from monGARS.api.dependencies import get_persistence_repository
-from monGARS.core.security import SecurityManager
-
 
 @pytest_asyncio.fixture
 async def ensure_test_users() -> None:
     """Provision standard test users expected by API contract suites."""
+
+    from monGARS.api.dependencies import get_persistence_repository
+    from monGARS.core.security import SecurityManager
 
     repo = get_persistence_repository()
     sec_manager = SecurityManager()

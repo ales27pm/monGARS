@@ -72,6 +72,19 @@
     ],
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/src/$1"
+    },
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "json-summary"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 15,
+        "functions": 35,
+        "lines": 38,
+        "statements": 38
+      }
     }
   }
 }

@@ -11,18 +11,18 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from monGARS.mlops.wrapper_loader import (
+    WrapperBundle,
+    WrapperBundleError,
+    load_wrapper_bundle,
+)
+
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - heavy dependency is optional
     from llm2vec import LLM2Vec
 except Exception:  # pragma: no cover - library not available in tests
     LLM2Vec = None  # type: ignore[assignment]
-
-from monGARS.mlops.wrapper_loader import (
-    WrapperBundle,
-    WrapperBundleError,
-    load_wrapper_bundle,
-)
 
 
 def _get_torch_module() -> Any | None:

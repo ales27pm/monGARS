@@ -76,7 +76,7 @@ def mismatched_sizes_all_gather(
         (
             *tensor.shape[:mismatched_axis],
             max_size,
-            *tensor.shape[mismatched_axis + 1 :],
+            *tensor.shape[slice(mismatched_axis + 1, None)],
         ),
         device=tensor.device,
         dtype=tensor.dtype,

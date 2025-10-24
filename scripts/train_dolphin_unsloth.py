@@ -76,12 +76,22 @@ SAMPLE_DATA_DIR = ROOT_DIR / "scripts" / "data"
 SAMPLE_TRAIN_FILE = SAMPLE_DATA_DIR / "dolphin_sft_sample_train.jsonl"
 SAMPLE_VALIDATION_FILE = SAMPLE_DATA_DIR / "dolphin_sft_sample_validation.jsonl"
 
-from modules.neurons.registry import update_manifest
-from monGARS.mlops.artifacts import (
-    WrapperConfig,
-    build_adapter_summary,
-    write_wrapper_bundle,
-)
+try:
+    from modules.neurons.registry import update_manifest
+    from monGARS.mlops.artifacts import (
+        WrapperConfig,
+        build_adapter_summary,
+        write_wrapper_bundle,
+    )
+except ModuleNotFoundError:  # pragma: no cover - script execution direct from repo root
+    if str(ROOT_DIR) not in sys.path:
+        sys.path.insert(0, str(ROOT_DIR))
+    from modules.neurons.registry import update_manifest
+    from monGARS.mlops.artifacts import (
+        WrapperConfig,
+        build_adapter_summary,
+        write_wrapper_bundle,
+    )
 
 try:  # pragma: no cover - optional dependency
     from llm2vec import LLM2VecModel
@@ -1238,7 +1248,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     if free_mb == 0 or total_mb == 0:
         LOGGER.warning("No compatible GPU detected; defaulting to CPU mode.")
         config.per_device_train_batch_size = 1
-        device = "cpu"
     else:
         config.per_device_train_batch_size = recommend_batch_size(free_mb)
 

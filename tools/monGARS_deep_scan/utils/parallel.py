@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Iterable, Iterator, Sequence, TypeVar
+from typing import Callable, Iterator, Sequence, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")

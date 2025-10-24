@@ -1696,7 +1696,7 @@ class LLMIntegration:
         text = response.get("text", "") if isinstance(response, dict) else ""
         if text:
             for start in range(0, len(text), STREAM_CHUNK_SIZE):
-                yield text[start : start + STREAM_CHUNK_SIZE]
+                yield text[slice(start, start + STREAM_CHUNK_SIZE)]
 
     async def _inference(self, prompt: str, task_type: str = "general") -> str:
         """Return the full response text for the prompt."""

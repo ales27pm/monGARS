@@ -186,8 +186,10 @@ class MistralBiModel(MistralModel):
                         <= (cache_position.reshape(-1, 1) - self.config.sliding_window)
                     )
             causal_mask *= exclude_mask
-            causal_mask = causal_mask[None, None, :, :].expand(
-                input_tensor.shape[0], 1, -1, -1
+            causal_mask = (
+                causal_mask.unsqueeze(0)
+                .unsqueeze(0)
+                .expand(input_tensor.shape[0], 1, -1, -1)
             )
             if attention_mask is not None:
                 causal_mask = (
@@ -195,13 +197,20 @@ class MistralBiModel(MistralModel):
                 )  # copy to contiguous memory for in-place edit
                 if attention_mask.dim() == 2:
                     mask_length = attention_mask.shape[-1]
+                    mask_slice = slice(0, mask_length)
+                    causal_indices = (
+                        slice(None),
+                        slice(None),
+                        slice(None),
+                        mask_slice,
+                    )
                     padding_mask = (
-                        causal_mask[:, :, :, :mask_length]
-                        + attention_mask[:, None, None, :]
+                        causal_mask[causal_indices]
+                        + attention_mask[(slice(None), None, None, slice(None))]
                     )
                     padding_mask = padding_mask == 0
-                    causal_mask[:, :, :, :mask_length] = causal_mask[
-                        :, :, :, :mask_length
+                    causal_mask[causal_indices] = causal_mask[
+                        causal_indices
                     ].masked_fill(padding_mask, min_dtype)
 
         if (

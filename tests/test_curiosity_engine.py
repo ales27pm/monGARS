@@ -1,13 +1,10 @@
 import asyncio
 import logging
-import os
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-
-os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from monGARS.core.cortex import curiosity_engine as curiosity_module
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine

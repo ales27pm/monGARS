@@ -24,6 +24,35 @@ observability pipelines.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import copy
+import logging
+import os
+import statistics
+import threading
+import time
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Protocol,
+    Sequence,
+)
+
+from modules.neurons.registry import update_manifest
+from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import get_tracer
+from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
+from monGARS.core.self_training import SelfTrainingEngine
+
 # Import Unsloth as early as possible to guarantee its patches execute before
 # transformer-based helpers from TRL are loaded.
 try:  # pragma: no cover - optional dependency for reasoning loop
@@ -41,20 +70,6 @@ FastLanguageModel = (
     if "unsloth" in globals() and unsloth is not None
     else None
 )
-
-import asyncio
-import contextlib
-import copy
-import logging
-import os
-import statistics
-import threading
-import time
-from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Protocol, Sequence
 
 try:  # pragma: no cover - optional dependency at runtime
     from trl import DPOConfig, DPOTrainer  # type: ignore
@@ -77,12 +92,6 @@ try:  # pragma: no cover - optional dependency at runtime
     from datasets import Dataset  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - datasets optional
     Dataset = None  # type: ignore[assignment]
-
-from modules.neurons.registry import update_manifest
-from monGARS.core.model_slot_manager import ModelSlotManager
-from monGARS.core.monitor import get_tracer
-from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
-from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
 
@@ -1286,13 +1295,6 @@ class ReasoningRunSummary:
             "adapter_dir": str(self.adapter_dir) if self.adapter_dir else None,
             "merged_dir": str(self.merged_dir) if self.merged_dir else None,
         }
-
-
-class ReinforcementLoop:
-    """Execute Unsloth-backed GRPO cycles focused on Dolphin 3.0 reasoning prompts."""
-
-
-from typing import ClassVar
 
 
 class ReinforcementLoop:

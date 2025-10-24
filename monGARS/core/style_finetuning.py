@@ -398,7 +398,8 @@ class StyleInferenceService:
         )
         model.eval()
         vectors: list[torch.Tensor] = []
-        for item in interactions[-self._config.max_history_messages :]:
+        history_slice = slice(-self._config.max_history_messages, None)
+        for item in interactions[history_slice]:
             candidate = item.get("response") or item.get("message")
             if not candidate:
                 continue
@@ -638,7 +639,7 @@ class StyleFineTuner:
         prompt = self._prompt_builder.build(base_text, personality or {})
         generated = self._inference.apply_style(state, prompt)
         if generated.startswith(prompt):
-            adapted = generated[len(prompt) :].strip()
+            adapted = generated[slice(len(prompt), None)].strip()
             return adapted or generated.strip()
         return generated.strip()
 
@@ -646,7 +647,8 @@ class StyleFineTuner:
         self, interactions: Sequence[dict[str, str]]
     ) -> list[str]:
         samples: list[str] = []
-        for item in interactions[-self.config.max_history_messages :]:
+        history_slice = slice(-self.config.max_history_messages, None)
+        for item in interactions[history_slice]:
             message = item.get("message", "").strip()
             if response := item.get("response", "").strip():
                 samples.append(response)
