@@ -32,19 +32,24 @@ on:
         type: string
         default: ""
       pipeline_overrides:
-        description: "JSON or key=value pairs overriding defaults (e.g. {\"max_seq_len\": 4096, \"retention_days\": 21})"
+        description: "JSON or key=value pairs overriding defaults (e.g. {\"max_seq_len\": 4096})"
         type: string
         default: ""
 
 permissions:
   contents: read
-  actions: write
+
+defaults:
+  run:
+    shell: bash
 
 env:
   PYTHON_VERSION: "3.11"
   HF_HOME: "${{ github.workspace }}/.cache/huggingface"
   TRANSFORMERS_CACHE: "${{ github.workspace }}/.cache/huggingface"
   PIP_CACHE_DIR: "${{ github.workspace }}/.cache/pip"
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  UV_PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
 
 concurrency:
   group: unsloth-${{ github.ref }}
@@ -53,7 +58,7 @@ concurrency:
 jobs:
   finetune:
     name: Run Unsloth pipeline
-    runs-on: [ubuntu-latest]
+    runs-on: ubuntu-latest
     timeout-minutes: 720
     steps:
       - name: Checkout repository
@@ -63,13 +68,12 @@ jobs:
 
       - name: Resolve Hugging Face token
         id: resolve-hf
-        shell: bash
         env:
           INPUT_TOKEN: ${{ inputs.hf_token }}
           SECRET_HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SECRET_ALT_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         run: |
-          set -eo pipefail
+          set -euo pipefail
           token="${INPUT_TOKEN:-}"
           source="inputs.hf_token"
           if [ -z "$token" ] && [ -n "${SECRET_HF_TOKEN}" ]; then
@@ -89,22 +93,27 @@ jobs:
             echo "source=none" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Set up Python with uv
+        uses: astral-sh/setup-uv@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore pip cache
+      - name: Prepare caches
         uses: actions/cache@v4
         with:
-          path: ${{ env.PIP_CACHE_DIR }}
-          key: "pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}"
-          restore-keys: |
-            pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+          path: |
+            ${{ env.PIP_CACHE_DIR }}
+            ${{ env.HF_HOME }}
+          key: "unsloth-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}"
+
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          uv pip install --system -r requirements.txt
 
       - name: Install OS dependencies
-        shell: bash
         run: |
+          set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y git-lfs
@@ -113,24 +122,14 @@ jobs:
             git lfs install --local || true
           fi
 
-      - name: Install Python dependencies
-        shell: bash
-        env:
-          PIP_CACHE_DIR: ${{ env.PIP_CACHE_DIR }}
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
       - name: Inspect accelerator availability
         id: accelerator
-        shell: bash
         run: |
           set -euo pipefail
           python scripts/inspect_accelerator.py
 
       - name: Resolve training paths
         id: paths
-        shell: bash
         env:
           INPUT_DATASET_PATH: ${{ inputs.dataset_path }}
           INPUT_EVAL_DATASET_PATH: ${{ inputs.eval_dataset_path }}
@@ -179,14 +178,15 @@ jobs:
             exit 1
           fi
 
-          echo "dataset_path=$dataset_path" >> "$GITHUB_OUTPUT"
-          echo "eval_dataset_path=$eval_dataset_path" >> "$GITHUB_OUTPUT"
-          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
-          echo "registry_path=$registry_path" >> "$GITHUB_OUTPUT"
+          {
+            echo "dataset_path=$dataset_path"
+            echo "eval_dataset_path=$eval_dataset_path"
+            echo "output_dir=$output_dir"
+            echo "registry_path=$registry_path"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve pipeline overrides
         id: overrides
-        shell: bash
         env:
           RAW_OVERRIDES: ${{ inputs.pipeline_overrides }}
         run: |
@@ -194,7 +194,6 @@ jobs:
           python scripts/resolve_pipeline_overrides.py
 
       - name: Run Unsloth fine-tuning pipeline
-        id: finetune
         env:
           MODEL_ID: ${{ inputs.model_id }}
           DATASET_ID: ${{ inputs.dataset_id }}
@@ -224,7 +223,6 @@ jobs:
           SKIP_METADATA: ${{ steps.overrides.outputs.skip_metadata }}
           SKIP_MERGE: ${{ steps.overrides.outputs.skip_merge }}
           ACCELERATOR: ${{ steps.accelerator.outputs.accelerator }}
-        shell: bash
         run: |
           set -euxo pipefail
           extra_args=()
@@ -275,7 +273,6 @@ jobs:
             "${extra_args[@]}"
 
       - name: List generated artifacts
-        shell: bash
         env:
           OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
         run: |
@@ -284,7 +281,6 @@ jobs:
 
       - name: Collect artifact paths
         id: artifact-paths
-        shell: bash
         env:
           OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
           REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
@@ -295,7 +291,6 @@ jobs:
             if [ -e "$candidate" ]; then
               echo "$candidate"
             fi
-            return 0
           }
 
           collect_paths() {
@@ -328,8 +323,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload training outputs
-        uses: actions/upload-artifact@v4
         if: steps.artifact-paths.outputs.has_files == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: unsloth-llm2vec-artifacts
           path: ${{ steps.artifact-paths.outputs.paths }}
@@ -337,7 +332,6 @@ jobs:
           retention-days: ${{ steps.overrides.outputs.retention_days }}
 
       - name: Publish summary
-        shell: bash
         env:
           OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
           REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}

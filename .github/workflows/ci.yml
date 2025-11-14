@@ -1,4 +1,4 @@
-name: CI Quality Gate
+name: CI
 
 on:
   push:
@@ -7,12 +7,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-quality-gate-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  actions: write
 
 defaults:
   run:
@@ -22,10 +21,12 @@ env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "18"
   MOBILE_NODE_VERSION: "18"
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  UV_PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
 
 jobs:
   changes:
-    name: Determine affected scopes
+    name: Determine impacted areas
     runs-on: ubuntu-latest
     outputs:
       python: ${{ steps.filter.outputs.python }}
@@ -35,13 +36,14 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - id: filter
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        name: Detect file changes
+        uses: dorny/paths-filter@v3
         with:
           filters: |
             python:
@@ -76,358 +78,177 @@ jobs:
               - '.github/*.yml'
               - '.github/*.yaml'
 
-      - name: Summarize impacted scopes
+      - name: Summarise scope
         run: |
           {
             echo "### Impacted scopes";
             echo;
             echo "- Python: ${{ steps.filter.outputs.python }}";
-            echo "- Web UI: ${{ steps.filter.outputs.web }}";
+            echo "- Web: ${{ steps.filter.outputs.web }}";
             echo "- Mobile: ${{ steps.filter.outputs.mobile }}";
             echo "- Docker: ${{ steps.filter.outputs.docker }}";
             echo "- Docs: ${{ steps.filter.outputs.docs }}";
             echo "- Workflows: ${{ steps.filter.outputs.workflows }}";
           } >> "$GITHUB_STEP_SUMMARY"
 
-  python-quality:
-    name: Python formatting & lint
+  python:
+    name: Backend lint, typecheck & tests
     needs: changes
     runs-on: ubuntu-latest
-    outputs:
-      should-run: ${{ steps.python_guard.outputs.should-run }}
+    if: |
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.web == 'true' ||
+      needs.changes.outputs.mobile == 'true' ||
+      needs.changes.outputs.docker == 'true' ||
+      needs.changes.outputs.docs == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      github.event_name != 'pull_request'
+    env:
+      UV_LINK_MODE: copy
     steps:
-      - name: Evaluate Python quality scope
-        id: python_guard
-        run: echo "should-run=${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.docker == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
-        if: steps.python_guard.outputs.should-run == 'true'
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Skip Python formatting & lint
-        if: steps.python_guard.outputs.should-run != 'true'
-        run: echo "Skipping Python formatting & lint because no Python-affecting changes were detected."
-
-      - name: Set up Python
-        if: steps.python_guard.outputs.should-run == 'true'
-        uses: actions/setup-python@v5
+      - name: Set up Python with uv
+        uses: astral-sh/setup-uv@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-
-      - name: Install formatters and linters
-        if: steps.python_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install black isort flake8
-
-      - name: Run Black
-        if: steps.python_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          black --check .
-
-      - name: Run isort
-        if: steps.python_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          isort --check-only --diff .
-
-      - name: Run flake8
-        if: steps.python_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          flake8 .
-
-  python-typecheck:
-    name: Python type checking
-    needs:
-      - changes
-      - python-quality
-    runs-on: ubuntu-latest
-    outputs:
-      should-run: ${{ steps.python_type_guard.outputs.should-run }}
-    steps:
-      - name: Evaluate Python type-check scope
-        id: python_type_guard
-        run: echo "should-run=${{ needs.python-quality.outputs.should-run == 'true' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
-        if: steps.python_type_guard.outputs.should-run == 'true'
-        uses: actions/checkout@v4
-
-      - name: Skip Python type checking
-        if: steps.python_type_guard.outputs.should-run != 'true'
-        run: echo "Skipping Python type checking because no Python-affecting changes were detected."
-
-      - name: Set up Python
-        if: steps.python_type_guard.outputs.should-run == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-
-      - name: Install backend dependencies for mypy
-        if: steps.python_type_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install mypy
-
-      - name: Verify dependency integrity
-        if: steps.python_type_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          pip check
-
-      - name: Run mypy
-        if: steps.python_type_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          mypy
-
-  python-tests:
-    name: Backend tests (pytest)
-    needs:
-      - changes
-      - python-quality
-      - python-typecheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    outputs:
-      should-run: ${{ steps.python_test_guard.outputs.should-run }}
-    steps:
-      - name: Evaluate backend test scope
-        id: python_test_guard
-        run: echo "should-run=${{ needs.python-quality.outputs.should-run == 'true' && needs.python-typecheck.outputs.should-run == 'true' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
-        if: steps.python_test_guard.outputs.should-run == 'true'
-        uses: actions/checkout@v4
-
-      - name: Skip backend tests
-        if: steps.python_test_guard.outputs.should-run != 'true'
-        run: echo "Skipping backend pytest suite because no Python-affecting changes were detected."
-
-      - name: Set up Python
-        if: steps.python_test_guard.outputs.should-run == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
 
       - name: Install backend dependencies
-        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install coverage[toml]
+          uv pip install --system -r requirements.txt
+          uv pip install --system black isort flake8 mypy coverage[toml]
+          uv pip check
 
-      - name: Verify dependency integrity
-        if: steps.python_test_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          pip check
+      - name: Run Black
+        run: black --check .
+
+      - name: Run isort
+        run: isort --check-only --diff .
+
+      - name: Run flake8
+        run: flake8 .
+
+      - name: Run mypy
+        run: mypy
 
       - name: Run pytest with coverage
-        if: steps.python_test_guard.outputs.should-run == 'true'
         run: |
           set -euo pipefail
           coverage run -m pytest
-
-      - name: Enforce coverage threshold
-        if: steps.python_test_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          # Calibrated to the current backend baseline (≈84%) so the gate flags
-          # meaningful regressions without failing on historical gaps while we
-          # backfill tests for low-coverage modules.
           coverage report --fail-under=84
-
-      - name: Generate coverage reports
-        if: steps.python_test_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
           coverage xml
           coverage html -d coverage_html
 
       - name: Publish coverage summary
-        if: always()
         run: |
-          set -euo pipefail
           {
             echo "### Pytest coverage";
             echo;
-            if [[ "${{ steps.python_test_guard.outputs.should-run }}" == 'true' ]]; then
-              coverage report;
-            else
-              echo "Pytest skipped because no Python-affecting changes were detected.";
-            fi
+            coverage report;
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload pytest cache and reports
-        if: steps.python_test_guard.outputs.should-run == 'true'
+      - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pytest-artifacts
           path: |
-            .pytest_cache
             .coverage
             coverage.xml
             coverage_html
+            .pytest_cache
           if-no-files-found: ignore
           retention-days: 14
 
-  node-quality:
-    name: Web UI lint, tests & build
+  web:
+    name: Web UI lint, test & build
     needs: changes
     runs-on: ubuntu-latest
-    outputs:
-      should-run: ${{ steps.web_guard.outputs.should-run }}
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
     steps:
-      - name: Evaluate web quality scope
-        id: web_guard
-        run: echo "should-run=${{ needs.changes.outputs.web == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
-        if: steps.web_guard.outputs.should-run == 'true'
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Skip web lint, tests & build
-        if: steps.web_guard.outputs.should-run != 'true'
-        run: echo "Skipping web lint/tests/build because no web or workflow changes were detected."
-
       - name: Set up Node.js
-        if: steps.web_guard.outputs.should-run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        if: steps.web_guard.outputs.should-run == 'true'
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Run ESLint
-        if: steps.web_guard.outputs.should-run == 'true'
         env:
           CI: "true"
-        run: |
-          set -euo pipefail
-          npm run lint
+        run: npm run lint
 
-      - name: Run Jest tests
-        if: steps.web_guard.outputs.should-run == 'true'
+      - name: Run Jest
         env:
           CI: "true"
-        run: |
-          set -euo pipefail
-          npm run jest -- --ci --runInBand --coverage
+        run: npm run jest -- --ci --runInBand --coverage
 
       - name: Build production bundle
-        if: steps.web_guard.outputs.should-run == 'true'
         env:
           NODE_ENV: production
-        run: |
-          set -euo pipefail
-          npm run build
+        run: npm run build
 
-      - name: Upload web bundle and coverage
-        if: steps.web_guard.outputs.should-run == 'true'
+      - name: Upload web artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: webapp-static-artifacts
+          name: webapp-artifacts
           path: |
-            webapp/static/js/chat.js
             coverage
+            webapp/static/js/chat.js
           if-no-files-found: warn
           retention-days: 7
 
-  mobile-quality:
-    name: Mobile app lint, typecheck & tests
+  mobile:
+    name: Mobile lint, typecheck & tests
     needs: changes
     runs-on: ubuntu-latest
-    outputs:
-      should-run: ${{ steps.mobile_guard.outputs.should-run }}
+    if: needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
     steps:
-      - name: Evaluate mobile quality scope
-        id: mobile_guard
-        run: echo "should-run=${{ needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Skip mobile lint, typecheck & tests
-        if: steps.mobile_guard.outputs.should-run != 'true'
-        working-directory: ${{ github.workspace }}
-        run: echo "Skipping mobile lint/typecheck/tests because no mobile or workflow changes were detected."
-
       - name: Set up Node.js
-        if: steps.mobile_guard.outputs.should-run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.MOBILE_NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: |
-            mobile-app/package-lock.json
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
 
       - name: Install dependencies
-        if: steps.mobile_guard.outputs.should-run == 'true'
         working-directory: mobile-app
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Run ESLint
-        if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         working-directory: mobile-app
-        run: |
-          set -euo pipefail
-          npm run lint
+        run: npm run lint
 
       - name: Type-check React Native sources
-        if: steps.mobile_guard.outputs.should-run == 'true'
         env:
           CI: "true"
         working-directory: mobile-app
-        run: |
-          set -euo pipefail
-          npm run typecheck
+        run: npm run typecheck
 
-      - name: Run Jest tests
-        if: steps.mobile_guard.outputs.should-run == 'true'
+      - name: Run Jest
         env:
           CI: "true"
         working-directory: mobile-app
-        run: |
-          set -euo pipefail
-          npm test -- --ci --runInBand --coverage
+        run: npm test -- --ci --runInBand --coverage
 
-      - name: Upload mobile Jest results
-        if: steps.mobile_guard.outputs.should-run == 'true'
+      - name: Upload mobile test artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-jest-artifacts
+          name: mobile-artifacts
           path: |
             mobile-app/coverage
             mobile-app/junit.xml
@@ -435,98 +256,63 @@ jobs:
           retention-days: 7
 
   inventory:
-    name: Repository inventory diff
-    needs: [changes, python-tests, node-quality, mobile-quality]
-    if: github.actor != 'nektos/act' && (needs.changes.outputs.python == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request')
+    name: Repository inventory snapshot
+    needs:
+      - changes
+      - python
+      - web
+      - mobile
+    if: |
+      (needs.changes.outputs.python == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true')
+      && success()
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout target revision
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          path: pr
 
-      - name: Checkout base revision
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-          path: base
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python with uv
+        uses: astral-sh/setup-uv@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
 
-      - name: Install tooling
-        working-directory: pr
+      - name: Install backend dependencies
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          uv pip install --system -r requirements.txt
 
-      - name: Generate baseline inventory
-        if: github.event_name == 'pull_request'
-        working-directory: base
+      - name: Generate inventory
         run: |
           set -euo pipefail
-          python .tools/inventory.py --output ../baseline_inventory.json
+          python .tools/inventory.py --output inventory.json
+          ls -al inventory.json
 
-      - name: Generate repository inventory
-        working-directory: pr
-        run: |
-          set -euo pipefail
-          python .tools/inventory.py --output ../current_inventory.json
-
-      - name: Compare inventory with base
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          diff -u baseline_inventory.json current_inventory.json > inventory.diff || true
-          if [ -s inventory.diff ]; then
-            {
-              echo "### Repository inventory differences";
-              echo;
-              echo '```diff';
-              head -n 200 inventory.diff;
-              echo '```';
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No inventory differences detected." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Create empty diff placeholder
-        if: github.event_name != 'pull_request'
-        run: touch inventory.diff
-
-      - name: Upload inventory artifact
+      - name: Upload inventory
         uses: actions/upload-artifact@v4
         with:
           name: repository-inventory
-          path: |
-            current_inventory.json
-            inventory.diff
-          if-no-files-found: warn
+          path: inventory.json
+          if-no-files-found: error
           retention-days: 14
 
-  docker-build:
+  docker:
     name: Docker runtime build validation
-    needs: [changes, python-tests, node-quality, mobile-quality]
-    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - python
+      - web
+      - mobile
     if: github.event_name != 'pull_request' && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build runtime image for validation
+      - name: Build runtime image
         env:
           PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cpu
         run: |
@@ -539,13 +325,7 @@ jobs:
       - name: Smoke test container pytest
         run: |
           set -euo pipefail
-          # Ensure critical long-haul coverage still executes by including explicit allow-list
-          docker run --rm mongars-ci pytest --maxfail=1 --disable-warnings -k "not long or long_haul or longhaul" || {
-            echo "Dockerized pytest smoke run failed" >> "$GITHUB_STEP_SUMMARY";
-            exit 1;
-          }
+          docker run --rm mongars-ci pytest --maxfail=1 --disable-warnings -k "not long or long_haul or longhaul"
 
-      - name: Show resulting image size
-        run: |
-          set -euo pipefail
-          docker images mongars-ci
+      - name: Display resulting image size
+        run: docker images mongars-ci
