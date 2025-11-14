@@ -1,8 +1,6 @@
-name: Build Custom Québec-French Dataset (repo-only)
+name: Build Custom Québec-French Dataset
 
 on:
-  push:
-    branches: ['**']         # run on any branch commit
   workflow_dispatch:
     inputs:
       ratios:
@@ -25,71 +23,84 @@ on:
 permissions:
   contents: read
 
-env:
-  PYTHON_VERSION: "3.12"
+defaults:
+  run:
+    shell: bash
 
-concurrency:
-  group: custom-dataset-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  PYTHON_VERSION: "3.11"
 
 jobs:
   scan_and_build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CONFIRM_SCAN: "YES"
       CONFIRM_DATA_FETCH: "NO"
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Set up Python with uv
+        uses: astral-sh/setup-uv@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install OS deps (graphviz for PNG graph)
+      - name: Install dataset dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y graphviz
-
-      - name: Install minimal Python deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install networkx || true
+          set -euo pipefail
+          uv pip install --system graphviz networkx
 
       - name: Verify required scripts exist
         run: |
-          test -f scripts/ultimate_repo_analyzer.py || (echo "Missing scripts/ultimate_repo_analyzer.py" && exit 1)
-          test -f scripts/prepare_dataset.py        || (echo "Missing scripts/prepare_dataset.py" && exit 1)
+          set -euo pipefail
+          test -f scripts/ultimate_repo_analyzer.py
+          test -f scripts/prepare_dataset.py
 
-      - name: Run analyzer (scan repo → mined artifacts)
+      - name: Clean previous dataset artefacts
         run: |
-          set -euxo pipefail
+          set -euo pipefail
+          rm -rf data/ultimate data/raw data/final
+          mkdir -p data
+
+      - name: Run repository analyzer
+        run: |
+          set -euo pipefail
           python scripts/ultimate_repo_analyzer.py
           echo "== Output tree =="
           find data/ultimate -maxdepth 3 -type f | sort || true
 
-      - name: Assemble inputs for dataset builder
+      - name: Assemble dataset inputs
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           mkdir -p data/raw
           cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/repo_sft.jsonl
           cp data/ultimate/processed_repo/agent_instruct_repo.jsonl data/raw/agent_handoff.jsonl
-          # Repo-only pipeline: use repo SFT as the FRCA source
           cp data/ultimate/processed_repo/sft_repo.jsonl            data/raw/frca_repo.jsonl
 
-      - name: Build final dataset (train/val)
+      - name: Build final dataset
+        env:
+          INPUT_RATIOS: ${{ inputs.ratios }}
+          INPUT_VAL_PCT: ${{ inputs.val_pct }}
+          INPUT_STRICT_QC: ${{ inputs.strict_qc }}
         run: |
-          set -euxo pipefail
-          python scripts/prepare_dataset.py             --frca data/raw/frca_repo.jsonl             --agent data/raw/agent_handoff.jsonl             --repo data/raw/repo_sft.jsonl             --outdir data/final             --ratio "${{ inputs.ratios || 'frca:0.50,agent:0.40,repo:0.10' }}"             --val_pct ${{ inputs.val_pct || 0.06 }}             $([ "${{ inputs.strict_qc || true }}" = "true" ] && echo "--strict_qc" || true)
+          set -euo pipefail
+          python scripts/prepare_dataset.py \
+            --frca data/raw/frca_repo.jsonl \
+            --agent data/raw/agent_handoff.jsonl \
+            --repo data/raw/repo_sft.jsonl \
+            --outdir data/final \
+            --ratio "${INPUT_RATIOS:-frca:0.50,agent:0.40,repo:0.10}" \
+            --val_pct "${INPUT_VAL_PCT:-0.06}" \
+            $([ "${INPUT_STRICT_QC:-true}" = "true" ] && echo "--strict_qc")
 
           echo "== Final counts =="
           wc -l data/final/train.jsonl || true
           wc -l data/final/val.jsonl   || true
 
-      - name: Upload artifacts
+      - name: Upload dataset artefacts
         uses: actions/upload-artifact@v4
         with:
           name: final-custom-dataset
