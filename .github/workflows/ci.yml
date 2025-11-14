@@ -285,10 +285,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Prepare virtual environment
+        run: |
+          set -euo pipefail
+          uv venv .venv --python "${PYTHON_VERSION}"
+
       - name: Install backend dependencies
         run: |
           set -euo pipefail
-          uv pip install --system -r requirements.txt
+          uv pip install --python .venv/bin/python -r requirements.txt
+
+      - name: Export virtual environment to PATH
+        run: echo "${{ github.workspace }}/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Generate inventory
         run: |
