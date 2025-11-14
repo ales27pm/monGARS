@@ -124,6 +124,7 @@ jobs:
       - name: Install backend dependencies
         run: |
           set -euo pipefail
+          uv pip install --python .venv/bin/python pip
           uv pip install --python .venv/bin/python -r requirements.txt
           uv pip install --python .venv/bin/python black isort flake8 mypy coverage[toml]
           uv pip check --python .venv/bin/python
@@ -293,6 +294,7 @@ jobs:
       - name: Install backend dependencies
         run: |
           set -euo pipefail
+          uv pip install --python .venv/bin/python pip
           uv pip install --python .venv/bin/python -r requirements.txt
 
       - name: Export virtual environment to PATH
