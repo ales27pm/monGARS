@@ -330,7 +330,7 @@ jobs:
 
       - name: Build runtime image
         env:
-          PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cpu
+          PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cpu-py3.11
         run: |
           set -euo pipefail
           docker build \
