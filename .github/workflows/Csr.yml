@@ -88,84 +88,84 @@ jobs:
           SUBJECT_ALT_NAMES: ${{ inputs.subject_alt_names }}
         run: |
           set -euo pipefail
-          python <<'PY'
-import os
-import pathlib
-
-
-def _escape_subject_value(raw: str) -> str:
-    """Escape OpenSSL subject special characters."""
-
-    replacements = {
-        "\\": "\\\\",
-        "/": "\\/",
-        ",": "\\,",
-        "+": "\\+",
-        "=": "\\=",
-        '"': '\\"',
-        "<": "\\<",
-        ">": "\\>",
-        "#": "\\#",
-        ";": "\\;",
-    }
-    return "".join(replacements.get(char, char) for char in raw)
-
-
-root = pathlib.Path("certs")
-root.mkdir(parents=True, exist_ok=True)
-
-subject_fields = [("CN", os.environ["COMMON_NAME"].strip())]
-field_mapping = [
-    ("EMAIL", "emailAddress"),
-    ("ORGANIZATION", "O"),
-    ("ORGANIZATIONAL_UNIT", "OU"),
-    ("LOCALITY", "L"),
-    ("STATE", "ST"),
-    ("COUNTRY", "C"),
-]
-for env_name, field_name in field_mapping:
-    value = os.environ.get(env_name, "").strip()
-    if value:
-        subject_fields.append((field_name, value))
-
-subject_value = "/" + "/".join(
-    f"{field}={_escape_subject_value(value)}" for field, value in subject_fields
-)
-(root / "subject.txt").write_text(subject_value + "\n", encoding="utf-8")
-
-san_raw = os.environ.get("SUBJECT_ALT_NAMES", "")
-san_entries: list[str] = []
-san_config_entries: list[str] = []
-for index, item in enumerate(san_raw.split(","), start=1):
-    clean = item.strip()
-    if not clean:
-        continue
-    if ":" in clean:
-        kind, value = clean.split(":", 1)
-        san_entries.append(f"{kind.strip()}:{value.strip()}")
-        san_config_entries.append(f"{kind.strip()}.{index} = {value.strip()}")
-    else:
-        san_entries.append(f"DNS:{clean}")
-        san_config_entries.append(f"DNS.{index} = {clean}")
-
-config_lines = [
-    "[req]",
-    "distinguished_name = req_distinguished_name",
-    "prompt = no",
-    "default_md = sha256",
-]
-if san_config_entries:
-    config_lines.append("req_extensions = req_ext")
-config_lines.extend(["", "[req_distinguished_name]"])
-config_lines.extend(f"{field} = {value}" for field, value in subject_fields)
-if san_config_entries:
-    config_lines.extend(["", "[req_ext]", "subjectAltName = @req_san", "", "[req_san]"])
-    config_lines.extend(san_config_entries)
-
-(root / "openssl.cnf").write_text("\n".join(config_lines) + "\n", encoding="utf-8")
-san_blob = "\n".join(san_entries)
-(root / "san_entries.txt").write_text((san_blob + "\n") if san_blob else "", encoding="utf-8")
-PY
+          python <<-'PY'
+          	import os
+          	import pathlib
+          
+          
+          	def _escape_subject_value(raw: str) -> str:
+          	    """Escape OpenSSL subject special characters."""
+          
+          	    replacements = {
+          	        "\\": "\\\\",
+          	        "/": "\\/",
+          	        ",": "\\,",
+          	        "+": "\\+",
+          	        "=": "\\=",
+          	        '"': '\\"',
+          	        "<": "\\<",
+          	        ">": "\\>",
+          	        "#": "\\#",
+          	        ";": "\\;",
+          	    }
+          	    return "".join(replacements.get(char, char) for char in raw)
+          
+          
+          	root = pathlib.Path("certs")
+          	root.mkdir(parents=True, exist_ok=True)
+          
+          	subject_fields = [("CN", os.environ["COMMON_NAME"].strip())]
+          	field_mapping = [
+          	    ("EMAIL", "emailAddress"),
+          	    ("ORGANIZATION", "O"),
+          	    ("ORGANIZATIONAL_UNIT", "OU"),
+          	    ("LOCALITY", "L"),
+          	    ("STATE", "ST"),
+          	    ("COUNTRY", "C"),
+          	]
+          	for env_name, field_name in field_mapping:
+          	    value = os.environ.get(env_name, "").strip()
+          	    if value:
+          	        subject_fields.append((field_name, value))
+          
+          	subject_value = "/" + "/".join(
+          	    f"{field}={_escape_subject_value(value)}" for field, value in subject_fields
+          	)
+          	(root / "subject.txt").write_text(subject_value + "\n", encoding="utf-8")
+          
+          	san_raw = os.environ.get("SUBJECT_ALT_NAMES", "")
+          	san_entries: list[str] = []
+          	san_config_entries: list[str] = []
+          	for index, item in enumerate(san_raw.split(","), start=1):
+          	    clean = item.strip()
+          	    if not clean:
+          	        continue
+          	    if ":" in clean:
+          	        kind, value = clean.split(":", 1)
+          	        san_entries.append(f"{kind.strip()}:{value.strip()}")
+          	        san_config_entries.append(f"{kind.strip()}.{index} = {value.strip()}")
+          	    else:
+          	        san_entries.append(f"DNS:{clean}")
+          	        san_config_entries.append(f"DNS.{index} = {clean}")
+          
+          	config_lines = [
+          	    "[req]",
+          	    "distinguished_name = req_distinguished_name",
+          	    "prompt = no",
+          	    "default_md = sha256",
+          	]
+          	if san_config_entries:
+          	    config_lines.append("req_extensions = req_ext")
+          	config_lines.extend(["", "[req_distinguished_name]"])
+          	config_lines.extend(f"{field} = {value}" for field, value in subject_fields)
+          	if san_config_entries:
+          	    config_lines.extend(["", "[req_ext]", "subjectAltName = @req_san", "", "[req_san]"])
+          	    config_lines.extend(san_config_entries)
+          
+          	(root / "openssl.cnf").write_text("\n".join(config_lines) + "\n", encoding="utf-8")
+          	san_blob = "\n".join(san_entries)
+          	(root / "san_entries.txt").write_text((san_blob + "\n") if san_blob else "", encoding="utf-8")
+          PY
 
       - name: Generate private key and CSR
         env:
@@ -210,18 +210,18 @@ PY
           SUBJECT_ALT_NAMES: ${{ inputs.subject_alt_names }}
         run: |
           set -euo pipefail
-          python <<'PY'
-import os
-import pathlib
-
-san_path = pathlib.Path("certs") / "san_summary.md"
-entries = []
-for raw in os.environ.get("SUBJECT_ALT_NAMES", "").split(","):
-    item = raw.strip()
-    if item:
-        entries.append(f"- {item}")
-san_path.write_text("\n".join(entries) + ("\n" if entries else ""), encoding="utf-8")
-PY
+          python <<-'PY'
+          	import os
+          	import pathlib
+          
+          	san_path = pathlib.Path("certs") / "san_summary.md"
+          	entries = []
+          	for raw in os.environ.get("SUBJECT_ALT_NAMES", "").split(","):
+          	    item = raw.strip()
+          	    if item:
+          	        entries.append(f"- {item}")
+          	san_path.write_text("\n".join(entries) + ("\n" if entries else ""), encoding="utf-8")
+          PY
           subject=$(openssl req -in certs/signing.csr -noout -subject | sed 's/^subject= //')
           fingerprint=$(openssl req -in certs/signing.csr -noout -pubkey | openssl pkey -pubin -outform DER | openssl dgst -sha256 | sed 's/^.*= //')
           {
