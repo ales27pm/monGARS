@@ -211,17 +211,17 @@ jobs:
         run: |
           set -euo pipefail
           python <<'PY'
-import os
-import pathlib
+            import os
+            import pathlib
 
-san_path = pathlib.Path("certs") / "san_summary.md"
-entries = []
-for raw in os.environ.get("SUBJECT_ALT_NAMES", "").split(","):
-    item = raw.strip()
-    if item:
-        entries.append(f"- {item}")
-san_path.write_text("\n".join(entries) + ("\n" if entries else ""), encoding="utf-8")
-PY
+            san_path = pathlib.Path("certs") / "san_summary.md"
+            entries = []
+            for raw in os.environ.get("SUBJECT_ALT_NAMES", "").split(","):
+                item = raw.strip()
+                if item:
+                    entries.append(f"- {item}")
+            san_path.write_text("\n".join(entries) + ("\n" if entries else ""), encoding="utf-8")
+          PY
           subject=$(openssl req -in certs/signing.csr -noout -subject | sed 's/^subject= //')
           fingerprint=$(openssl req -in certs/signing.csr -noout -pubkey | openssl pkey -pubin -outform DER | openssl dgst -sha256 | sed 's/^.*= //')
           {
