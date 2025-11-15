@@ -449,6 +449,101 @@ def _disable_model_cache(model: Any) -> None:
         logger.debug("Disabled model cache for training")
 
 
+def _parse_int_env(key: str, default: int = 0) -> int:
+    """Best-effort integer conversion for environment variables."""
+
+    value = os.environ.get(key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):  # pragma: no cover - defensive guard
+        return default
+
+
+def _visible_cuda_device_count() -> int:
+    """Return the number of CUDA devices visible to the current process."""
+
+    if not torch.cuda.is_available():
+        return 0
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is None or visible.strip() == "":
+        try:
+            return int(torch.cuda.device_count())
+        except Exception:  # pragma: no cover - defensive guard
+            return 0
+
+    identifiers = [entry.strip() for entry in visible.split(",") if entry.strip()]
+    return len(identifiers)
+
+
+def _is_distributed_context() -> bool:
+    """Detect whether the process is running in a distributed environment."""
+
+    if _parse_int_env("LOCAL_RANK", -1) >= 0:
+        return True
+
+    distributed_env_keys = (
+        "WORLD_SIZE",
+        "ACCELERATE_NUM_PROCESSES",
+        "SLURM_NTASKS",
+        "PMI_SIZE",
+        "OMPI_COMM_WORLD_SIZE",
+        "MV2_COMM_WORLD_SIZE",
+    )
+    for key in distributed_env_keys:
+        if _parse_int_env(key, 1) > 1:
+            return True
+
+    try:  # pragma: no cover - torch.distributed optional during tests
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            return torch.distributed.get_world_size() > 1
+    except Exception:  # pragma: no cover - defensive guard
+        return False
+    return False
+
+
+def _model_uses_multi_device_map(model: Any) -> bool:
+    """Return ``True`` when the model or any submodule tracks a multi-device map."""
+
+    mapping = getattr(model, "hf_device_map", None)
+    if mapping and len(mapping) > 1:
+        return True
+
+    modules = getattr(model, "modules", None)
+    if not callable(modules):
+        return False
+    for submodule in modules():
+        mapping = getattr(submodule, "hf_device_map", None)
+        if mapping and len(mapping) > 1:
+            return True
+    return False
+
+
+def _maybe_enable_accelerate_device_map_bypass(model: Any) -> None:
+    """Enable Accelerate's device-map bypass when multi-device training is unavoidable."""
+
+    if os.environ.get("ACCELERATE_BYPASS_DEVICE_MAP", "").lower() == "true":
+        return
+
+    if not _model_uses_multi_device_map(model):
+        return
+
+    multi_gpu_context = _visible_cuda_device_count() > 1
+    if not (multi_gpu_context or _is_distributed_context()):
+        return
+
+    os.environ["ACCELERATE_BYPASS_DEVICE_MAP"] = "true"
+    logger.info(
+        "Enabled ACCELERATE_BYPASS_DEVICE_MAP to allow quantized training across multiple devices",
+        extra={
+            "multi_gpu": multi_gpu_context,
+            "distributed_env": _is_distributed_context(),
+        },
+    )
+
+
 def train_qlora(
     model: Any,
     dataset: Any,
@@ -558,6 +653,7 @@ def train_qlora(
     use_cuda = prefer_cuda
 
     _disable_model_cache(model)
+    _maybe_enable_accelerate_device_map_bypass(model)
 
     while True:
         attempt += 1

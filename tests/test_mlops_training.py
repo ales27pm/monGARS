@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from types import SimpleNamespace
+
 import pytest
 import torch
 import torch.nn as nn
@@ -233,3 +236,42 @@ def test_train_qlora_cpu_fallback_normalises_dtype(monkeypatch, trainer_config):
     )
 
     assert all(param.dtype == torch.float32 for param in model.parameters())
+
+
+def test_device_map_bypass_enables_env_flag(monkeypatch):
+    class DeviceMappedModel:
+        def __init__(self) -> None:
+            self.config = SimpleNamespace(use_cache=True)
+            self.hf_device_map = {"layer": "cuda:0", "head": "cpu"}
+
+        def modules(self):
+            yield self
+
+    from monGARS import mlops
+
+    monkeypatch.setattr(mlops.training, "_visible_cuda_device_count", lambda: 2)
+    monkeypatch.setattr(mlops.training, "_is_distributed_context", lambda: False)
+    monkeypatch.delenv("ACCELERATE_BYPASS_DEVICE_MAP", raising=False)
+
+    mlops.training._maybe_enable_accelerate_device_map_bypass(DeviceMappedModel())
+
+    assert os.environ.get("ACCELERATE_BYPASS_DEVICE_MAP") == "true"
+
+
+def test_device_map_bypass_skips_when_not_needed(monkeypatch):
+    class SimpleModel:
+        def __init__(self) -> None:
+            self.config = SimpleNamespace(use_cache=True)
+
+        def modules(self):
+            yield self
+
+    from monGARS import mlops
+
+    monkeypatch.setattr(mlops.training, "_visible_cuda_device_count", lambda: 0)
+    monkeypatch.setattr(mlops.training, "_is_distributed_context", lambda: False)
+    monkeypatch.delenv("ACCELERATE_BYPASS_DEVICE_MAP", raising=False)
+
+    mlops.training._maybe_enable_accelerate_device_map_bypass(SimpleModel())
+
+    assert "ACCELERATE_BYPASS_DEVICE_MAP" not in os.environ
