@@ -44,7 +44,8 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Callable, List, Optional, Sequence
 
 import torch
 import uvicorn
@@ -53,6 +54,11 @@ from pydantic import BaseModel
 from transformers import AutoModel, AutoTokenizer
 
 LOGGER = logging.getLogger("llm2vec_service")
+
+# The wrapper manifest loader lives in export_llm2vec_wrapper.py. Importing it here keeps
+# backwards compatibility with older callers (and tests) that monkeypatch the function
+# directly on this module.
+from scripts.export_llm2vec_wrapper import load_wrapper_config  # noqa: E402  (import after LOGGER)
 
 
 # ---------------------------------------------------------------------------
@@ -300,12 +306,96 @@ class HealthResponse(BaseModel):
     dimension: int
 
 
+class LegacyEmbedRequest(BaseModel):
+    inputs: List[str]
+    normalise: Optional[bool] = None
+
+
+class LegacyEmbedResponse(BaseModel):
+    vectors: List[List[float]]
+    count: int
+    dims: int
+    backend: str
+    model: str
+    normalised: bool
+
+
+class EmbeddingService:
+    """Backward-compatible wrapper for the legacy embedding service interface.
+
+    The historic API exposed an ``EmbeddingService`` object with a ``wrapper_factory``
+    that returned a lightweight embedding helper. Tests and integration scripts still
+    import :class:`EmbeddingService` from this module and expect ``create_app`` to
+    accept such an instance. The new implementation keeps that surface area while
+    delegating the heavy lifting to the modern embedding wrapper machinery.
+    """
+
+    def __init__(
+        self,
+        *,
+        model_dir: Path | str,
+        backend: str,
+        wrapper_factory: Callable[[], Any],
+        settings: Any,
+        default_batch_size: int = 8,
+    ) -> None:
+        self.model_dir = str(model_dir)
+        self.backend = backend
+        self.wrapper_factory = wrapper_factory
+        self.settings = settings
+        self.default_batch_size = default_batch_size
+        self._wrapper: Any | None = None
+
+        config = load_wrapper_config(Path(model_dir))
+        self.wrapper_config = config if isinstance(config, dict) else {}
+        embedding_options = self.wrapper_config.get("embedding_options", {})
+        self.default_normalise = bool(embedding_options.get("normalise", True))
+        self.model_identifier = str(
+            self.wrapper_config.get("base_model_id", self.model_dir)
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy helpers
+    # ------------------------------------------------------------------
+    def get_wrapper(self) -> Any:
+        if self._wrapper is None:
+            self._wrapper = self.wrapper_factory()
+        return self._wrapper
+
+    def embed(
+        self, inputs: Sequence[str], *, normalise: Optional[bool] = None
+    ) -> List[List[float]]:
+        if not inputs:
+            raise ValueError("inputs must be a non-empty sequence")
+
+        wrapper = self.get_wrapper()
+        payload = [str(item) for item in inputs]
+        effective_normalise = (
+            self.default_normalise if normalise is None else bool(normalise)
+        )
+        result = wrapper.embed(payload, normalise=effective_normalise)
+        if hasattr(result, "tolist"):
+            return list(result.tolist())  # type: ignore[no-any-return]
+        return list(result)
+
+    def infer_dimensions(self, vectors: Sequence[Sequence[float]]) -> int:
+        if vectors and vectors[0]:
+            return len(vectors[0])
+        return int(getattr(self.settings, "llm2vec_vector_dimensions", 0))
+
+
 # ---------------------------------------------------------------------------
 # FastAPI application factory
 # ---------------------------------------------------------------------------
 
 
-def create_app(cfg: ServiceConfig) -> FastAPI:
+def create_app(cfg: ServiceConfig | EmbeddingService) -> FastAPI:
+    if isinstance(cfg, EmbeddingService):
+        return _create_legacy_app(cfg)
+    return _create_modern_app(cfg)
+
+
+def _create_modern_app(cfg: ServiceConfig) -> FastAPI:
     app = FastAPI(title="LLM2Vec Embedding Service")
 
     model_wrapper = EmbeddingModel(
@@ -336,6 +426,47 @@ def create_app(cfg: ServiceConfig) -> FastAPI:
             embeddings=embeddings,
             dimension=model_wrapper.embedding_dim,
             model=cfg.model_dir,
+        )
+
+    return app
+
+
+def _create_legacy_app(service: EmbeddingService) -> FastAPI:
+    app = FastAPI(title="LLM2Vec Embedding Service")
+
+    @app.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        return HealthResponse(
+            status="ok",
+            model=service.model_dir,
+            dimension=int(
+                getattr(service.settings, "llm2vec_vector_dimensions", 0)
+            ),
+        )
+
+    @app.post("/embed", response_model=LegacyEmbedResponse)
+    def embed(request: LegacyEmbedRequest) -> LegacyEmbedResponse:
+        if not request.inputs:
+            raise HTTPException(
+                status_code=400,
+                detail="Field 'inputs' must be a non-empty list",
+            )
+
+        vectors = service.embed(request.inputs, normalise=request.normalise)
+        dims = service.infer_dimensions(vectors)
+        normalised = (
+            service.default_normalise
+            if request.normalise is None
+            else bool(request.normalise)
+        )
+
+        return LegacyEmbedResponse(
+            vectors=vectors,
+            count=len(vectors),
+            dims=dims,
+            backend=service.backend,
+            model=service.model_identifier,
+            normalised=normalised,
         )
 
     return app
