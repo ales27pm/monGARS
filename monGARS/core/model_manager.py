@@ -161,13 +161,13 @@ class ModelProvisionReport:
 _DEFAULT_MODELS: dict[str, ModelDefinition] = {
     "general": ModelDefinition(
         role="general",
-        name="dolphin3",
-        description="Dolphin 3.0 Llama 3.1 8B chat checkpoint",
+        name="dolphin-x1",
+        description="Dolphin-X1-8B chat checkpoint",
     ),
     "coding": ModelDefinition(
         role="coding",
-        name="dolphin3-llm2vec",
-        description="LLM2Vec-wrapped Dolphin 3.0 build for coding tasks",
+        name="dolphin-x1-llm2vec",
+        description="LLM2Vec-wrapped Dolphin-X1-8B build for coding tasks",
     ),
 }
 

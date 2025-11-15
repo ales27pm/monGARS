@@ -1319,7 +1319,7 @@ class ReinforcementLoop:
     def __init__(
         self,
         *,
-        model_id: str = "dphn/Dolphin3.0-Llama3.1-8B",
+        model_id: str = "dphn/Dolphin-X1-8B",
         slot_name: str = "reasoning-grpo",
         max_seq_length: int = 2048,
         output_dir: str | os.PathLike[str] = "artifacts/reasoning_grpo",

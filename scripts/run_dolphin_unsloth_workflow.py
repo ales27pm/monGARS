@@ -42,7 +42,7 @@ ANALYZER_OUTPUT = (
 )
 FORMATTED_DATASET = REPO_ROOT / "datasets" / "formatted_dataset 2.jsonl"
 DEFAULT_DATASET_DIR = REPO_ROOT / "datasets" / "dolphin_unsloth_auto"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "dolphin3_unsloth_adapter"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "dolphin_x1_unsloth_adapter"
 
 
 @dataclass(slots=True)

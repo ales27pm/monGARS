@@ -29,7 +29,7 @@ def reset_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate that Unsloth can be loaded and promises expected optimisations.
 
-    The check emulates loading a Dolphin 3.0 adapter to guarantee a minimum 2x
+    The check emulates loading a Dolphin-X1 adapter to guarantee a minimum 2x
     throughput boost and a 70% reduction in VRAM usage once the kernels are
     patched. Heavy models are not pulled during the test run; instead we assert
     that the metadata returned by :func:`initialize_unsloth` advertises the

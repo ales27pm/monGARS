@@ -1,13 +1,13 @@
-# Reusing Dolphin 3.0 for Chat and Embeddings
+# Reusing Dolphin-X1-8B for Chat and Embeddings
 
-> **Last updated:** 2025-03-14 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-05-18 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
-The Dolphin 3.0 (Llama-3.1-8B) checkpoint already powers monGARS chat flows via
+The Dolphin-X1-8B checkpoint already powers monGARS chat flows via
 Ollama. This guide explains how to reuse the very same weights for retrieval
 embeddings so the assistant and the vector index stay aligned.
 
 ## Single Checkpoint Strategy
-- `dolphin_llm2vec_pipeline.py` loads the base model in 4-bit, attaches LoRA
+- `dolphin_llm2vec_pipeline.py` loads the Dolphin-X1-8B base model in 4-bit, attaches LoRA
   adapters, fine-tunes, and finally persists both the adapters and an
   LLM2Vec-compatible wrapper configuration. The wrapper metadata now records the
   Hugging Face backend and deterministic embedding options (mean pooling,
@@ -18,7 +18,7 @@ embeddings so the assistant and the vector index stay aligned.
   No additional adapter conversion is required before serving.【F:dolphin_llm2vec_pipeline.py†L142-L177】
 
 ## Chat Serving via Ollama
-- The default profile binds the `general` role to the `dolphin3` Ollama model so
+- The default profile binds the `general` role to the `dolphin-x1` Ollama model so
   conversational traffic continues to flow through the dedicated chat runtime.
   This path preserves streaming responses and sampling controls optimised for
   dialogue.【F:configs/llm_models.json†L4-L20】
@@ -34,7 +34,7 @@ embeddings so the assistant and the vector index stay aligned.
   keeps the embeddings consistent with the chat model’s tokenisation and avoids
   stochasticity during vector extraction.【F:scripts/export_llm2vec_wrapper.py†L57-L168】
 - When running training locally, the pipeline relies on
-  `load_4bit_causal_lm(...)` to fit Dolphin 3.0 within commodity GPUs by using
+  `load_4bit_causal_lm(...)` to fit Dolphin-X1-8B within commodity GPUs by using
   NF4 quantisation, device maps, and offloading heuristics. This means the same
   model directory can be mounted by both the chat service and the embedding
   wrapper without duplicating checkpoints.【F:monGARS/mlops/model.py†L41-L120】
@@ -88,7 +88,7 @@ embeddings so the assistant and the vector index stay aligned.
 
 ## Optional llama.cpp / GGUF Export
 - If you need a lighter-weight embedding daemon, call the pipeline with
-  `EXPORT_GGUF=1`. The exporter converts the merged weights into a GGUF file,
+  `EXPORT_GGUF=1`. The exporter converts the merged Dolphin-X1-8B weights into a GGUF file,
   which llama.cpp can serve in `--embeddings` mode. This gives you the same
   vector semantics while using llama.cpp’s optimised runtime.【F:dolphin_llm2vec_pipeline.py†L99-L116】【F:monGARS/mlops/exporters.py†L28-L74】
 

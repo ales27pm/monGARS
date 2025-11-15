@@ -476,7 +476,7 @@ def parse_args(argv: Optional[List[str]] = None) -> PipelineConfig:
     )
     parser.add_argument(
         "--base-model",
-        default="dphn/Dolphin3.0-Llama3.1-8B-Q4_K_M.gguf",
+        default="dphn/Dolphin-X1-8B-Q4_K_M.gguf",
         help="Base model identifier used by the SFT step (if needed by underlying scripts).",
     )
     parser.add_argument(

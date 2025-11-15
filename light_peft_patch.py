@@ -26,7 +26,7 @@
 #       make_sliced_trainer           # optional: Trainer that computes CE on a small slice
 #   )
 #
-#   model, tok = load_4bit_causal_lm("dphn/Dolphin3.0-Llama3.1-8B",
+#   model, tok = load_4bit_causal_lm("dphn/Dolphin-X1-8B",
 #                                    vram_budget_mb=7100, offload_dir="./offload")
 #   model     = prepare_lora_model_light(model, r=16, alpha=16, dropout=0.0)
 #

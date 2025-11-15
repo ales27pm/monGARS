@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-DEFAULT_BASE_MODEL = "dphn/Dolphin3.0-Llama3.1-8B"
+DEFAULT_BASE_MODEL = "dphn/Dolphin-X1-8B"
 
 WRAPPER_PY_TEMPLATE = '''# llm2vec_wrapper.py
 from __future__ import annotations
@@ -251,7 +251,7 @@ README_MD = """# LLM2Vec Wrapper (monGARS)
 
 This wrapper exposes:
 
-- `LLM2Vec.generate(prompt, ...)` → text generation with Dolphin 3.0 adapters
+- `LLM2Vec.generate(prompt, ...)` → text generation with Dolphin-X1 adapters
 - `LLM2Vec.embed(texts, normalise=False)` → embeddings via mean-pooled hidden states
 
 ## Quickstart
@@ -274,7 +274,7 @@ python scripts/run_llm2vec_service.py --model-dir .. --host 0.0.0.0 --port 8081
 ```
 
 The service exposes `/healthz` and `/embed` endpoints so retrieval pipelines can
-reuse the same Dolphin 3.0 checkpoint that powers chat.
+reuse the same Dolphin-X1 checkpoint that powers chat.
 """
 
 DEFAULT_CONFIG: Dict[str, Any] = {

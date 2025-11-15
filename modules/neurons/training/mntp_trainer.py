@@ -1184,9 +1184,11 @@ class MNTPTrainer:
     def _resolve_model_name(self) -> str:
         model_name = self.config["model_name_or_path"].strip()
         lower_name = model_name.lower()
-        if lower_name.startswith(
-            "cognitivecomputations/dolphin3.0"
-        ) or lower_name.startswith("dphn/dolphin3.0"):
+        if (
+            lower_name.startswith("cognitivecomputations/dolphin3.0")
+            or lower_name.startswith("dphn/dolphin3.0")
+            or lower_name.startswith("dphn/dolphin-x1")
+        ):
             logger.warning(
                 "Large model specified; defaulting to lightweight reference model",
                 extra={"requested_model": model_name},

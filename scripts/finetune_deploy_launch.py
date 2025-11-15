@@ -33,7 +33,7 @@ from scripts.full_stack_visual_deploy import (  # noqa: E402
 
 LOGGER = logging.getLogger("monGARS.finetune_deploy")
 
-DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
+DEFAULT_MODEL_ID = "dphn/Dolphin-X1-8B"
 DEFAULT_DATASET_PATH = Path("datasets/unsloth/monGARS_unsloth_dataset.jsonl")
 DEFAULT_EVAL_DATASET_PATH = Path("datasets/monGARS_llm/monGARS_llm_val.jsonl")
 DEFAULT_MODEL_CACHE_ROOT = Path("models/base_snapshots")

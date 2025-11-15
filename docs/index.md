@@ -55,7 +55,7 @@ audiences, and calls out the live sources of truth inside the repository.
 | --- | --- |
 | [rag_context_enrichment.md](rag_context_enrichment.md) | How RAG enrichment integrates with FastAPI review flows and fallback behaviour. |
 | [rag_dataset_governance.md](rag_dataset_governance.md) | Dataset retention policies, scrubbing tools, and export controls. |
-| [dolphin3_chat_embeddings.md](dolphin3_chat_embeddings.md) | Dolphin 3 stack reuse for chat and embeddings with deployment parameters. |
+| [dolphin_x1_chat_embeddings.md](dolphin_x1_chat_embeddings.md) | Dolphin-X1 stack reuse for chat and embeddings with deployment parameters. |
 | [reinforcement_rollout_runbook.md](reinforcement_rollout_runbook.md) | Operator actions for the reinforcement loop, approvals, and soak testing. |
 | [advanced_fine_tuning.md](advanced_fine_tuning.md) | (Also in Developer Essentials) — adapter training and Ray Serve automation backlog. |
 

@@ -1,6 +1,6 @@
 """Model slot manager maintaining persistent VRAM allocations.
 
-The manager keeps a cache of Unsloth-backed Dolphin 3.0 language models mapped
+The manager keeps a cache of Unsloth-backed Dolphin-X1 language models mapped
 to logical "slots". Each slot can be acquired via a context manager which
 guarantees that models are lazily instantiated, re-used across callers, and
 safely offloaded when GPU memory pressure exceeds the configured threshold.
@@ -52,7 +52,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
+_DEFAULT_MODEL_ID = "dphn/Dolphin-X1-8B"
 _TARGET_MODULES: tuple[str, ...] = (
     "q_proj",
     "k_proj",

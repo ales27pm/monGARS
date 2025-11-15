@@ -7,7 +7,7 @@ import pytest
 
 from monGARS.config import Settings
 from monGARS.core.embeddings import (
-    Dolphin3Embedder,
+    DolphinX1Embedder,
     EmbeddingBackendError,
     LLM2VecEmbedder,
 )
@@ -668,13 +668,13 @@ async def test_transformers_backend_matches_reference_model() -> None:
 
 
 @pytest.fixture(scope="session")
-def dolphin3_tiny_embedder() -> Dolphin3Embedder:
-    """Return a Dolphin 3 embedder backed by a tiny reference checkpoint."""
+def dolphin_x1_tiny_embedder() -> DolphinX1Embedder:
+    """Return a Dolphin-X1 embedder backed by a tiny reference checkpoint."""
 
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
-    embedder = Dolphin3Embedder(
+    embedder = DolphinX1Embedder(
         settings=Settings(),
         model_id="hf-internal-testing/tiny-random-LlamaForCausalLM",
         device="cpu",
@@ -685,48 +685,48 @@ def dolphin3_tiny_embedder() -> Dolphin3Embedder:
     )
 
     try:
-        embedder.encode(["warmup sentence for dolphin 3 embeddings"])
+        embedder.encode(["warmup sentence for dolphin-x1 embeddings"])
     except EmbeddingBackendError as exc:  # pragma: no cover - dependency missing
-        pytest.skip(f"Unable to load Dolphin 3 embedding model: {exc}")
+        pytest.skip(f"Unable to load Dolphin-X1 embedding model: {exc}")
     except OSError as exc:  # pragma: no cover - HF download/IO failure
-        pytest.skip(f"Dolphin 3 embedding model unavailable: {exc}")
+        pytest.skip(f"Dolphin-X1 embedding model unavailable: {exc}")
 
     return embedder
 
 
-def test_dolphin3_embedder_respects_configured_dimension(
-    dolphin3_tiny_embedder: Dolphin3Embedder,
+def test_dolphin_x1_embedder_respects_configured_dimension(
+    dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
-    vectors = dolphin3_tiny_embedder.encode(["alpha", "beta"])
+    vectors = dolphin_x1_tiny_embedder.encode(["alpha", "beta"])
 
     assert len(vectors) == 2
     assert {len(vector) for vector in vectors} == {
-        dolphin3_tiny_embedder.vector_dimension
+        dolphin_x1_tiny_embedder.vector_dimension
     }
 
-    torch_module, model, _ = dolphin3_tiny_embedder._ensure_model_components()
+    torch_module, model, _ = dolphin_x1_tiny_embedder._ensure_model_components()
     hidden_size = getattr(getattr(model, "config", None), "hidden_size", None)
     if (
         isinstance(hidden_size, int)
-        and hidden_size < dolphin3_tiny_embedder.vector_dimension
+        and hidden_size < dolphin_x1_tiny_embedder.vector_dimension
     ):
         tail_index = hidden_size
         for vector in vectors:
             assert all(abs(component) < 1e-6 for component in vector[tail_index:])
 
 
-def test_dolphin3_embedder_matches_manual_mean_pool(
-    dolphin3_tiny_embedder: Dolphin3Embedder,
+def test_dolphin_x1_embedder_matches_manual_mean_pool(
+    dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
-    torch_module, model, tokenizer = dolphin3_tiny_embedder._ensure_model_components()
-    text = "verifying dolphin 3 pooling"
+    torch_module, model, tokenizer = dolphin_x1_tiny_embedder._ensure_model_components()
+    text = "verifying dolphin-x1 pooling"
 
-    reference_vectors = dolphin3_tiny_embedder.encode([text])
+    reference_vectors = dolphin_x1_tiny_embedder.encode([text])
     assert len(reference_vectors) == 1
     reference_vector = reference_vectors[0]
 
     system_prompt = getattr(
-        dolphin3_tiny_embedder._settings, "llm2vec_instruction", None
+        dolphin_x1_tiny_embedder._settings, "llm2vec_instruction", None
     )
     formatted = render_chat_prompt_from_text(
         text,
@@ -739,11 +739,11 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=dolphin3_tiny_embedder.max_length,
+        max_length=dolphin_x1_tiny_embedder.max_length,
     )
     prepared = {
         name: (
-            tensor.to(dolphin3_tiny_embedder.device)
+            tensor.to(dolphin_x1_tiny_embedder.device)
             if hasattr(tensor, "to")
             else tensor
         )
@@ -773,11 +773,11 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
     manual_vector = pooled.detach().to(torch_module.float32)
     if manual_vector.device.type != "cpu":
         manual_vector = manual_vector.cpu()
-    if manual_vector.shape[-1] > dolphin3_tiny_embedder.vector_dimension:
-        manual_vector = manual_vector[: dolphin3_tiny_embedder.vector_dimension]
-    elif manual_vector.shape[-1] < dolphin3_tiny_embedder.vector_dimension:
+    if manual_vector.shape[-1] > dolphin_x1_tiny_embedder.vector_dimension:
+        manual_vector = manual_vector[: dolphin_x1_tiny_embedder.vector_dimension]
+    elif manual_vector.shape[-1] < dolphin_x1_tiny_embedder.vector_dimension:
         pad = torch_module.zeros(
-            dolphin3_tiny_embedder.vector_dimension - manual_vector.shape[-1],
+            dolphin_x1_tiny_embedder.vector_dimension - manual_vector.shape[-1],
             dtype=manual_vector.dtype,
             device=manual_vector.device,
         )
@@ -786,16 +786,16 @@ def test_dolphin3_embedder_matches_manual_mean_pool(
     assert reference_vector == pytest.approx(manual_vector.tolist(), abs=1e-5)
 
 
-def test_dolphin3_embedder_embeddings_are_deterministic(
-    dolphin3_tiny_embedder: Dolphin3Embedder,
+def test_dolphin_x1_embedder_embeddings_are_deterministic(
+    dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
     text = "determinism check for dolphin embeddings"
 
-    first = dolphin3_tiny_embedder.encode([text])[0]
-    second = dolphin3_tiny_embedder.encode([text])[0]
+    first = dolphin_x1_tiny_embedder.encode([text])[0]
+    second = dolphin_x1_tiny_embedder.encode([text])[0]
 
-    assert len(first) == dolphin3_tiny_embedder.vector_dimension
-    assert len(second) == dolphin3_tiny_embedder.vector_dimension
+    assert len(first) == dolphin_x1_tiny_embedder.vector_dimension
+    assert len(second) == dolphin_x1_tiny_embedder.vector_dimension
     assert first == pytest.approx(second, rel=1e-6, abs=1e-6)
     assert _vector_norm(first) == pytest.approx(
         _vector_norm(second), rel=1e-6, abs=1e-6
@@ -803,8 +803,8 @@ def test_dolphin3_embedder_embeddings_are_deterministic(
     assert all(math.isfinite(component) for component in first)
 
 
-def test_dolphin3_embedder_batch_determinism(
-    dolphin3_tiny_embedder: Dolphin3Embedder,
+def test_dolphin_x1_embedder_batch_determinism(
+    dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
     texts = [
         "batch determinism check 1",
@@ -816,15 +816,15 @@ def test_dolphin3_embedder_batch_determinism(
 
     for batch_size in (1, 2, len(texts)):
         payload = texts[:batch_size]
-        first_batch = dolphin3_tiny_embedder.encode(payload)
-        second_batch = dolphin3_tiny_embedder.encode(payload)
+        first_batch = dolphin_x1_tiny_embedder.encode(payload)
+        second_batch = dolphin_x1_tiny_embedder.encode(payload)
 
         assert len(first_batch) == len(payload)
         assert len(second_batch) == len(payload)
 
         for first_vector, second_vector in zip(first_batch, second_batch, strict=True):
-            assert len(first_vector) == dolphin3_tiny_embedder.vector_dimension
-            assert len(second_vector) == dolphin3_tiny_embedder.vector_dimension
+            assert len(first_vector) == dolphin_x1_tiny_embedder.vector_dimension
+            assert len(second_vector) == dolphin_x1_tiny_embedder.vector_dimension
             assert first_vector == pytest.approx(second_vector, rel=1e-6, abs=1e-6)
             assert _vector_norm(first_vector) == pytest.approx(
                 _vector_norm(second_vector), rel=1e-6, abs=1e-6
@@ -832,8 +832,8 @@ def test_dolphin3_embedder_batch_determinism(
             assert all(math.isfinite(component) for component in first_vector)
 
 
-def test_dolphin3_embedder_normalises_empty_inputs(
-    dolphin3_tiny_embedder: Dolphin3Embedder,
+def test_dolphin_x1_embedder_normalises_empty_inputs(
+    dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
     payloads = [
         "",  # empty string
@@ -848,11 +848,11 @@ def test_dolphin3_embedder_normalises_empty_inputs(
         " \t\n\u2003\u2009\u202f",  # combination of whitespace
     ]
 
-    vectors = dolphin3_tiny_embedder.encode(payloads)
+    vectors = dolphin_x1_tiny_embedder.encode(payloads)
 
     assert len(vectors) == len(payloads)
     for vector in vectors:
-        assert len(vector) == dolphin3_tiny_embedder.vector_dimension
+        assert len(vector) == dolphin_x1_tiny_embedder.vector_dimension
         assert all(math.isfinite(component) for component in vector)
         norm = _vector_norm(vector)
         assert norm >= 0.0

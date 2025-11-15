@@ -1,6 +1,6 @@
 # Model Configuration & Provisioning
 
-> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-05-18 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The LLM runtime is configured through a manifest located at
 `configs/llm_models.json`. Profiles group related model roles (for example
@@ -14,7 +14,7 @@ optional description.
     "default": {
       "models": {
         "general": {
-          "name": "dolphin3",
+          "name": "dolphin-x1",
           "provider": "ollama",
           "auto_download": true,
           "parameters": {
@@ -22,7 +22,7 @@ optional description.
             "num_predict": 512
           }
         },
-        "coding": "dolphin3-llm2vec"
+        "coding": "dolphin-x1-llm2vec"
       }
     }
   }
@@ -102,7 +102,7 @@ pipelines.
 
 - Model definitions are sourced from `configs/llm_models.json`. The default
   profile declares two roles—`general` and `coding`—that both target the
-  Dolphin 3 family via the Ollama provider. Each entry includes provider
+  Dolphin-X1 family via the Ollama provider. Each entry includes provider
   options (`temperature`, `top_p`, `num_predict`, etc.) that are merged with the
   runtime settings pulled from `monGARS.config.get_settings()`.
 - `LLMModelManager` currently only instantiates Ollama-backed definitions. Any
@@ -121,7 +121,7 @@ pipelines.
 
 ### Embedding Strategy
 
-- Embeddings reuse the same Dolphin 3.0 checkpoint that powers chat. The
+- Embeddings reuse the same Dolphin-X1 checkpoint that powers chat. The
   `dolphin_llm2vec_pipeline.py` workflow saves LoRA adapters, exports an
   LLM2Vec-compatible wrapper, and annotates deterministic embedding options so
   downstream services can reload the weights without guessing parameters.
@@ -153,7 +153,7 @@ pipelines.
 - `LLMIntegration.initialize_unsloth()` attempts to patch PyTorch at startup so
   fused kernels and quantisation paths are ready before any slot is acquired. A
   structured log (`llm.unsloth.patched`) confirms whether the patch succeeded.
-  The helper reports a 70% VRAM reduction baseline for the reference Dolphin 3
+  The helper reports a 70% VRAM reduction baseline for the reference Dolphin-X1
   adapter.
 - Use `python -m scripts.diagnose_unsloth` to inspect whether the optimisation
   was applied and to capture current CUDA memory headroom. The command now emits

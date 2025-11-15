@@ -225,7 +225,7 @@ services:
       - ./models/encoders:/app/models/encoders
     command: >-
       bash -lc "python scripts/run_mongars_llm_pipeline.py finetune
-        --model-id ${UNSLOTH_MODEL_ID:-dphn/Dolphin3.0-Llama3.1-8B}
+        --model-id ${UNSLOTH_MODEL_ID:-dphn/Dolphin-X1-8B}
         --dataset-path ${UNSLOTH_DATASET_PATH:-/app/datasets/monGARS_llm/monGARS_llm_train.jsonl}
         --eval-dataset-path ${UNSLOTH_EVAL_DATASET_PATH:-/app/datasets/monGARS_llm/monGARS_llm_val.jsonl}
         --output-dir ${UNSLOTH_OUTPUT_DIR:-/app/models/encoders/monGARS_unsloth/run}

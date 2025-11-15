@@ -269,7 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     finetune.add_argument(
         "--model-id",
         required=True,
-        help="Base model identifier (e.g. dphn/Dolphin3.0-Llama3.1-8B)",
+        help="Base model identifier (e.g. dphn/Dolphin-X1-8B)",
     )
     finetune.add_argument(
         "--dataset-id",
