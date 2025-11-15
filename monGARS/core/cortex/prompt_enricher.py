@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from monGARS.core.iris import IrisDocument
 from monGARS.core.search import VerifiedBundle
 from monGARS.core.search.source_badge import source_badge
+
+
+UTC = datetime.UTC if hasattr(datetime, "UTC") else timezone.utc
 
 
 def _fmt_dt(value: datetime | None) -> str:
