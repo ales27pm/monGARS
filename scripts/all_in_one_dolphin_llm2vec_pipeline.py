@@ -448,7 +448,13 @@ def stage_serve(cfg: PipelineConfig, hf_model_dir: Path) -> None:
         cmd.extend(extra)
 
     try:
-        run_subprocess(cmd, cwd=cfg.repo_root, dry_run=cfg.dry_run, check=False)
+        returncode = run_subprocess(
+            cmd, cwd=cfg.repo_root, dry_run=cfg.dry_run, check=False
+        )
+        if not cfg.dry_run and returncode != 0:
+            raise PipelineError(
+                f"run_llm2vec_service.py exited with code {returncode}; check the service logs."
+            )
     except KeyboardInterrupt:
         LOGGER.info("Embedding service interrupted by user.")
 
