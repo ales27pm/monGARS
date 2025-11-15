@@ -62,7 +62,7 @@ REQUIRED_PACKAGES = [
     "transformers>=4.44",
     "datasets",
     "peft>=0.11",
-    "bitsandbytes>=0.44.1",
+    "bitsandbytes>=0.48.0",
     "llm2vec",
     "sentencepiece",
 ]

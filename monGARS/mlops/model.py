@@ -202,7 +202,7 @@ def detach_sequences(sequences: Iterable[Any]) -> list[Any]:
 
 
 _MIN_BITSANDBYTES_VERSION_ENV = "MONGARS_MIN_BITSANDBYTES_VERSION"
-_DEFAULT_MIN_BITSANDBYTES_VERSION = Version("0.44.1")
+_DEFAULT_MIN_BITSANDBYTES_VERSION = Version("0.48.0")
 
 
 @lru_cache(maxsize=1)
