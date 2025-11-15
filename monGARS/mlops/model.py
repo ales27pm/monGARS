@@ -227,18 +227,29 @@ def _cache_device_map_hint(model: Any, mapping: Mapping[str, Any]) -> None:
         )
 
 
+_DEVICE_MAP_PROXY_ATTRS: tuple[str, ...] = (
+    "base_model",
+    "model",
+    "pretrained_model",
+    "inner_model",
+    "llm",
+)
+
+
 def _resolve_device_map_candidate(model: Any) -> Mapping[str, Any] | None:
     for attr in ("_hf_device_map", "_mongars_device_map_hint"):
         candidate = getattr(model, attr, None)
         if isinstance(candidate, Mapping):
             return candidate
 
-    base_model = getattr(model, "base_model", None)
-    if base_model is not None:
-        mapping = getattr(base_model, "hf_device_map", None)
+    for attr in _DEVICE_MAP_PROXY_ATTRS:
+        proxy = getattr(model, attr, None)
+        if proxy is None or proxy is model:
+            continue
+        mapping = getattr(proxy, "hf_device_map", None)
         if isinstance(mapping, Mapping):
             return mapping
-        hint = getattr(base_model, "_mongars_device_map_hint", None)
+        hint = getattr(proxy, "_mongars_device_map_hint", None)
         if isinstance(hint, Mapping):
             return hint
     return None
@@ -247,23 +258,30 @@ def _resolve_device_map_candidate(model: Any) -> Mapping[str, Any] | None:
 def ensure_explicit_device_map(model: Any) -> bool:
     """Ensure ``hf_device_map`` attributes are mappings instead of the string ``'auto'``."""
 
-    visited: set[int] = set()
-    stack: list[Any] = [model]
+    processed: set[int] = set()
+    stack: list[tuple[Any, bool]] = [(model, False)]
     updated = False
 
     while stack:
-        current = stack.pop()
+        current, children_processed = stack.pop()
         if current is None:
             continue
-        pointer = id(current)
-        if pointer in visited:
-            continue
-        visited.add(pointer)
 
-        for attr in ("base_model", "model"):
-            nested = getattr(current, attr, None)
-            if nested is not None:
-                stack.append(nested)
+        pointer = id(current)
+        if children_processed:
+            if pointer in processed:
+                continue
+            processed.add(pointer)
+        elif pointer in processed:
+            continue
+
+        if not children_processed:
+            stack.append((current, True))
+            for attr in ("base_model", "model"):
+                nested = getattr(current, attr, None)
+                if nested is not None:
+                    stack.append((nested, False))
+            continue
 
         mapping = getattr(current, "hf_device_map", None)
         if isinstance(mapping, Mapping):

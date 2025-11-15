@@ -119,3 +119,40 @@ def test_ensure_explicit_device_map_inherits_from_base_model() -> None:
 
     assert changed is True
     assert wrapper.hf_device_map == base.hf_device_map
+
+
+def test_ensure_explicit_device_map_infers_from_model_attr() -> None:
+    base = _DummyModel()
+
+    class _Wrapper:
+        def __init__(self) -> None:
+            self.hf_device_map = "auto"
+            self.model = base
+
+    wrapper = _Wrapper()
+
+    changed = model_mod.ensure_explicit_device_map(wrapper)
+
+    assert changed is True
+    assert wrapper.hf_device_map == base.hf_device_map
+
+
+def test_ensure_explicit_device_map_waits_for_nested_updates() -> None:
+    class _Base:
+        def __init__(self) -> None:
+            self.hf_device_map: Any = "auto"
+            self._hf_device_map = {"layer": "cuda:0"}
+
+    class _Wrapper:
+        def __init__(self, inner: _Base) -> None:
+            self.hf_device_map = "auto"
+            self.base_model = inner
+
+    base = _Base()
+    wrapper = _Wrapper(base)
+
+    changed = model_mod.ensure_explicit_device_map(wrapper)
+
+    assert changed is True
+    assert wrapper.hf_device_map == base.hf_device_map
+    assert isinstance(wrapper.hf_device_map, dict)
