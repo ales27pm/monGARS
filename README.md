@@ -371,7 +371,7 @@ entries for quick access. Keep the documentation set dynamic by running
 | Implementation status & roadmap alignment | [docs/implementation_status.md](docs/implementation_status.md) |
 | Advanced fine-tuning and distributed inference plan | [docs/advanced_fine_tuning.md](docs/advanced_fine_tuning.md) |
 | RAG context enrichment | [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md) |
-| Dolphin 3 chat/embedding reuse | [docs/dolphin3_chat_embeddings.md](docs/dolphin3_chat_embeddings.md) |
+| Dolphin-X1 chat/embedding reuse | [docs/dolphin_x1_chat_embeddings.md](docs/dolphin_x1_chat_embeddings.md) |
 | SDK overview & release workflow | [docs/sdk-overview.md](docs/sdk-overview.md), [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |
 | API specification & client stubs | [docs/api/](docs/api/README.md) |
 

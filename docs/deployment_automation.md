@@ -81,7 +81,7 @@ deployment, and a browser launch for the Django console.
 
 ```bash
 python scripts/finetune_deploy_launch.py \
-  --model-id dphn/Dolphin3.0-Llama3.1-8B \
+  --model-id dphn/Dolphin-X1-8B \
   --dataset-path datasets/unsloth/monGARS_unsloth_dataset.jsonl
 ```
 

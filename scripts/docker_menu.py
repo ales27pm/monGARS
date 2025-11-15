@@ -895,7 +895,7 @@ class DockerMenu:
                 return
             shutil.rmtree(install_root)
 
-        model_default = "dphn/Dolphin3.0-Llama3.1-8B"
+        model_default = "dphn/Dolphin-X1-8B"
         model_id = (
             input(f"Base model identifier [{model_default}]: ").strip() or model_default
         )

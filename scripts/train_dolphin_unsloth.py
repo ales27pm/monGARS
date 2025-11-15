@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless training pipeline for Dolphin 3.0 Llama 3.1-8B using Unsloth.
+"""Headless training pipeline for Dolphin-X1-8B using Unsloth.
 
 This script automates end-to-end supervised fine-tuning (SFT) with features that
 make it suitable for unattended, headless servers:
@@ -835,13 +835,13 @@ def parse_arguments(
     argv: Optional[list[str]] = None,
 ) -> tuple[argparse.Namespace, TrainingConfig]:
     parser = argparse.ArgumentParser(
-        description="Automated Dolphin 3.0 fine-tuning pipeline"
+        description="Automated Dolphin-X1 fine-tuning pipeline"
     )
     parser.add_argument("--hf-token", type=str, help="Hugging Face access token")
     parser.add_argument(
         "--base-model-id",
         type=str,
-        default="dphn/Dolphin3.0-Llama3.1-8B",
+        default="dphn/Dolphin-X1-8B",
         help="Base Hugging Face model identifier to fine-tune.",
     )
     parser.add_argument(
@@ -991,7 +991,7 @@ def parse_arguments(
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("dolphin3_finetuned"),
+        default=Path("dolphin_x1_finetuned"),
         help="Directory where the fine-tuned checkpoint will be written.",
     )
     parser.add_argument(

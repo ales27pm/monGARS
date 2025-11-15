@@ -1,4 +1,4 @@
-"""Utilities to generate GGUF and wrapper artefacts for Dolphin fine-tuning."""
+"""Utilities to generate GGUF and wrapper artefacts for Dolphin-X1 fine-tuning."""
 
 from __future__ import annotations
 
@@ -274,7 +274,7 @@ def render_output_bundle_readme(
         f"""
         # Output bundle
 
-        This folder contains all artifacts to integrate the fine-tuned Dolphin 8B model and a wrapper
+        This folder contains all artifacts to integrate the fine-tuned Dolphin-X1-8B model and a wrapper
         that enables both chat generation and embeddings (via LLM2Vec) from the SAME model instance.
 
         Layout

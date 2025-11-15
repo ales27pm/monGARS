@@ -3,7 +3,7 @@
     "default": {
       "models": {
         "general": {
-          "name": "dolphin3",
+          "name": "dolphin-x1",
           "provider": "ollama",
           "auto_download": true,
           "parameters": {
@@ -11,19 +11,19 @@
             "num_predict": 512,
             "max_tokens": 4096
           },
-          "description": "Dolphin 3.0 Llama 3.1 8B chat checkpoint.",
+          "description": "Dolphin-X1-8B chat checkpoint.",
           "adapters": [
             {
-              "name": "dolphin3-chat-baseline",
+              "name": "dolphin-x1-chat-baseline",
               "source": "../models/encoders/monGARS_unsloth",
-              "target": "dolphin3/chat/baseline",
+              "target": "dolphin-x1/chat/baseline",
               "auto_update": true,
               "description": "Baseline chat adapter snapshot distributed with monGARS."
             }
           ]
         },
         "coding": {
-          "name": "dolphin3-llm2vec",
+          "name": "dolphin-x1-llm2vec",
           "provider": "ollama",
           "auto_download": true,
           "parameters": {
@@ -31,19 +31,19 @@
             "num_predict": 512,
             "max_tokens": 4096
           },
-          "description": "LLM2Vec-wrapped Dolphin 3.0 build tuned for coding and embeddings.",
+          "description": "LLM2Vec-wrapped Dolphin-X1-8B build tuned for coding and embeddings.",
           "adapters": [
             {
-              "name": "dolphin3-coding-baseline",
+              "name": "dolphin-x1-coding-baseline",
               "source": "../models/encoders/monGARS_unsloth",
-              "target": "dolphin3/coding/baseline",
+              "target": "dolphin-x1/coding/baseline",
               "auto_update": true,
               "description": "Shared adapter baseline providing deterministic embeddings."
             }
           ]
         },
         "reasoning": {
-          "name": "dolphin3",
+          "name": "dolphin-x1",
           "provider": "ollama",
           "auto_download": true,
           "parameters": {
@@ -51,12 +51,12 @@
             "num_predict": 768,
             "max_tokens": 4096
           },
-          "description": "Reasoning-focused Dolphin 3 role backed by curated adapters.",
+          "description": "Reasoning-focused Dolphin-X1 role backed by curated adapters.",
           "adapters": [
             {
-              "name": "dolphin3-reasoning-baseline",
+              "name": "dolphin-x1-reasoning-baseline",
               "source": "../models/encoders/monGARS_unsloth",
-              "target": "dolphin3/reasoning/baseline",
+              "target": "dolphin-x1/reasoning/baseline",
               "auto_update": true,
               "description": "Placeholder reasoning adapter synced from the local registry."
             }

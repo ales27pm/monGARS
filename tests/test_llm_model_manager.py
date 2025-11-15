@@ -212,10 +212,10 @@ def test_default_profile_exposes_reasoning_role(tmp_path):
     manager = LLMModelManager(settings)
 
     reasoning = manager.get_model_definition("reasoning")
-    assert reasoning.name == "dolphin3"
+    assert reasoning.name == "dolphin-x1"
     assert reasoning.adapters
     assert len(reasoning.adapters) >= 1, "Expected at least one adapter"
-    assert reasoning.adapters[0].target == "dolphin3/reasoning/baseline"
+    assert reasoning.adapters[0].target == "dolphin-x1/reasoning/baseline"
 
 
 @pytest.mark.asyncio

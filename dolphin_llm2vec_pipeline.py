@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-model chat + embedding pipeline for Dolphin3.0-Llama3.1-8B."""
+"""One-model chat + embedding pipeline for Dolphin-X1-8B."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 
 from llm2vec import LLM2Vec
-
 from monGARS.mlops.dataset import prepare_instruction_dataset
 from monGARS.mlops.exporters import (
     export_gguf,
@@ -32,7 +31,7 @@ from monGARS.mlops.utils import (
     ensure_directory,
 )
 
-MODEL_ID = os.environ.get("MODEL_ID", "dphn/Dolphin3.0-Llama3.1-8B")
+MODEL_ID = os.environ.get("MODEL_ID", "dphn/Dolphin-X1-8B")
 DATASET_ID = os.environ.get("DATASET_ID", "yahma/alpaca-cleaned")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "outputs_dolphin8b"))
 OFFLOAD_DIR = Path(os.environ.get("OFFLOAD_DIR", "./offload"))
@@ -142,7 +141,7 @@ def main() -> None:
         "activation_buffer_mb": ACTIVATION_BUFFER_MB,
         "chat_backend": {
             "provider": "ollama",
-            "model": "dolphin3",
+            "model": "dolphin-x1",
             "parameters": {
                 "temperature": 0.2,
                 "top_p": 0.9,
@@ -171,7 +170,7 @@ def main() -> None:
             "wrapper_config_path": str(OUTPUT_DIR / "wrapper_config.json"),
         },
         "notes": (
-            "Reload the Dolphin3.0 base in 4-bit, apply PEFT adapters, and wrap with "
+            "Reload the Dolphin-X1 base in 4-bit, apply PEFT adapters, and wrap with "
             "LLM2Vec for deterministic embedding extraction."
         ),
     }

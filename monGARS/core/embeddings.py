@@ -1,4 +1,4 @@
-"""Utilities for generating high-fidelity embeddings with LLM2Vec and Dolphin 3."""
+"""Utilities for generating high-fidelity embeddings with LLM2Vec and Dolphin-X1."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import threading
+import warnings
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -1114,10 +1115,10 @@ class LLM2VecEmbedder:
             return None
 
 
-class Dolphin3Embedder:
-    """Generate embeddings by mean-pooling Dolphin 3.0 hidden states."""
+class DolphinX1Embedder:
+    """Generate embeddings by mean-pooling Dolphin-X1-8B hidden states."""
 
-    DEFAULT_MODEL_ID = "dphn/Dolphin3.0-Llama3.1-8B"
+    DEFAULT_MODEL_ID = "dphn/Dolphin-X1-8B"
     DEFAULT_MAX_LENGTH = 4096
     DEFAULT_BATCH_SIZE = 2
     DEFAULT_VECTOR_DIMENSION = 3072
@@ -1136,6 +1137,7 @@ class Dolphin3Embedder:
         self._settings = settings or get_settings()
         self._model_id = (
             model_id
+            or getattr(self._settings, "dolphin_x1_embedding_model_id", None)
             or getattr(self._settings, "dolphin3_embedding_model_id", None)
             or self.DEFAULT_MODEL_ID
         )
@@ -1145,8 +1147,12 @@ class Dolphin3Embedder:
                 max_length
                 or getattr(
                     self._settings,
-                    "dolphin3_embedding_max_length",
-                    self.DEFAULT_MAX_LENGTH,
+                    "dolphin_x1_embedding_max_length",
+                    getattr(
+                        self._settings,
+                        "dolphin3_embedding_max_length",
+                        self.DEFAULT_MAX_LENGTH,
+                    ),
                 )
             ),
         )
@@ -1156,8 +1162,12 @@ class Dolphin3Embedder:
                 batch_size
                 or getattr(
                     self._settings,
-                    "dolphin3_embedding_batch_size",
-                    self.DEFAULT_BATCH_SIZE,
+                    "dolphin_x1_embedding_batch_size",
+                    getattr(
+                        self._settings,
+                        "dolphin3_embedding_batch_size",
+                        self.DEFAULT_BATCH_SIZE,
+                    ),
                 )
             ),
         )
@@ -1167,16 +1177,23 @@ class Dolphin3Embedder:
                 target_dimension
                 or getattr(
                     self._settings,
-                    "dolphin3_embedding_vector_dimensions",
-                    self.DEFAULT_VECTOR_DIMENSION,
+                    "dolphin_x1_embedding_vector_dimensions",
+                    getattr(
+                        self._settings,
+                        "dolphin3_embedding_vector_dimensions",
+                        self.DEFAULT_VECTOR_DIMENSION,
+                    ),
                 )
             ),
         )
-        self._device_preference = device or getattr(
-            self._settings, "dolphin3_embedding_device", None
+        self._device_preference = device or (
+            getattr(self._settings, "dolphin_x1_embedding_device", None)
+            or getattr(self._settings, "dolphin3_embedding_device", None)
         )
         self._torch_dtype_config = torch_dtype or getattr(
-            self._settings, "dolphin3_embedding_torch_dtype", None
+            self._settings,
+            "dolphin_x1_embedding_torch_dtype",
+            getattr(self._settings, "dolphin3_embedding_torch_dtype", None),
         )
         self._torch_module: Any | None = None
         self._tokenizer = None
@@ -1206,7 +1223,7 @@ class Dolphin3Embedder:
         return self._max_length
 
     def encode(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return embeddings for ``texts`` using Dolphin 3 mean pooling."""
+        """Return embeddings for ``texts`` using Dolphin-X1 mean pooling."""
 
         if not texts:
             return []
@@ -1242,7 +1259,7 @@ class Dolphin3Embedder:
             hidden_states = getattr(outputs, "hidden_states", None)
             if not hidden_states:
                 raise EmbeddingBackendError(
-                    "Dolphin 3 model did not return hidden states"
+                    "Dolphin-X1 model did not return hidden states"
                 )
 
             final_hidden = hidden_states[-1]
@@ -1332,7 +1349,7 @@ class Dolphin3Embedder:
         spec = importlib.util.find_spec("torch")
         if spec is None:
             raise EmbeddingBackendError(
-                "PyTorch is required for Dolphin 3 embeddings but is not installed"
+                "PyTorch is required for Dolphin-X1 embeddings but is not installed"
             )
         torch_module = importlib.import_module("torch")
         self._torch_module = torch_module
@@ -1342,7 +1359,7 @@ class Dolphin3Embedder:
         spec = importlib.util.find_spec("transformers")
         if spec is None:
             raise EmbeddingBackendError(
-                "transformers is required for Dolphin 3 embeddings but is not installed"
+                "transformers is required for Dolphin-X1 embeddings but is not installed"
             )
         transformers_module = importlib.import_module("transformers")
         tokenizer_cls = getattr(transformers_module, "AutoTokenizer", None)
@@ -1397,7 +1414,7 @@ class Dolphin3Embedder:
 
         if dtype is None:
             logger.warning(
-                "dolphin3.embedding.dtype_unresolved",
+                "dolphin_x1.embedding.dtype_unresolved",
                 extra={"value": self._torch_dtype_config},
             )
             return None
@@ -1407,12 +1424,16 @@ class Dolphin3Embedder:
             "torch.float64",
         }:
             logger.warning(
-                "dolphin3.embedding.dtype_cpu_override",
+                "dolphin_x1.embedding.dtype_cpu_override",
                 extra={"requested": self._torch_dtype_config},
             )
             return torch_module.float32
 
         return dtype
+
+
+# Backwards compatibility alias maintained for callers importing the legacy name.
+Dolphin3Embedder = DolphinX1Embedder
 
 
 @lru_cache(maxsize=1)
@@ -1423,18 +1444,32 @@ def get_llm2vec_embedder() -> LLM2VecEmbedder:
 
 
 @lru_cache(maxsize=1)
-def get_dolphin3_embedder() -> Dolphin3Embedder:
-    """Return a cached Dolphin 3 embedder instance."""
+def get_dolphin_x1_embedder() -> DolphinX1Embedder:
+    """Return a cached Dolphin-X1 embedder instance."""
 
-    return Dolphin3Embedder()
+    return DolphinX1Embedder()
+
+
+@lru_cache(maxsize=1)
+def get_dolphin3_embedder() -> DolphinX1Embedder:
+    """Deprecated alias for :func:`get_dolphin_x1_embedder`."""
+
+    warnings.warn(
+        "get_dolphin3_embedder is deprecated; use get_dolphin_x1_embedder instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return get_dolphin_x1_embedder()
 
 
 __all__ = [
     "EmbeddingBackendError",
     "EmbeddingBatch",
+    "DolphinX1Embedder",
     "Dolphin3Embedder",
     "LLM2VecEmbedder",
     "_encode_with_transformers",
+    "get_dolphin_x1_embedder",
     "get_dolphin3_embedder",
     "get_llm2vec_embedder",
 ]
