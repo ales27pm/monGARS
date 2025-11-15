@@ -24,6 +24,11 @@ try:  # pragma: no cover - accelerate optional during some tests
 except Exception:  # pragma: no cover - fallback path exercised in unit tests
     _ACCELERATE_REMOVE_HOOK = None  # type: ignore[assignment]
 
+try:  # pragma: no cover - accelerate optional during some tests
+    from accelerate.state import AcceleratorState as _ACCELERATE_STATE
+except Exception:  # pragma: no cover - fallback path exercised in unit tests
+    _ACCELERATE_STATE = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,6 +196,7 @@ def move_to_cpu(model: Any) -> None:
 
     _remove_accelerate_hooks(model)
     _normalise_device_map_to_cpu(model)
+    _reset_accelerate_state()
 
 
 def _remove_accelerate_hooks(model: Any) -> None:
@@ -279,6 +285,18 @@ def _normalise_device_map_to_cpu(model: Any) -> None:
             logger.debug(
                 "Unable to update model _hf_device_map for CPU fallback", exc_info=True
             )
+
+
+def _reset_accelerate_state() -> None:
+    """Reset Accelerate's global state so future trainers re-evaluate devices."""
+
+    if _ACCELERATE_STATE is None:
+        return
+
+    try:
+        _ACCELERATE_STATE._reset_state()
+    except Exception:  # pragma: no cover - best effort cleanup
+        logger.debug("Unable to reset accelerate state", exc_info=True)
 
 
 def detach_sequences(sequences: Iterable[Any]) -> list[Any]:

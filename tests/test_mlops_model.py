@@ -65,3 +65,24 @@ def test_move_to_cpu_handles_missing_accelerate(
     assert not hasattr(model, "_hf_hook")
     assert not hasattr(model, "_old_forward")
     assert hook.detached is True
+
+
+def test_move_to_cpu_resets_accelerate_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_calls: list[bool] = []
+
+    class _State:
+        @staticmethod
+        def _reset_state(reset_partial_state: bool = False) -> None:
+            reset_calls.append(reset_partial_state)
+
+    monkeypatch.setattr(model_mod, "_ACCELERATE_STATE", _State)
+    monkeypatch.setattr(model_mod, "_ACCELERATE_REMOVE_HOOK", lambda *args, **kwargs: None)
+
+    model = _DummyModel()
+
+    model_mod.move_to_cpu(model)
+
+    assert model.device == "cpu"
+    assert reset_calls == [False]
