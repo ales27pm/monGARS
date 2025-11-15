@@ -10,6 +10,7 @@ planning.
 
 from __future__ import annotations
 
+import unsloth
 import argparse
 import importlib
 import importlib.util
