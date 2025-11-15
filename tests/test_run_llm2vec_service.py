@@ -1,119 +1,82 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-import torch
 from fastapi.testclient import TestClient
 
-from monGARS.config import get_settings
-from monGARS.core.embeddings import EmbeddingBatch, LLM2VecEmbedder
-from scripts.run_llm2vec_service import EmbeddingService, create_app
+from scripts import run_llm2vec_service
 
 
-class DummyWrapper:
-    def __init__(self) -> None:
-        self.calls: list[tuple[list[str], bool | None]] = []
+class DummyEmbeddingModel:
+    def __init__(self, *args, **kwargs) -> None:
+        del args, kwargs
+        self.embedding_dim = 3
+        self.calls: list[tuple[list[str], int]] = []
 
-    def embed(self, texts: list[str], normalise: bool | None = None) -> torch.Tensor:
-        self.calls.append((texts, normalise))
-        return torch.ones(len(texts), 3)
+    def embed_texts(self, texts, batch_size: int):
+        payload = [str(text) for text in texts]
+        self.calls.append((payload, batch_size))
+        return [[float(index)] * self.embedding_dim for index, _ in enumerate(payload)]
 
 
-def test_embedding_service_exposes_health_and_embed(tmp_path: Path) -> None:
-    wrapper_dir = tmp_path / "wrapper"
-    wrapper_dir.mkdir()
+def test_service_exposes_health_and_embeddings(monkeypatch) -> None:
+    dummy = DummyEmbeddingModel()
 
-    config = {
-        "base_model_id": "sample/dolphin",
-        "embedding_backend": "huggingface",
-        "embedding_options": {"max_length": 16, "normalise": False},
-    }
-    (tmp_path / "wrapper_config.json").write_text(json.dumps(config))
-    (wrapper_dir / "config.json").write_text(json.dumps(config))
+    def factory(*args, **kwargs):
+        return dummy
 
-    dummy = DummyWrapper()
-    service = EmbeddingService(
-        tmp_path,
-        prefer_merged=False,
+    monkeypatch.setattr(run_llm2vec_service, "EmbeddingModel", factory)
+
+    cfg = run_llm2vec_service.ServiceConfig(
+        model_dir="/tmp/model",
+        host="127.0.0.1",
+        port=8080,
         device="cpu",
-        load_in_4bit=None,
-        wrapper_factory=lambda: dummy,
+        max_length=128,
+        batch_size=4,
+        normalize=True,
+        pooling="mean",
+        log_level="INFO",
     )
-    app = create_app(service)
+
+    app = run_llm2vec_service.create_app(cfg)
     client = TestClient(app)
 
-    health = client.get("/healthz")
+    health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["model"] == "sample/dolphin"
+    assert health.json() == {
+        "status": "ok",
+        "model": "/tmp/model",
+        "dimension": 3,
+    }
 
-    response = client.post(
-        "/embed",
-        json={"inputs": ["hello", "world"], "normalise": True},
-    )
+    response = client.post("/embed", json={"texts": ["hello", "world"]})
     assert response.status_code == 200
     payload = response.json()
-    assert payload["count"] == 2
-    assert payload["dims"] == 3
-    assert payload["normalised"] is True
-    assert dummy.calls[0][0] == ["hello", "world"]
-    assert dummy.calls[0][1] is True
+    assert payload["dimension"] == 3
+    assert payload["model"] == "/tmp/model"
+    assert payload["embeddings"] == [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]
+    assert dummy.calls == [(["hello", "world"], 4)]
 
 
-def test_embedding_service_ollama_backend(monkeypatch) -> None:
-    async def fake_encode_batch(_self, texts, *, instruction=None):
-        del instruction
-        return EmbeddingBatch(
-            vectors=[[float(index), float(index + 1)] for index, _ in enumerate(texts)],
-            used_fallback=False,
-        )
-
+def test_service_rejects_empty_payload(monkeypatch) -> None:
     monkeypatch.setattr(
-        LLM2VecEmbedder, "encode_batch", fake_encode_batch, raising=True
+        run_llm2vec_service, "EmbeddingModel", lambda *a, **kw: DummyEmbeddingModel()
     )
 
-    service = EmbeddingService(
-        None,
-        backend="ollama",
-        settings=get_settings(),
+    cfg = run_llm2vec_service.ServiceConfig(
+        model_dir="/tmp/model",
+        host="127.0.0.1",
+        port=8080,
+        device="cpu",
+        max_length=128,
+        batch_size=1,
+        normalize=True,
+        pooling="mean",
+        log_level="INFO",
     )
 
-    assert service.backend == "ollama"
-
-    app = create_app(service)
+    app = run_llm2vec_service.create_app(cfg)
     client = TestClient(app)
 
-    response = client.post("/embed", json={"inputs": ["alpha", "beta"]})
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["backend"] == "ollama"
-    assert payload["count"] == 2
-    assert payload["dims"] == 2
-    assert payload["normalised"] is False
-    assert payload["vectors"] == [[0.0, 1.0], [1.0, 2.0]]
-
-
-def test_embedding_service_unsupported_backend_warns(tmp_path: Path, caplog) -> None:
-    wrapper_dir = tmp_path / "wrapper"
-    wrapper_dir.mkdir()
-    config = {
-        "base_model_id": "fallback/model",
-        "embedding_backend": "huggingface",
-        "embedding_options": {"normalise": False},
-    }
-    (tmp_path / "wrapper_config.json").write_text(json.dumps(config))
-    (wrapper_dir / "config.json").write_text(json.dumps(config))
-
-    caplog.set_level("WARNING")
-
-    service = EmbeddingService(
-        tmp_path,
-        backend="unsupported-backend",
-        settings=get_settings(),
-    )
-
-    assert service.backend == "huggingface"
-    assert any(
-        record.getMessage() == "llm2vec.embedding.backend.unsupported"
-        for record in caplog.records
-    )
+    response = client.post("/embed", json={"texts": []})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Field 'texts' must be a non-empty list"

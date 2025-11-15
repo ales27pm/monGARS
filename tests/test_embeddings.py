@@ -1,6 +1,7 @@
 """Tests for the LLM2Vec embedder utilities."""
 
 import math
+import sys
 
 import pytest
 
@@ -98,6 +99,106 @@ class _NonFiniteManager:
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
         return [[self.return_value, 1.0, 2.0] for _ in texts]
+
+
+class _FakeHTTPError(Exception):
+    """Substitute for httpx.HTTPError in tests."""
+
+
+class _FakeTimeout:
+    """Lightweight timeout stub mirroring httpx.Timeout initialisation."""
+
+    def __init__(self, total: float, *, connect: float) -> None:
+        self.total = total
+        self.connect = connect
+
+
+class _FakeResponse:
+    def __init__(
+        self,
+        data: dict[str, object] | list[object],
+        *,
+        status_code: int = 200,
+        error_cls: type[Exception] = _FakeHTTPError,
+    ) -> None:
+        self._data = data
+        self.status_code = status_code
+        self._error_cls = error_cls
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise self._error_cls(f"HTTP {self.status_code}")
+
+    def json(self) -> dict[str, object] | list[object]:
+        return self._data
+
+
+class _FakeAsyncClient:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout: _FakeTimeout,
+        headers: dict[str, str] | None,
+        module: "_FakeHTTPXModule",
+    ) -> None:
+        self.base_url = base_url
+        self.timeout = timeout
+        self.headers = headers
+        self._module = module
+        self.post_calls: list[tuple[str, dict[str, object]]] = []
+        self.get_calls: list[str] = []
+
+    async def get(self, path: str) -> _FakeResponse:
+        self.get_calls.append(path)
+        if self._module.health_queue:
+            payload, status = self._module.health_queue.pop(0)
+        else:
+            payload, status = ({"status": "ok"}, 200)
+        return _FakeResponse(
+            payload, status_code=status, error_cls=self._module.HTTPError
+        )
+
+    async def post(self, path: str, json: dict[str, object]) -> _FakeResponse:
+        self.post_calls.append((path, json))
+        if self._module.post_queue:
+            payload, status = self._module.post_queue.pop(0)
+        else:
+            payload, status = ({"embeddings": [], "dimension": 0}, 200)
+        return _FakeResponse(
+            payload, status_code=status, error_cls=self._module.HTTPError
+        )
+
+    async def aclose(self) -> None:  # pragma: no cover - compatibility hook
+        self._module.closed_clients.append(self)
+
+
+class _FakeHTTPXModule:
+    """Minimal shim emulating the subset of httpx used by the embedder."""
+
+    def __init__(self) -> None:
+        self.HTTPError = _FakeHTTPError
+        self.Timeout = _FakeTimeout
+        self.post_queue: list[tuple[dict[str, object], int]] = []
+        self.health_queue: list[tuple[dict[str, object], int]] = []
+        self.created_clients: list[_FakeAsyncClient] = []
+        self.closed_clients: list[_FakeAsyncClient] = []
+
+    def AsyncClient(
+        self,
+        *,
+        base_url: str,
+        timeout: _FakeTimeout,
+        headers: dict[str, str] | None = None,
+    ) -> _FakeAsyncClient:
+        client = _FakeAsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            headers=headers,
+            module=self,
+        )
+        self.created_clients.append(client)
+        return client
 
 
 @pytest.mark.asyncio
@@ -206,6 +307,83 @@ async def test_encode_batch_generates_deterministic_fallback_vectors() -> None:
     for vector in first.vectors:
         magnitude = _vector_norm(vector)
         assert magnitude == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_dolphin_service_backend_requests_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _FakeHTTPXModule()
+    module.health_queue.append(({"status": "ok", "model": "stub", "dimension": 3}, 200))
+    module.post_queue.append(
+        (
+            {
+                "embeddings": [
+                    [1.0, 2.0, 3.0],
+                    [4.0, 5.0, 6.0],
+                ],
+                "dimension": 3,
+            },
+            200,
+        )
+    )
+    monkeypatch.setitem(sys.modules, "httpx", module)
+
+    settings = Settings(
+        embedding_backend="dolphin-x1-llm2vec",
+        llm2vec_max_batch_size=8,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        debug=True,
+        dolphin_x1_llm2vec_service_url="http://localhost:9090",
+    )
+    embedder = LLM2VecEmbedder(settings=settings)
+
+    payloads = ["alpha", "beta"]
+    batch = await embedder.encode_batch(payloads)
+
+    assert batch.used_fallback is False
+    assert batch.vectors == [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+
+    assert module.created_clients  # client instantiated lazily
+    client = module.created_clients[0]
+    assert client.get_calls == ["/health"]
+    assert client.post_calls == [("/embed", {"texts": payloads})]
+
+
+@pytest.mark.asyncio
+async def test_dolphin_service_backend_falls_back_on_invalid_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _FakeHTTPXModule()
+    module.health_queue.append(({"status": "ok", "model": "stub", "dimension": 3}, 200))
+    module.post_queue.append(
+        ({"embeddings": [["not", "numbers"]], "dimension": 3}, 200)
+    )
+    monkeypatch.setitem(sys.modules, "httpx", module)
+
+    settings = Settings(
+        embedding_backend="dolphin-x1-llm2vec",
+        llm2vec_max_batch_size=4,
+        llm2vec_max_concurrency=1,
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+        debug=True,
+    )
+    embedder = LLM2VecEmbedder(settings=settings)
+
+    batch = await embedder.encode_batch(["needs fallback"])
+    assert batch.used_fallback is True
+    assert len(batch.vectors) == 1
+    assert len(batch.vectors[0]) == 3
+
+    # Subsequent calls return the cached fallback without additional HTTP calls.
+    cached = await embedder.encode_batch(["needs fallback"])
+    assert cached.vectors == batch.vectors
+    assert module.created_clients  # ensure the same client is reused
+    client = module.created_clients[0]
+    assert client.post_calls == [("/embed", {"texts": ["needs fallback"]})]
 
 
 @pytest.mark.asyncio
