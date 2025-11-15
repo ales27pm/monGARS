@@ -17,7 +17,6 @@ from typing import Any, Callable, Iterable, Type
 import torch
 from transformers import Trainer, TrainingArguments, default_data_collator
 
-
 try:  # pragma: no cover - optional dependency under tests
     from peft import LoraConfig, get_peft_model
 except Exception:  # pragma: no cover - tests patch this path
@@ -634,6 +633,10 @@ def train_qlora(
                 use_cuda = False
                 bf16_ok = False
                 move_to_cpu(model)
+                if _ensure_floating_point_dtype(model, torch.float32):
+                    logger.info(
+                        "Normalised model tensors to float32 for CPU training fallback"
+                    )
                 _maybe_empty_cuda_cache()
                 _reset_cuda_peak_memory_stats()
                 del trainer
@@ -681,3 +684,31 @@ def run_embedding_smoke_test(
     if isinstance(shape, (tuple, list)) and len(shape) == 2:
         return int(shape[0]), int(shape[1])
     return None
+
+
+def _ensure_floating_point_dtype(module: Any, dtype: torch.dtype) -> bool:
+    """Cast floating-point parameters and buffers on ``module`` to ``dtype``."""
+
+    changed = False
+
+    parameters = getattr(module, "parameters", None)
+    buffers = getattr(module, "buffers", None)
+
+    with torch.no_grad():
+        if callable(parameters):
+            for param in parameters():
+                if not isinstance(param, torch.Tensor):
+                    continue
+                if param.is_floating_point() and param.dtype is not dtype:
+                    param.data = param.data.to(dtype)
+                    changed = True
+
+        if callable(buffers):
+            for buffer in buffers():
+                if not isinstance(buffer, torch.Tensor):
+                    continue
+                if buffer.is_floating_point() and buffer.dtype is not dtype:
+                    buffer.data = buffer.data.to(dtype)
+                    changed = True
+
+    return changed
