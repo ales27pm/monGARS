@@ -169,6 +169,24 @@ def load_4bit_causal_lm(
 
     _configure_model_post_load(model, attention_implementation=attention_implementation)
 
+    # ``AutoModelForCausalLM.from_pretrained`` may replace the explicit device map
+    # with the string "auto" when quantization hooks request dynamic placement.
+    # Accelerate refuses to train models that advertise ``device_map='auto'`` in any
+    # distributed context, which surfaces as a hard error during Trainer setup even
+    # when we only intend to train on a single process.  Normalise the attribute to
+    # the deterministic mapping we computed so Accelerate recognises that placement
+    # is intentional and bypass-safe.
+    current_map = getattr(model, "hf_device_map", None)
+    if isinstance(current_map, str) and current_map.lower() == "auto":
+        try:
+            setattr(model, "hf_device_map", device_map)
+            setattr(model, "_hf_device_map", device_map)
+            logger.info("Normalised model hf_device_map from 'auto' to explicit mapping")
+        except Exception:  # pragma: no cover - best effort correction
+            logger.warning(
+                "Failed to override hf_device_map='auto' with explicit mapping", exc_info=True
+            )
+
     try:  # pragma: no cover - depends on torch build
         torch.backends.cuda.enable_flash_sdp(False)
         torch.backends.cuda.enable_mem_efficient_sdp(False)
