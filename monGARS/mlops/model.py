@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -17,6 +18,11 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
+
+try:  # pragma: no cover - accelerate optional during some tests
+    from accelerate.hooks import remove_hook_from_module as _ACCELERATE_REMOVE_HOOK
+except Exception:  # pragma: no cover - fallback path exercised in unit tests
+    _ACCELERATE_REMOVE_HOOK = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +188,97 @@ def move_to_cpu(model: Any) -> None:
             mover("cpu")
         except Exception:
             logger.debug("Unable to move model to CPU", exc_info=True)
+
+    _remove_accelerate_hooks(model)
+    _normalise_device_map_to_cpu(model)
+
+
+def _remove_accelerate_hooks(model: Any) -> None:
+    """Detach Accelerate hooks so CPU fallbacks do not reattach CUDA inputs."""
+
+    if _ACCELERATE_REMOVE_HOOK is not None:
+        try:
+            _ACCELERATE_REMOVE_HOOK(model, recurse=True)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logger.debug("Unable to remove accelerate hooks", exc_info=True)
+        return
+
+    # Fallback path when accelerate is unavailable—manually clear common attributes.
+    hook = getattr(model, "_hf_hook", None)
+    if hook is not None:
+        try:
+            detach = getattr(hook, "detach_hook", None)
+            if callable(detach):
+                detach(model)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logger.debug("Unable to detach manual accelerate hook", exc_info=True)
+        try:
+            delattr(model, "_hf_hook")
+        except Exception:
+            logger.debug(
+                "Unable to delete manual accelerate hook attribute", exc_info=True
+            )
+
+    old_forward = getattr(model, "_old_forward", None)
+    if old_forward is not None:
+        try:
+            model.forward = old_forward  # type: ignore[attr-defined]
+        except Exception:
+            logger.debug("Unable to restore original forward method", exc_info=True)
+        try:
+            delattr(model, "_old_forward")
+        except Exception:
+            logger.debug("Unable to delete cached forward attribute", exc_info=True)
+
+    for attr in ("cuda", "npu", "xpu", "mlu", "sdaa", "musa"):
+        try:
+            model.__dict__.pop(attr, None)
+        except Exception:
+            logger.debug(
+                "Unable to remove auxiliary accelerate attribute %s",
+                attr,
+                exc_info=True,
+            )
+
+    children = getattr(model, "children", None)
+    if callable(children):
+        for child in children():
+            _remove_accelerate_hooks(child)
+
+
+def _normalise_device_map_to_cpu(model: Any) -> None:
+    """Update any recorded device maps to reflect CPU execution."""
+
+    mapping = getattr(model, "hf_device_map", None)
+    if not mapping:
+        return
+
+    items: Iterable[tuple[str, Any]]
+    if isinstance(mapping, Mapping):
+        items = mapping.items()
+    else:
+        try:
+            items = list(mapping.items())  # type: ignore[attr-defined]
+        except Exception:
+            logger.debug("Model device map is not a mapping; skipping normalisation")
+            return
+
+    new_map = {key: "cpu" for key, _ in items}
+
+    try:
+        setattr(model, "hf_device_map", new_map)
+    except Exception:  # pragma: no cover - best effort cleanup
+        logger.debug(
+            "Unable to update model hf_device_map for CPU fallback", exc_info=True
+        )
+
+    if hasattr(model, "_hf_device_map"):
+        try:
+            setattr(model, "_hf_device_map", new_map)
+        except Exception:  # pragma: no cover - best effort cleanup
+            logger.debug(
+                "Unable to update model _hf_device_map for CPU fallback", exc_info=True
+            )
 
 
 def detach_sequences(sequences: Iterable[Any]) -> list[Any]:
