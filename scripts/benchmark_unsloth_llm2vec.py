@@ -265,10 +265,10 @@ def collect_hardware_snapshot() -> HardwareSnapshot:
                 GPUStatus(
                     name=str(getattr(device, "name", "unknown")),
                     total_memory_mb=_safe_float(
-                        getattr(device, "memoryTotal", None), scale=1024
+                        getattr(device, "memoryTotal", None)
                     ),
                     free_memory_mb=_safe_float(
-                        getattr(device, "memoryFree", None), scale=1024
+                        getattr(device, "memoryFree", None)
                     ),
                     temperature_c=_safe_float(getattr(device, "temperature", None)),
                     utilisation_percent=_safe_float(
