@@ -113,6 +113,8 @@ services:
         VAULT_URL: http://vault:8200
         VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
         WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
+        SEARCH_SEARX_ENABLED: ${SEARCH_SEARX_ENABLED:-true}
+        SEARCH_SEARX_BASE_URL: ${SEARCH_SEARX_INTERNAL_BASE_URL:-http://searxng:8080}
       restart: "no"
       working_dir: /app
       volumes:

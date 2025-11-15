@@ -124,6 +124,72 @@ def test_parse_env_file_ignores_comments(tmp_path: Path):
     assert parsed == {"KEY": "value", "EMPTY": ""}
 
 
+def test_prepare_ports_updates_searx_urls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda self: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+    menu.env_file = tmp_path / ".env"
+    menu.env_template = tmp_path / ".env.example"
+    menu.env_file.write_text(
+        "\n".join(
+            [
+                "SEARXNG_PORT=8082",
+                "SEARXNG_BASE_URL=http://localhost:8082",
+                "SEARCH_SEARX_BASE_URL=http://localhost:8082",
+                "SEARCH_SEARX_INTERNAL_BASE_URL=http://searxng:8080",
+            ]
+        )
+        + "\n",
+        encoding="utf8",
+    )
+
+    def fake_find_available_port(start: int, _reserved: set[int]) -> int:
+        return 9090 if start == 8082 else start
+
+    monkeypatch.setattr(menu, "_find_available_port", fake_find_available_port)
+
+    menu.prepare_ports()
+    values = docker_menu.DockerMenu._parse_env_file(menu.env_file)
+
+    assert values["SEARXNG_PORT"] == "9090"
+    assert values["SEARXNG_BASE_URL"] == "http://localhost:9090"
+    assert values["SEARCH_SEARX_BASE_URL"] == "http://localhost:9090"
+
+
+def test_synchronise_searx_urls_skips_remote_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda self: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+    env_values = {
+        "SEARXNG_PORT": "8082",
+        "SEARXNG_BASE_URL": "https://search.example",
+        "SEARCH_SEARX_BASE_URL": "https://search.example",
+    }
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        menu, "_write_env_updates", lambda updates: captured.update(updates)
+    )
+
+    menu._synchronise_searx_urls(env_values)
+
+    assert captured == {}
+    assert env_values["SEARXNG_BASE_URL"] == "https://search.example"
+    assert env_values["SEARCH_SEARX_BASE_URL"] == "https://search.example"
+
+
 def test_generate_base_model_bundle_invokes_pipeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

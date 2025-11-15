@@ -1,6 +1,6 @@
 # Full-Stack Deployment Automation
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The `scripts/full_stack_visual_deploy.py` helper orchestrates every
 prerequisite required to bring the monGARS research stack online. It
@@ -45,8 +45,11 @@ The installer performs the following actions:
    `docker-compose`) are present.
 2. **Prepare environment file** – copies `.env.example` to `.env` if it
    does not already exist, generates secure secrets for FastAPI,
-   Django, PostgreSQL, and SearxNG, and adds opinionated SearxNG keys
-   (`SEARCH_SEARX_*`).
+   Django, PostgreSQL, and SearxNG, adds opinionated SearxNG keys
+   (`SEARCH_SEARX_*`, including `SEARCH_SEARX_INTERNAL_BASE_URL` so
+   containers point at `http://searxng:8080`), and keeps
+   `SEARXNG_BASE_URL`/`SEARCH_SEARX_BASE_URL` aligned with
+   `SEARXNG_PORT` when operators customise the exposed port.
 3. **Install Python backend** – creates `.venv`, upgrades `pip`, and
    installs `requirements.txt` using the virtual environment interpreter.
 4. **Install web dependencies** – runs `npm install` in the repository

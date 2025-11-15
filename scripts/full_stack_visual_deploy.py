@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 
 class DeploymentError(RuntimeError):
@@ -145,6 +146,8 @@ class EnvFileManager:
         self._ensure_key("SEARXNG_PORT", "8082")
         self._ensure_key("SEARXNG_BASE_URL", "http://localhost:8082")
         self._ensure_key("SEARCH_SEARX_BASE_URL", "http://localhost:8082")
+        self._ensure_key("SEARCH_SEARX_INTERNAL_BASE_URL", "http://searxng:8080")
+        self._align_searx_urls()
 
     def _replace_if_default(self, key: str, defaults: set[str], new_value: str) -> None:
         current = self._read_value(key)
@@ -181,6 +184,53 @@ class EnvFileManager:
             lines.append(f"{key}={value}")
         with self.path.open("w", encoding="utf8") as handle:
             handle.write("\n".join(lines) + "\n")
+
+    def _align_searx_urls(self) -> None:
+        port_raw = self._read_value("SEARXNG_PORT")
+        if port_raw is None:
+            return
+        try:
+            port = int(port_raw.strip())
+        except (TypeError, ValueError):
+            self.logger.warning(
+                "Invalid SEARXNG_PORT=%s; skipping SearxNG URL alignment", port_raw
+            )
+            return
+
+        def _normalise_local_url(raw_url: str | None) -> str | None:
+            raw = (raw_url or "").strip()
+            if not raw:
+                return f"http://localhost:{port}"
+            try:
+                parsed = urlsplit(raw)
+            except ValueError:
+                return None
+            hostname = parsed.hostname
+            path = parsed.path or ""
+            if not hostname:
+                if raw.startswith(("localhost", "127.0.0.1")):
+                    host_part, _, remainder = raw.partition("/")
+                    name, _, _ = host_part.partition(":")
+                    hostname = name or "localhost"
+                    path = f"/{remainder}" if remainder else ""
+                else:
+                    return None
+            if hostname not in {"localhost", "127.0.0.1"}:
+                return None
+            scheme = parsed.scheme or "http"
+            netloc = f"{hostname}:{port}"
+            if path in {"", "/"}:
+                path = ""
+            new_url = urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
+            return new_url if new_url != raw else None
+
+        for key in ("SEARXNG_BASE_URL", "SEARCH_SEARX_BASE_URL"):
+            current = self._read_value(key)
+            replacement = _normalise_local_url(current)
+            if replacement is None:
+                continue
+            self.logger.info("Aligning %s with SEARXNG_PORT=%s", key, port)
+            self._write_value(key, replacement)
 
     @staticmethod
     def _random_value(length: int) -> str:
