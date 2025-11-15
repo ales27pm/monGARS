@@ -646,6 +646,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    @field_validator("search_searx_page_size", mode="before")
+    @classmethod
+    def _normalize_optional_int(cls, value: Any) -> Any:
+        """Allow empty strings from env vars to fall back to the default."""
+
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return stripped
+        return value
+
     # --- SearxNG helpers ---
     @field_validator("search_searx_categories", "search_searx_engines", mode="before")
     @classmethod
