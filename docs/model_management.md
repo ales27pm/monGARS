@@ -60,6 +60,31 @@ Logs are emitted under the `scripts.models.provision` namespace with the roles
 and actions taken, allowing operators to forward results into structured log
 pipelines.
 
+### Automated monGARS fine-tuning bundle
+- `python -m scripts.build_monGARS_llm_bundle` orchestrates LoRA training for
+  `dphn/Dolphin-X1-8B`, consuming either the curated
+  `datasets/unsloth/monGARS_unsloth_dataset.jsonl` file or a HuggingFace dataset
+  identifier, exporting adapters, and writing an LLM2Vec-ready wrapper alongside
+  enriched run metadata so operators can redeploy the artefacts without
+  additional scripting. The CLI defaults to the repository’s `models/encoders`
+  registry but accepts `--registry-path` for alternate manifests and `--json` to
+  emit a machine-readable run summary once training completes.【F:scripts/build_monGARS_llm_bundle.py†L103-L195】【F:scripts/build_monGARS_llm_bundle.py†L498-L648】
+- Dataset hygiene is surfaced before any GPU work: the command validates the
+  JSONL payload, reports duplicate ratios, prompt/completion statistics, and
+  writes `dataset_summary.json` next to the adapters. Use `--dry-run` to emit the
+  summary (optionally as JSON via `--json`) without launching a fine-tune, which
+  is ideal for pre-flight reviews in CI.【F:scripts/build_monGARS_llm_bundle.py†L279-L590】
+- Configuration profiles can be captured in JSON or YAML and loaded through
+  `--config`; CLI flags still win when both are supplied. Run labels provided via
+  `--run-name` are propagated into `run_metadata.json` and the adapter manifest,
+  enabling downstream schedulers to tag promotion candidates or bundle specific
+  experiments.【F:scripts/build_monGARS_llm_bundle.py†L205-L399】【F:scripts/build_monGARS_llm_bundle.py†L498-L590】
+- Optional evaluation datasets (`--eval-dataset-id` or `--eval-dataset-path`)
+  and batch sizing knobs roll straight into the Unsloth pipeline, and the
+  manifest metrics now include both dataset statistics and evaluation scores so
+  consumers such as Ray Serve can sanity-check provenance automatically when the
+  registry refreshes.【F:scripts/build_monGARS_llm_bundle.py†L530-L632】
+
 ## Runtime Behaviour
 
 - `LLMIntegration` calls `LLMModelManager.ensure_models_installed()` before
