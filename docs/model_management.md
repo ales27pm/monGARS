@@ -1,6 +1,6 @@
 # Model Configuration & Provisioning
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The LLM runtime is configured through a manifest located at
 `configs/llm_models.json`. Profiles group related model roles (for example
@@ -68,7 +68,9 @@ pipelines.
   enriched run metadata so operators can redeploy the artefacts without
   additional scripting. The CLI defaults to the repository’s `models/encoders`
   registry but accepts `--registry-path` for alternate manifests and `--json` to
-  emit a machine-readable run summary once training completes.【F:scripts/build_monGARS_llm_bundle.py†L103-L195】【F:scripts/build_monGARS_llm_bundle.py†L498-L648】
+  emit a machine-readable run summary once training completes. Refer to
+  [`scripts/build_monGARS_llm_bundle.py`](../scripts/build_monGARS_llm_bundle.py)
+  for the authoritative implementation.【F:scripts/build_monGARS_llm_bundle.py†L103-L195】【F:scripts/build_monGARS_llm_bundle.py†L498-L648】
 - Dataset hygiene is surfaced before any GPU work: the command validates the
   JSONL payload, reports duplicate ratios, prompt/completion statistics, and
   writes `dataset_summary.json` next to the adapters. Use `--dry-run` to emit the

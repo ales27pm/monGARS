@@ -237,8 +237,11 @@ def _apply_config_overrides(
         return args, {}, []
 
     payload = _load_config_payload(config_path)
+    actions_by_dest: dict[str, argparse.Action] = {
+        action.dest: action for action in parser._actions if action.dest
+    }
     defaults: dict[str, Any] = {
-        action.dest: action.default for action in parser._actions if action.dest
+        dest: action.default for dest, action in actions_by_dest.items()
     }
     applied: dict[str, Any] = {}
     skipped: list[str] = []
@@ -250,8 +253,17 @@ def _apply_config_overrides(
         if current != defaults[key]:
             skipped.append(key)
             continue
-        setattr(args, key, value)
-        applied[key] = value
+        action = actions_by_dest[key]
+        converted = value
+        if action.type is not None and value is not None:
+            try:
+                converted = action.type(value)
+            except Exception as exc:  # pragma: no cover - defensive validation
+                raise SystemExit(
+                    f"Invalid value for config key '{key}': {value!r}"
+                ) from exc
+        setattr(args, key, converted)
+        applied[key] = converted
     return args, applied, skipped
 
 
