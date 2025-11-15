@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from hashlib import blake2s
 from typing import Any, Optional
 
@@ -27,6 +27,7 @@ from ..init_db import Interaction
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+UTC = timezone.utc
 
 
 class _FakeLLM:
