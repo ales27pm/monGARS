@@ -217,7 +217,8 @@ def _remove_accelerate_hooks(model: Any) -> None:
             _ACCELERATE_REMOVE_HOOK(model, recurse=True)
         except Exception:  # pragma: no cover - best effort cleanup
             logger.debug("Unable to remove accelerate hooks", exc_info=True)
-        return
+        else:
+            return
 
     # Fallback path when accelerate is unavailable—manually clear common attributes.
     hook = getattr(model, "_hf_hook", None)
