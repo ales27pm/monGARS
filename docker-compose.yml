@@ -85,7 +85,7 @@ services:
 
   migrations:
     <<: &app-service
-      image: ${MONGARS_IMAGE:-mongars-app:local}
+      image: ales27pm/mongars-app:latest
       build:
         context: .
         dockerfile: Dockerfile
