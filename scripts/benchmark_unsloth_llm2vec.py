@@ -264,6 +264,9 @@ def collect_hardware_snapshot() -> HardwareSnapshot:
             gpus.append(
                 GPUStatus(
                     name=str(getattr(device, "name", "unknown")),
+                    # GPUtil already reports memoryTotal/memoryFree in megabytes,
+                    # so we intentionally keep the raw values without additional scaling
+                    # to ensure VRAM-aware auto-tuning receives accurate capacities.
                     total_memory_mb=_safe_float(
                         getattr(device, "memoryTotal", None)
                     ),
