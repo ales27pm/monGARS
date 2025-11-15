@@ -24,3 +24,15 @@ tools/monGARS_deep_scan.zip
 # JavaScript dependencies
 node_modules/
 
+models/base_snapshots/dphn__Dolphin-X1-8B/config.json
+models/base_snapshots/dphn__Dolphin-X1-8B/generation_config.json
+models/base_snapshots/dphn__Dolphin-X1-8B/model-00001-of-00004.safetensors
+models/base_snapshots/dphn__Dolphin-X1-8B/model-00002-of-00004.safetensors
+models/base_snapshots/dphn__Dolphin-X1-8B/model-00003-of-00004.safetensors
+models/base_snapshots/dphn__Dolphin-X1-8B/model-00004-of-00004.safetensors
+models/base_snapshots/dphn__Dolphin-X1-8B/model.safetensors.index.json
+models/base_snapshots/dphn__Dolphin-X1-8B/README.md
+models/base_snapshots/dphn__Dolphin-X1-8B/special_tokens_map.json
+models/base_snapshots/dphn__Dolphin-X1-8B/tokenizer_config.json
+models/base_snapshots/dphn__Dolphin-X1-8B/tokenizer.json
+models/base_snapshots/dphn__Dolphin-X1-8B/.gitattributes
