@@ -1,6 +1,6 @@
 # monGARS
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 **monGARS** (Modular Neural Guardian for Autonomous Research & Support) is a
 privacy-first AI assistant designed for resilient deployment on workstations,
@@ -159,10 +159,15 @@ service, and destroy the stack. Additional tooling now:
 
 - Creates `.env` from `.env.example` on first run and rotates weak defaults for
   JWT, Django, Postgres, and Vault secrets.
-- Scans for port collisions across API, webapp, Postgres, Redis, MLflow, Vault,
-  Ollama, and Ray endpoints. Busy ports are replaced with the next available
-  value, persisted back to `.env`, and reflected in `WS_ALLOWED_ORIGINS` so
-  browsers connect without manual edits.
+- Layers `docker-compose.searxng.yml` automatically when
+  `SEARCH_SEARX_ENABLED=true`, wiring the FastAPI/Django containers to the
+  internal `http://searxng:8080` endpoint while exposing the host-accessible
+  interface on `http://localhost:${SEARXNG_PORT:-8082}`.
+- Scans for port collisions across API, webapp, SearxNG, Postgres, Redis,
+  MLflow, Vault, Ollama, and Ray endpoints. Busy ports are replaced with the
+  next available value, persisted back to `.env`, reflected in
+  `WS_ALLOWED_ORIGINS`, and applied to the SearxNG base URLs so CLI tools keep
+  talking to the correct host without manual edits.
 - Lets you toggle optional profiles before startup. Enable the Ollama profile
   to launch the local LLM runtime or the Ray profile to expose the Ray head
   node (`${RAY_DASHBOARD_PORT:-8265}`), Ray Client API

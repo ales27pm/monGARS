@@ -52,6 +52,32 @@ def test_env_manager_creates_and_updates(tmp_path: Path) -> None:
     assert values["SEARXNG_PORT"] == "8082"
     assert values["SEARXNG_BASE_URL"] == "http://localhost:8082"
     assert values["SEARCH_SEARX_BASE_URL"] == "http://localhost:8082"
+    assert values["SEARCH_SEARX_INTERNAL_BASE_URL"] == "http://searxng:8080"
+
+
+def test_env_manager_aligns_searx_urls(tmp_path: Path) -> None:
+    example = tmp_path / ".env.example"
+    example.write_text(
+        "\n".join(
+            [
+                "SEARXNG_PORT=9090",
+                "SEARXNG_BASE_URL=http://localhost:8082",
+                "SEARCH_SEARX_BASE_URL=http://127.0.0.1:8082",
+                "SEARCH_SEARX_INTERNAL_BASE_URL=http://searxng:8080",
+            ]
+        )
+        + "\n",
+        encoding="utf8",
+    )
+    manager = EnvFileManager(tmp_path, logging.getLogger("test"))
+    manager.ensure_env_file()
+    manager.ensure_secure_defaults()
+
+    values = _read_env(tmp_path / ".env")
+    assert values["SEARXNG_PORT"] == "9090"
+    assert values["SEARXNG_BASE_URL"] == "http://localhost:9090"
+    assert values["SEARCH_SEARX_BASE_URL"] == "http://127.0.0.1:9090"
+    assert values["SEARCH_SEARX_INTERNAL_BASE_URL"] == "http://searxng:8080"
 
 
 def test_compose_invocation_prefers_docker(

@@ -15,6 +15,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 PROJECT_DEFAULT_NAME = "mongars"
 WEAK_SECRET_DEFAULTS = {
@@ -22,6 +23,8 @@ WEAK_SECRET_DEFAULTS = {
     "DJANGO_SECRET_KEY": {"django-insecure-change-me", ""},
     "DB_PASSWORD": {"changeme", ""},
     "VAULT_TOKEN": {"dev-root-token", ""},
+    "SEARXNG_SECRET": {"change-me", ""},
+    "SEARCH_SEARX_API_KEY": {"change-me", ""},
 }
 
 
@@ -53,6 +56,7 @@ class DockerMenu:
     def __init__(self) -> None:
         self.project_root = Path(__file__).resolve().parent.parent
         self.compose_file = self.project_root / "docker-compose.yml"
+        self.searx_compose_file = self.project_root / "docker-compose.searxng.yml"
         self.env_file = self.project_root / ".env"
         self.env_template = self.project_root / ".env.example"
         self.project_name = os.environ.get("COMPOSE_PROJECT_NAME", PROJECT_DEFAULT_NAME)
@@ -142,8 +146,14 @@ class DockerMenu:
         for key, weak_values in WEAK_SECRET_DEFAULTS.items():
             current = env_values.get(key, "").strip()
             if current in weak_values:
-                if key.endswith("SECRET_KEY"):
+                if (
+                    key.endswith("SECRET_KEY")
+                    or key.endswith("_SECRET")
+                    or key.endswith("SECRET")
+                ):
                     updates[key] = secrets.token_urlsafe(64)
+                elif key.endswith("API_KEY"):
+                    updates[key] = secrets.token_urlsafe(48)
                 elif key == "DB_PASSWORD":
                     updates[key] = secrets.token_urlsafe(24)
                 elif key == "VAULT_TOKEN":
@@ -222,12 +232,14 @@ class DockerMenu:
             self._write_env_updates({spec.key: str(candidate)})
 
         self._synchronise_ws_origins(env_values)
+        self._synchronise_searx_urls(env_values)
 
     @staticmethod
     def _port_specs() -> list[PortSpec]:
         return [
             PortSpec("API_PORT", 8000, "FastAPI service"),
             PortSpec("WEBAPP_PORT", 8001, "Django webapp"),
+            PortSpec("SEARXNG_PORT", 8082, "SearxNG interface"),
             PortSpec("POSTGRES_PORT", 5432, "PostgreSQL database"),
             PortSpec("REDIS_PORT", 6379, "Redis cache"),
             PortSpec("MLFLOW_PORT", 5000, "MLflow tracking server"),
@@ -340,6 +352,61 @@ class DockerMenu:
 
         self._write_env_updates({"WS_ALLOWED_ORIGINS": json.dumps(deduped)})
 
+    def _synchronise_searx_urls(self, env_values: Dict[str, str]) -> None:
+        port_raw = (env_values.get("SEARXNG_PORT") or "").strip()
+        if not port_raw:
+            return
+        try:
+            port = int(port_raw)
+        except ValueError:
+            self.log(
+                f"Invalid SEARXNG_PORT '{port_raw}'; skipping SearxNG URL alignment",
+                error=True,
+            )
+            return
+
+        updates: Dict[str, str] = {}
+
+        def _maybe_update(key: str) -> None:
+            raw = (env_values.get(key) or "").strip()
+            if not raw:
+                new_url = f"http://localhost:{port}"
+                updates[key] = new_url
+                env_values[key] = new_url
+                return
+            try:
+                parsed = urlsplit(raw)
+            except ValueError:
+                return
+            hostname = parsed.hostname
+            path = parsed.path or ""
+            if not hostname:
+                if raw.startswith(("localhost", "127.0.0.1")):
+                    host_part, _, remainder = raw.partition("/")
+                    name, _, _ = host_part.partition(":")
+                    hostname = name or "localhost"
+                    path = f"/{remainder}" if remainder else ""
+                else:
+                    return
+            if hostname not in {"localhost", "127.0.0.1"}:
+                return
+            scheme = parsed.scheme or "http"
+            netloc = f"{hostname}:{port}"
+            if path in {"", "/"}:
+                path = ""
+            new_url = urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
+            if new_url != raw:
+                updates[key] = new_url
+                env_values[key] = new_url
+
+        for key in ("SEARXNG_BASE_URL", "SEARCH_SEARX_BASE_URL"):
+            _maybe_update(key)
+
+        if updates:
+            self._write_env_updates(updates)
+            for key, value in updates.items():
+                self.log(f"Updated {key} -> {value}")
+
     # ------------------------------------------------------------------
     # Compose command helpers
     # ------------------------------------------------------------------
@@ -356,6 +423,24 @@ class DockerMenu:
             "Docker Compose plugin or docker-compose binary is required but was not found."
         )
 
+    def _compose_files(self) -> List[Path]:
+        files: List[Path] = [self.compose_file]
+        env_values = self._read_env_file()
+        searx_flag = (
+            (env_values.get("SEARCH_SEARX_ENABLED", "true") or "").strip().lower()
+        )
+        include_searx = searx_flag in {"1", "true", "yes", "on"}
+
+        if include_searx:
+            if self.searx_compose_file.exists():
+                files.append(self.searx_compose_file)
+            else:
+                self.log(
+                    "SEARCH_SEARX_ENABLED=true but docker-compose.searxng.yml is missing; proceeding without overlay.",
+                    error=True,
+                )
+        return files
+
     def compose(
         self,
         *args: str,
@@ -368,15 +453,10 @@ class DockerMenu:
         for profile in selected:
             profile_args.extend(["--profile", profile])
 
-        cmd = [
-            *self.compose_binary,
-            "-f",
-            str(self.compose_file),
-            "--project-name",
-            self.project_name,
-            *profile_args,
-            *args,
-        ]
+        cmd: list[str] = [*self.compose_binary]
+        for compose_path in self._compose_files():
+            cmd.extend(["-f", str(compose_path)])
+        cmd.extend(["--project-name", self.project_name, *profile_args, *args])
 
         safe_cmd = [str(arg) for arg in cmd]
 

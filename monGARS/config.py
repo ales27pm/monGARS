@@ -591,7 +591,7 @@ class Settings(BaseSettings):
         ),
     )
     search_searx_base_url: AnyUrl | None = Field(
-        default="http://localhost:8080",
+        default="http://localhost:8082",
         description="Base URL for the SearxNG deployment, e.g. https://searx.example.com.",
     )
     search_searx_api_key: str | None = Field(
