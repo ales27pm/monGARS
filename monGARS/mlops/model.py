@@ -23,7 +23,6 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
-
 try:  # pragma: no cover - accelerate optional during some tests
     from accelerate.hooks import remove_hook_from_module as _ACCELERATE_REMOVE_HOOK
 except Exception:  # pragma: no cover - fallback path exercised in unit tests
@@ -181,11 +180,16 @@ def load_4bit_causal_lm(
         try:
             setattr(model, "hf_device_map", device_map)
             setattr(model, "_hf_device_map", device_map)
-            logger.info("Normalised model hf_device_map from 'auto' to explicit mapping")
+            logger.info(
+                "Normalised model hf_device_map from 'auto' to explicit mapping"
+            )
         except Exception:  # pragma: no cover - best effort correction
             logger.warning(
-                "Failed to override hf_device_map='auto' with explicit mapping", exc_info=True
+                "Failed to override hf_device_map='auto' with explicit mapping",
+                exc_info=True,
             )
+
+    _cache_device_map_hint(model, device_map)
 
     try:  # pragma: no cover - depends on torch build
         torch.backends.cuda.enable_flash_sdp(False)
@@ -210,6 +214,90 @@ def summarise_device_map(model: Any) -> dict[str, int] | None:
         counts[str(device)] = counts.get(str(device), 0) + 1
     logger.info("Device map summary", extra=counts)
     return counts
+
+
+def _cache_device_map_hint(model: Any, mapping: Mapping[str, Any]) -> None:
+    """Persist the last known explicit mapping on ``model`` for future reuse."""
+
+    try:
+        setattr(model, "_mongars_device_map_hint", dict(mapping))
+    except Exception:  # pragma: no cover - best effort hint caching
+        logger.debug(
+            "Unable to cache device map hint on %s", type(model), exc_info=True
+        )
+
+
+def _resolve_device_map_candidate(model: Any) -> Mapping[str, Any] | None:
+    for attr in ("_hf_device_map", "_mongars_device_map_hint"):
+        candidate = getattr(model, attr, None)
+        if isinstance(candidate, Mapping):
+            return candidate
+
+    base_model = getattr(model, "base_model", None)
+    if base_model is not None:
+        mapping = getattr(base_model, "hf_device_map", None)
+        if isinstance(mapping, Mapping):
+            return mapping
+        hint = getattr(base_model, "_mongars_device_map_hint", None)
+        if isinstance(hint, Mapping):
+            return hint
+    return None
+
+
+def ensure_explicit_device_map(model: Any) -> bool:
+    """Ensure ``hf_device_map`` attributes are mappings instead of the string ``'auto'``."""
+
+    visited: set[int] = set()
+    stack: list[Any] = [model]
+    updated = False
+
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        pointer = id(current)
+        if pointer in visited:
+            continue
+        visited.add(pointer)
+
+        for attr in ("base_model", "model"):
+            nested = getattr(current, attr, None)
+            if nested is not None:
+                stack.append(nested)
+
+        mapping = getattr(current, "hf_device_map", None)
+        if isinstance(mapping, Mapping):
+            _cache_device_map_hint(current, mapping)
+            continue
+
+        candidate = _resolve_device_map_candidate(current)
+        if candidate is None:
+            continue
+
+        try:
+            normalised = dict(candidate)
+        except Exception:  # pragma: no cover - fallback to original object
+            normalised = candidate  # type: ignore[assignment]
+
+        try:
+            setattr(current, "hf_device_map", normalised)
+            updated = True
+        except Exception:  # pragma: no cover - best effort enforcement
+            logger.debug(
+                "Unable to normalise hf_device_map on %s", type(current), exc_info=True
+            )
+            continue
+
+        try:
+            setattr(current, "_hf_device_map", normalised)
+        except Exception:  # pragma: no cover - best effort enforcement
+            logger.debug(
+                "Unable to refresh _hf_device_map on %s", type(current), exc_info=True
+            )
+
+        _cache_device_map_hint(current, normalised)
+
+    return updated
 
 
 def move_to_cpu(model: Any) -> None:

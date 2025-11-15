@@ -19,7 +19,11 @@ from monGARS.mlops.dataset import (
     prepare_local_instruction_dataset,
 )
 from monGARS.mlops.exporters import merge_lora_adapters
-from monGARS.mlops.model import load_4bit_causal_lm, summarise_device_map
+from monGARS.mlops.model import (
+    ensure_explicit_device_map,
+    load_4bit_causal_lm,
+    summarise_device_map,
+)
 from monGARS.mlops.training import (
     LoraHyperParams,
     TrainerConfig,
@@ -175,10 +179,12 @@ def run_unsloth_finetune(
     summarise_device_map(model)
 
     model, unsloth_active = _activate_unsloth(model)
+    ensure_explicit_device_map(model)
     model = prepare_lora_model_light(
         model,
         LoraHyperParams(r=lora_rank, alpha=lora_alpha, dropout=lora_dropout),
     )
+    ensure_explicit_device_map(model)
 
     dataset = _load_dataset(
         dataset_id=dataset_id,

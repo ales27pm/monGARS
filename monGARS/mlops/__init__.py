@@ -30,6 +30,7 @@ from .exporters import (
 )
 from .model import (
     detach_sequences,
+    ensure_explicit_device_map,
     load_4bit_causal_lm,
     move_to_cpu,
     summarise_device_map,
@@ -72,6 +73,7 @@ __all__ = [
     "merge_lora_adapters",
     "run_generation_smoke_test",
     "load_4bit_causal_lm",
+    "ensure_explicit_device_map",
     "summarise_device_map",
     "move_to_cpu",
     "detach_sequences",
