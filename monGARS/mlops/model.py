@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# isort: off
+from ._unsloth_bootstrap import UNSLOTH_AVAILABLE
+
+# isort: on
 import inspect
 import logging
 import os
@@ -19,6 +23,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
+
 try:  # pragma: no cover - accelerate optional during some tests
     from accelerate.hooks import remove_hook_from_module as _ACCELERATE_REMOVE_HOOK
 except Exception:  # pragma: no cover - fallback path exercised in unit tests
@@ -30,6 +35,11 @@ except Exception:  # pragma: no cover - fallback path exercised in unit tests
     _ACCELERATE_STATE = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+if not UNSLOTH_AVAILABLE:
+    logger.debug(
+        "Unsloth package not preloaded; 4-bit loader will rely on standard Transformers kernels"
+    )
 
 
 def _compute_weight_budget(

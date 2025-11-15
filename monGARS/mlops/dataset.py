@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# isort: off
+from ._unsloth_bootstrap import UNSLOTH_AVAILABLE
+
+# isort: on
 import json
 import logging
 from pathlib import Path
@@ -16,7 +20,13 @@ from monGARS.mlops.code_analysis import (
     build_strategy_recommendation,
 )
 
+
 logger = logging.getLogger(__name__)
+
+if not UNSLOTH_AVAILABLE:
+    logger.debug(
+        "Unsloth unavailable during dataset initialisation; proceeding with standard tokenizers"
+    )
 
 
 PROMPT_KEYS = ("instruction", "prompt", "question")

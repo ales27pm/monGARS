@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# isort: off
+from ._unsloth_bootstrap import UNSLOTH_AVAILABLE
+
+# isort: on
 import inspect
 import json
 import logging
@@ -13,6 +17,7 @@ from typing import Any, Callable, Iterable, Type
 import torch
 from transformers import Trainer, TrainingArguments, default_data_collator
 
+
 try:  # pragma: no cover - optional dependency under tests
     from peft import LoraConfig, get_peft_model
 except Exception:  # pragma: no cover - tests patch this path
@@ -21,6 +26,11 @@ except Exception:  # pragma: no cover - tests patch this path
 from monGARS.mlops.model import move_to_cpu
 
 logger = logging.getLogger(__name__)
+
+if not UNSLOTH_AVAILABLE:
+    logger.debug(
+        "Unsloth kernels not pre-imported; trainer falling back to vanilla Transformers"
+    )
 
 
 try:  # pragma: no cover - signature inspection is deterministic

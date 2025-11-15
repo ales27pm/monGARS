@@ -12,6 +12,7 @@ try:  # pragma: no cover - optional dependency at runtime
 except Exception:  # pragma: no cover - library not installed during tests
     LLM2Vec = None  # type: ignore[assignment]
 
+from monGARS.mlops._unsloth_bootstrap import UNSLOTH_AVAILABLE
 from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
 from monGARS.mlops.dataset import (
     prepare_instruction_dataset,
@@ -50,10 +51,16 @@ OPTIONAL_PACKAGES = ("unsloth", "llm2vec")
 def _activate_unsloth(model: object) -> tuple[object, bool]:
     """Attempt to apply Unsloth fast-path hooks to ``model``."""
 
+    if not UNSLOTH_AVAILABLE:
+        logger.info("Unsloth not available; continuing without fast-path hooks")
+        return model, False
+
     try:
         from unsloth import FastLanguageModel  # type: ignore
     except Exception:  # pragma: no cover - dependency optional in CI
-        logger.info("Unsloth not available; continuing without fast-path hooks")
+        logger.info(
+            "Unsloth import failed even though detection succeeded", exc_info=True
+        )
         return model, False
 
     candidates = []
