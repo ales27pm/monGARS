@@ -42,26 +42,17 @@ on:
         required: false
         type: string
         default: ""
-      key_type:
-        description: "Key algorithm"
+      key_profile:
+        description: "Key algorithm and parameters"
         required: false
         type: choice
         options:
-          - rsa
-          - ec
-        default: rsa
-      key_bits:
-        description: "RSA key size"
-        required: false
-        type: choice
-        options: [2048, 3072, 4096]
-        default: 2048
-      ec_curve:
-        description: "Elliptic curve when using EC keys"
-        required: false
-        type: choice
-        options: [prime256v1, secp384r1]
-        default: prime256v1
+          - rsa-2048
+          - rsa-3072
+          - rsa-4096
+          - ec-prime256v1
+          - ec-secp384r1
+        default: rsa-2048
 
 permissions:
   contents: read
@@ -167,11 +158,55 @@ jobs:
           	(root / "san_entries.txt").write_text((san_blob + "\n") if san_blob else "", encoding="utf-8")
           PY
 
+      - name: Determine key parameters
+        id: key_params
+        env:
+          KEY_PROFILE: ${{ inputs.key_profile }}
+        run: |
+          set -euo pipefail
+          case "$KEY_PROFILE" in
+            rsa-2048)
+              key_type="rsa"
+              key_bits="2048"
+              ec_curve=""
+              ;;
+            rsa-3072)
+              key_type="rsa"
+              key_bits="3072"
+              ec_curve=""
+              ;;
+            rsa-4096)
+              key_type="rsa"
+              key_bits="4096"
+              ec_curve=""
+              ;;
+            ec-prime256v1)
+              key_type="ec"
+              key_bits=""
+              ec_curve="prime256v1"
+              ;;
+            ec-secp384r1)
+              key_type="ec"
+              key_bits=""
+              ec_curve="secp384r1"
+              ;;
+            *)
+              echo "Unsupported key profile: $KEY_PROFILE" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "key_type=$key_type"
+            echo "key_bits=$key_bits"
+            echo "ec_curve=$ec_curve"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Generate private key and CSR
         env:
-          KEY_TYPE: ${{ inputs.key_type }}
-          KEY_BITS: ${{ inputs.key_bits }}
-          EC_CURVE: ${{ inputs.ec_curve }}
+          KEY_TYPE: ${{ steps.key_params.outputs.key_type }}
+          KEY_BITS: ${{ steps.key_params.outputs.key_bits }}
+          EC_CURVE: ${{ steps.key_params.outputs.ec_curve }}
         run: |
           set -euo pipefail
           subject=$(cat certs/subject.txt)
@@ -204,9 +239,9 @@ jobs:
 
       - name: Publish summary
         env:
-          KEY_TYPE: ${{ inputs.key_type }}
-          KEY_BITS: ${{ inputs.key_bits }}
-          EC_CURVE: ${{ inputs.ec_curve }}
+          KEY_TYPE: ${{ steps.key_params.outputs.key_type }}
+          KEY_BITS: ${{ steps.key_params.outputs.key_bits }}
+          EC_CURVE: ${{ steps.key_params.outputs.ec_curve }}
           SUBJECT_ALT_NAMES: ${{ inputs.subject_alt_names }}
         run: |
           set -euo pipefail
