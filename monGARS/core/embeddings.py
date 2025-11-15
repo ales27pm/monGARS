@@ -364,6 +364,10 @@ class LLM2VecEmbedder:
         self._ollama_module_unavailable = False
         self._ollama_client: Any | None = None
         self._ollama_client_lock = asyncio.Lock()
+        self._dolphin_client: Any | None = None
+        self._dolphin_client_lock = asyncio.Lock()
+        self._dolphin_metadata: Mapping[str, Any] | None = None
+        self._dolphin_metadata_lock = asyncio.Lock()
 
     @property
     def backend(self) -> str:
@@ -401,6 +405,8 @@ class LLM2VecEmbedder:
 
         if self._backend == "ollama":
             batch = await self._encode_with_ollama(cleaned, prompt)
+        elif self._backend == "dolphin-x1-llm2vec":
+            batch = await self._encode_with_dolphin_service(cleaned, prompt)
         elif self._backend == "transformers":
             batch = await self._encode_with_transformers(
                 cleaned,
@@ -530,6 +536,194 @@ class LLM2VecEmbedder:
         if used_fallback:
             logger.debug("llm2vec.fallback_embeddings", extra={"count": len(cleaned)})
         return EmbeddingBatch(vectors=aggregate_vectors, used_fallback=used_fallback)
+
+    async def _encode_with_dolphin_service(
+        self, cleaned: Sequence[str], prompt: str
+    ) -> EmbeddingBatch:
+        try:
+            import httpx
+        except ImportError as exc:  # pragma: no cover - dependency missing
+            raise EmbeddingBackendError(
+                "Dolphin-X1-LLM2Vec backend requires httpx to be installed"
+            ) from exc
+
+        client = await self._ensure_dolphin_client(httpx)
+        await self._ensure_dolphin_metadata(httpx, client)
+
+        aggregate_vectors: list[list[float]] = []
+        used_fallback = False
+        batch_size = max(1, int(self._settings.llm2vec_max_batch_size))
+
+        for start in range(0, len(cleaned), batch_size):
+            chunk = list(cleaned[slice(start, start + batch_size)])
+            if not chunk:
+                continue
+
+            try:
+                async with self._semaphore:
+                    response = await client.post("/embed", json={"texts": chunk})
+                    response.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.exception(
+                    "dolphin_x1.embed.request_failed",
+                    extra={
+                        "payload_count": len(chunk),
+                        "service_url": str(client.base_url),
+                    },
+                )
+                raise EmbeddingBackendError(
+                    "Dolphin-X1 embedding service request failed"
+                ) from exc
+
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                logger.exception(
+                    "dolphin_x1.embed.invalid_json",
+                    extra={"payload_count": len(chunk)},
+                )
+                raise EmbeddingBackendError(
+                    "Dolphin-X1 embedding service returned invalid JSON"
+                ) from exc
+
+            embeddings = (
+                payload.get("embeddings") if isinstance(payload, Mapping) else None
+            )
+            if not isinstance(embeddings, list):
+                logger.error(
+                    "dolphin_x1.embed.missing_embeddings",
+                    extra={
+                        "payload_count": len(chunk),
+                        "response_keys": list(payload or []),
+                    },
+                )
+                raise EmbeddingBackendError(
+                    "Dolphin-X1 embedding service response missing embeddings"
+                )
+
+            dimension = (
+                payload.get("dimension") if isinstance(payload, Mapping) else None
+            )
+            self._record_dolphin_dimension(dimension)
+
+            for index, text in enumerate(chunk):
+                candidate: Sequence[float] | None = None
+                if index < len(embeddings):
+                    candidate = embeddings[index]
+                prepared = self._normalise_dimensions(candidate)
+                if prepared is None:
+                    used_fallback = True
+                    aggregate_vectors.append(self._fallback_vector(prompt, text))
+                else:
+                    aggregate_vectors.append(prepared)
+
+        if used_fallback:
+            logger.warning(
+                "dolphin_x1.embed.fallback",
+                extra={"count": len(cleaned), "service_url": str(client.base_url)},
+            )
+
+        return EmbeddingBatch(vectors=aggregate_vectors, used_fallback=used_fallback)
+
+    async def _ensure_dolphin_client(
+        self, httpx_module
+    ):  # noqa: ANN001 - dynamic module
+        if self._dolphin_client is not None:
+            return self._dolphin_client
+        async with self._dolphin_client_lock:
+            if self._dolphin_client is not None:
+                return self._dolphin_client
+
+            base_url = str(self._settings.dolphin_x1_llm2vec_service_url)
+            timeout_seconds = float(self._settings.dolphin_x1_llm2vec_service_timeout)
+            timeout = httpx_module.Timeout(
+                timeout_seconds, connect=min(timeout_seconds, 10.0)
+            )
+            headers: dict[str, str] = {}
+            token = getattr(self._settings, "dolphin_x1_llm2vec_service_token", None)
+            if token:
+                stripped = str(token).strip()
+                if stripped:
+                    if stripped.lower().startswith("bearer "):
+                        headers["Authorization"] = stripped
+                    else:
+                        headers["Authorization"] = f"Bearer {stripped}"
+
+            self._dolphin_client = httpx_module.AsyncClient(
+                base_url=base_url,
+                timeout=timeout,
+                headers=headers or None,
+            )
+            logger.info(
+                "dolphin_x1.client.initialised",
+                extra={"base_url": base_url, "has_token": bool(headers)},
+            )
+            return self._dolphin_client
+
+    async def _ensure_dolphin_metadata(
+        self, httpx_module, client
+    ):  # noqa: ANN001 - runtime module
+        if self._dolphin_metadata is not None:
+            return self._dolphin_metadata
+        async with self._dolphin_metadata_lock:
+            if self._dolphin_metadata is not None:
+                return self._dolphin_metadata
+            try:
+                response = await client.get("/health")
+                response.raise_for_status()
+                payload = response.json()
+                metadata: dict[str, Any] = {}
+                if isinstance(payload, Mapping):
+                    model = payload.get("model")
+                    dimension = payload.get("dimension")
+                    if model is not None:
+                        metadata["model"] = str(model)
+                    if isinstance(dimension, int):
+                        metadata["dimension"] = dimension
+                self._dolphin_metadata = metadata
+                logger.info(
+                    "dolphin_x1.service.healthy",
+                    extra={
+                        "base_url": str(client.base_url),
+                        "model": metadata.get("model"),
+                        "dimension": metadata.get("dimension"),
+                    },
+                )
+            except httpx_module.HTTPError as exc:
+                logger.warning(
+                    "dolphin_x1.service.health_unavailable",
+                    extra={"base_url": str(client.base_url), "error": str(exc)},
+                )
+                self._dolphin_metadata = {}
+            except ValueError as exc:
+                logger.warning(
+                    "dolphin_x1.service.health_invalid",
+                    extra={"base_url": str(client.base_url), "error": str(exc)},
+                )
+                self._dolphin_metadata = {}
+            return self._dolphin_metadata
+
+    def _record_dolphin_dimension(self, dimension: Any) -> None:
+        if not isinstance(dimension, int):
+            return
+        existing = self._dolphin_metadata or {}
+        known_dimension = (
+            existing.get("dimension") if isinstance(existing, Mapping) else None
+        )
+        if known_dimension == dimension:
+            return
+        settings_dimension = int(self._settings.llm2vec_vector_dimensions)
+        if dimension != settings_dimension:
+            logger.info(
+                "dolphin_x1.embed.dimension_mismatch",
+                extra={
+                    "service_dimension": dimension,
+                    "configured_dimension": settings_dimension,
+                },
+            )
+        if isinstance(existing, dict):
+            existing["dimension"] = dimension
+            self._dolphin_metadata = existing
 
     async def _ensure_manager(self) -> NeuronManager:
         if self._manager is not None:

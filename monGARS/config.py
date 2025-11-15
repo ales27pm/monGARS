@@ -51,7 +51,12 @@ log = logging.getLogger(__name__)
 EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(sorted(SUPPORTED_EMBEDDING_BACKENDS))
 """Supported embedding backends exposed to runtime configuration."""
 
-EmbeddingBackend: TypeAlias = Literal["huggingface", "ollama", "transformers"]
+EmbeddingBackend: TypeAlias = Literal[
+    "dolphin-x1-llm2vec",
+    "huggingface",
+    "ollama",
+    "transformers",
+]
 
 
 if set(get_args(EmbeddingBackend)) != set(
@@ -459,6 +464,26 @@ class Settings(BaseSettings):
         default=None,
         description=(
             "Optional torch device override (e.g. 'cuda', 'cpu', 'mps') for transformers embeddings."
+        ),
+    )
+    dolphin_x1_llm2vec_service_url: AnyUrl = Field(
+        default="http://127.0.0.1:8080",
+        description=(
+            "Base URL for the Dolphin-X1-LLM2Vec embedding service when "
+            "embedding_backend='dolphin-x1-llm2vec'."
+        ),
+    )
+    dolphin_x1_llm2vec_service_timeout: float = Field(
+        default=30.0,
+        ge=0.1,
+        description=(
+            "Request timeout, in seconds, applied to Dolphin-X1-LLM2Vec service calls."
+        ),
+    )
+    dolphin_x1_llm2vec_service_token: str | None = Field(
+        default=None,
+        description=(
+            "Optional bearer token added to Authorization headers for the Dolphin-X1-LLM2Vec service."
         ),
     )
 

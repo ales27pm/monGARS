@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 SUPPORTED_EMBEDDING_BACKENDS: frozenset[str] = frozenset(
-    {"huggingface", "ollama", "transformers"}
+    {"huggingface", "ollama", "transformers", "dolphin-x1-llm2vec"}
 )
 """Backends available for LLM2Vec embedding generation."""
 

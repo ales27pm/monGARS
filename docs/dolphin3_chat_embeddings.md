@@ -1,6 +1,6 @@
 # Reusing Dolphin 3.0 for Chat and Embeddings
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-03-14 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The Dolphin 3.0 (Llama-3.1-8B) checkpoint already powers monGARS chat flows via
 Ollama. This guide explains how to reuse the very same weights for retrieval
@@ -59,30 +59,32 @@ embeddings so the assistant and the vector index stay aligned.
   chat.【F:scripts/export_llm2vec_wrapper.py†L57-L168】
 
 ### Serving Embeddings via FastAPI
-- `scripts/run_llm2vec_service.py` provides a FastAPI façade that imports the
-  generated wrapper, lazily initialises the model, and exposes `/embed` plus a
-  `/healthz` endpoint. The CLI toggles merged-weight loading, device targeting,
-  and 4-bit preferences, making it simple to stand up an embedding sidecar next
-  to the Ollama chat runtime.【F:scripts/run_llm2vec_service.py†L1-L204】
-- The service returns vectors as JSON (with count, dimensionality, backend, and
-  normalisation flags) so a retrieval pipeline can stream results directly into
-  a vector index. `--prefer-merged` lets you reuse the FP16 snapshot exported by
-  the training pipeline, while `--force-4bit` keeps VRAM budgets low when GGUF
-  export is unnecessary.【F:scripts/run_llm2vec_service.py†L33-L204】
+- `scripts/run_llm2vec_service.py` now loads the Hugging Face checkpoint
+  directly, performs attention-mask-aware pooling, and exposes `/health` plus a
+  `/embed` endpoint. The CLI controls batch sizing, pooling strategy, device
+  targeting, and normalisation so you can run the service next to the Ollama
+  chat deployment or in a dedicated embedding tier.【F:scripts/run_llm2vec_service.py†L1-L338】
+- When `embedding_backend` is set to `dolphin-x1-llm2vec`, monGARS routes
+  embedding requests through the service using the new configuration keys:
+  `DOLPHIN_X1_LLM2VEC_SERVICE_URL`, `DOLPHIN_X1_LLM2VEC_SERVICE_TIMEOUT`, and
+  the optional `DOLPHIN_X1_LLM2VEC_SERVICE_TOKEN`. These values default to a
+  local instance on port 8080 and can be tuned per environment.【F:monGARS/config.py†L438-L459】【F:monGARS/core/embeddings.py†L372-L579】
 - Example launch when running on the same host as Ollama:
   ```bash
   python scripts/run_llm2vec_service.py \
-    --model-dir outputs_dolphin8b \
+    --model-dir runs/dolphin_x1_llm2vec_v1/simcse \
     --host 0.0.0.0 --port 8081 \
-    --prefer-merged --log-level info
+    --batch-size 8 --pooling mean --log-level info
   ```
   ```bash
   curl -X POST http://localhost:8081/embed \
     -H 'content-type: application/json' \
-    -d '{"inputs": ["How do we share weights?"], "normalise": true}'
+    -d '{"texts": ["How do we share weights?", "When was the last adapter refresh?"]}'
   ```
-  The same Dolphin 3.0 weights now power both chat (via Ollama) and deterministic
-  embeddings (via FastAPI/Hugging Face) without duplicating checkpoints.
+  The API responds with a JSON body that includes the embeddings array, the
+  detected dimensionality, and the model path so retrieval workers can stream
+  the vectors directly into pgvector or other index stores without additional
+  adapters.【F:scripts/run_llm2vec_service.py†L308-L360】
 
 ## Optional llama.cpp / GGUF Export
 - If you need a lighter-weight embedding daemon, call the pipeline with
