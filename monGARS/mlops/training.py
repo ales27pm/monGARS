@@ -22,7 +22,7 @@ try:  # pragma: no cover - optional dependency under tests
 except Exception:  # pragma: no cover - tests patch this path
     LoraConfig = get_peft_model = None  # type: ignore
 
-from monGARS.mlops.model import move_to_cpu
+from monGARS.mlops.model import ensure_explicit_device_map, move_to_cpu
 
 logger = logging.getLogger(__name__)
 
@@ -653,6 +653,7 @@ def train_qlora(
     use_cuda = prefer_cuda
 
     _disable_model_cache(model)
+    ensure_explicit_device_map(model)
     _maybe_enable_accelerate_device_map_bypass(model)
 
     while True:

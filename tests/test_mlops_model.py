@@ -78,7 +78,9 @@ def test_move_to_cpu_resets_accelerate_state(
             reset_calls.append(reset_partial_state)
 
     monkeypatch.setattr(model_mod, "_ACCELERATE_STATE", _State)
-    monkeypatch.setattr(model_mod, "_ACCELERATE_REMOVE_HOOK", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        model_mod, "_ACCELERATE_REMOVE_HOOK", lambda *args, **kwargs: None
+    )
 
     model = _DummyModel()
 
@@ -86,3 +88,34 @@ def test_move_to_cpu_resets_accelerate_state(
 
     assert model.device == "cpu"
     assert reset_calls == [False]
+
+
+def test_ensure_explicit_device_map_uses_cached_mapping() -> None:
+    class _AutoModel:
+        def __init__(self) -> None:
+            self.hf_device_map: Any = "auto"
+            self._hf_device_map = {"layer": "cuda:0"}
+
+    model = _AutoModel()
+
+    changed = model_mod.ensure_explicit_device_map(model)
+
+    assert changed is True
+    assert model.hf_device_map == {"layer": "cuda:0"}
+    assert getattr(model, "_mongars_device_map_hint") == {"layer": "cuda:0"}
+
+
+def test_ensure_explicit_device_map_inherits_from_base_model() -> None:
+    base = _DummyModel()
+
+    class _Wrapper:
+        def __init__(self) -> None:
+            self.hf_device_map = "auto"
+            self.base_model = base
+
+    wrapper = _Wrapper()
+
+    changed = model_mod.ensure_explicit_device_map(wrapper)
+
+    assert changed is True
+    assert wrapper.hf_device_map == base.hf_device_map
