@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, Iterable, Literal, Optional
+from typing import Annotated, Any, Iterable, Literal, Optional, TypeAlias, get_args
 
 import hvac
 from dotenv import dotenv_values, set_key
@@ -51,7 +51,16 @@ log = logging.getLogger(__name__)
 EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(sorted(SUPPORTED_EMBEDDING_BACKENDS))
 """Supported embedding backends exposed to runtime configuration."""
 
-EmbeddingBackend = Literal[*EMBEDDING_BACKEND_CHOICES]
+EmbeddingBackend: TypeAlias = Literal["huggingface", "ollama", "transformers"]
+
+
+if set(get_args(EmbeddingBackend)) != set(
+    EMBEDDING_BACKEND_CHOICES
+):  # pragma: no cover - defensive guard
+    raise RuntimeError(
+        "EmbeddingBackend literal choices must match SUPPORTED_EMBEDDING_BACKENDS. "
+        "Update monGARS.config.EmbeddingBackend when the supported backends change."
+    )
 
 
 # --- helpers (top-level) ---
