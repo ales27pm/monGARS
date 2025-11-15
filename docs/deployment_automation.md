@@ -1,6 +1,6 @@
 # Full-Stack Deployment Automation
 
-> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-02-16 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The `scripts/full_stack_visual_deploy.py` helper orchestrates every
 prerequisite required to bring the monGARS research stack online. It
@@ -70,6 +70,53 @@ The installer performs the following actions:
 
 Each step key matches the `--only` flag values: `prerequisites`, `env`,
 `python`, `root-node`, `mobile`, `searxng`, and `containers`.
+
+## Fine-tune, deploy, and launch in one pass
+
+Operators who need to roll a freshly tuned adapter directly into the
+local docker stack can rely on
+`scripts/finetune_deploy_launch.py`. The helper stitches together the
+existing Unsloth fine-tuning pipeline, manifest refresh, docker-compose
+deployment, and a browser launch for the Django console.
+
+```bash
+python scripts/finetune_deploy_launch.py \
+  --model-id dphn/Dolphin3.0-Llama3.1-8B \
+  --dataset-path datasets/unsloth/monGARS_unsloth_dataset.jsonl
+```
+
+Key behaviour:
+
+- Caches the base model snapshot ahead of training using
+  `huggingface_hub.snapshot_download`, storing artefacts under
+  `models/base_snapshots/<model>/` by default. Provide `--model-cache-dir`,
+  `--model-revision`, or authentication via `--hf-token`/`HF_TOKEN` to
+  customise the fetch.
+- Reuses the `EnvFileManager` logic from the visual deployer to create a
+  `.env` file and rotate secrets when `--skip-env` is omitted.
+- Invokes `monGARS.mlops.pipelines.run_unsloth_finetune` with the same
+  defaults exposed by `scripts/run_mongars_llm_pipeline.py`, writing
+  artefacts under `models/encoders/monGARS_unsloth/runs/<timestamp>/` by
+  default.
+- Ensures 4-bit quantisation is tracked in the adapter manifest and labels
+  the export with `llm2vec_export=enabled`, making it clear that the wrapper
+  produced by `write_wrapper_bundle` supports both chat and embedding flows.
+- Persists adapter metadata through
+  `modules.neurons.registry.update_manifest` so FastAPI and background
+  workers pick up the new revision without manual edits.
+- Executes `docker compose pull`, `build`, and `up -d` (with optional
+  extra compose overlays supplied via `--compose-file`) before polling
+  `http://localhost:8000/healthz` and
+  `http://localhost:8001/chat/login/` for readiness.
+- Opens `http://localhost:8001/chat/` in the default browser unless
+  `--no-browser` is supplied, making it clear when the UI is ready for
+  validation.
+
+Use `--skip-pull` to avoid pulling images during local iteration, set
+`--dataset-id` when training from Hugging Face instead of a local JSONL
+file, point `--registry-path` at a custom encoder directory when testing
+isolated manifests, and supply `--skip-model-download` if the base model is
+already present in the Transformers cache.
 
 ## React Native build tips
 
