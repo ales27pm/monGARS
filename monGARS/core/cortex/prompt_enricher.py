@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from monGARS.core.iris import IrisDocument
@@ -14,7 +14,7 @@ def _fmt_dt(value: datetime | None) -> str:
     if value is None:
         return ""
     if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
+        value = value.replace(tzinfo=timezone.utc)
     return value.isoformat()
 
 
