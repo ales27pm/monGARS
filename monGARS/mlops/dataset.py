@@ -133,27 +133,77 @@ def prepare_instruction_dataset(
 
 def _load_jsonl_records(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for idx, line in enumerate(handle, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-                raise ValueError(
-                    f"Invalid JSON on line {idx} of {path}: {exc}"
-                ) from exc
-            if not {"prompt", "completion"} <= payload.keys():
-                raise ValueError(
-                    f"Record {idx} missing prompt/completion fields in {path}"
-                )
-            records.append(
-                {
-                    "prompt": str(payload["prompt"]),
-                    "completion": str(payload["completion"]),
-                }
+    buffer: list[str] = []
+    depth = 0
+    in_string = False
+    escape_next = False
+    record_start_line: int | None = None
+
+    def flush_buffer(start_line: int) -> None:
+        nonlocal depth, in_string, escape_next, buffer
+        chunk = "".join(buffer).strip()
+        buffer = []
+        depth = 0
+        in_string = False
+        escape_next = False
+        if not chunk:
+            return
+        try:
+            payload = json.loads(chunk)
+        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+            raise ValueError(
+                f"Invalid JSON starting at line {start_line} of {path}: {exc}"
+            ) from exc
+        if not {"prompt", "completion"} <= payload.keys():
+            raise ValueError(
+                f"Record starting at line {start_line} missing prompt/completion fields in {path}"
             )
+        records.append(
+            {
+                "prompt": str(payload["prompt"]),
+                "completion": str(payload["completion"]),
+            }
+        )
+
+    line_number = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not buffer and not stripped:
+                continue
+            if not buffer:
+                record_start_line = line_number
+            buffer.append(line)
+            for char in line:
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == "\\" and in_string:
+                    escape_next = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth < 0:
+                        raise ValueError(
+                            f"Unexpected closing brace on line {line_number} of {path}"
+                        )
+            if depth == 0 and buffer:
+                flush_buffer(record_start_line or line_number)
+                record_start_line = None
+
+    if buffer:
+        start = record_start_line or line_number
+        raise ValueError(
+            f"Unexpected EOF while parsing JSON object starting at line {start} in {path}"
+        )
+
     if not records:
         raise ValueError(f"Dataset at {path} is empty")
     return records
