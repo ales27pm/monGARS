@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 try:
     from monGARS.mlops.code_analysis import (
         scan_llm_usage,
@@ -16,20 +18,15 @@ try:
     )
     from monGARS.mlops.dataset import build_unsloth_llm2vec_dataset
     from monGARS.mlops.pipelines import run_unsloth_finetune
-except ModuleNotFoundError:  # pragma: no cover - CLI invocation convenience
-    REPO_ROOT = Path(__file__).resolve().parents[1]
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    from monGARS.mlops.code_analysis import (
-        scan_llm_usage,
-        scan_module_interactions,
-    )
-    from monGARS.mlops.dataset import build_unsloth_llm2vec_dataset
-    from monGARS.mlops.pipelines import run_unsloth_finetune
+except ModuleNotFoundError as exc:  # pragma: no cover - CLI invocation convenience
+    raise ModuleNotFoundError(
+        "Unable to import monGARS modules. Run this script from the repository root "
+        "(e.g. `python -m scripts.auto_unsloth_llm2vec`) or set PYTHONPATH to include "
+        f"{REPO_ROOT}"
+    ) from exc
 
 
 LOGGER = logging.getLogger("auto_unsloth_llm2vec")
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_DIR = REPO_ROOT / "datasets" / "unsloth_auto"
 DEFAULT_METADATA = DEFAULT_DATASET_DIR / "metadata.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "unsloth_llm2vec"
@@ -51,10 +48,7 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def _normalise_paths(paths: Sequence[str]) -> list[Path]:
-    resolved: list[Path] = []
-    for path in paths:
-        resolved.append(Path(path).expanduser().resolve())
-    return resolved
+    return [Path(path).expanduser().resolve() for path in paths]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,104 +57,152 @@ def build_parser() -> argparse.ArgumentParser:
             "Create a combined monGARS dataset and launch the Unsloth + LLM2Vec pipeline."
         )
     )
-    parser.add_argument("--root", default=_default_repo_root(), help="Repository root")
-    parser.add_argument(
-        "--dataset-dir",
-        default=DEFAULT_DATASET_DIR,
-        help="Directory where the generated train/validation splits are written.",
-    )
-    parser.add_argument(
-        "--metadata-path",
-        default=DEFAULT_METADATA,
-        help="Optional metadata file describing the dataset composition.",
-    )
-    parser.add_argument(
-        "--validation-ratio",
-        type=float,
-        default=0.1,
-        help="Fraction of records reserved for validation (0 disables validation).",
-    )
-    parser.add_argument(
-        "--shuffle-seed",
-        type=int,
-        default=13,
-        help="Deterministic seed used when shuffling merged dataset records.",
-    )
-    parser.add_argument(
-        "--seed-dataset",
-        action="append",
-        default=[],
-        help="Additional JSONL datasets (prompt/completion) merged into the corpus.",
-    )
-    parser.add_argument(
-        "--no-default-seed",
-        action="store_true",
-        help="Do not automatically include datasets/unsloth/monGARS_unsloth_dataset.jsonl.",
-    )
-    parser.add_argument(
-        "--packages",
-        nargs="*",
-        default=("monGARS", "modules"),
-        help="Package prefixes considered when scanning module interactions.",
-    )
-    parser.add_argument(
-        "--ignore-part",
-        action="append",
-        default=[".venv", "tests", "build", "dist", "__pycache__"],
-        help="Directory names ignored during source analysis (may be repeated).",
-    )
-    parser.add_argument(
-        "--model-id",
-        default="dphn/Dolphin-X1-8B",
-        help="Base model identifier passed to run_unsloth_finetune.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=DEFAULT_OUTPUT_DIR,
-        help="Where fine-tuning artefacts (adapters, wrappers) will be written.",
-    )
-    parser.add_argument("--vram-budget-mb", type=int, default=7500)
-    parser.add_argument("--activation-buffer-mb", type=int, default=1024)
-    parser.add_argument("--max-seq-len", type=int, default=4096)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--grad-accum", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=2e-4)
-    parser.add_argument("--epochs", type=float, default=1.0)
-    parser.add_argument("--max-steps", type=int, default=-1)
-    parser.add_argument("--lora-rank", type=int, default=32)
-    parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--lora-dropout", type=float, default=0.0)
-    parser.add_argument(
-        "--eval-batch-size",
-        type=int,
-        default=2,
-        help="Batch size forwarded to Trainer.evaluate when validation data exists.",
-    )
-    parser.add_argument(
-        "--skip-train",
-        action="store_true",
-        help="Generate datasets only; skip the Unsloth fine-tuning phase.",
-    )
-    parser.add_argument(
-        "--skip-smoke-tests",
-        action="store_true",
-        help="Disable generation/embedding smoke tests inside run_unsloth_finetune.",
-    )
-    parser.add_argument(
-        "--skip-metadata",
-        action="store_true",
-        help="Do not write run_metadata.json next to the training artefacts.",
-    )
-    parser.add_argument(
-        "--skip-merge",
-        action="store_true",
-        help="Avoid merging LoRA adapters into an FP16 checkpoint after training.",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Increase logging verbosity for troubleshooting.",
-    )
+
+    dataset_args: list[tuple[tuple[str, ...], dict[str, object]]] = [
+        (("--root",), {"default": _default_repo_root(), "help": "Repository root"}),
+        (
+            ("--dataset-dir",),
+            {
+                "default": DEFAULT_DATASET_DIR,
+                "help": "Directory where the generated train/validation splits are written.",
+            },
+        ),
+        (
+            ("--metadata-path",),
+            {
+                "default": DEFAULT_METADATA,
+                "help": "Optional metadata file describing the dataset composition.",
+            },
+        ),
+        (
+            ("--validation-ratio",),
+            {
+                "type": float,
+                "default": 0.1,
+                "help": "Fraction of records reserved for validation (must be between 0 and 1).",
+            },
+        ),
+        (
+            ("--shuffle-seed",),
+            {
+                "type": int,
+                "default": 13,
+                "help": "Deterministic seed used when shuffling merged dataset records.",
+            },
+        ),
+        (
+            ("--seed-dataset",),
+            {
+                "action": "append",
+                "default": [],
+                "help": "Additional JSONL datasets (prompt/completion) merged into the corpus.",
+            },
+        ),
+        (
+            ("--packages",),
+            {
+                "nargs": "*",
+                "default": ("monGARS", "modules"),
+                "help": "Package prefixes considered when scanning module interactions.",
+            },
+        ),
+        (
+            ("--ignore-part",),
+            {
+                "action": "append",
+                "default": [".venv", "tests", "build", "dist", "__pycache__"],
+                "help": "Directory names ignored during source analysis (may be repeated).",
+            },
+        ),
+        (
+            ("--model-id",),
+            {
+                "default": "dphn/Dolphin-X1-8B",
+                "help": "Base model identifier passed to run_unsloth_finetune.",
+            },
+        ),
+        (
+            ("--output-dir",),
+            {
+                "default": DEFAULT_OUTPUT_DIR,
+                "help": "Where fine-tuning artefacts (adapters, wrappers) will be written.",
+            },
+        ),
+    ]
+
+    numeric_args = [
+        (("--vram-budget-mb",), {"type": int, "default": 7500}),
+        (("--activation-buffer-mb",), {"type": int, "default": 1024}),
+        (("--max-seq-len",), {"type": int, "default": 4096}),
+        (("--batch-size",), {"type": int, "default": 1}),
+        (("--grad-accum",), {"type": int, "default": 8}),
+        (("--learning-rate",), {"type": float, "default": 2e-4}),
+        (("--epochs",), {"type": float, "default": 1.0}),
+        (("--max-steps",), {"type": int, "default": -1}),
+        (("--lora-rank",), {"type": int, "default": 32}),
+        (("--lora-alpha",), {"type": int, "default": 32}),
+        (("--lora-dropout",), {"type": float, "default": 0.0}),
+        (
+            ("--eval-batch-size",),
+            {
+                "type": int,
+                "default": 2,
+                "help": "Batch size forwarded to Trainer.evaluate when validation data exists.",
+            },
+        ),
+    ]
+
+    boolean_flags = [
+        (
+            "--no-default-seed",
+            {
+                "action": "store_true",
+                "help": "Do not automatically include datasets/unsloth/monGARS_unsloth_dataset.jsonl.",
+            },
+        ),
+        (
+            "--skip-train",
+            {
+                "action": "store_true",
+                "help": "Generate datasets only; skip the Unsloth fine-tuning phase.",
+            },
+        ),
+        (
+            "--skip-smoke-tests",
+            {
+                "action": "store_true",
+                "help": "Disable generation/embedding smoke tests inside run_unsloth_finetune.",
+            },
+        ),
+        (
+            "--skip-metadata",
+            {
+                "action": "store_true",
+                "help": "Do not write run_metadata.json next to the training artefacts.",
+            },
+        ),
+        (
+            "--skip-merge",
+            {
+                "action": "store_true",
+                "help": "Avoid merging LoRA adapters into an FP16 checkpoint after training.",
+            },
+        ),
+        (
+            "--verbose",
+            {
+                "action": "store_true",
+                "help": "Increase logging verbosity for troubleshooting.",
+            },
+        ),
+    ]
+
+    for flags, options in [*dataset_args, *numeric_args]:
+        parser.add_argument(*flags, **options)
+
+    for flag, options in boolean_flags:
+        parser.add_argument(flag, **options)
+
     return parser
 
 
@@ -174,8 +216,8 @@ def _resolve_seed_datasets(args: argparse.Namespace) -> list[Path]:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.validation_ratio < 0 or args.validation_ratio >= 1:
-        raise SystemExit("--validation-ratio must be within [0, 1)")
+    if not 0 < args.validation_ratio < 1:
+        raise SystemExit("--validation-ratio must be within (0, 1)")
     if args.batch_size <= 0 or args.grad_accum <= 0:
         raise SystemExit("batch-size and grad-accum must be positive integers")
     if args.epochs <= 0:

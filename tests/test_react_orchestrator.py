@@ -96,3 +96,49 @@ def test_react_pattern_enforcement(
             "rag_search", {"query": "latest"}, {"user_id": "alice"}
         )
     assert str(exc.value) == "LLM response missing [THOUGHT] reasoning prefix"
+
+
+def test_react_pattern_keeps_multiline_reasoning(
+    dummy_llm: DummyLLM, monitor_stub: MonitorStub
+) -> None:
+    orchestrator = ReActOrchestrator(rag_enricher=DummyRagEnricher())
+    dummy_llm.response = (
+        "[THOUGHT] Evaluate rag search candidates\n"
+        "Expand queries with related modules\n"
+        "[THOUGHT] Cross-check cached snippets\n"
+        '[ACTION] {"tool": "rag_search"}'
+    )
+
+    orchestrator.execute_tool("rag_search", {"query": "docs"}, {"user_id": "bob"})
+
+    _, payload = monitor_stub.traces[-1]
+    reasoning = payload["reasoning"].splitlines()
+    assert reasoning[0] == "Evaluate rag search candidates"
+    assert "Expand queries with related modules" in reasoning[1]
+    assert reasoning[-1] == "Cross-check cached snippets"
+
+
+def test_react_pattern_rejects_empty_thought(dummy_llm: DummyLLM) -> None:
+    orchestrator = ReActOrchestrator(rag_enricher=DummyRagEnricher())
+    dummy_llm.response = '[THOUGHT]   \n[ACTION] {"tool": "rag_search"}'
+
+    with pytest.raises(InvalidReasoningFormatError) as exc:
+        orchestrator.execute_tool(
+            "rag_search", {"query": "latest"}, {"user_id": "carol"}
+        )
+
+    assert "empty [THOUGHT]" in str(exc.value)
+
+
+def test_react_pattern_rejects_empty_followup_thought(dummy_llm: DummyLLM) -> None:
+    orchestrator = ReActOrchestrator(rag_enricher=DummyRagEnricher())
+    dummy_llm.response = (
+        "[THOUGHT] Start with rag search\n"
+        "[THOUGHT]   \n"
+        '[ACTION] {"tool": "rag_search"}'
+    )
+
+    with pytest.raises(InvalidReasoningFormatError):
+        orchestrator.execute_tool(
+            "rag_search", {"query": "latest"}, {"user_id": "dora"}
+        )

@@ -248,27 +248,8 @@ def _write_jsonl_records(path: Path, records: Iterable[dict[str, str]]) -> None:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def build_unsloth_llm2vec_dataset(
-    usages: Sequence[LLMUsage],
-    interactions: Sequence[ModuleInteraction],
-    output_dir: Path,
-    *,
-    validation_ratio: float = 0.1,
-    shuffle_seed: int = 13,
-    metadata_path: Path | None = None,
-    extra_datasets: Sequence[Path] | None = None,
-) -> dict[str, Path | None]:
-    """Build a blended dataset tailored for Unsloth + LLM2Vec pipelines."""
-
-    if not usages and not interactions and not extra_datasets:
-        raise ValueError(
-            "At least one data source must be provided to build the dataset"
-        )
-    if not 0 <= validation_ratio < 1:
-        raise ValueError("validation_ratio must be within [0, 1)")
-
+def _gather_usage_records(usages: Sequence[LLMUsage]) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
-
     for usage in usages:
         prompt = (
             "Analyse the following LLM callsite and recommend how to adapt it for "
@@ -282,7 +263,13 @@ def build_unsloth_llm2vec_dataset(
         )
         completion = build_strategy_recommendation(usage)
         records.append({"prompt": prompt, "completion": completion})
+    return records
 
+
+def _gather_interaction_records(
+    interactions: Sequence[ModuleInteraction],
+) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
     for interaction in interactions:
         prompt = (
             "Describe how these monGARS modules collaborate.\n"
@@ -295,8 +282,11 @@ def build_unsloth_llm2vec_dataset(
         )
         completion = _summarise_interaction(interaction)
         records.append({"prompt": prompt, "completion": completion})
+    return records
 
-    extra_paths = tuple(extra_datasets or ())
+
+def _load_seed_dataset_records(extra_paths: Sequence[Path]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
     for dataset_path in extra_paths:
         payload = _load_jsonl_records(dataset_path)
         logger.info(
@@ -304,7 +294,12 @@ def build_unsloth_llm2vec_dataset(
             extra={"path": str(dataset_path), "rows": len(payload)},
         )
         records.extend(payload)
+    return records
 
+
+def _clean_and_dedupe_records(
+    records: Iterable[dict[str, str]],
+) -> list[dict[str, str]]:
     cleaned: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for record in records:
@@ -317,20 +312,58 @@ def build_unsloth_llm2vec_dataset(
             continue
         seen.add(key)
         cleaned.append({"prompt": prompt, "completion": completion})
+    return cleaned
 
+
+def _split_records(
+    records: list[dict[str, str]], validation_ratio: float, shuffle_seed: int
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    if not records:
+        return [], []
+    shuffled = list(records)
+    rng = random.Random(shuffle_seed)
+    rng.shuffle(shuffled)
+    if len(shuffled) <= 1:
+        return shuffled, []
+    validation_count = max(1, int(len(shuffled) * validation_ratio))
+    validation_count = min(validation_count, len(shuffled) - 1)
+    validation_records = shuffled[:validation_count]
+    train_records = shuffled[validation_count:]
+    return train_records, validation_records
+
+
+def build_unsloth_llm2vec_dataset(
+    usages: Sequence[LLMUsage],
+    interactions: Sequence[ModuleInteraction],
+    output_dir: Path,
+    *,
+    validation_ratio: float = 0.1,
+    shuffle_seed: int = 13,
+    metadata_path: Path | None = None,
+    extra_datasets: Sequence[Path] | None = None,
+) -> dict[str, Path | None]:
+    """Build a blended dataset tailored for Unsloth + LLM2Vec pipelines."""
+
+    extra_paths = tuple(Path(path).resolve() for path in extra_datasets or ())
+    if not usages and not interactions and not extra_paths:
+        raise ValueError(
+            "At least one data source must be provided to build the dataset"
+        )
+    if not 0 < validation_ratio < 1:
+        raise ValueError("validation_ratio must be within (0, 1)")
+
+    records: list[dict[str, str]] = []
+    records.extend(_gather_usage_records(usages))
+    records.extend(_gather_interaction_records(interactions))
+    records.extend(_load_seed_dataset_records(extra_paths))
+
+    cleaned = _clean_and_dedupe_records(records)
     if not cleaned:
         raise ValueError("No usable records were produced for the dataset")
 
-    rng = random.Random(shuffle_seed)
-    rng.shuffle(cleaned)
-
-    validation_count = 0
-    if validation_ratio > 0 and len(cleaned) > 1:
-        validation_count = max(1, int(len(cleaned) * validation_ratio))
-        validation_count = min(validation_count, len(cleaned) - 1)
-
-    validation_records = cleaned[:validation_count]
-    train_records = cleaned[validation_count:]
+    train_records, validation_records = _split_records(
+        cleaned, validation_ratio, shuffle_seed
+    )
 
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

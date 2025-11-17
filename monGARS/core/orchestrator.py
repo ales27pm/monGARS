@@ -313,25 +313,75 @@ class ReActOrchestrator:
         monitor.complete_trace(trace_id, result)
         return result
 
+    def _raise_invalid_reasoning(
+        self, trace_id: str, response: str, message: str
+    ) -> None:
+        monitor.log_error(
+            trace_id,
+            "INVALID_REASONING_FORMAT",
+            {
+                "response": response[:200],
+                "detail": message,
+            },
+        )
+        raise InvalidReasoningFormatError(message)
+
     def _extract_react_thought(self, trace_id: str, response: str) -> str:
         """Validate and extract the [THOUGHT] reasoning block."""
 
         normalized = response.lstrip()
         if not normalized.startswith("[THOUGHT]"):
-            monitor.log_error(
+            self._raise_invalid_reasoning(
                 trace_id,
-                "INVALID_REASONING_FORMAT",
-                {
-                    "response": response[:200],
-                    "expected": "[THOUGHT] pattern missing",
-                },
-            )
-            raise InvalidReasoningFormatError(
-                "LLM response missing [THOUGHT] reasoning prefix"
+                response,
+                "LLM response missing [THOUGHT] reasoning prefix",
             )
 
-        first_line = normalized.splitlines()[0]
-        return first_line[len("[THOUGHT]") :].strip()
+        lines = normalized.splitlines()
+        if not lines:
+            self._raise_invalid_reasoning(
+                trace_id,
+                response,
+                "LLM response missing [THOUGHT] reasoning prefix",
+            )
+
+        reasoning_lines: list[str] = []
+        first_content = lines[0][len("[THOUGHT]") :].strip()
+        if not first_content:
+            self._raise_invalid_reasoning(
+                trace_id,
+                response,
+                "LLM response contained empty [THOUGHT] reasoning content",
+            )
+        reasoning_lines.append(first_content)
+
+        for raw_line in lines[1:]:
+            stripped = raw_line.strip()
+            if not stripped:
+                reasoning_lines.append("")
+                continue
+            if stripped.startswith("[ACTION]"):
+                break
+            if stripped.startswith("[THOUGHT]"):
+                block = stripped[len("[THOUGHT]") :].strip()
+                if not block:
+                    self._raise_invalid_reasoning(
+                        trace_id,
+                        response,
+                        "LLM response contained empty [THOUGHT] reasoning content",
+                    )
+                reasoning_lines.append(block)
+                continue
+            reasoning_lines.append(raw_line.rstrip())
+
+        reasoning_text = "\n".join(reasoning_lines).strip()
+        if not reasoning_text:
+            self._raise_invalid_reasoning(
+                trace_id,
+                response,
+                "LLM response contained empty [THOUGHT] reasoning content",
+            )
+        return reasoning_text
 
     def _rag_tool(
         self, arguments: dict[str, Any], context: dict[str, Any]

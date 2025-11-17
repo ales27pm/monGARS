@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import auto_unsloth_llm2vec as workflow
 
 
@@ -91,3 +93,54 @@ def test_run_training_invokes_unsloth(monkeypatch, tmp_path: Path) -> None:
 
     assert captured["dataset_path"] == dataset_paths["train"]
     assert result["wrapper_dir"] == Path("wrapper")
+
+
+def test_run_training_uses_validation_dataset(monkeypatch, tmp_path: Path) -> None:
+    args = workflow.parse_args(
+        [
+            "--root",
+            str(tmp_path),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--eval-batch-size",
+            "4",
+        ]
+    )
+    dataset_paths = {
+        "train": tmp_path / "train.jsonl",
+        "validation": tmp_path / "validation.jsonl",
+    }
+    dataset_paths["train"].write_text(
+        json.dumps({"prompt": "train", "completion": "resp"}) + "\n"
+    )
+    dataset_paths["validation"].write_text(
+        json.dumps({"prompt": "val", "completion": "resp"}) + "\n"
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_unsloth_finetune(**kwargs):
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(workflow, "run_unsloth_finetune", fake_run_unsloth_finetune)
+
+    workflow._run_training(args, dataset_paths)
+
+    assert captured["eval_dataset_path"] == dataset_paths["validation"]
+    assert captured["eval_batch_size"] == 4
+
+
+def test_parse_args_rejects_invalid_ratio() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        workflow.parse_args(["--validation-ratio", "0"])
+
+    assert "(0, 1)" in str(excinfo.value)
+
+
+def test_parse_args_rejects_unknown_option(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        workflow.parse_args(["--not-an-arg"])
+
+    captured = capsys.readouterr()
+    assert "unrecognized arguments" in captured.err.lower()

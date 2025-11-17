@@ -212,3 +212,35 @@ def test_build_unsloth_llm2vec_dataset(tmp_path: Path) -> None:
 def test_build_unsloth_dataset_requires_sources(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         build_unsloth_llm2vec_dataset([], [], tmp_path / "out")
+
+
+def test_build_unsloth_dataset_from_extra_only(tmp_path: Path) -> None:
+    extra_dataset = tmp_path / "seed.jsonl"
+    extra_dataset.write_text(
+        json.dumps({"prompt": "seed", "completion": "resp"}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_unsloth_llm2vec_dataset(
+        [],
+        [],
+        tmp_path / "out",
+        validation_ratio=0.5,
+        extra_datasets=[extra_dataset],
+    )
+
+    assert result["train"].exists()
+    assert result["validation"] is None
+
+
+@pytest.mark.parametrize("ratio", [0.0, -0.1, 1.0, 1.5])
+def test_build_unsloth_dataset_rejects_invalid_ratio(
+    tmp_path: Path, ratio: float
+) -> None:
+    with pytest.raises(ValueError):
+        build_unsloth_llm2vec_dataset(
+            [_usage(1)],
+            [],
+            tmp_path / "out",
+            validation_ratio=ratio,
+        )
