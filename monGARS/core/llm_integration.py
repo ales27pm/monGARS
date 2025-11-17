@@ -740,6 +740,8 @@ class LLMIntegration:
         *,
         task_type_rules: Sequence[Mapping[str, object] | _TaskTypeRule] | None = None,
         coding_score_threshold: int | None = None,
+        runtime_factory: Callable[[], UnifiedLLMRuntime] | None = None,
+        generate_override: Callable[..., str] | None = None,
     ) -> None:
         self._settings = get_settings()
         self._model_manager = LLMModelManager(self._settings)
@@ -766,6 +768,9 @@ class LLMIntegration:
         self._coding_score_threshold = self._resolve_coding_score_threshold(
             coding_score_threshold
         )
+        self._runtime_factory_override = runtime_factory
+        self._runtime_override_instance: UnifiedLLMRuntime | None = None
+        self._generate_override = generate_override
         use_ray_env = os.getenv("USE_RAY_SERVE")
         # Default to Ray Serve to activate distributed inference once configured.
         self.use_ray = (
@@ -884,6 +889,10 @@ class LLMIntegration:
         UnifiedLLMRuntime.reset_for_tests()
 
     def _runtime(self) -> UnifiedLLMRuntime:
+        if self._runtime_factory_override is not None:
+            if self._runtime_override_instance is None:
+                self._runtime_override_instance = self._runtime_factory_override()
+            return self._runtime_override_instance
         runtime = self.__class__._unified_service
         if runtime is not None:
             return runtime
@@ -900,6 +909,8 @@ class LLMIntegration:
         return tokenizer
 
     def _generate_internal(self, prompt: str, **kwargs: Any) -> str:
+        if self._generate_override is not None:
+            return self._generate_override(prompt, **kwargs)
         return self._runtime().generate(prompt, **kwargs)
 
     def generate(
