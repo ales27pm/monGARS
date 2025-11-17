@@ -275,7 +275,12 @@ class UnifiedLLMRuntime:
     def _build_quantization_config(self) -> BitsAndBytesConfig | None:
         model_settings = getattr(self._settings, "model", None)
         llm_settings = getattr(self._settings, "llm", None)
-        load_in_4bit = bool(getattr(llm_settings, "load_in_4bit", True))
+        model_quantize_enabled = bool(getattr(model_settings, "quantize_4bit", True))
+        requested_load_in_4bit = getattr(llm_settings, "load_in_4bit", None)
+        if requested_load_in_4bit is None:
+            load_in_4bit = model_quantize_enabled
+        else:
+            load_in_4bit = bool(requested_load_in_4bit) and model_quantize_enabled
         quantization_mode = getattr(llm_settings, "quantization", None)
         if not load_in_4bit or quantization_mode == LLMQuantization.NONE:
             return None
@@ -283,6 +288,12 @@ class UnifiedLLMRuntime:
             logger.warning(
                 "llm.quantization.unavailable",
                 extra={"reason": "cuda_required", "requested": "4bit"},
+            )
+            return None
+        if quantization_mode in {LLMQuantization.GPTQ, LLMQuantization.FP8}:
+            logger.warning(
+                "llm.quantization.unsupported",
+                extra={"requested": getattr(quantization_mode, "value", quantization_mode)},
             )
             return None
         compute_dtype_name = getattr(

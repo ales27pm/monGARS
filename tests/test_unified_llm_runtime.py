@@ -73,6 +73,28 @@ def test_cpu_quantisation_disabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     UnifiedLLMRuntime.reset_for_tests()
 
 
+def test_model_quantize_flag_is_respected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    UnifiedLLMRuntime.reset_for_tests()
+    settings = _make_settings(tmp_path)
+    settings.model.quantize_4bit = False
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    runtime = UnifiedLLMRuntime.instance(settings)
+    assert runtime._build_quantization_config() is None
+    UnifiedLLMRuntime.reset_for_tests()
+
+
+def test_unsupported_quantization_modes_are_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    UnifiedLLMRuntime.reset_for_tests()
+    settings = _make_settings(tmp_path)
+    settings.llm.quantization = LLMQuantization.GPTQ
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    runtime = UnifiedLLMRuntime.instance(settings)
+    assert runtime._build_quantization_config() is None
+    UnifiedLLMRuntime.reset_for_tests()
+
+
 @pytest.mark.skipif(
     os.getenv("CI", "false").lower() == "true",
     reason="Tiny fixture models are only loaded in local environments",
