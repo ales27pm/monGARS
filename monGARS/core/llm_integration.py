@@ -16,11 +16,10 @@ from urllib.parse import urlparse
 
 import httpx
 from opentelemetry import metrics
-
-from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-from monGARS.config import get_settings
+from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
+from monGARS.config import LLMQuantization, get_settings
 
 from .inference_utils import (
     CHATML_BEGIN_OF_TEXT,
@@ -196,9 +195,7 @@ class UnifiedLLMRuntime:
             "temperature": getattr(model_settings, "temperature", 0.7),
             "top_p": getattr(model_settings, "top_p", 0.9),
             "top_k": getattr(model_settings, "top_k", 40),
-            "repetition_penalty": getattr(
-                model_settings, "repetition_penalty", 1.05
-            ),
+            "repetition_penalty": getattr(model_settings, "repetition_penalty", 1.05),
             "do_sample": True,
         }
         return defaults
@@ -237,8 +234,10 @@ class UnifiedLLMRuntime:
         )
         encoder_kwargs: dict[str, Any] = {
             "device_map": "auto" if self._device == "cuda" else None,
-            "torch_dtype": torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16,
-            "pooling_mode": "mean",
+            "torch_dtype": (
+                torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16
+            ),
+            "pooling_mode": self._settings.llm.embedding_pooling.value,
             "peft_model_name_or_path": str(self._model_dir),
         }
         if encoder_kwargs["device_map"] is None:
@@ -252,7 +251,9 @@ class UnifiedLLMRuntime:
                 str(self._model_dir), trust_remote_code=True
             )
         generator_kwargs: dict[str, Any] = {
-            "torch_dtype": torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16,
+            "torch_dtype": (
+                torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16
+            ),
             "trust_remote_code": True,
         }
         if self._device == "cuda":
@@ -273,16 +274,31 @@ class UnifiedLLMRuntime:
 
     def _build_quantization_config(self) -> BitsAndBytesConfig | None:
         model_settings = getattr(self._settings, "model", None)
-        quantize = getattr(model_settings, "quantize_4bit", True)
-        if not quantize or torch is None or not torch.cuda.is_available():
+        llm_settings = getattr(self._settings, "llm", None)
+        load_in_4bit = bool(getattr(llm_settings, "load_in_4bit", True))
+        quantization_mode = getattr(llm_settings, "quantization", None)
+        if not load_in_4bit or quantization_mode == LLMQuantization.NONE:
             return None
-        compute_dtype_name = getattr(model_settings, "bnb_4bit_compute_dtype", "bfloat16")
+        if torch is None or not torch.cuda.is_available():
+            logger.warning(
+                "llm.quantization.unavailable",
+                extra={"reason": "cuda_required", "requested": "4bit"},
+            )
+            return None
+        compute_dtype_name = getattr(
+            model_settings, "bnb_4bit_compute_dtype", "bfloat16"
+        )
         compute_dtype = getattr(torch, compute_dtype_name, torch.bfloat16)
+        quantization_value = (
+            quantization_mode.value
+            if isinstance(quantization_mode, LLMQuantization)
+            else str(quantization_mode or "nf4")
+        )
+        if not quantization_value or quantization_value == LLMQuantization.NONE.value:
+            return None
         return BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_quant_type=getattr(
-                model_settings, "bnb_4bit_quant_type", "nf4"
-            ),
+            bnb_4bit_quant_type=quantization_value,
             bnb_4bit_use_double_quant=getattr(
                 model_settings, "bnb_4bit_use_double_quant", True
             ),
@@ -611,6 +627,15 @@ class LLMIntegration:
         coding_definition = self._model_manager.get_model_definition("coding")
         self.general_model = general_definition.name
         self.coding_model = coding_definition.name
+        logger.info(
+            {
+                "llm_config": {
+                    "quant": self._settings.llm.quantization.value,
+                    "load_4bit": self._settings.llm.load_in_4bit,
+                    "pooling": self._settings.llm.embedding_pooling.value,
+                }
+            }
+        )
         self._ensure_models_lock = asyncio.Lock()
         self._models_ready = False
         self._metrics_enabled = bool(
@@ -1035,7 +1060,9 @@ class LLMIntegration:
                 "llm.local_provider.error",
                 extra={"task_type": task_type, "model": model_definition.name},
             )
-            raise LLMRuntimeError("Local provider failed to generate a response") from exc
+            raise LLMRuntimeError(
+                "Local provider failed to generate a response"
+            ) from exc
 
         if not isinstance(response, Mapping):
             raise LLMRuntimeError("Local provider returned an unexpected payload")

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from monGARS.config import LLMQuantization, LLMPooling
 from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
 
 
@@ -33,7 +34,12 @@ def _make_settings(tmp_path: Path) -> SimpleNamespace:
         top_k=20,
         repetition_penalty=1.05,
     )
-    return SimpleNamespace(unified_model_dir=tmp_path, model=model)
+    llm = SimpleNamespace(
+        quantization=LLMQuantization.NF4,
+        load_in_4bit=True,
+        embedding_pooling=LLMPooling.MEAN,
+    )
+    return SimpleNamespace(unified_model_dir=tmp_path, model=model, llm=llm)
 
 
 def test_fake_runtime_contract() -> None:

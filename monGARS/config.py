@@ -7,6 +7,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal, Optional, TypeAlias, get_args
@@ -250,6 +251,40 @@ class ModelRuntimeSettings(BaseModel):
     )
 
 
+class LLMPooling(str, Enum):
+    MEAN = "mean"
+    MAX = "max"
+    CLS = "cls"
+
+
+class LLMQuantization(str, Enum):
+    NONE = "none"
+    NF4 = "nf4"
+    GPTQ = "gptq"
+    FP8 = "fp8"
+
+
+class LLMSettings(BaseModel):
+    """LLM-specific runtime configuration."""
+
+    model_config = ConfigDict(
+        extra="forbid", alias_generator=str.upper, populate_by_name=True
+    )
+
+    quantization: LLMQuantization = Field(
+        default=LLMQuantization.NF4,
+        description="BitsAndBytes quantization strategy applied to LLM weights.",
+    )
+    load_in_4bit: bool = Field(
+        default=True,
+        description="Toggle 4-bit quantized loading when CUDA resources are available.",
+    )
+    embedding_pooling: LLMPooling = Field(
+        default=LLMPooling.MEAN,
+        description="Pooling strategy applied to encoder embeddings.",
+    )
+
+
 class Settings(BaseSettings):
     """Application configuration."""
 
@@ -465,6 +500,10 @@ class Settings(BaseSettings):
     model: ModelRuntimeSettings = Field(
         default_factory=ModelRuntimeSettings,
         description="Runtime quantization and sampling controls for the unified model.",
+    )
+    llm: LLMSettings = Field(
+        default_factory=LLMSettings,
+        description="LLM runtime configuration covering quantization and pooling.",
     )
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
