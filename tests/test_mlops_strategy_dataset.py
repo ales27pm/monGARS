@@ -7,6 +7,7 @@ from monGARS.mlops.code_analysis import LLMUsage, ModuleInteraction
 from monGARS.mlops.dataset import (
     build_module_interaction_dataset,
     build_mongars_strategy_dataset,
+    build_unsloth_llm2vec_dataset,
     prepare_local_instruction_dataset,
 )
 
@@ -160,3 +161,54 @@ def test_build_module_interaction_dataset(tmp_path: Path) -> None:
     assert len(payload) == len(interactions)
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["num_examples"] == len(interactions)
+
+
+def test_build_unsloth_llm2vec_dataset(tmp_path: Path) -> None:
+    extra_dataset = tmp_path / "extra.jsonl"
+    extra_dataset.write_text(
+        json.dumps({"prompt": "P", "completion": "C"}) + "\n", encoding="utf-8"
+    )
+
+    usages = [_usage(1), _usage(2)]
+    interactions = [
+        ModuleInteraction(
+            source_path=Path("monGARS/core/orchestrator.py"),
+            line=10,
+            source_module="monGARS.core.orchestrator",
+            target_module="monGARS.core.telemetry",
+            import_names=("Telemetry",),
+            kind="from",
+            snippet="0010: from monGARS.core.telemetry import Telemetry",
+        )
+    ]
+    metadata_path = tmp_path / "meta.json"
+    output_dir = tmp_path / "generated"
+
+    result = build_unsloth_llm2vec_dataset(
+        usages,
+        interactions,
+        output_dir,
+        validation_ratio=0.5,
+        shuffle_seed=7,
+        metadata_path=metadata_path,
+        extra_datasets=[extra_dataset],
+    )
+
+    assert result["train"].exists()
+    assert metadata_path.exists()
+    with result["train"].open("r", encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle]
+    assert rows, "expected at least one training row"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["train_records"] == len(rows)
+    if result["validation"]:
+        with result["validation"].open("r", encoding="utf-8") as handle:
+            val_rows = [json.loads(line) for line in handle]
+        assert metadata["validation_records"] == len(val_rows)
+    else:
+        assert metadata["validation_records"] == 0
+
+
+def test_build_unsloth_dataset_requires_sources(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        build_unsloth_llm2vec_dataset([], [], tmp_path / "out")

@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Generate datasets and run Unsloth + LLM2Vec fine-tuning in one step."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+from typing import Sequence
+
+try:
+    from monGARS.mlops.code_analysis import (
+        scan_llm_usage,
+        scan_module_interactions,
+    )
+    from monGARS.mlops.dataset import build_unsloth_llm2vec_dataset
+    from monGARS.mlops.pipelines import run_unsloth_finetune
+except ModuleNotFoundError:  # pragma: no cover - CLI invocation convenience
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from monGARS.mlops.code_analysis import (
+        scan_llm_usage,
+        scan_module_interactions,
+    )
+    from monGARS.mlops.dataset import build_unsloth_llm2vec_dataset
+    from monGARS.mlops.pipelines import run_unsloth_finetune
+
+
+LOGGER = logging.getLogger("auto_unsloth_llm2vec")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATASET_DIR = REPO_ROOT / "datasets" / "unsloth_auto"
+DEFAULT_METADATA = DEFAULT_DATASET_DIR / "metadata.json"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "unsloth_llm2vec"
+DEFAULT_SEED_DATASET = (
+    REPO_ROOT / "datasets" / "unsloth" / "monGARS_unsloth_dataset.jsonl"
+)
+
+
+def _default_repo_root() -> Path:
+    return REPO_ROOT
+
+
+def _configure_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+
+def _normalise_paths(paths: Sequence[str]) -> list[Path]:
+    resolved: list[Path] = []
+    for path in paths:
+        resolved.append(Path(path).expanduser().resolve())
+    return resolved
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create a combined monGARS dataset and launch the Unsloth + LLM2Vec pipeline."
+        )
+    )
+    parser.add_argument("--root", default=_default_repo_root(), help="Repository root")
+    parser.add_argument(
+        "--dataset-dir",
+        default=DEFAULT_DATASET_DIR,
+        help="Directory where the generated train/validation splits are written.",
+    )
+    parser.add_argument(
+        "--metadata-path",
+        default=DEFAULT_METADATA,
+        help="Optional metadata file describing the dataset composition.",
+    )
+    parser.add_argument(
+        "--validation-ratio",
+        type=float,
+        default=0.1,
+        help="Fraction of records reserved for validation (0 disables validation).",
+    )
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=13,
+        help="Deterministic seed used when shuffling merged dataset records.",
+    )
+    parser.add_argument(
+        "--seed-dataset",
+        action="append",
+        default=[],
+        help="Additional JSONL datasets (prompt/completion) merged into the corpus.",
+    )
+    parser.add_argument(
+        "--no-default-seed",
+        action="store_true",
+        help="Do not automatically include datasets/unsloth/monGARS_unsloth_dataset.jsonl.",
+    )
+    parser.add_argument(
+        "--packages",
+        nargs="*",
+        default=("monGARS", "modules"),
+        help="Package prefixes considered when scanning module interactions.",
+    )
+    parser.add_argument(
+        "--ignore-part",
+        action="append",
+        default=[".venv", "tests", "build", "dist", "__pycache__"],
+        help="Directory names ignored during source analysis (may be repeated).",
+    )
+    parser.add_argument(
+        "--model-id",
+        default="dphn/Dolphin-X1-8B",
+        help="Base model identifier passed to run_unsloth_finetune.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help="Where fine-tuning artefacts (adapters, wrappers) will be written.",
+    )
+    parser.add_argument("--vram-budget-mb", type=int, default=7500)
+    parser.add_argument("--activation-buffer-mb", type=int, default=1024)
+    parser.add_argument("--max-seq-len", type=int, default=4096)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--epochs", type=float, default=1.0)
+    parser.add_argument("--max-steps", type=int, default=-1)
+    parser.add_argument("--lora-rank", type=int, default=32)
+    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--lora-dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=2,
+        help="Batch size forwarded to Trainer.evaluate when validation data exists.",
+    )
+    parser.add_argument(
+        "--skip-train",
+        action="store_true",
+        help="Generate datasets only; skip the Unsloth fine-tuning phase.",
+    )
+    parser.add_argument(
+        "--skip-smoke-tests",
+        action="store_true",
+        help="Disable generation/embedding smoke tests inside run_unsloth_finetune.",
+    )
+    parser.add_argument(
+        "--skip-metadata",
+        action="store_true",
+        help="Do not write run_metadata.json next to the training artefacts.",
+    )
+    parser.add_argument(
+        "--skip-merge",
+        action="store_true",
+        help="Avoid merging LoRA adapters into an FP16 checkpoint after training.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Increase logging verbosity for troubleshooting.",
+    )
+    return parser
+
+
+def _resolve_seed_datasets(args: argparse.Namespace) -> list[Path]:
+    seeds = _normalise_paths(args.seed_dataset)
+    if not args.no_default_seed and DEFAULT_SEED_DATASET.exists():
+        seeds.append(DEFAULT_SEED_DATASET.resolve())
+    return seeds
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.validation_ratio < 0 or args.validation_ratio >= 1:
+        raise SystemExit("--validation-ratio must be within [0, 1)")
+    if args.batch_size <= 0 or args.grad_accum <= 0:
+        raise SystemExit("batch-size and grad-accum must be positive integers")
+    if args.epochs <= 0:
+        raise SystemExit("--epochs must be positive")
+    if args.lora_rank <= 0 or args.lora_alpha <= 0:
+        raise SystemExit("LoRA rank/alpha must be positive")
+    return args
+
+
+def _build_dataset(args: argparse.Namespace) -> dict[str, Path | None]:
+    root = Path(args.root).resolve()
+    dataset_dir = Path(args.dataset_dir).resolve()
+    metadata_path = Path(args.metadata_path).resolve() if args.metadata_path else None
+    ignore_parts = tuple(args.ignore_part)
+    packages = tuple(args.packages)
+
+    LOGGER.info("Scanning repository for LLM callsites", extra={"root": str(root)})
+    usages = scan_llm_usage(root, ignore_parts=ignore_parts)
+    LOGGER.info("Discovered %d callsites", len(usages))
+
+    interactions = scan_module_interactions(
+        root, packages=packages, ignore_parts=ignore_parts
+    )
+    LOGGER.info("Discovered %d module interactions", len(interactions))
+
+    seeds = _resolve_seed_datasets(args)
+    dataset_paths = build_unsloth_llm2vec_dataset(
+        usages,
+        interactions,
+        dataset_dir,
+        validation_ratio=float(args.validation_ratio),
+        shuffle_seed=int(args.shuffle_seed),
+        metadata_path=metadata_path,
+        extra_datasets=seeds,
+    )
+    LOGGER.info(
+        "Dataset prepared",
+        extra={
+            "train": str(dataset_paths["train"]),
+            "validation": str(dataset_paths.get("validation")),
+        },
+    )
+    return dataset_paths
+
+
+def _run_training(
+    args: argparse.Namespace, dataset_paths: dict[str, Path | None]
+) -> dict[str, object]:
+    output_dir = Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.info("Starting Unsloth fine-tuning", extra={"output": str(output_dir)})
+    results = run_unsloth_finetune(
+        model_id=str(args.model_id),
+        output_dir=output_dir,
+        dataset_id=None,
+        dataset_path=dataset_paths["train"],
+        max_seq_len=int(args.max_seq_len),
+        vram_budget_mb=int(args.vram_budget_mb),
+        activation_buffer_mb=int(args.activation_buffer_mb),
+        batch_size=int(args.batch_size),
+        grad_accum=int(args.grad_accum),
+        learning_rate=float(args.learning_rate),
+        epochs=float(args.epochs),
+        max_steps=int(args.max_steps),
+        lora_rank=int(args.lora_rank),
+        lora_alpha=int(args.lora_alpha),
+        lora_dropout=float(args.lora_dropout),
+        train_fraction=None,
+        eval_dataset_id=None,
+        eval_dataset_path=dataset_paths.get("validation"),
+        eval_batch_size=int(args.eval_batch_size),
+        run_smoke_tests=not args.skip_smoke_tests,
+        write_metadata=not args.skip_metadata,
+        merge_to_fp16=not args.skip_merge,
+    )
+    LOGGER.info(
+        "Fine-tuning completed",
+        extra={
+            "chat_lora": str(results.get("chat_lora_dir")),
+            "wrapper": str(results.get("wrapper_dir")),
+        },
+    )
+    return dict(results)
+
+
+def main(argv: Sequence[str] | None = None) -> dict[str, object | Path | None]:
+    args = parse_args(argv)
+    _configure_logging(args.verbose)
+    dataset_paths = _build_dataset(args)
+    if args.skip_train:
+        LOGGER.info("Skip-train flag supplied; training phase disabled")
+        return dataset_paths
+    return _run_training(args, dataset_paths)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entrypoint
+    main()

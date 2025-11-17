@@ -43,10 +43,10 @@ class ToolReasoningMonitor:
             extra={"trace_id": trace_id, **metadata},
         )
 
-    def log_trace(self, trace_id: str, reasoning: str) -> None:
+    def log_trace(self, trace_id: str, payload: dict[str, Any]) -> None:
         logger.info(
             "react.trace.log",
-            extra={"trace_id": trace_id, "reasoning": reasoning},
+            extra={"trace_id": trace_id, **payload},
         )
 
     def log_error(
@@ -71,6 +71,10 @@ def generate_uuid() -> str:
     """Generate a short random trace identifier for tool executions."""
 
     return str(uuid.uuid4())[:8]
+
+
+class InvalidReasoningFormatError(RuntimeError):
+    """Raised when the LLM fails to follow the strict ReAct reasoning format."""
 
 
 class Orchestrator:
@@ -286,19 +290,18 @@ class ReActOrchestrator:
         """
 
         response = LLMIntegration.instance().generate(reasoning_prompt)
+        extracted_thought = self._extract_react_thought(trace_id, response)
 
-        if "[THOUGHT]" not in response:
-            monitor.log_error(
-                trace_id,
-                "INVALID_REASONING_FORMAT",
-                {"response": response[:200], "expected": "[THOUGHT] pattern missing"},
-            )
-            return {
-                "error": "invalid_reasoning",
-                "message": "LLM failed to generate proper reasoning trace",
-            }
-
-        monitor.log_trace(trace_id, response)
+        monitor.log_trace(
+            trace_id,
+            {
+                "event": "tool_execution",
+                "tool": tool_name,
+                "reasoning": extracted_thought,
+                "arguments": arguments,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
 
         if tool_name == "rag_search":
             result = self._rag_tool(arguments, context)
@@ -309,6 +312,26 @@ class ReActOrchestrator:
 
         monitor.complete_trace(trace_id, result)
         return result
+
+    def _extract_react_thought(self, trace_id: str, response: str) -> str:
+        """Validate and extract the [THOUGHT] reasoning block."""
+
+        normalized = response.lstrip()
+        if not normalized.startswith("[THOUGHT]"):
+            monitor.log_error(
+                trace_id,
+                "INVALID_REASONING_FORMAT",
+                {
+                    "response": response[:200],
+                    "expected": "[THOUGHT] pattern missing",
+                },
+            )
+            raise InvalidReasoningFormatError(
+                "LLM response missing [THOUGHT] reasoning prefix"
+            )
+
+        first_line = normalized.splitlines()[0]
+        return first_line[len("[THOUGHT]") :].strip()
 
     def _rag_tool(
         self, arguments: dict[str, Any], context: dict[str, Any]

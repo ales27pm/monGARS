@@ -8,8 +8,9 @@ from ._unsloth_bootstrap import UNSLOTH_AVAILABLE
 # isort: on
 import json
 import logging
+import random
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from transformers import PreTrainedTokenizerBase
 
@@ -238,6 +239,135 @@ def _load_jsonl_records(path: Path) -> list[dict[str, Any]]:
     if not records:
         raise ValueError(f"Dataset at {path} is empty")
     return records
+
+
+def _write_jsonl_records(path: Path, records: Iterable[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def build_unsloth_llm2vec_dataset(
+    usages: Sequence[LLMUsage],
+    interactions: Sequence[ModuleInteraction],
+    output_dir: Path,
+    *,
+    validation_ratio: float = 0.1,
+    shuffle_seed: int = 13,
+    metadata_path: Path | None = None,
+    extra_datasets: Sequence[Path] | None = None,
+) -> dict[str, Path | None]:
+    """Build a blended dataset tailored for Unsloth + LLM2Vec pipelines."""
+
+    if not usages and not interactions and not extra_datasets:
+        raise ValueError(
+            "At least one data source must be provided to build the dataset"
+        )
+    if not 0 <= validation_ratio < 1:
+        raise ValueError("validation_ratio must be within [0, 1)")
+
+    records: list[dict[str, str]] = []
+
+    for usage in usages:
+        prompt = (
+            "Analyse the following LLM callsite and recommend how to adapt it for "
+            "a unified chat + embedding workflow.\n"
+            f"File: {usage.file_path}\n"
+            f"Line: {usage.line}\n"
+            f"Symbol: {usage.symbol}\n"
+            f"Framework: {usage.framework}\n"
+            f"Call: {usage.call}\n"
+            f"Snippet:\n{usage.snippet}\n"
+        )
+        completion = build_strategy_recommendation(usage)
+        records.append({"prompt": prompt, "completion": completion})
+
+    for interaction in interactions:
+        prompt = (
+            "Describe how these monGARS modules collaborate.\n"
+            f"Source module: {interaction.source_module}\n"
+            f"Imported module: {interaction.target_module}\n"
+            f"Imported names: {', '.join(interaction.import_names) or '<module>'}\n"
+            f"Import kind: {interaction.kind}\n"
+            f"Location: {interaction.source_path}:{interaction.line}\n"
+            f"Snippet:\n{interaction.snippet}\n"
+        )
+        completion = _summarise_interaction(interaction)
+        records.append({"prompt": prompt, "completion": completion})
+
+    extra_paths = tuple(extra_datasets or ())
+    for dataset_path in extra_paths:
+        payload = _load_jsonl_records(dataset_path)
+        logger.info(
+            "Loaded seed dataset",
+            extra={"path": str(dataset_path), "rows": len(payload)},
+        )
+        records.extend(payload)
+
+    cleaned: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for record in records:
+        prompt = str(record.get("prompt", "")).strip()
+        completion = str(record.get("completion", "")).strip()
+        if not prompt or not completion:
+            continue
+        key = (prompt, completion)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append({"prompt": prompt, "completion": completion})
+
+    if not cleaned:
+        raise ValueError("No usable records were produced for the dataset")
+
+    rng = random.Random(shuffle_seed)
+    rng.shuffle(cleaned)
+
+    validation_count = 0
+    if validation_ratio > 0 and len(cleaned) > 1:
+        validation_count = max(1, int(len(cleaned) * validation_ratio))
+        validation_count = min(validation_count, len(cleaned) - 1)
+
+    validation_records = cleaned[:validation_count]
+    train_records = cleaned[validation_count:]
+
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    train_path = output_dir / "train.jsonl"
+    validation_path = output_dir / "validation.jsonl"
+    _write_jsonl_records(train_path, train_records)
+    if validation_records:
+        _write_jsonl_records(validation_path, validation_records)
+        validation_file: Path | None = validation_path
+    else:
+        if validation_path.exists():
+            validation_path.unlink()
+        validation_file = None
+
+    logger.info(
+        "Generated Unsloth dataset",
+        extra={
+            "train_records": len(train_records),
+            "validation_records": len(validation_records),
+            "extra_sources": [str(path) for path in extra_paths],
+        },
+    )
+
+    if metadata_path is not None:
+        metadata = {
+            "train_records": len(train_records),
+            "validation_records": len(validation_records),
+            "validation_ratio": validation_ratio,
+            "shuffle_seed": shuffle_seed,
+            "extra_datasets": [str(path) for path in extra_paths],
+        }
+        metadata_path = metadata_path.resolve()
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    return {"train": train_path, "validation": validation_file}
 
 
 def prepare_local_instruction_dataset(
