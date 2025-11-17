@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
-import math
-from collections.abc import Iterable, Sequence
+import re
+from typing import Any, List
 
 from .llm_integration import LLMIntegration
 
@@ -16,109 +16,141 @@ DEFAULT_ACTIONS: list[tuple[str, str]] = [
     ("explain", "Explain a concept in simpler terms with examples."),
 ]
 
-_FALLBACK_KEYWORD_WEIGHT = 0.2
 
-
-def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a)) or 1.0
-    nb = math.sqrt(sum(x * x for x in b)) or 1.0
-    return dot / (na * nb)
-
-
-def _keyword_score(action_key: str, prompt: str, action_desc: str) -> float:
-    p = prompt.lower()
-    d = action_desc.lower()
-    hints: dict[str, tuple[str, ...]] = {
-        "code": (
-            "code",
-            "function",
-            "bug",
-            "refactor",
-            "compile",
-            "typescript",
-            "python",
-            "class",
-        ),
-        "summarize": ("tl;dr", "summary", "summarize", "condense", "short version"),
-        "explain": ("explain", "why", "how", "teach", "beginner", "simple"),
-    }
-    score = 0.0
-    for word in hints.get(action_key, ()):
-        if word in p:
-            score += 1.0
-        if word in d:
-            score += 0.25
-    return score
-
-
-class AUISuggester:
-    """Produces ordered suggestions for action-oriented UI shortcuts."""
-
-    def __init__(self) -> None:
-        self._llm: LLMIntegration | None = None
+class LLMActionSuggester:
+    def __init__(self, context_window: int = 1024):
+        self.context_window = context_window
         try:
-            self._llm = LLMIntegration.instance()
+            self.llm = LLMIntegration.instance()
         except Exception as exc:  # pragma: no cover - optional dependency
-            logger.warning("aui_llm_init_failed", extra={"error": repr(exc)})
-            self._llm = None
+            logger.warning(
+                "llm_action_suggester_init_failed", extra={"error": repr(exc)}
+            )
+            self.llm = None
 
     @property
     def model_name(self) -> str:
-        return "llm" if self._llm else "keyword"
+        return "dolphin3-reasoning-baseline" if self.llm else "heuristic-keyword"
 
-    async def suggest(
-        self,
-        prompt: str,
-        actions: Iterable[tuple[str, str]] = DEFAULT_ACTIONS,
-    ) -> dict[str, float]:
-        """
-        Return a mapping of action key to relevance score for the provided prompt.
+    def suggest(self, prompt: str, actions: List[str], context: dict) -> List[str]:
+        """Generate ranked action suggestions using LLM reasoning"""
+        if not actions:
+            return []
 
-        Falls back to the keyword heuristic when embeddings are unavailable.
-        """
+        if not self.llm:
+            return self._heuristic_fallback(prompt, actions)
 
-        items = list(actions)
-        if not items:
+        # Trim context to fit within token limits
+        trimmed_context = self._trim_context(context)
+
+        suggestion_prompt = (
+            "You are Dolphin, an AI assistant that helps users by suggesting relevant actions.\n"
+            "Given the user's current intent and available actions, rank them from most to least relevant.\n\n"
+            f"USER INTENT: '{prompt}'\n"
+            f"AVAILABLE ACTIONS: {json.dumps(actions)}\n"
+            f"CURRENT CONTEXT: {json.dumps(trimmed_context)}\n\n"
+            "Respond ONLY with a JSON array of action names in order of relevance:"
+        )
+
+        try:
+            response = self.llm.generate(suggestion_prompt, max_new_tokens=150)
+        except Exception as exc:  # pragma: no cover - runtime fallback
+            logger.warning("Suggestion generation failed: %s", str(exc))
+            return self._heuristic_fallback(prompt, actions)
+
+        try:
+            ranked_actions = json.loads(self._extract_json(response))
+            if not isinstance(ranked_actions, list):
+                raise ValueError("LLM response must be a list")
+            logger.info(
+                {
+                    "event": "suggestion_generated",
+                    "model": "dolphin3-reasoning-baseline",
+                    "user_intent": prompt[:50],
+                    "suggested_count": len(ranked_actions),
+                    "context_size": len(str(trimmed_context)),
+                }
+            )
+            filtered_actions = [
+                action
+                for action in ranked_actions
+                if isinstance(action, str) and action in actions
+            ]
+            return filtered_actions or self._heuristic_fallback(prompt, actions)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Suggestion parsing failed: {str(e)}")
+            return self._heuristic_fallback(prompt, actions)
+
+    def _trim_context(self, context: dict) -> dict:
+        """Reduce context size to fit within token limits"""
+        if not context or not isinstance(context, dict):
             return {}
 
-        fallback_scores = {
-            key: _keyword_score(key, prompt, description) for key, description in items
-        }
+        limit = max(self.context_window, 256)
+        serialized = json.dumps(context, ensure_ascii=False)
+        if len(serialized) <= limit:
+            return context
 
-        if self._llm:
-            payloads = [prompt, *(description for _, description in items)]
-            try:
-                vectors = await asyncio.to_thread(
-                    self._llm.embed_batch, payloads
-                )
-            except Exception as exc:  # pragma: no cover - runtime fallback
-                logger.warning(
-                    "aui_embedding_inference_failed", extra={"error": repr(exc)}
-                )
-            else:
-                if len(vectors) != len(payloads):
-                    logger.debug("aui_embedding_vector_mismatch")
-                    return fallback_scores
-                prompt_vector = vectors[0]
-                action_vectors = vectors[1:]
-                embedding_scores = {
-                    key: _cosine(prompt_vector, vector)
-                    for (key, _), vector in zip(items, action_vectors, strict=False)
-                }
-                return {
-                    key: embedding_scores[key]
-                    + (fallback_scores.get(key, 0.0) * _FALLBACK_KEYWORD_WEIGHT)
-                    for key in embedding_scores
-                }
+        def trim_value(value: Any, budget: int) -> Any | None:
+            if budget <= 0:
+                return None
+            if isinstance(value, str):
+                return value[:budget]
+            if isinstance(value, (int, float, bool)) or value is None:
+                return value
+            if isinstance(value, list):
+                trimmed_list = []
+                for item in value:
+                    remaining_budget = budget - len(
+                        json.dumps(trimmed_list, ensure_ascii=False)
+                    )
+                    if remaining_budget <= 0:
+                        break
+                    trimmed_item = trim_value(item, remaining_budget)
+                    if trimmed_item is None:
+                        break
+                    trimmed_list.append(trimmed_item)
+                return trimmed_list
+            if isinstance(value, dict):
+                trimmed_dict: dict[str, Any] = {}
+                for key, val in value.items():
+                    remaining_budget = budget - len(
+                        json.dumps(trimmed_dict, ensure_ascii=False)
+                    )
+                    if remaining_budget <= 0:
+                        break
+                    trimmed_val = trim_value(val, remaining_budget)
+                    if trimmed_val is None:
+                        break
+                    trimmed_dict[key] = trimmed_val
+                return trimmed_dict
+            return str(value)[:budget]
 
-        return fallback_scores
+        trimmed: dict[str, Any] = {}
+        for key, value in context.items():
+            current_length = len(json.dumps(trimmed, ensure_ascii=False))
+            if current_length >= limit:
+                break
+            trimmed_value = trim_value(value, limit - current_length)
+            if trimmed_value is None:
+                break
+            trimmed[key] = trimmed_value
+            if len(json.dumps(trimmed, ensure_ascii=False)) > limit:
+                trimmed.pop(key, None)
+                break
 
-    async def order(
-        self,
-        prompt: str,
-        actions: Iterable[tuple[str, str]] = DEFAULT_ACTIONS,
-    ) -> tuple[list[str], dict[str, float]]:
-        scores = await self.suggest(prompt, actions)
-        ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-        return [key for key, _ in ordered], scores
+        return trimmed
+
+    def _extract_json(self, text: str) -> str:
+        """Extract JSON from LLM response"""
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        return match.group(0) if match else "[]"
+
+    def _heuristic_fallback(self, prompt: str, actions: List[str]) -> List[str]:
+        """Fallback to simple heuristic when LLM fails"""
+        prompt_lower = prompt.lower()
+        return sorted(
+            actions,
+            key=lambda x: prompt_lower.count(x.lower()),
+            reverse=True,
+        )

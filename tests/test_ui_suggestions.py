@@ -2,17 +2,28 @@ from __future__ import annotations
 
 import pytest
 
-from monGARS.core.aui import AUISuggester
+from monGARS.core.aui import LLMActionSuggester
 
 
-@pytest.mark.asyncio
-async def test_order_keyword_reflects_intent() -> None:
-    suggester = AUISuggester()
-    order, _ = await suggester.order("please refactor this python function")
+def test_llm_action_suggester_fallback_orders_by_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeLLM:
+        def generate(self, prompt: str, max_new_tokens: int) -> str:  # noqa: ARG002
+            return "not valid json"
+
+    monkeypatch.setattr("monGARS.core.aui.LLMIntegration.instance", lambda: FakeLLM())
+
+    suggester = LLMActionSuggester()
+    prompt = "code code code summarize explain"
+    actions = ["code", "summarize", "explain"]
+    order = suggester.suggest(prompt, actions, {})
     assert order[0] == "code"
 
-    order2, _ = await suggester.order("tl;dr the following conversation")
+    summary_prompt = "summarize summarize summarize code"
+    order2 = suggester.suggest(summary_prompt, actions, {})
     assert order2[0] == "summarize"
 
-    order3, _ = await suggester.order("explain transformers like I'm five")
+    explain_prompt = "explain explain explain summarize"
+    order3 = suggester.suggest(explain_prompt, actions, {})
     assert order3[0] == "explain"
