@@ -18,6 +18,7 @@ import pytest
 
 from monGARS.config import LLMQuantization, Settings
 from monGARS.core import llm_integration, monitor as core_monitor
+from monGARS.core.conversation import PromptTooLargeError
 from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 
 
@@ -291,7 +292,7 @@ def test_embedding_output(llm_builder: Callable[..., LLMIntegration]) -> None:
     assert isinstance(embedding, list)
     assert len(embedding) == 4096
     norm = np.linalg.norm(np.array(embedding))
-    assert 0.99 < norm < 1.01, f"Vector not normalized: norm={norm}"
+    assert 0.999 <= norm <= 1.001, f"Vector not normalized: norm={norm}"
 
 
 @patch("monGARS.core.llm_integration.LLMIntegration._call_local_provider")
@@ -337,6 +338,47 @@ def test_security_guard_integration(
     assert response["error"] == "approval_required"
     assert "token_ref" in response
     assert "4111" not in response["message"]
+
+
+def test_max_context_handling(llm_builder: Callable[..., LLMIntegration]) -> None:
+    llm = llm_builder()
+
+    def _raise_prompt_error(*_args: object, **_kwargs: object) -> str:
+        raise PromptTooLargeError(prompt_tokens=10000, limit=8192)
+
+    llm._generate_override = _raise_prompt_error  # type: ignore[assignment]
+
+    long_text = "word " * 10000
+    with pytest.raises(PromptTooLargeError) as exc_info:
+        llm.generate(long_text)
+
+    assert exc_info.value.limit == 8192
+
+
+def test_context_limit_boundary(llm_builder: Callable[..., LLMIntegration]) -> None:
+    runtime = _FakeUnifiedRuntime()
+    llm = llm_builder(runtime_factory=lambda: runtime)
+
+    def _generate_override(prompt: str, *_args: object, **_kwargs: object) -> str:
+        prompt_tokens = len(prompt.split())
+        if prompt_tokens > 8192:
+            raise PromptTooLargeError(prompt_tokens=prompt_tokens, limit=8192)
+        return "ok"
+
+    llm._generate_override = _generate_override  # type: ignore[assignment]
+
+    at_limit_text = "word " * 8192
+    assert llm.generate(at_limit_text) == "ok"
+
+    below_limit_text = "word " * 8191
+    assert llm.generate(below_limit_text) == "ok"
+
+    above_limit_text = "word " * 8193
+    with pytest.raises(PromptTooLargeError) as exc_info:
+        llm.generate(above_limit_text)
+
+    assert exc_info.value.limit == 8192
+    assert exc_info.value.prompt_tokens == 8193
 
 
 @pytest.mark.skipif(os.getenv("CI_ENVIRONMENT") != "true", reason="Only run in CI")
@@ -526,6 +568,31 @@ async def test_generate_response_returns_expected_keys(
     cache_key = fake_llm_integration._cache_key("general", active_prompt)
     cached = await llm_integration._RESPONSE_CACHE.get(cache_key)
     assert cached == result
+
+
+@pytest.mark.asyncio
+async def test_ray_backend_fallback_when_ray_unavailable(
+    llm_builder: Callable[..., LLMIntegration],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = llm_builder()
+    llm.use_ray = True
+
+    async def _ray_call(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise RuntimeError("ray down")
+
+    async def _local(prompt: str, task_type: str) -> dict[str, Any]:
+        return {"message": {"content": f"local::{prompt}::{task_type}"}}
+
+    monkeypatch.setattr(llm, "_ray_call", _ray_call, raising=False)
+    monkeypatch.setattr(llm, "_call_local_provider", _local, raising=False)
+
+    result = await llm.generate_response("hello", "general")
+
+    assert result["text"].startswith("local::")
+    assert result["text"].endswith("::general")
+    assert "hello" in result["text"]
+    assert result["source"] == "local"
 
 
 @pytest.mark.asyncio
