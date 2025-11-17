@@ -1,11 +1,27 @@
+from __future__ import annotations
+
 import logging
 import time
+from typing import Any
 
-import ray
-from ray import serve
+try:
+    import ray  # noqa: F401 - imported for side effects required by Serve
+    from ray import serve
+except ImportError as exc:  # pragma: no cover - enforced at deployment build time
+    raise ImportError(
+        "Ray Serve deployment module requires the 'ray[serve]' extra to be installed."
+    ) from exc
 
-from monGARS.core.llm_integration import LLMIntegration
+try:  # pragma: no cover - optional based on Ray version
+    from ray.serve.exceptions import RayServeException
+except Exception:  # pragma: no cover - fallback when exceptions module changes
+
+    class RayServeException(RuntimeError):
+        """Fallback Ray Serve exception type."""
+
+
 from monGARS.config import get_settings
+from monGARS.core.llm_integration import LLMIntegration
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -27,16 +43,38 @@ class RayLLMDeployment:
         self.llm = LLMIntegration.instance()
         self.health_check_timestamp = time.time()
 
-    async def health_check(self):
-        """Verify model is responsive"""
-        if time.time() - self.health_check_timestamp > 300:  # 5 minutes
-            test_response = await self.__call__(
-                {"prompt": "health check", "max_new_tokens": 10}
-            )
-            self.health_check_timestamp = time.time()
-        return {"status": "healthy", "last_check": self.health_check_timestamp}
+    async def health_check(self) -> dict[str, Any]:
+        """Verify the underlying model is responsive."""
 
-    async def __call__(self, request_data: dict):
+        now = time.time()
+        if now - self.health_check_timestamp > 300:  # 5 minutes
+            try:
+                result = await self.__call__(
+                    {"prompt": "health check", "max_new_tokens": 10}
+                )
+            except Exception as exc:  # pragma: no cover - unexpected runtime failure
+                logger.exception("ray_llm.health_check_failed")
+                return {
+                    "status": "unhealthy",
+                    "last_check": self.health_check_timestamp,
+                    "detail": str(exc),
+                    "model": settings.llm.model_name,
+                }
+            if isinstance(result, dict) and result.get("error"):
+                return {
+                    "status": "unhealthy",
+                    "last_check": self.health_check_timestamp,
+                    "detail": result.get("message") or result.get("error"),
+                    "model": settings.llm.model_name,
+                }
+            self.health_check_timestamp = now
+        return {
+            "status": "healthy",
+            "last_check": self.health_check_timestamp,
+            "model": settings.llm.model_name,
+        }
+
+    async def __call__(self, request_data: dict[str, Any]) -> dict[str, Any]:
         prompt = request_data.get("prompt", "")
         max_tokens = request_data.get("max_new_tokens", settings.llm.max_tokens)
 
@@ -44,15 +82,32 @@ class RayLLMDeployment:
             return {"error": "empty_prompt", "message": "Prompt cannot be empty"}
 
         try:
-            response = self.llm.generate(prompt, max_new_tokens=max_tokens)
-            return {
-                "response": response,
-                "tokens_used": len(self.llm.tokenizer.tokenize(prompt + response)),
-                "model": settings.llm.model_name,
-            }
-        except Exception as e:
-            logger.error(f"Generation failed: {str(e)}")
-            return {"error": "generation_failed", "message": str(e)}
+            kwargs: dict[str, Any] = {}
+            if max_tokens is not None:
+                kwargs["max_new_tokens"] = max_tokens
+            response = self.llm.generate(prompt, **kwargs)
+        except Exception as exc:  # pragma: no cover - unexpected runtime failure
+            logger.exception(
+                "ray_llm.generation_failed",
+                extra={"prompt_length": len(prompt)},
+            )
+            return {"error": "generation_failed", "message": str(exc)}
+        tokens_used: int | None = None
+        tokenizer = getattr(self.llm, "tokenizer", None)
+        if tokenizer is not None and hasattr(tokenizer, "tokenize"):
+            try:
+                tokens_used = len(tokenizer.tokenize(prompt + response))
+            except RayServeException:  # pragma: no cover - tokenizer failures are rare
+                tokens_used = None
+            except Exception:  # pragma: no cover - tokenizer failures are rare
+                tokens_used = None
+        payload: dict[str, Any] = {
+            "response": response,
+            "model": settings.llm.model_name,
+        }
+        if tokens_used is not None:
+            payload["tokens_used"] = tokens_used
+        return payload
 
 
 deployment = RayLLMDeployment.bind()

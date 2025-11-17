@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
@@ -102,6 +102,16 @@ class ChatResponse(BaseModel):
     confidence: float
     processing_time: float
     speech_turn: SpeechTurnSchema
+
+
+class LLMHealthResponse(BaseModel):
+    """Response returned by the low-level LLM health endpoint."""
+
+    status: Literal["healthy", "unhealthy"]
+    backend: Literal["local", "ray", "unavailable"]
+    model: str | None = None
+    last_check: float | None = None
+    detail: str | None = None
 
 
 class RagContextRequest(BaseModel):

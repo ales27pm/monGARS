@@ -19,7 +19,25 @@ from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Any
 
-import ray
+try:  # pragma: no cover - ray is optional
+    import ray
+    from ray import serve
+except ImportError:  # pragma: no cover - fallback when ray is unavailable
+    ray = None  # type: ignore[assignment]
+    serve = None  # type: ignore[assignment]
+
+
+class RayServeException(RuntimeError):
+    """Fallback Ray Serve exception type when the package is unavailable."""
+
+
+if serve is not None:  # pragma: no cover - only executed when ray is installed
+    try:
+        from ray.serve.exceptions import RayServeException as _RayServeException
+    except Exception:  # pragma: no cover - defensive against API drift
+        pass
+    else:  # pragma: no cover - executed when import succeeds
+        RayServeException = _RayServeException
 from fastapi import (
     APIRouter,
     Depends,
@@ -33,6 +51,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
+from pydantic import ValidationError
 
 try:
     from opentelemetry import trace
@@ -67,12 +86,15 @@ from monGARS.api.dependencies import (
 from monGARS.api.schemas import (
     ChatRequest,
     ChatResponse,
+    LLMHealthResponse,
     PasswordChangeRequest,
     PeerLoadSnapshot,
     PeerMessage,
     PeerRegistration,
     PeerTelemetryEnvelope,
     PeerTelemetryPayload,
+    SpeechSegmentSchema,
+    SpeechTurnSchema,
     UserListResponse,
     UserRegistration,
 )
@@ -120,7 +142,9 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(prefix="/llm", tags=["llm"])
+
+_RAY_DEPLOYMENT_NAME = "RayLLMDeployment"
 
 _settings = get_settings()
 settings = _settings
@@ -317,6 +341,136 @@ def get_conversational_module(
             dynamic=dynamic,
         )
     return conversation_module
+
+
+def _ray_backend_configured() -> bool:
+    return settings.llm.serve_backend == "ray"
+
+
+def _ray_backend_available() -> bool:
+    return (
+        _ray_backend_configured()
+        and ray is not None
+        and serve is not None
+        and hasattr(serve, "get_deployment_handle")
+    )
+
+
+async def _invoke_ray_chat(
+    prompt: str, *, max_new_tokens: int | None
+) -> dict[str, Any] | None:
+    if not _ray_backend_available():
+        if _ray_backend_configured() and ray is None:
+            logger.warning("web_api.ray_dependency_missing")
+        return None
+    try:
+        handle = serve.get_deployment_handle(_RAY_DEPLOYMENT_NAME)
+    except Exception as exc:  # pragma: no cover - transport errors
+        logger.warning(
+            "web_api.ray_handle_unavailable",
+            extra={"detail": str(exc)},
+        )
+        return None
+    payload: dict[str, Any] = {"prompt": prompt}
+    if max_new_tokens is not None:
+        payload["max_new_tokens"] = max_new_tokens
+    try:
+        return await handle.remote(payload)
+    except (RayServeException, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "web_api.ray_generation_failed",
+            extra={"detail": str(exc)},
+        )
+        return None
+
+
+async def _invoke_ray_health_check() -> dict[str, Any] | None:
+    if not _ray_backend_available():
+        return None
+    try:
+        handle = serve.get_deployment_handle(_RAY_DEPLOYMENT_NAME)
+    except Exception as exc:  # pragma: no cover - transport errors
+        logger.warning(
+            "web_api.ray_handle_unavailable",
+            extra={"detail": str(exc)},
+        )
+        return None
+    try:
+        return await handle.options(method_name="health_check").remote()
+    except (RayServeException, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "web_api.ray_health_failed",
+            extra={"detail": str(exc)},
+        )
+        return None
+
+
+def _build_default_speech_turn(text: str) -> SpeechTurnSchema:
+    created_at = datetime.now(UTC)
+    word_count = len(text.split())
+    estimated_duration = max(word_count / 2.5, 0.0)
+    segment = SpeechSegmentSchema(
+        text=text,
+        estimated_duration=estimated_duration,
+        pause_after=0.0,
+    )
+    avg_wps = word_count / estimated_duration if estimated_duration else 0.0
+    return SpeechTurnSchema(
+        turn_id=f"llm-{hashlib.blake2s(text.encode('utf-8'), digest_size=6).hexdigest()}",
+        text=text,
+        created_at=created_at,
+        segments=[segment],
+        average_words_per_second=avg_wps,
+        tempo=0.0,
+    )
+
+
+def _chat_response_from_payload(payload: dict[str, Any]) -> ChatResponse:
+    response_text = str(payload.get("response", ""))
+    speech_turn_data = payload.get("speech_turn")
+    speech_turn: SpeechTurnSchema | None = None
+    if isinstance(speech_turn_data, SpeechTurnSchema):
+        speech_turn = speech_turn_data
+    elif isinstance(speech_turn_data, dict):
+        try:
+            speech_turn = SpeechTurnSchema(**speech_turn_data)
+        except (ValidationError, TypeError, ValueError):
+            speech_turn = None
+    if speech_turn is None:
+        speech_turn = _build_default_speech_turn(response_text)
+    try:
+        confidence = float(payload.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    try:
+        processing_time = float(payload.get("processing_time", 0.0))
+    except (TypeError, ValueError):
+        processing_time = 0.0
+    return ChatResponse(
+        response=response_text,
+        confidence=confidence,
+        processing_time=processing_time,
+        speech_turn=speech_turn,
+    )
+
+
+async def _generate_local_llm_payload(
+    prompt: str,
+    *,
+    max_new_tokens: int | None,
+) -> dict[str, Any]:
+    llm = LLMIntegration.instance()
+    start = perf_counter()
+    kwargs: dict[str, Any] = {}
+    if max_new_tokens is not None:
+        kwargs["max_new_tokens"] = max_new_tokens
+    response = await asyncio.to_thread(
+        llm.generate,
+        prompt,
+        **kwargs,
+    )
+    duration = perf_counter() - start
+    return {"response": response, "processing_time": duration}
 
 
 @app.post("/token")
@@ -763,23 +917,79 @@ async def peer_telemetry_snapshot(
     return PeerTelemetryEnvelope(telemetry=payloads)
 
 
-@router.post("/chat")
-async def chat_endpoint(request: Request):
-    if settings.llm.serve_backend == "ray":
-        ray_client = ray.serve.connect()
-        deployment = ray_client.get_handle("RayLLMDeployment")
-        result = await deployment.remote(await request.json())
-        return result
-    return {
-        "response": LLMIntegration.instance().generate((await request.json())["prompt"])
-    }
+@router.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(
+    chat: ChatRequest,
+    current_user: Annotated[dict, Depends(enforce_chat_rate_limit)],
+) -> ChatResponse:
+    user_id = current_user["sub"]
+    try:
+        data = validate_user_input({"user_id": user_id, "query": chat.message})
+    except ValueError as exc:
+        logger.warning(
+            "web_api.llm_chat_invalid_input",
+            extra={"user": _redact_user_id(user_id), "detail": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    prompt = data["query"]
+    max_tokens = getattr(settings.llm, "max_tokens", None)
+    ray_result = await _invoke_ray_chat(prompt, max_new_tokens=max_tokens)
+    if ray_result is not None:
+        if ray_result.get("error"):
+            logger.warning(
+                "web_api.llm_chat_ray_error",
+                extra={"user": _redact_user_id(user_id), "error": ray_result},
+            )
+        else:
+            return _chat_response_from_payload(ray_result)
+
+    try:
+        local_payload = await _generate_local_llm_payload(
+            prompt,
+            max_new_tokens=max_tokens,
+        )
+    except Exception as exc:  # pragma: no cover - unexpected runtime failure
+        logger.exception(
+            "web_api.llm_chat_local_failed",
+            extra={"user": _redact_user_id(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate chat response",
+        ) from exc
+    return _chat_response_from_payload(local_payload)
 
 
-@router.get("/llm/health")
-async def llm_health():
-    if settings.llm.serve_backend == "ray":
-        ray_client = ray.serve.connect()
-        deployment = ray_client.get_handle("RayLLMDeployment")
-        result = await deployment.health_check.remote()
-        return result
-    return {"status": "healthy", "model": LLMIntegration.instance()._model_id}
+@router.get("/health", response_model=LLMHealthResponse)
+async def llm_health() -> LLMHealthResponse:
+    model_name = getattr(settings.llm, "model_name", None)
+    if _ray_backend_configured():
+        health_payload = await _invoke_ray_health_check()
+        if health_payload is not None:
+            status_value = str(health_payload.get("status", "healthy"))
+            detail = health_payload.get("detail") or health_payload.get("error")
+            return LLMHealthResponse(
+                status="healthy" if status_value == "healthy" else "unhealthy",
+                backend="ray",
+                model=health_payload.get("model", model_name),
+                last_check=health_payload.get("last_check"),
+                detail=detail,
+            )
+        backend = "ray" if _ray_backend_available() else "unavailable"
+        detail = (
+            "Ray Serve deployment is unavailable"
+            if backend == "ray"
+            else "Ray Serve integration is not installed"
+        )
+        return LLMHealthResponse(
+            status="unhealthy",
+            backend=backend,
+            model=model_name,
+            detail=detail,
+        )
+
+    return LLMHealthResponse(status="healthy", backend="local", model=model_name)
