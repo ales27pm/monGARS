@@ -5,13 +5,7 @@ import logging
 import math
 from collections.abc import Iterable, Sequence
 
-# Prefer the existing embedding system if present
-try:  # pragma: no cover - import guard
-    from .neurones import EmbeddingSystem  # type: ignore[attr-defined]
-
-    _HAS_NEURONES = True
-except Exception:  # pragma: no cover - optional dependency
-    _HAS_NEURONES = False
+from .llm_integration import LLMIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -62,17 +56,16 @@ class AUISuggester:
     """Produces ordered suggestions for action-oriented UI shortcuts."""
 
     def __init__(self) -> None:
-        self._embed: EmbeddingSystem | None = None
-        if _HAS_NEURONES:
-            try:
-                self._embed = EmbeddingSystem()
-            except Exception as exc:  # pragma: no cover - instantiation failure
-                logger.warning("aui_embed_init_failed", extra={"error": repr(exc)})
-                self._embed = None
+        self._llm: LLMIntegration | None = None
+        try:
+            self._llm = LLMIntegration.instance()
+        except Exception as exc:  # pragma: no cover - optional dependency
+            logger.warning("aui_llm_init_failed", extra={"error": repr(exc)})
+            self._llm = None
 
     @property
     def model_name(self) -> str:
-        return "neurones" if self._embed else "keyword"
+        return "llm" if self._llm else "keyword"
 
     async def suggest(
         self,
@@ -93,31 +86,31 @@ class AUISuggester:
             key: _keyword_score(key, prompt, description) for key, description in items
         }
 
-        if self._embed:
+        if self._llm:
+            payloads = [prompt, *(description for _, description in items)]
             try:
-                prompt_vector, prompt_used_fallback = await self._embed.encode(prompt)
-                action_vectors = await asyncio.gather(
-                    *(self._embed.encode(description) for _, description in items)
+                vectors = await asyncio.to_thread(
+                    self._llm.embed_batch, payloads
                 )
-                if prompt_used_fallback or any(
-                    action_used_fallback for _, action_used_fallback in action_vectors
-                ):
+            except Exception as exc:  # pragma: no cover - runtime fallback
+                logger.warning(
+                    "aui_embedding_inference_failed", extra={"error": repr(exc)}
+                )
+            else:
+                if len(vectors) != len(payloads):
+                    logger.debug("aui_embedding_vector_mismatch")
                     return fallback_scores
+                prompt_vector = vectors[0]
+                action_vectors = vectors[1:]
                 embedding_scores = {
                     key: _cosine(prompt_vector, vector)
-                    for (key, _), (vector, _) in zip(
-                        items, action_vectors, strict=False
-                    )
+                    for (key, _), vector in zip(items, action_vectors, strict=False)
                 }
                 return {
                     key: embedding_scores[key]
                     + (fallback_scores.get(key, 0.0) * _FALLBACK_KEYWORD_WEIGHT)
                     for key in embedding_scores
                 }
-            except Exception as exc:  # pragma: no cover - runtime fallback
-                logger.warning(
-                    "aui_embedding_inference_failed", extra={"error": repr(exc)}
-                )
 
         return fallback_scores
 

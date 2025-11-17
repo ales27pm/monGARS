@@ -488,6 +488,8 @@ class _TaskTypeRule:
 class LLMIntegration:
     """Adapter responsible for generating responses via local or remote LLMs."""
 
+    _shared_instance: ClassVar["LLMIntegration" | None] = None
+    _shared_lock: ClassVar[threading.Lock] = threading.Lock()
     SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists", "skipped"})
     FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
     _CHATML_SYSTEM_TOKEN = "<|system|>"
@@ -718,6 +720,16 @@ class LLMIntegration:
         self._generation_token_targets: dict[str, int | None] = {}
 
     @classmethod
+    def instance(cls) -> "LLMIntegration":
+        """Return a lazily instantiated shared :class:`LLMIntegration`."""
+
+        if cls._shared_instance is None:
+            with cls._shared_lock:
+                if cls._shared_instance is None:
+                    cls._shared_instance = cls()
+        return cls._shared_instance
+
+    @classmethod
     def _reset_unified_service(cls) -> None:
         """Testing helper retained for backwards compatibility."""
 
@@ -737,6 +749,17 @@ class LLMIntegration:
         vectors = self._runtime().embed(list(texts))
         assert torch is not None  # noqa: S101 - guarded at module import
         return torch.tensor(vectors)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        logger.info(
+            {
+                "event": "embedding_requested",
+                "count": len(texts),
+                "model": "dolphin-x1-llm2vec",
+            }
+        )
+        normalized = [str(text) for text in texts]
+        return self._runtime().embed(normalized)
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
