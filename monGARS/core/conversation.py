@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -554,23 +555,41 @@ class ConversationalModule:
             history_pairs = trimmed_history
             semantic_context = trimmed_semantic
 
-        runtime = UnifiedLLMRuntime.instance(settings)
-        runtime_kwargs: dict[str, Any] = {}
-        if generation_target:
-            runtime_kwargs["max_new_tokens"] = generation_target
-        try:
-            response_text = await asyncio.to_thread(
-                runtime.generate, prompt_bundle.text, **runtime_kwargs
-            )
-        except LLMRuntimeError as exc:
-            logger.exception("conversation.runtime.generate_failed")
-            raise
-        llm_out: dict[str, Any] = {
-            "text": response_text,
-            "confidence": 0.0,
-            "source": "unified-runtime",
-            "adapter_version": "unified",
-        }
+        llm_out: dict[str, Any]
+        llm_adapter = getattr(self, "llm", None)
+        use_adapter = bool(llm_adapter and hasattr(llm_adapter, "generate_response"))
+        if use_adapter:
+            try:
+                response_mapping = await llm_adapter.generate_response(  # type: ignore[attr-defined]
+                    prompt_bundle.text,
+                    task_type=task_type,
+                    response_hints=response_hints,
+                    formatted_prompt=prompt_bundle.chatml,
+                )
+            except LLMRuntimeError:
+                logger.exception("conversation.runtime.generate_failed")
+                raise
+            if not isinstance(response_mapping, Mapping):
+                raise TypeError("LLM integration must return a mapping")
+            llm_out = dict(response_mapping)
+        else:
+            runtime = UnifiedLLMRuntime.instance(settings)
+            runtime_kwargs: dict[str, Any] = {}
+            if generation_target:
+                runtime_kwargs["max_new_tokens"] = generation_target
+            try:
+                response_text = await asyncio.to_thread(
+                    runtime.generate, prompt_bundle.text, **runtime_kwargs
+                )
+            except LLMRuntimeError:
+                logger.exception("conversation.runtime.generate_failed")
+                raise
+            llm_out = {
+                "text": response_text,
+                "confidence": 0.0,
+                "source": "unified-runtime",
+                "adapter_version": "unified",
+            }
         llm_out.setdefault("prompt_tokens", prompt_tokens)
         if configured_limit is not None:
             llm_out.setdefault("prompt_token_limit", configured_limit)

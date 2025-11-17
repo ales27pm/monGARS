@@ -133,6 +133,29 @@ def _tokenize(text: str) -> set[str]:
     return {token for token in text.lower().split() if token}
 
 
+class _EmbeddingCompatibilityAdapter:
+    """Backwards-compatible embedding façade used by historical tests."""
+
+    def __init__(self, engine: "CuriosityEngine") -> None:
+        self._engine = engine
+        self.driver: Any | None = None
+        self._model_dependency_available = engine._llm is not None
+
+    async def encode(self, text: str) -> tuple[list[float], bool]:
+        llm = self._engine._llm
+        if llm is None:
+            raise RuntimeError("Embedding runtime unavailable")
+
+        cleaned = text.strip() if isinstance(text, str) else ""
+
+        def _run() -> list[list[float]]:
+            return llm.embed_batch([cleaned])
+
+        vectors = await asyncio.to_thread(_run)
+        vector = vectors[0] if vectors else []
+        return vector, True
+
+
 class CuriosityEngine:
     """Detect knowledge gaps and trigger research fetches when required."""
 
@@ -157,7 +180,9 @@ class CuriosityEngine:
                 "curiosity.embedding_runtime_unavailable", extra={"error": repr(exc)}
             )
             self._llm = None
+        self.embedding_system = _EmbeddingCompatibilityAdapter(self)
         self._kg_driver = _create_kg_driver()
+        self.embedding_system.driver = self._kg_driver
         self.similarity_threshold = settings.curiosity_similarity_threshold
         self.similar_history_threshold = max(
             0, settings.curiosity_minimum_similar_history
@@ -433,7 +458,14 @@ class CuriosityEngine:
         if not history_candidates:
             return 0
 
-        if self._llm is None:
+        embedding_component = getattr(self, "embedding_system", None)
+        embeddings_ready = bool(
+            embedding_component
+            and getattr(embedding_component, "_model_dependency_available", False)
+            and hasattr(embedding_component, "encode")
+        )
+
+        if not embeddings_ready:
             logger.debug("Vector similarity skipped; embedding runtime unavailable")
             return self._count_token_similarity(query_terms, history_candidates)
 
@@ -481,8 +513,42 @@ class CuriosityEngine:
         return similar
 
     async def _embed_payloads(self, payloads: Sequence[str]) -> list[list[float]]:
-        cleaned = [value.strip() if isinstance(value, str) else "" for value in payloads]
+        cleaned = [
+            value.strip() if isinstance(value, str) else "" for value in payloads
+        ]
+        embedding_component = getattr(self, "embedding_system", None)
+        embeddings_ready = bool(
+            embedding_component
+            and getattr(embedding_component, "_model_dependency_available", False)
+            and hasattr(embedding_component, "encode")
+        )
+        if embeddings_ready:
+            vectors: list[list[float]] = []
+            for text in cleaned:
+                response = embedding_component.encode(text)
+                if inspect.isawaitable(response):
+                    response = await response  # type: ignore[assignment]
+                vector = self._coerce_embedding_vector(response)
+                vectors.append(vector)
+            return vectors
+
+        if self._llm is None:
+            raise RuntimeError("Embedding runtime unavailable")
         return await asyncio.to_thread(self._llm.embed_batch, cleaned)
+
+    def _coerce_embedding_vector(self, payload: Any) -> list[float]:
+        vector_payload = payload[0] if isinstance(payload, tuple) else payload
+        if not isinstance(vector_payload, Sequence):
+            raise TypeError("Embedding response must be a sequence")
+        coerced: list[float] = []
+        for value in vector_payload:
+            try:
+                coerced.append(float(value))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Embedding response must contain numeric values"
+                ) from exc
+        return coerced
 
     def _count_token_similarity(
         self, query_terms: set[str], history_candidates: Iterable[str]
@@ -634,7 +700,7 @@ class CuriosityEngine:
         if not normalized_entities:
             return {}
 
-        driver = self._kg_driver
+        driver = getattr(self.embedding_system, "driver", None) or self._kg_driver
         session_factory = getattr(driver, "session", None)
         if not callable(session_factory):
             logger.debug(
