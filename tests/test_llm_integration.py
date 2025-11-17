@@ -422,18 +422,74 @@ def test_infer_task_type_detects_coding(
     )
 
 
+class _FakeTokenizer:
+    def tokenize(self, text: str) -> list[str]:
+        return list(text)
+
+
 class _FakeUnifiedRuntime:
     def __init__(self) -> None:
         self.generate_calls: list[tuple[str, dict[str, object]]] = []
         self.embed_calls: list[list[str]] = []
+        self.tokenizer = _FakeTokenizer()
+        self.next_response: str | None = None
 
     def generate(self, prompt: str, **kwargs: object) -> str:
         self.generate_calls.append((prompt, dict(kwargs)))
+        if self.next_response is not None:
+            return self.next_response
         return f"generated::{prompt}"
 
     def embed(self, texts: list[str]) -> str:
         self.embed_calls.append(list(texts))
         return f"embedded::{len(texts)}"
+
+
+class _FakeCounter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, dict[str, str]]] = []
+
+    def add(self, value: int, attributes: dict[str, str]) -> None:
+        self.calls.append((value, attributes))
+
+
+class _FakeHistogram:
+    def __init__(self) -> None:
+        self.records: list[tuple[float, dict[str, str]]] = []
+
+    def record(self, value: float, attributes: dict[str, str]) -> None:
+        self.records.append((value, attributes))
+
+
+class _FakeSpan:
+    def __init__(self, name: str, kind: object) -> None:
+        self.name = name
+        self.kind = kind
+        self.attributes: dict[str, object] = {}
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+
+class _SpanContextManager:
+    def __init__(self, span: _FakeSpan) -> None:
+        self._span = span
+
+    def __enter__(self) -> _FakeSpan:
+        return self._span
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _FakeTracer:
+    def __init__(self) -> None:
+        self.spans: list[_FakeSpan] = []
+
+    def start_as_current_span(self, name: str, kind: object | None = None):
+        span = _FakeSpan(name, kind)
+        self.spans.append(span)
+        return _SpanContextManager(span)
 
 
 def test_generate_method_uses_unified_runtime(
@@ -470,6 +526,104 @@ def test_embed_method_uses_unified_runtime(
     assert runtime.embed_calls == [["a", "b"]]
 
 
+def test_generate_records_span_attributes_and_metrics(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure OpenTelemetry spans and metrics capture model, user, and latency."""
+
+    runtime = _FakeUnifiedRuntime()
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    fake_tracer = _FakeTracer()
+    fake_counter = _FakeCounter()
+    fake_histogram = _FakeHistogram()
+    monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
+    monkeypatch.setattr(llm_integration, "token_counter", fake_counter, raising=False)
+    monkeypatch.setattr(
+        llm_integration, "latency_histogram", fake_histogram, raising=False
+    )
+
+    time_values = iter([100.0, 100.2])
+    monkeypatch.setattr(
+        llm_integration.time, "monotonic", lambda: next(time_values), raising=False
+    )
+
+    result = fake_llm_integration.generate("hi", context={"user_id": "researcher"})
+
+    assert result == "generated::hi"
+    assert len(fake_tracer.spans) == 1
+    span = fake_tracer.spans[0]
+    assert span.name == "llm.generate"
+    assert span.kind == llm_integration.SpanKind.SERVER
+    assert span.attributes["llm.model_name"] == fake_llm_integration._model_id
+    assert span.attributes["enduser.id"] == "researcher"
+    assert span.attributes["input.length"] == 2
+    assert span.attributes["output.length"] == len("generated::hi")
+    assert span.attributes["tokens.input"] == 2
+    assert span.attributes["tokens.output"] == len("generated::hi")
+    assert span.attributes["latency.ms"] == pytest.approx(200.0)
+
+    assert fake_counter.calls == [
+        (2, {"direction": "input", "model": fake_llm_integration._model_id}),
+        (
+            len("generated::hi"),
+            {"direction": "output", "model": fake_llm_integration._model_id},
+        ),
+    ]
+    assert len(fake_histogram.records) == 1
+    latency_value, latency_attrs = fake_histogram.records[0]
+    assert latency_value == pytest.approx(200.0)
+    assert latency_attrs == {
+        "model": fake_llm_integration._model_id,
+        "enduser.id": "researcher",
+    }
+
+
+@pytest.mark.parametrize(
+    ("prompt", "response"),
+    [
+        ("", ""),
+        ("   \t", " \n"),
+        ("x" * 4096, "y" * 2048),
+    ],
+)
+def test_generate_records_token_counts_for_edge_cases(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt: str,
+    response: str,
+) -> None:
+    """Token counter should accurately capture edge-case prompts and outputs."""
+
+    runtime = _FakeUnifiedRuntime()
+    runtime.next_response = response
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    fake_tracer = _FakeTracer()
+    fake_counter = _FakeCounter()
+    fake_histogram = _FakeHistogram()
+    monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
+    monkeypatch.setattr(llm_integration, "token_counter", fake_counter, raising=False)
+    monkeypatch.setattr(
+        llm_integration, "latency_histogram", fake_histogram, raising=False
+    )
+
+    time_values = iter([10.0, 10.1])
+    monkeypatch.setattr(
+        llm_integration.time, "monotonic", lambda: next(time_values), raising=False
+    )
+
+    fake_llm_integration.generate(prompt)
+
+    assert fake_counter.calls == [
+        (len(prompt), {"direction": "input", "model": fake_llm_integration._model_id}),
+        (len(response), {"direction": "output", "model": fake_llm_integration._model_id}),
+    ]
 @pytest.mark.parametrize(
     ("prompt", "expected"),
     [

@@ -675,7 +675,7 @@ async def change_password(
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics_endpoint(
+async def secured_metrics_endpoint(
     _: Annotated[dict, Depends(get_current_user)],
 ) -> Response:
     """Expose Prometheus metrics collected from the API process."""
@@ -1052,6 +1052,16 @@ async def llm_health() -> LLMHealthResponse:
         )
 
     return LLMHealthResponse(status="healthy", backend="local", model=model_name)
+
+
+@router.get("/metrics", include_in_schema=False)
+async def metrics_endpoint() -> Response:
+    if not _settings.otel_prometheus_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return Response(
+        generate_latest(PROMETHEUS_REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 app.include_router(router)
