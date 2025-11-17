@@ -101,10 +101,9 @@ from monGARS.api.schemas import (
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
-from monGARS.core.llm_integration import LLMIntegration
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
-from monGARS.core.llm_integration import CircuitBreakerOpenError
+from monGARS.core.llm_integration import CircuitBreakerOpenError, LLMIntegration
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
@@ -171,7 +170,6 @@ app.include_router(ui_routes.router)
 app.include_router(model_management.router)
 app.include_router(ws_ticket_router)
 app.include_router(rag_routes.router)
-app.include_router(router)
 
 conversation_module: ConversationalModule | None = None
 ws_manager = _ws_manager
@@ -344,7 +342,8 @@ def get_conversational_module(
 
 
 def _ray_backend_configured() -> bool:
-    return settings.llm.serve_backend == "ray"
+    backend = getattr(settings.llm, "serve_backend", "local")
+    return backend == "ray"
 
 
 def _ray_backend_available() -> bool:
@@ -936,7 +935,7 @@ async def chat_endpoint(
         ) from exc
 
     prompt = data["query"]
-    max_tokens = getattr(settings.llm, "max_tokens", None)
+    max_tokens = getattr(settings.model, "max_new_tokens", None)
     ray_result = await _invoke_ray_chat(prompt, max_new_tokens=max_tokens)
     if ray_result is not None:
         if ray_result.get("error"):
@@ -993,3 +992,6 @@ async def llm_health() -> LLMHealthResponse:
         )
 
     return LLMHealthResponse(status="healthy", backend="local", model=model_name)
+
+
+app.include_router(router)

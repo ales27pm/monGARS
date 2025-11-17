@@ -76,7 +76,8 @@ class RayLLMDeployment:
 
     async def __call__(self, request_data: dict[str, Any]) -> dict[str, Any]:
         prompt = request_data.get("prompt", "")
-        max_tokens = request_data.get("max_new_tokens", settings.llm.max_tokens)
+        default_max_tokens = getattr(settings.model, "max_new_tokens", None)
+        max_tokens = request_data.get("max_new_tokens", default_max_tokens)
 
         if not prompt:
             return {"error": "empty_prompt", "message": "Prompt cannot be empty"}

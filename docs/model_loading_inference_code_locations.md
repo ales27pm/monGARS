@@ -1,6 +1,6 @@
 # Model Loading & Inference Code Locations
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-17 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This reference pinpoints the files that orchestrate model configuration, provisioning, and runtime inference so operators can jump directly to the relevant logic when debugging or extending the stack.
 
@@ -16,6 +16,10 @@ This reference pinpoints the files that orchestrate model configuration, provisi
 - `_call_local_provider` ensures the requested roles are provisioned, logs the dispatch, and either calls `_ollama_call` or activates the slot-based fallback if Ollama is missing or errors out.【F:monGARS/core/llm_integration.py†L609-L698】
 - `_ollama_call` wraps `ollama.chat` with retry and circuit breaker protections so transient errors do not surface to users without multiple attempts.【F:monGARS/core/llm_integration.py†L567-L607】
 - `_slot_model_fallback` and `_generate_with_model_slot` bridge to the Unsloth-backed PyTorch slot manager, translating Ollama-style options into Hugging Face generation arguments when a local fallback is required.【F:monGARS/core/llm_integration.py†L700-L760】
+
+## Direct LLM API Router
+- The `/llm/chat` and `/llm/health` endpoints live in `monGARS/api/web_api.py`. They reuse the `ChatRequest`/`ChatResponse` schemas, authenticate via the same bearer token dependencies, and consult `_invoke_ray_chat` before falling back to `_generate_local_llm_payload` so Ray Serve and the local runtime share a consistent contract.【F:monGARS/api/web_api.py†L320-L400】【F:monGARS/api/web_api.py†L920-L990】
+- Operators select the backend with `settings.llm.serve_backend` and may toggle GPU allocations for Ray replicas via `settings.llm.use_gpu`; the deployment inherits generation limits from `settings.model.max_new_tokens` to keep Ray Serve and API defaults aligned.【F:monGARS/config.py†L270-L320】【F:monGARS/core/ray_llm_deployment.py†L20-L110】
 
 ## Conversation Driver
 - `ConversationalModule.generate_response` composes the final prompt (history, curiosity hints, semantic recall), invokes `LLMIntegration.generate_response`, adapts the reply to personality traits, and persists the full interaction payload.【F:monGARS/core/conversation.py†L241-L317】

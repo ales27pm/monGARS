@@ -283,6 +283,18 @@ class LLMSettings(BaseModel):
         default=LLMPooling.MEAN,
         description="Pooling strategy applied to encoder embeddings.",
     )
+    serve_backend: Literal["local", "ray"] = Field(
+        default="local",
+        description=(
+            "Backend used by the /llm API router. When set to 'ray' the API"
+            " will attempt to route requests through the Ray Serve deployment"
+            " before falling back to the local runtime."
+        ),
+    )
+    use_gpu: bool = Field(
+        default=False,
+        description="Request GPU resources for Ray Serve replicas when available.",
+    )
 
 
 class Settings(BaseSettings):

@@ -31,6 +31,36 @@
   - `400 Bad Request`: If the input is invalid.
   - `401 Unauthorized`: If the user is not authenticated.
 
+#### **POST /llm/chat**
+- **Description:** Call the low-level LLM router directly. The endpoint reuses the
+  same payload schema, authentication, and rate limiting as
+  `/api/v1/conversation/chat` but bypasses the conversational memory/personality
+  layers.
+- **Request Body:**
+  - `message` (string): Prompt forwarded to Ray Serve when configured or to the
+    local `LLMIntegration` fallback.
+  - `session_id` (string, optional): Included for schema compatibility; the
+    handler currently ignores it because no adaptive pacing is performed.
+- **Response:**
+  - `200 OK`: `ChatResponse` payload emitted by either Ray Serve or the local
+    runtime, ensuring callers always receive the `response`, `confidence`,
+    `processing_time`, and structured `speech_turn` fields.
+  - `401 Unauthorized`: Missing or invalid bearer token.
+  - `422 Unprocessable Entity`: Input rejected by `validate_user_input`.
+  - `502 Bad Gateway`: The local fallback also failed.
+
+#### **GET /llm/health**
+- **Description:** Report the health of the LLM backend currently serving the
+  `/llm` router.
+- **Response:**
+  - `200 OK`: JSON body with:
+    - `status`: `healthy` or `unhealthy`.
+    - `backend`: `local`, `ray`, or `unavailable` when Ray Serve is configured
+      but unreachable.
+    - `model`: Name reported by the backend when available.
+    - `last_check`: Unix timestamp (Ray Serve deployments only).
+    - `detail`: Optional human-readable message for degraded states.
+
 #### **POST /token**
 - **Description:** Obtain an access token for authentication.
 - **Request Body:**
