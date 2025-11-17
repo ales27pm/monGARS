@@ -422,10 +422,16 @@ def test_infer_task_type_detects_coding(
     )
 
 
+class _FakeTokenizer:
+    def tokenize(self, text: str) -> list[str]:
+        return list(text)
+
+
 class _FakeUnifiedRuntime:
     def __init__(self) -> None:
         self.generate_calls: list[tuple[str, dict[str, object]]] = []
         self.embed_calls: list[list[str]] = []
+        self.tokenizer = _FakeTokenizer()
 
     def generate(self, prompt: str, **kwargs: object) -> str:
         self.generate_calls.append((prompt, dict(kwargs)))

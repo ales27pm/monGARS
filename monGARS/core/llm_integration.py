@@ -16,7 +16,8 @@ from typing import Any, ClassVar, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
+from opentelemetry.trace import SpanKind
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 try:  # pragma: no cover - optional dependency used for local dispatch
@@ -131,7 +132,19 @@ STREAM_CHUNK_SIZE = 64
 T = TypeVar("T")
 
 
+tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
+
+token_counter = meter.create_counter(
+    "llm.tokens",
+    description="Tokens processed by LLM",
+    unit="tokens",
+)
+latency_histogram = meter.create_histogram(
+    "llm.latency",
+    description="LLM response latency",
+    unit="ms",
+)
 _RAY_REQUEST_COUNTER = meter.create_counter(
     "llm.ray.requests",
     unit="1",
@@ -270,6 +283,10 @@ class UnifiedLLMRuntime:
             return asyncio.run(_runner())
         future = asyncio.run_coroutine_threadsafe(_runner(), loop)
         return future.result()
+
+    @property
+    def tokenizer(self) -> Any | None:
+        return self._tokenizer
 
     def _build_generation_defaults(self) -> dict[str, Any]:
         model_settings = getattr(self._settings, "model", None)
@@ -730,6 +747,7 @@ class LLMIntegration:
         coding_definition = self._model_manager.get_model_definition("coding")
         self.general_model = general_definition.name
         self.coding_model = coding_definition.name
+        self._model_id = str(general_definition.name)
         logger.info(
             {
                 "llm_config": {
@@ -873,6 +891,17 @@ class LLMIntegration:
         self.__class__._unified_service = runtime
         return runtime
 
+    @property
+    def tokenizer(self) -> Any:
+        runtime = self._runtime()
+        tokenizer = runtime.tokenizer
+        if tokenizer is None:
+            raise RuntimeError("LLM tokenizer is not initialized")
+        return tokenizer
+
+    def _generate_internal(self, prompt: str, **kwargs: Any) -> str:
+        return self._runtime().generate(prompt, **kwargs)
+
     def generate(
         self, prompt: str, context: Mapping[str, Any] | None = None, **kwargs: Any
     ) -> str:
@@ -882,7 +911,53 @@ class LLMIntegration:
         guard_result = pre_generation_guard(prompt, guard_context)
         if guard_result:
             raise GuardRejectionError(guard_result)
-        return self._runtime().generate(prompt, **kwargs)
+        context = guard_context or {}
+        user_id = context.get("user_id", "anonymous")
+        start_time = time.time()
+
+        with tracer.start_as_current_span(
+            "llm.generate", kind=SpanKind.SERVER
+        ) as span:
+            span.set_attribute("llm.model_name", self._model_id)
+            span.set_attribute("user.id", user_id)
+            span.set_attribute("input.length", len(prompt))
+
+            result = self._generate_internal(prompt, **kwargs)
+
+            tokenizer = self.tokenizer
+            input_tokens = len(tokenizer.tokenize(prompt))
+            output_tokens = len(tokenizer.tokenize(result))
+
+            token_counter.add(
+                input_tokens,
+                {
+                    "direction": "input",
+                    "model": self._model_id,
+                },
+            )
+            token_counter.add(
+                output_tokens,
+                {
+                    "direction": "output",
+                    "model": self._model_id,
+                },
+            )
+
+            latency = (time.time() - start_time) * 1000
+            latency_histogram.record(
+                latency,
+                {
+                    "model": self._model_id,
+                    "user_id": user_id,
+                },
+            )
+
+            span.set_attribute("output.length", len(result))
+            span.set_attribute("tokens.input", input_tokens)
+            span.set_attribute("tokens.output", output_tokens)
+            span.set_attribute("latency.ms", latency)
+
+            return result
 
     def embed(self, texts: Sequence[str]) -> Any:
         """Return embeddings for ``texts`` using the shared LLM2Vec encoder."""
