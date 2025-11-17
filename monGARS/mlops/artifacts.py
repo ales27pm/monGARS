@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from monGARS.mlops.dataset import DOLPHIN_CHAT_TEMPLATE
+from monGARS.mlops.chat_templates import DOLPHIN_CHAT_TEMPLATE
 
 PROJECT_WRAPPER_TEMPLATE = """# Auto-generated wrapper: project_wrapper.py
 import os
@@ -25,6 +25,16 @@ from transformers import (
 )
 
 DOLPHIN_CHAT_TEMPLATE = {dolphin_chat_template!r}
+
+def _ensure_dolphin_chat_template(tokenizer):
+    if not hasattr(tokenizer, "chat_template"):
+        return tokenizer
+    try:
+        if getattr(tokenizer, "chat_template", None) != DOLPHIN_CHAT_TEMPLATE:
+            tokenizer.chat_template = DOLPHIN_CHAT_TEMPLATE
+    except Exception:
+        pass
+    return tokenizer
 
 BASE_MODEL_ID = {base_model_id!r}
 LORA_DIR = {lora_dir!r}
@@ -72,8 +82,7 @@ class ChatAndEmbed:
         self.tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, use_fast=True)
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        if getattr(self.tokenizer, "chat_template", None) != DOLPHIN_CHAT_TEMPLATE:
-            self.tokenizer.chat_template = DOLPHIN_CHAT_TEMPLATE
+        _ensure_dolphin_chat_template(self.tokenizer)
 
         self.model = AutoModelForCausalLM.from_pretrained(
             BASE_MODEL_ID,

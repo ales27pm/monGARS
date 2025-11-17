@@ -8,10 +8,7 @@ import os
 from pathlib import Path
 
 from llm2vec import LLM2Vec
-from monGARS.mlops.dataset import (
-    ensure_dolphin_chat_template,
-    prepare_instruction_dataset,
-)
+from monGARS.mlops.dataset import prepare_instruction_dataset
 from monGARS.mlops.exporters import (
     export_gguf,
     merge_lora_adapters,
@@ -85,7 +82,6 @@ def main() -> None:
         activation_buffer_mb=ACTIVATION_BUFFER_MB,
         offload_dir=OFFLOAD_DIR,
     )
-    ensure_dolphin_chat_template(tokenizer)
     summarise_device_map(model)
     model = prepare_lora_model_light(
         model,

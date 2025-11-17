@@ -64,7 +64,7 @@ except Exception as exc:  # pragma: no cover - optional dependency guard
 
 import torch
 from huggingface_hub import login
-from transformers import AutoTokenizer, Trainer, TrainingArguments, set_seed
+from transformers import Trainer, TrainingArguments, set_seed
 
 from datasets import Dataset, DatasetDict, load_dataset
 
@@ -83,7 +83,10 @@ try:
         build_adapter_summary,
         write_wrapper_bundle,
     )
-    from monGARS.mlops.dataset import ensure_dolphin_chat_template
+    from monGARS.mlops.chat_templates import (
+        ensure_dolphin_chat_template,
+        load_tokenizer_with_dolphin_chat_template,
+    )
 except ModuleNotFoundError:  # pragma: no cover - script execution direct from repo root
     if str(ROOT_DIR) not in sys.path:
         sys.path.insert(0, str(ROOT_DIR))
@@ -93,7 +96,10 @@ except ModuleNotFoundError:  # pragma: no cover - script execution direct from r
         build_adapter_summary,
         write_wrapper_bundle,
     )
-    from monGARS.mlops.dataset import ensure_dolphin_chat_template
+    from monGARS.mlops.chat_templates import (
+        ensure_dolphin_chat_template,
+        load_tokenizer_with_dolphin_chat_template,
+    )
 
 try:  # pragma: no cover - optional dependency
     from llm2vec import LLM2VecModel
@@ -830,7 +836,7 @@ def convert_to_llm2vec(output_dir: Path, tokenizer_dir: Path) -> None:
     encoder = LLM2VecModel.from_pretrained(str(output_dir))
     target_dir = output_dir / "llm2vec_encoder"
     encoder.save_pretrained(str(target_dir))
-    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
+    tokenizer = load_tokenizer_with_dolphin_chat_template(str(tokenizer_dir))
     tokenizer.save_pretrained(str(target_dir))
 
 

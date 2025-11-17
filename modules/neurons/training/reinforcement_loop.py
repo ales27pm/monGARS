@@ -52,7 +52,7 @@ from monGARS.core.model_slot_manager import ModelSlotManager
 from monGARS.core.monitor import get_tracer
 from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
-from monGARS.mlops.dataset import ensure_dolphin_chat_template
+from monGARS.mlops.chat_templates import ensure_dolphin_chat_template
 
 # Import Unsloth as early as possible to guarantee its patches execute before
 # transformer-based helpers from TRL are loaded.

@@ -52,7 +52,6 @@ import torch
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
-    AutoTokenizer,
     BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
@@ -61,7 +60,10 @@ from transformers import (
 
 from datasets import load_dataset
 
-from monGARS.mlops.dataset import ensure_dolphin_chat_template
+from monGARS.mlops.chat_templates import (
+    ensure_dolphin_chat_template,
+    load_tokenizer_with_dolphin_chat_template,
+)
 
 # ---- Public API --------------------------------------------------------------
 
@@ -125,9 +127,7 @@ def load_4bit_causal_lm(
         kwargs["llm_int8_enable_fp32_cpu_offload"] = True
 
     model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
-    tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-    if tok.pad_token_id is None and tok.eos_token_id is not None:
-        tok.pad_token = tok.eos_token
+    tok = load_tokenizer_with_dolphin_chat_template(model_id)
 
     # Memory-friendly defaults for Turing (RTX 20xx)
     model.config.use_cache = False

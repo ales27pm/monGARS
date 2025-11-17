@@ -19,9 +19,10 @@ from packaging.version import InvalidVersion, Version
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
-    AutoTokenizer,
     BitsAndBytesConfig,
 )
+
+from monGARS.mlops.chat_templates import load_tokenizer_with_dolphin_chat_template
 
 try:  # pragma: no cover - accelerate optional during some tests
     from accelerate.hooks import remove_hook_from_module as _ACCELERATE_REMOVE_HOOK
@@ -746,11 +747,9 @@ def _configure_model_post_load(
 def _initialise_tokenizer(model_id: str, *, trust_remote_code: bool) -> Any:
     """Create a tokenizer with consistent padding defaults across loader paths."""
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_id, use_fast=True, trust_remote_code=trust_remote_code
+    tokenizer = load_tokenizer_with_dolphin_chat_template(
+        model_id, trust_remote_code=trust_remote_code
     )
-    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-        tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
 
 
