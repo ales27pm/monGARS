@@ -19,8 +19,6 @@ from monGARS.config import LLMQuantization, Settings
 from monGARS.core import llm_integration
 from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 
-os.environ.setdefault("CI_ENVIRONMENT", "true")
-
 
 @pytest.fixture(autouse=True)
 def reset_unsloth_state(monkeypatch: pytest.MonkeyPatch) -> None:
