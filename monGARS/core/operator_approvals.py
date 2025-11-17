@@ -330,9 +330,18 @@ def log_blocked_attempt(
 
     approval_registry = registry or _default_registry()
     request = approval_registry.submit(source=_AUDIT_SOURCE, payload=payload)
-    approval_token = generate_approval_token(user_id, request.request_id)
-    request.payload["approval_token"] = approval_token
-    approval_registry._persist()
+
+    existing_token = str(request.payload.get("approval_token") or "")
+    if existing_token:
+        approval_token = existing_token
+        token_assigned = False
+    else:
+        approval_token = generate_approval_token(user_id, request.request_id)
+        request.payload["approval_token"] = approval_token
+        token_assigned = True
+
+    if token_assigned:
+        approval_registry._persist()
 
     logger.info(
         "operator_approvals.blocked_request_logged",

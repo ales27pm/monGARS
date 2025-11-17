@@ -1003,6 +1003,7 @@ async def peer_telemetry_snapshot(
 @router.post("/security/approve")
 @limiter.limit("5/minute")
 async def approve_request(
+    request: Request,
     token: str,
     operator_id: str,
     claims: dict = Depends(_require_operator_claims),

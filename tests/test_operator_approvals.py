@@ -69,6 +69,42 @@ def test_log_blocked_attempt_records_audit_fields(tmp_path: Path) -> None:
     assert payload["approval_token"] == approval_token
 
 
+def test_log_blocked_attempt_reuses_existing_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = OperatorApprovalRegistry(tmp_path / "reuse.json")
+    entity = PIIEntity(type="email", value="user@example.com", start=0, end=16)
+
+    monkeypatch.setattr(
+        "monGARS.core.operator_approvals._utcnow_isoformat",
+        lambda: "2025-01-01T00:00:00+00:00",
+    )
+
+    first_ref, first_token = log_blocked_attempt(
+        user_id="alice",
+        prompt_hash="deadbeef",
+        pii_entities=[entity],
+        required_action="approval",
+        context={"allowed_actions": ["personal_data_access"], "user_id": "alice"},
+        registry=registry,
+    )
+
+    second_ref, second_token = log_blocked_attempt(
+        user_id="alice",
+        prompt_hash="deadbeef",
+        pii_entities=[entity],
+        required_action="approval",
+        context={"allowed_actions": ["personal_data_access"], "user_id": "alice"},
+        registry=registry,
+    )
+
+    assert first_ref == second_ref
+    assert first_token == second_token
+    stored = registry.get(first_ref)
+    assert stored is not None
+    assert stored.payload["approval_token"] == first_token
+
+
 def test_generate_approval_token_changes_with_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
