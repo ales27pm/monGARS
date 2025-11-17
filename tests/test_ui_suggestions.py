@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from monGARS.core.aui import LLMActionSuggester
@@ -43,3 +45,22 @@ def test_llm_action_suggester_deduplicates_ranked_actions(
     order = suggester.suggest("anything", actions, {})
 
     assert order == ["code", "summarize"]
+
+
+def test_extract_json_handles_multiple_response_styles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("monGARS.core.aui.LLMIntegration.instance", lambda: None)
+    suggester = LLMActionSuggester()
+
+    responses = [
+        '["code", "summarize"]',
+        """```json\n[\"summarize\", \"explain\"]\n```""",
+        'Here you go: ["explain", "code"]\nThanks!',
+        'Result:\n```\n["summarize"]\n``` Extra notes.',
+    ]
+
+    for response in responses:
+        parsed = json.loads(suggester._extract_json(response))
+        assert isinstance(parsed, list)
+        assert parsed

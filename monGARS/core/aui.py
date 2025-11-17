@@ -37,129 +37,186 @@ class LLMActionSuggester:
         if not actions:
             return []
 
+        trimmed_context = self._trim_context_to_tokens(context, max_tokens=256)
+        fallback_used = False
+
         if not self.llm:
-            return self._heuristic_fallback(prompt, actions)
+            fallback_used = True
+            result = self._heuristic_fallback(prompt, actions)
+        else:
+            try:
+                response = self.llm.generate(
+                    f"""
+        You are Dolphin. Rank these actions by relevance to user intent:
+        USER INTENT: '{prompt}'
+        ACTIONS: {json.dumps(actions)}
+        CONTEXT: {json.dumps(trimmed_context)}
+        Respond ONLY with JSON array of action names:
+        """,
+                    max_new_tokens=100,
+                )
+                ranked = json.loads(self._extract_json(response))
+                if not isinstance(ranked, list):
+                    raise ValueError("LLM response must be a list")
+                filtered = [a for a in ranked if a in actions]
+                deduped: list[str] = []
+                seen: set[str] = set()
+                for action in filtered:
+                    if isinstance(action, str) and action not in seen:
+                        deduped.append(action)
+                        seen.add(action)
+                result = deduped or self._heuristic_fallback(prompt, actions)
+                fallback_used = not bool(deduped)
+            except GuardRejectionError:
+                fallback_used = True
+                result = self._heuristic_fallback(prompt, actions)
+            except (json.JSONDecodeError, ValueError):
+                fallback_used = True
+                result = self._heuristic_fallback(prompt, actions)
+            except Exception:  # pragma: no cover - runtime fallback
+                fallback_used = True
+                result = self._heuristic_fallback(prompt, actions)
 
-        # Trim context to fit within token limits
-        trimmed_context = self._trim_context(context)
-
-        suggestion_prompt = (
-            "You are Dolphin, an AI assistant that helps users by suggesting relevant actions.\n"
-            "Given the user's current intent and available actions, rank them from most to least relevant.\n\n"
-            f"USER INTENT: '{prompt}'\n"
-            f"AVAILABLE ACTIONS: {json.dumps(actions)}\n"
-            f"CURRENT CONTEXT: {json.dumps(trimmed_context)}\n\n"
-            "Respond ONLY with a JSON array of action names in order of relevance:"
+        logger.info(
+            {
+                "event": "suggestion_generated",
+                "model": "dolphin3-reasoning-baseline",
+                "user_intent": prompt[:50],
+                "action_count": len(actions),
+                "context_size": len(str(trimmed_context)),
+                "fallback_used": fallback_used,
+            }
         )
+        return result
 
-        guard_context = context if isinstance(context, dict) else {}
-        try:
-            response = self.llm.generate(
-                suggestion_prompt,
-                max_new_tokens=150,
-                context=guard_context,
-            )
-        except GuardRejectionError as exc:
-            logger.info(
-                "aui.suggestions.guard_blocked",
-                extra={
-                    "reason": exc.payload.get("message"),
-                    "user": guard_context.get("user_id"),
-                },
-            )
-            return self._heuristic_fallback(prompt, actions)
-        except Exception as exc:  # pragma: no cover - runtime fallback
-            logger.warning("Suggestion generation failed: %s", str(exc))
-            return self._heuristic_fallback(prompt, actions)
-
-        try:
-            ranked_actions = json.loads(self._extract_json(response))
-            if not isinstance(ranked_actions, list):
-                raise ValueError("LLM response must be a list")
-            logger.info(
-                {
-                    "event": "suggestion_generated",
-                    "model": "dolphin3-reasoning-baseline",
-                    "user_intent": prompt[:50],
-                    "suggested_count": len(ranked_actions),
-                    "context_size": len(str(trimmed_context)),
-                }
-            )
-            seen: set[str] = set()
-            filtered_actions: list[str] = []
-            for action in ranked_actions:
-                if isinstance(action, str) and action in actions and action not in seen:
-                    filtered_actions.append(action)
-                    seen.add(action)
-            return filtered_actions or self._heuristic_fallback(prompt, actions)
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Suggestion parsing failed: {str(e)}")
-            return self._heuristic_fallback(prompt, actions)
-
-    def _trim_context(self, context: dict) -> dict:
-        """Reduce context size to fit within token limits"""
+    def _trim_context_to_tokens(
+        self, context: dict | None, *, max_tokens: int
+    ) -> dict[str, Any]:
         if not context or not isinstance(context, dict):
             return {}
 
-        limit = max(self.context_window, 256)
-        serialized = json.dumps(context, ensure_ascii=False)
-        if len(serialized) <= limit:
-            return context
+        token_limit = max(1, max_tokens)
+
+        tokenizer: Any | None = None
+        if self.llm is not None:
+            try:
+                tokenizer = self.llm.tokenizer
+            except Exception:  # pragma: no cover - defensive guard
+                tokenizer = None
+
+        def token_count(value: Any) -> int:
+            serialized = json.dumps(value, ensure_ascii=False)
+            if tokenizer is not None:
+                try:
+                    encoded = tokenizer.encode(serialized, add_special_tokens=False)
+                    return len(encoded)
+                except Exception:  # pragma: no cover - tokenizer errors fallback
+                    pass
+            approx = max(1, len(serialized) // 4)
+            return approx
+
+        def trim_string(value: str, budget: int) -> str | None:
+            if budget <= 0:
+                return None
+            if token_count(value) <= budget:
+                return value
+            low, high = 1, len(value)
+            best: str | None = None
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = value[:mid]
+                if token_count(candidate) <= budget:
+                    best = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            return best
 
         def trim_value(value: Any, budget: int) -> Any | None:
             if budget <= 0:
                 return None
             if isinstance(value, str):
-                return value[:budget]
+                return trim_string(value, budget)
             if isinstance(value, (int, float, bool)) or value is None:
                 return value
             if isinstance(value, list):
-                trimmed_list = []
+                trimmed_list: list[Any] = []
                 for item in value:
-                    remaining_budget = budget - len(
-                        json.dumps(trimmed_list, ensure_ascii=False)
-                    )
-                    if remaining_budget <= 0:
+                    remaining = budget - token_count(trimmed_list)
+                    if remaining <= 0:
                         break
-                    trimmed_item = trim_value(item, remaining_budget)
+                    trimmed_item = trim_value(item, remaining)
                     if trimmed_item is None:
+                        break
+                    candidate = trimmed_list + [trimmed_item]
+                    if token_count(candidate) > budget:
                         break
                     trimmed_list.append(trimmed_item)
                 return trimmed_list
             if isinstance(value, dict):
                 trimmed_dict: dict[str, Any] = {}
                 for key, val in value.items():
-                    remaining_budget = budget - len(
-                        json.dumps(trimmed_dict, ensure_ascii=False)
-                    )
-                    if remaining_budget <= 0:
+                    remaining = budget - token_count(trimmed_dict)
+                    if remaining <= 0:
                         break
-                    trimmed_val = trim_value(val, remaining_budget)
+                    trimmed_val = trim_value(val, remaining)
                     if trimmed_val is None:
+                        break
+                    candidate = dict(trimmed_dict)
+                    candidate[key] = trimmed_val
+                    if token_count(candidate) > budget:
                         break
                     trimmed_dict[key] = trimmed_val
                 return trimmed_dict
-            return str(value)[:budget]
+            as_string = str(value)
+            return trim_string(as_string, budget)
 
         trimmed: dict[str, Any] = {}
         for key, value in context.items():
-            current_length = len(json.dumps(trimmed, ensure_ascii=False))
-            if current_length >= limit:
+            remaining_budget = token_limit - token_count(trimmed)
+            if remaining_budget <= 0:
                 break
-            trimmed_value = trim_value(value, limit - current_length)
+            trimmed_value = trim_value(value, remaining_budget)
             if trimmed_value is None:
                 break
-            trimmed[key] = trimmed_value
-            if len(json.dumps(trimmed, ensure_ascii=False)) > limit:
-                trimmed.pop(key, None)
+            candidate = dict(trimmed)
+            candidate[key] = trimmed_value
+            if token_count(candidate) > token_limit:
                 break
-
+            trimmed[key] = trimmed_value
         return trimmed
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from LLM response"""
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-        return match.group(0) if match else "[]"
+        if not text:
+            return "[]"
+        stripped = text.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            return stripped
+
+        code_block = re.search(
+            r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", stripped, re.IGNORECASE
+        )
+        if code_block:
+            return code_block.group(1)
+
+        start_index = -1
+        depth = 0
+        for index, char in enumerate(stripped):
+            if char == "[":
+                if depth == 0:
+                    start_index = index
+                depth += 1
+            elif char == "]" and depth > 0:
+                depth -= 1
+                if depth == 0 and start_index != -1:
+                    return stripped[start_index : index + 1]
+
+        inline = re.search(r"\[(?:[^\]\[]|\[[^\]]*\])*\]", stripped)
+        if inline:
+            return inline.group(0)
+
+        return "[]"
 
     def _heuristic_fallback(self, prompt: str, actions: List[str]) -> List[str]:
         """Fallback to simple heuristic when LLM fails"""
