@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 from opentelemetry import metrics, trace
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 try:  # pragma: no cover - optional dependency used for local dispatch
@@ -38,6 +38,11 @@ from .inference_utils import (
     CHATML_START_HEADER,
 )
 from .model_manager import LLMModelManager, ModelDefinition
+from .monitor import (
+    LLM_ERROR_COUNTER,
+    annotate_llm_span,
+    record_llm_metrics,
+)
 from .security import pre_generation_guard
 from .ui_events import event_bus, make_event
 
@@ -134,17 +139,6 @@ T = TypeVar("T")
 
 tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
-
-token_counter = meter.create_counter(
-    "llm.tokens",
-    description="Tokens processed by LLM",
-    unit="tokens",
-)
-latency_histogram = meter.create_histogram(
-    "llm.latency",
-    description="LLM response latency",
-    unit="ms",
-)
 _RAY_REQUEST_COUNTER = meter.create_counter(
     "llm.ray.requests",
     unit="1",
@@ -923,6 +917,13 @@ class LLMIntegration:
             raise GuardRejectionError(guard_result)
         context = guard_context or {}
         user_id = context.get("user_id", "anonymous")
+        raw_conversation_id = context.get("conversation_id")
+        if raw_conversation_id is None:
+            conversation_id = None
+        else:
+            conversation_id = str(raw_conversation_id).strip() or None
+        temperature = kwargs.get("temperature")
+        max_tokens = kwargs.get("max_tokens")
         start_time = time.monotonic()
 
         with tracer.start_as_current_span(
@@ -932,7 +933,18 @@ class LLMIntegration:
             span.set_attribute("enduser.id", user_id)
             span.set_attribute("input.length", len(prompt))
 
-            result = self._generate_internal(prompt, **kwargs)
+            try:
+                result = self._generate_internal(prompt, **kwargs)
+            except Exception as exc:
+                LLM_ERROR_COUNTER.add(
+                    1,
+                    {
+                        "error.type": type(exc).__name__,
+                        "model": self._model_id,
+                    },
+                )
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
 
             tokenizer = self.tokenizer
             prompt_tokens = tokenizer.tokenize(prompt)
@@ -940,34 +952,31 @@ class LLMIntegration:
             input_tokens = len(prompt_tokens)
             output_tokens = len(result_tokens)
 
-            token_counter.add(
-                input_tokens,
-                {
-                    "direction": "input",
-                    "model": self._model_id,
-                },
-            )
-            token_counter.add(
-                output_tokens,
-                {
-                    "direction": "output",
-                    "model": self._model_id,
-                },
-            )
-
             latency = (time.monotonic() - start_time) * 1000
-            latency_histogram.record(
-                latency,
-                {
-                    "model": self._model_id,
-                    "enduser.id": user_id,
-                },
-            )
-
             span.set_attribute("output.length", len(result))
             span.set_attribute("tokens.input", input_tokens)
             span.set_attribute("tokens.output", output_tokens)
             span.set_attribute("latency.ms", latency)
+
+            resolved_user_id, resolved_conversation_id, request_id = annotate_llm_span(
+                span,
+                model_id=self._model_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+            record_llm_metrics(
+                model_id=self._model_id,
+                user_id=resolved_user_id,
+                conversation_id=resolved_conversation_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_ms=latency,
+                extra_attributes={"request.id": request_id},
+            )
 
             return result
 

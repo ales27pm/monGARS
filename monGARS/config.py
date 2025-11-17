@@ -1228,9 +1228,7 @@ def configure_telemetry(settings: Settings) -> None:
 
     if settings.otel_prometheus_enabled:
         try:
-            metric_readers.append(
-                PrometheusMetricReader(collector_registry=PROMETHEUS_REGISTRY)
-            )
+            metric_readers.append(PrometheusMetricReader())
         except Exception as exc:  # pragma: no cover - optional metrics
             log.warning("Failed to configure Prometheus metrics exporter: %s", exc)
 

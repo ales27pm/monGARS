@@ -10,13 +10,14 @@ import re
 import sys
 import types
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from monGARS.config import LLMQuantization, Settings
-from monGARS.core import llm_integration
+from monGARS.core import llm_integration, monitor as core_monitor
 from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 
 
@@ -608,22 +609,6 @@ class _FakeUnifiedRuntime:
         return f"embedded::{len(texts)}"
 
 
-class _FakeCounter:
-    def __init__(self) -> None:
-        self.calls: list[tuple[int, dict[str, str]]] = []
-
-    def add(self, value: int, attributes: dict[str, str]) -> None:
-        self.calls.append((value, attributes))
-
-
-class _FakeHistogram:
-    def __init__(self) -> None:
-        self.records: list[tuple[float, dict[str, str]]] = []
-
-    def record(self, value: float, attributes: dict[str, str]) -> None:
-        self.records.append((value, attributes))
-
-
 class _FakeSpan:
     def __init__(self, name: str, kind: object) -> None:
         self.name = name
@@ -632,6 +617,10 @@ class _FakeSpan:
 
     def set_attribute(self, key: str, value: object) -> None:
         self.attributes[key] = value
+
+    def set_attributes(self, attributes: dict[str, object]) -> None:
+        for key, value in attributes.items():
+            self.attributes[key] = value
 
 
 class _SpanContextManager:
@@ -701,12 +690,24 @@ def test_generate_records_span_attributes_and_metrics(
     )
 
     fake_tracer = _FakeTracer()
-    fake_counter = _FakeCounter()
-    fake_histogram = _FakeHistogram()
     monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
-    monkeypatch.setattr(llm_integration, "token_counter", fake_counter, raising=False)
+
+    metrics_calls: list[dict[str, Any]] = []
+
+    def _record_metrics(**payload: Any) -> None:
+        metrics_calls.append(payload)
+
     monkeypatch.setattr(
-        llm_integration, "latency_histogram", fake_histogram, raising=False
+        llm_integration,
+        "record_llm_metrics",
+        _record_metrics,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        core_monitor,
+        "generate_request_id",
+        lambda: "req-test",
+        raising=False,
     )
 
     time_values = iter([100.0, 100.2])
@@ -714,7 +715,12 @@ def test_generate_records_span_attributes_and_metrics(
         llm_integration.time, "monotonic", lambda: next(time_values), raising=False
     )
 
-    result = fake_llm_integration.generate("hi", context={"user_id": "researcher"})
+    result = fake_llm_integration.generate(
+        "hi",
+        context={"user_id": "researcher", "conversation_id": "thread-7"},
+        temperature=0.5,
+        max_tokens=64,
+    )
 
     assert result == "generated::hi"
     assert len(fake_tracer.spans) == 1
@@ -723,26 +729,30 @@ def test_generate_records_span_attributes_and_metrics(
     assert span.kind == llm_integration.SpanKind.SERVER
     assert span.attributes["llm.model_name"] == fake_llm_integration._model_id
     assert span.attributes["enduser.id"] == "researcher"
+    assert span.attributes["user.id"] == "researcher"
+    assert span.attributes["conversation.id"] == "thread-7"
+    assert span.attributes["request.id"] == "req-test"
+    assert span.attributes["llm.system"] == "dolphin-x1"
+    assert span.attributes["llm.token_count.prompt"] == 2
+    assert span.attributes["llm.token_count.completion"] == len("generated::hi")
+    assert span.attributes["llm.temperature"] == 0.5
+    assert span.attributes["llm.max_tokens"] == 64
     assert span.attributes["input.length"] == 2
     assert span.attributes["output.length"] == len("generated::hi")
     assert span.attributes["tokens.input"] == 2
     assert span.attributes["tokens.output"] == len("generated::hi")
     assert span.attributes["latency.ms"] == pytest.approx(200.0)
-
-    assert fake_counter.calls == [
-        (2, {"direction": "input", "model": fake_llm_integration._model_id}),
-        (
-            len("generated::hi"),
-            {"direction": "output", "model": fake_llm_integration._model_id},
-        ),
+    assert metrics_calls == [
+        {
+            "model_id": fake_llm_integration._model_id,
+            "user_id": "researcher",
+            "conversation_id": "thread-7",
+            "input_tokens": 2,
+            "output_tokens": len("generated::hi"),
+            "latency_ms": pytest.approx(200.0),
+            "extra_attributes": {"request.id": "req-test"},
+        }
     ]
-    assert len(fake_histogram.records) == 1
-    latency_value, latency_attrs = fake_histogram.records[0]
-    assert latency_value == pytest.approx(200.0)
-    assert latency_attrs == {
-        "model": fake_llm_integration._model_id,
-        "enduser.id": "researcher",
-    }
 
 
 @pytest.mark.parametrize(
@@ -768,12 +778,24 @@ def test_generate_records_token_counts_for_edge_cases(
     )
 
     fake_tracer = _FakeTracer()
-    fake_counter = _FakeCounter()
-    fake_histogram = _FakeHistogram()
     monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
-    monkeypatch.setattr(llm_integration, "token_counter", fake_counter, raising=False)
+
+    metrics_calls: list[dict[str, Any]] = []
+
+    def _record_metrics(**payload: Any) -> None:
+        metrics_calls.append(payload)
+
     monkeypatch.setattr(
-        llm_integration, "latency_histogram", fake_histogram, raising=False
+        llm_integration,
+        "record_llm_metrics",
+        _record_metrics,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        core_monitor,
+        "generate_request_id",
+        lambda: "req-edge",
+        raising=False,
     )
 
     time_values = iter([10.0, 10.1])
@@ -783,13 +805,10 @@ def test_generate_records_token_counts_for_edge_cases(
 
     fake_llm_integration.generate(prompt)
 
-    assert fake_counter.calls == [
-        (len(prompt), {"direction": "input", "model": fake_llm_integration._model_id}),
-        (
-            len(response),
-            {"direction": "output", "model": fake_llm_integration._model_id},
-        ),
-    ]
+    assert metrics_calls
+    measurement = metrics_calls[0]
+    assert measurement["input_tokens"] == len(prompt)
+    assert measurement["output_tokens"] == len(response)
 
 
 @pytest.mark.parametrize(
