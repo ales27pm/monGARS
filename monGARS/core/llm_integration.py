@@ -908,25 +908,26 @@ class LLMIntegration:
         """Synchronously generate text via the unified Dolphin-X1 runtime."""
 
         guard_context = dict(context) if isinstance(context, Mapping) else {}
-        guard_result = pre_generation_guard(prompt, guard_context)
-        if guard_result:
+        if guard_result := pre_generation_guard(prompt, guard_context):
             raise GuardRejectionError(guard_result)
         context = guard_context or {}
         user_id = context.get("user_id", "anonymous")
-        start_time = time.time()
+        start_time = time.monotonic()
 
         with tracer.start_as_current_span(
             "llm.generate", kind=SpanKind.SERVER
         ) as span:
             span.set_attribute("llm.model_name", self._model_id)
-            span.set_attribute("user.id", user_id)
+            span.set_attribute("enduser.id", user_id)
             span.set_attribute("input.length", len(prompt))
 
             result = self._generate_internal(prompt, **kwargs)
 
             tokenizer = self.tokenizer
-            input_tokens = len(tokenizer.tokenize(prompt))
-            output_tokens = len(tokenizer.tokenize(result))
+            prompt_tokens = tokenizer.tokenize(prompt)
+            result_tokens = tokenizer.tokenize(result)
+            input_tokens = len(prompt_tokens)
+            output_tokens = len(result_tokens)
 
             token_counter.add(
                 input_tokens,
@@ -943,12 +944,12 @@ class LLMIntegration:
                 },
             )
 
-            latency = (time.time() - start_time) * 1000
+            latency = (time.monotonic() - start_time) * 1000
             latency_histogram.record(
                 latency,
                 {
                     "model": self._model_id,
-                    "user_id": user_id,
+                    "enduser.id": user_id,
                 },
             )
 
