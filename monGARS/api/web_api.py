@@ -52,6 +52,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
 from pydantic import ValidationError
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 try:
     from opentelemetry import trace
@@ -75,6 +79,7 @@ from monGARS.api.authentication import (
     authenticate_user,
     get_current_admin_user,
     get_current_user,
+    oauth2_scheme,
 )
 from monGARS.api.dependencies import (
     get_adaptive_response_generator,
@@ -108,6 +113,7 @@ from monGARS.core.llm_integration import (
     GuardRejectionError,
     LLMIntegration,
 )
+from monGARS.core.operator_approvals import get_operator_approval_registry
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
@@ -130,6 +136,35 @@ _ws_manager = ws_manager.ws_manager
 sec_manager = SecurityManager()
 
 
+def _require_operator_claims(token: str = Depends(oauth2_scheme)) -> dict:
+    """Ensure approval calls originate from authenticated operators."""
+
+    try:
+        claims = sec_manager.verify_token(token)
+    except ValueError as exc:
+        logger.warning(
+            "web_api.approval.invalid_auth_token",
+            extra={"reason": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"status": "error", "reason": "invalid_token"},
+        ) from exc
+
+    role = str(claims.get("role", ""))
+    if role != "operator":
+        logger.warning(
+            "web_api.approval.non_operator_claim",
+            extra={"role": role or "<missing>"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"status": "error", "reason": "not_operator"},
+        )
+
+    return claims
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Validate dependency overrides and prepare application state."""
@@ -146,6 +181,11 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/llm", tags=["llm"])
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 _RAY_DEPLOYMENT_NAME = "RayLLMDeployment"
 
@@ -958,6 +998,58 @@ async def peer_telemetry_snapshot(
     telemetry = communicator.get_peer_telemetry(include_self=True)
     payloads = [PeerTelemetryPayload(**entry) for entry in telemetry]
     return PeerTelemetryEnvelope(telemetry=payloads)
+
+
+@router.post("/security/approve")
+@limiter.limit("5/minute")
+async def approve_request(
+    request: Request,
+    token: str,
+    operator_id: str,
+    claims: dict = Depends(_require_operator_claims),
+) -> dict[str, str]:
+    """Validate an approval token and mark the associated request as approved."""
+
+    token_value = (token or "").strip()
+    operator_value = (operator_id or "").strip()
+    if not token_value or not operator_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "error", "reason": "missing_fields"},
+        )
+
+    claimed_operator = str(claims.get("sub", "") or "")
+    if claimed_operator and claimed_operator != operator_value:
+        logger.warning(
+            "web_api.approval.operator_mismatch",
+            extra={"claimed": claimed_operator, "provided": operator_value},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"status": "error", "reason": "operator_mismatch"},
+        )
+
+    registry = get_operator_approval_registry()
+    request = registry.find_by_token(token_value)
+    if request is None:
+        logger.warning(
+            "web_api.approval.invalid_token",
+            extra={"operator": operator_value},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "error", "reason": "token_not_found"},
+        )
+
+    if request.is_approved:
+        return {"status": "already_approved", "token_ref": request.request_id}
+
+    registry.approve(request.request_id, operator=operator_value)
+    logger.info(
+        "web_api.approval.request_approved",
+        extra={"operator": operator_value, "request_id": request.request_id},
+    )
+    return {"status": "approved", "token_ref": request.request_id}
 
 
 @router.post("/chat", response_model=ChatResponse)
