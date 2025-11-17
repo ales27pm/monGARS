@@ -614,6 +614,7 @@ class _FakeSpan:
         self.name = name
         self.kind = kind
         self.attributes: dict[str, object] = {}
+        self.status: object | None = None
 
     def set_attribute(self, key: str, value: object) -> None:
         self.attributes[key] = value
@@ -621,6 +622,9 @@ class _FakeSpan:
     def set_attributes(self, attributes: dict[str, object]) -> None:
         for key, value in attributes.items():
             self.attributes[key] = value
+
+    def set_status(self, status: object) -> None:
+        self.status = status
 
 
 class _SpanContextManager:
@@ -709,6 +713,12 @@ def test_generate_records_span_attributes_and_metrics(
         lambda: "req-test",
         raising=False,
     )
+    monkeypatch.setattr(
+        llm_integration,
+        "generate_request_id",
+        lambda: "req-test",
+        raising=False,
+    )
 
     time_values = iter([100.0, 100.2])
     monkeypatch.setattr(
@@ -719,7 +729,7 @@ def test_generate_records_span_attributes_and_metrics(
         "hi",
         context={"user_id": "researcher", "conversation_id": "thread-7"},
         temperature=0.5,
-        max_tokens=64,
+        max_new_tokens=64,
     )
 
     assert result == "generated::hi"
@@ -752,6 +762,67 @@ def test_generate_records_span_attributes_and_metrics(
             "latency_ms": pytest.approx(200.0),
             "extra_attributes": {"request.id": "req-test"},
         }
+    ]
+
+
+def test_generate_records_error_attributes_and_metrics(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Span attributes and counters should capture correlation info on errors."""
+
+    fake_tracer = _FakeTracer()
+    monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
+
+    error_calls: list[tuple[int, dict[str, Any]]] = []
+
+    class _FakeCounter:
+        def add(self, value: int, attrs: dict[str, Any]) -> None:
+            error_calls.append((value, dict(attrs)))
+
+    monkeypatch.setattr(llm_integration, "LLM_ERROR_COUNTER", _FakeCounter())
+    monkeypatch.setattr(
+        llm_integration,
+        "generate_conversation_id",
+        lambda: "thread-auto",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        llm_integration,
+        "generate_request_id",
+        lambda: "req-error",
+        raising=False,
+    )
+
+    def _boom(prompt: str, **_: Any) -> str:
+        raise RuntimeError("runtime exploded")
+
+    fake_llm_integration._generate_override = _boom
+
+    with pytest.raises(RuntimeError):
+        fake_llm_integration.generate(
+            "fail", context={"user_id": "researcher"}, temperature=0.1
+        )
+
+    assert len(fake_tracer.spans) == 1
+    span = fake_tracer.spans[0]
+    assert span.attributes["user.id"] == "researcher"
+    assert span.attributes["conversation.id"] == "thread-auto"
+    assert span.attributes["request.id"] == "req-error"
+    assert span.attributes["llm.model_name"] == fake_llm_integration._model_id
+    assert span.attributes["enduser.id"] == "researcher"
+    assert span.attributes["input.length"] == len("fail")
+    assert error_calls == [
+        (
+            1,
+            {
+                "error.type": "RuntimeError",
+                "model": fake_llm_integration._model_id,
+                "user.id": "researcher",
+                "conversation.id": "thread-auto",
+                "request.id": "req-error",
+            },
+        )
     ]
 
 

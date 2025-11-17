@@ -28,31 +28,50 @@ TRAINING_TOKEN_COUNTER = meter.create_counter(
 )
 LLM_TOKEN_COUNTER = meter.create_counter(
     "llm.tokens",
-    "Tokens processed",
-    "tokens",
+    unit="tokens",
+    description="Tokens processed",
 )
 LLM_LATENCY_HISTOGRAM = meter.create_histogram(
     "llm.duration",
-    "LLM response time",
-    "ms",
+    unit="ms",
+    description="LLM response time",
 )
 LLM_ERROR_COUNTER = meter.create_counter(
     "llm.errors",
-    "LLM errors",
-    "errors",
+    unit="errors",
+    description="LLM errors",
 )
+
+
+def _generate_uuid() -> str:
+    """Return a random hexadecimal UUID string."""
+
+    return uuid.uuid4().hex
 
 
 def generate_request_id() -> str:
     """Return a globally unique identifier for a single LLM request."""
 
-    return uuid.uuid4().hex
+    return _generate_uuid()
 
 
 def generate_conversation_id() -> str:
-    """Return a deterministic placeholder for ad-hoc conversations."""
+    """Return a globally unique UUID4 identifier for ad-hoc conversations."""
 
-    return uuid.uuid4().hex
+    return _generate_uuid()
+
+
+def _base_llm_attrs(
+    user_id: str | None,
+    conversation_id: str | None,
+) -> tuple[dict[str, str], str, str]:
+    resolved_user_id = user_id or "anonymous"
+    resolved_conversation_id = conversation_id or generate_conversation_id()
+    attributes = {
+        "user.id": resolved_user_id,
+        "conversation.id": resolved_conversation_id,
+    }
+    return attributes, resolved_user_id, resolved_conversation_id
 
 
 def annotate_llm_span(
@@ -65,6 +84,7 @@ def annotate_llm_span(
     max_tokens: int | None,
     user_id: str | None,
     conversation_id: str | None,
+    request_id: str | None = None,
 ) -> tuple[str, str, str]:
     """Attach the required Dolphin-X1 metadata to an OpenTelemetry span.
 
@@ -72,23 +92,24 @@ def annotate_llm_span(
     caller can forward identifiers to downstream metrics sinks.
     """
 
-    resolved_user_id = user_id or "anonymous"
-    resolved_conversation_id = conversation_id or generate_conversation_id()
-    request_id = generate_request_id()
-    span.set_attributes(
-        {
-            "llm.model_name": model_id,
-            "llm.system": "dolphin-x1",
-            "llm.token_count.prompt": input_tokens,
-            "llm.token_count.completion": output_tokens,
-            "llm.temperature": temperature,
-            "llm.max_tokens": max_tokens,
-            "user.id": resolved_user_id,
-            "conversation.id": resolved_conversation_id,
-            "request.id": request_id,
-        }
+    base_attributes, resolved_user_id, resolved_conversation_id = _base_llm_attrs(
+        user_id, conversation_id
     )
-    return resolved_user_id, resolved_conversation_id, request_id
+    resolved_request_id = request_id or generate_request_id()
+    attributes: dict[str, Any] = {
+        "llm.model_name": model_id,
+        "llm.system": "dolphin-x1",
+        "llm.token_count.prompt": input_tokens,
+        "llm.token_count.completion": output_tokens,
+        "request.id": resolved_request_id,
+        **base_attributes,
+    }
+    if temperature is not None:
+        attributes["llm.temperature"] = temperature
+    if max_tokens is not None:
+        attributes["llm.max_tokens"] = max_tokens
+    span.set_attributes(attributes)
+    return resolved_user_id, resolved_conversation_id, resolved_request_id
 
 
 def record_llm_metrics(
@@ -103,13 +124,10 @@ def record_llm_metrics(
 ) -> None:
     """Record token counts, latency, and correlation identifiers for an LLM call."""
 
-    attributes = {
-        "model": model_id,
-        "user.id": user_id,
-        "conversation.id": conversation_id,
-    }
+    base_attributes, _, _ = _base_llm_attrs(user_id, conversation_id)
+    attributes: dict[str, Any] = {"model": model_id, **base_attributes}
     if extra_attributes:
-        attributes.update(extra_attributes)
+        attributes |= extra_attributes
 
     prompt_attrs = dict(attributes)
     prompt_attrs["llm.token_type"] = "prompt"
