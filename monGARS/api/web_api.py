@@ -1056,6 +1056,8 @@ async def llm_health() -> LLMHealthResponse:
 
 @router.get("/metrics", include_in_schema=False)
 async def metrics_endpoint() -> Response:
+    if not _settings.otel_prometheus_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return Response(
         generate_latest(PROMETHEUS_REGISTRY),
         media_type=CONTENT_TYPE_LATEST,
