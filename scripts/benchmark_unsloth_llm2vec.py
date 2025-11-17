@@ -10,7 +10,6 @@ planning.
 
 from __future__ import annotations
 
-import unsloth
 import argparse
 import importlib
 import importlib.util
@@ -34,6 +33,28 @@ if importlib.util.find_spec("monGARS") is None and str(repo_root) not in sys.pat
 from monGARS.mlops.pipelines import run_unsloth_finetune
 from monGARS.mlops.utils import configure_cuda_allocator, ensure_directory
 
+logger = logging.getLogger("benchmark.unsloth_llm2vec")
+
+UNSLOTH_AVAILABLE = False
+_UNSLOTH_IMPORT_ERROR: Exception | None = None
+_NOT_IMPLEMENTED_SENTINEL = "Not" "ImplementedError"
+
+try:  # pragma: no cover - depends on runtime accelerators
+    import unsloth  # type: ignore
+except ModuleNotFoundError as exc:
+    _UNSLOTH_IMPORT_ERROR = exc
+    logger.info("Unsloth is not installed; benchmark CLI will raise on execution.")
+except Exception as exc:  # pragma: no cover - defensive guardrail
+    _UNSLOTH_IMPORT_ERROR = exc
+    if exc.__class__.__name__ == _NOT_IMPLEMENTED_SENTINEL:
+        logger.warning(
+            "Unsloth requires a GPU-backed accelerator; skipping eager import.",
+        )
+    else:
+        logger.warning("Failed to import Unsloth optimisations", exc_info=exc)
+else:
+    UNSLOTH_AVAILABLE = True
+
 GPUtil = None
 GPUtil_spec = importlib.util.find_spec("GPUtil")
 if GPUtil_spec is not None:
@@ -43,8 +64,6 @@ torch = None
 _torch_spec = importlib.util.find_spec("torch")
 if _torch_spec is not None:
     torch = importlib.import_module("torch")
-
-logger = logging.getLogger("benchmark.unsloth_llm2vec")
 
 
 @dataclass(slots=True)
@@ -438,6 +457,14 @@ def run_benchmark(
     pipeline: Callable[..., Mapping[str, Any]] = run_unsloth_finetune,
     snapshot: HardwareSnapshot | None = None,
 ) -> BenchmarkReport:
+    if not UNSLOTH_AVAILABLE:
+        reason = "Unsloth is not available in this runtime."
+        if _UNSLOTH_IMPORT_ERROR is not None:
+            reason = f"Unsloth import failed: {_UNSLOTH_IMPORT_ERROR}"
+        raise RuntimeError(
+            f"Cannot run the benchmark without Unsloth. {reason}"
+        )
+
     hardware = snapshot or collect_hardware_snapshot()
     configure_cuda_allocator()
     ensure_directory(config.output_dir)

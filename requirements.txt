@@ -39,6 +39,9 @@ sentence-transformers>=3.0.1
 peft>=0.13.2
 accelerate>=0.30.0
 git+https://github.com/unslothai/unsloth.git
+# The core Unsloth package now requires the companion unsloth_zoo wheel at import time,
+# so install it explicitly to keep pytest bootstrap checks passing.
+unsloth_zoo>=2025.11.4
 trafilatura>=2.0.0
 uvicorn>=0.35.0
 ./vendor/llm2vec_monGARS
