@@ -83,6 +83,24 @@ def test_generate_approval_token_changes_with_time(
     assert first != second
 
 
+def test_generate_approval_token_uniqueness_across_users_and_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("monGARS.core.security.time.time", lambda: 1000.0)
+
+    token_a1 = generate_approval_token("alice", "ref123")
+    token_a2 = generate_approval_token("alice", "ref456")
+    token_b1 = generate_approval_token("bob", "ref123")
+    token_b2 = generate_approval_token("bob", "ref456")
+
+    assert token_a1 != token_a2
+    assert token_a1 != token_b1
+    assert token_a1 != token_b2
+    assert token_a2 != token_b1
+    assert token_a2 != token_b2
+    assert token_b1 != token_b2
+
+
 def test_verify_approval_token_requires_approved_request(tmp_path: Path) -> None:
     registry = OperatorApprovalRegistry(tmp_path / "verify.json")
     entity = PIIEntity(type="email", value="user@example.com", start=0, end=16)
@@ -118,5 +136,39 @@ def test_verify_approval_token_requires_approved_request(tmp_path: Path) -> None
         token_ref=token_ref,
         approval_token=approval_token,
         prompt_hash="wrong-hash",
+        registry=registry,
+    )
+
+
+def test_verify_approval_token_rejects_invalid_token(tmp_path: Path) -> None:
+    registry = OperatorApprovalRegistry(tmp_path / "invalid-token.json")
+    entity = PIIEntity(type="email", value="user@example.com", start=0, end=16)
+    token_ref, approval_token = log_blocked_attempt(
+        user_id="dave",
+        prompt_hash="cafebabe",
+        pii_entities=[entity],
+        required_action="approval",
+        context={"allowed_actions": ["personal_data_access"], "user_id": "dave"},
+        registry=registry,
+    )
+    registry.approve(token_ref, operator="ops")
+
+    assert not verify_approval_token(
+        user_id="dave",
+        token_ref=token_ref,
+        approval_token="0" * len(approval_token),
+        prompt_hash="cafebabe",
+        registry=registry,
+    )
+
+
+def test_verify_approval_token_missing_request(tmp_path: Path) -> None:
+    registry = OperatorApprovalRegistry(tmp_path / "missing-request.json")
+
+    assert not verify_approval_token(
+        user_id="erin",
+        token_ref="does-not-exist",
+        approval_token="0" * 64,
+        prompt_hash="unknown",
         registry=registry,
     )
