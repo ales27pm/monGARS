@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from monGARS.config import LLMQuantization, LLMPooling
 from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
 
 
@@ -33,7 +34,12 @@ def _make_settings(tmp_path: Path) -> SimpleNamespace:
         top_k=20,
         repetition_penalty=1.05,
     )
-    return SimpleNamespace(unified_model_dir=tmp_path, model=model)
+    llm = SimpleNamespace(
+        quantization=LLMQuantization.NF4,
+        load_in_4bit=True,
+        embedding_pooling=LLMPooling.MEAN,
+    )
+    return SimpleNamespace(unified_model_dir=tmp_path, model=model, llm=llm)
 
 
 def test_fake_runtime_contract() -> None:
@@ -64,6 +70,28 @@ def test_cpu_quantisation_disabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     runtime = UnifiedLLMRuntime.instance(settings)
     quant_config = runtime._build_quantization_config()
     assert quant_config is None
+    UnifiedLLMRuntime.reset_for_tests()
+
+
+def test_model_quantize_flag_is_respected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    UnifiedLLMRuntime.reset_for_tests()
+    settings = _make_settings(tmp_path)
+    settings.model.quantize_4bit = False
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    runtime = UnifiedLLMRuntime.instance(settings)
+    assert runtime._build_quantization_config() is None
+    UnifiedLLMRuntime.reset_for_tests()
+
+
+def test_unsupported_quantization_modes_are_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    UnifiedLLMRuntime.reset_for_tests()
+    settings = _make_settings(tmp_path)
+    settings.llm.quantization = LLMQuantization.GPTQ
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    runtime = UnifiedLLMRuntime.instance(settings)
+    assert runtime._build_quantization_config() is None
     UnifiedLLMRuntime.reset_for_tests()
 
 
