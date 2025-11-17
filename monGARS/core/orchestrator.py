@@ -8,7 +8,11 @@ from typing import Optional
 from monGARS.config import get_settings
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
-from monGARS.core.llm_integration import LLMIntegration
+from monGARS.core.llm_integration import (
+    LLMIntegration,
+    LLMRuntimeError,
+    UnifiedLLMRuntime,
+)
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
 from monGARS.core.neuro_symbolic.advanced_reasoner import AdvancedReasoner
@@ -93,11 +97,13 @@ class Orchestrator:
             else:
                 refined_query = query
 
+            runtime = UnifiedLLMRuntime.instance()
             try:
-                llm_response = await asyncio.wait_for(
-                    self.llm.generate_response(refined_query), timeout=30
+                response_text = await asyncio.wait_for(
+                    asyncio.to_thread(runtime.generate, refined_query), timeout=30
                 )
-            except Exception as exc:
+                llm_response = {"text": response_text, "confidence": 0.9}
+            except (LLMRuntimeError, Exception) as exc:
                 logger.error("LLM call failed: %s", exc)
                 llm_response = {"text": "", "confidence": 0.0}
             base_response = llm_response.get("text", "")

@@ -14,7 +14,11 @@ from monGARS.core.inference_utils import (
     build_converged_chat_prompt,
     estimate_token_count,
 )
-from monGARS.core.llm_integration import LLMIntegration
+from monGARS.core.llm_integration import (
+    LLMIntegration,
+    LLMRuntimeError,
+    UnifiedLLMRuntime,
+)
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
 from monGARS.core.neuro_symbolic.advanced_reasoner import AdvancedReasoner
@@ -552,12 +556,23 @@ class ConversationalModule:
             history_pairs = trimmed_history
             semantic_context = trimmed_semantic
 
-        llm_out = await self.llm.generate_response(
-            prompt_bundle.text,
-            task_type=task_type,
-            response_hints=response_hints,
-            formatted_prompt=prompt_bundle.chatml,
-        )
+        runtime = UnifiedLLMRuntime.instance(settings)
+        runtime_kwargs: dict[str, Any] = {}
+        if generation_target:
+            runtime_kwargs["max_new_tokens"] = generation_target
+        try:
+            response_text = await asyncio.to_thread(
+                runtime.generate, prompt_bundle.text, **runtime_kwargs
+            )
+        except LLMRuntimeError as exc:
+            logger.exception("conversation.runtime.generate_failed")
+            raise
+        llm_out: dict[str, Any] = {
+            "text": response_text,
+            "confidence": 0.0,
+            "source": "unified-runtime",
+            "adapter_version": "unified",
+        }
         llm_out.setdefault("prompt_tokens", prompt_tokens)
         if configured_limit is not None:
             llm_out.setdefault("prompt_token_limit", configured_limit)

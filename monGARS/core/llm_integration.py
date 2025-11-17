@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import builtins
 import hashlib
-import importlib
 import logging
 import os
 import re
@@ -12,21 +11,15 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 from urllib.parse import urlparse
 
 import httpx
 from opentelemetry import metrics
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    retry_if_not_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
 from monGARS.config import get_settings
 
 from .inference_utils import (
@@ -34,10 +27,8 @@ from .inference_utils import (
     CHATML_END_HEADER,
     CHATML_END_OF_TURN,
     CHATML_START_HEADER,
-    prepare_tokenizer_inputs,
 )
 from .model_manager import LLMModelManager, ModelDefinition
-from .model_slot_manager import ModelSlotManager
 from .ui_events import event_bus, make_event
 
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
@@ -50,11 +41,6 @@ except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
     _TORCH_IMPORT_ERROR = exc
 else:
     _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
-
-try:  # pragma: no cover - optional dependency during tests
-    import ollama
-except ImportError:  # pragma: no cover - allow tests without ollama
-    ollama = None
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +110,273 @@ class AsyncTTLCache:
 _RESPONSE_CACHE = AsyncTTLCache()
 
 
+class LLMRuntimeError(RuntimeError):
+    """Raised when the unified runtime fails to serve a request."""
+
+
+class UnifiedLLMRuntime:
+    """Singleton runtime that powers both generation and embeddings."""
+
+    _instance: ClassVar["UnifiedLLMRuntime" | None] = None
+    _instance_lock = threading.Lock()
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "UnifiedLLMRuntime":
+        if cls._instance is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance  # type: ignore[return-value]
+
+    def __init__(self, settings: Any | None = None) -> None:
+        if getattr(self, "_initialised", False):
+            return
+        if torch is None:  # pragma: no cover - dependency guard
+            raise LLMRuntimeError(
+                "Unified runtime requires torch; install torch to enable local inference."
+            ) from _TORCH_IMPORT_ERROR
+        self._initialised = True
+        self._settings = settings or get_settings()
+        self._model_dir = Path(self._settings.unified_model_dir).expanduser()
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._load_lock = threading.Lock()
+        self._generation_lock = threading.Lock()
+        self._embedding_lock = threading.Lock()
+        self._encoder: Any | None = None
+        self._generator: AutoModelForCausalLM | None = None
+        self._tokenizer: Any | None = None
+        self._generation_defaults = self._build_generation_defaults()
+        self._async_loop = asyncio.new_event_loop()
+        self._async_thread = threading.Thread(
+            target=self._async_loop.run_forever, daemon=True
+        )
+        self._async_thread.start()
+
+    @classmethod
+    def instance(cls, settings: Any | None = None) -> "UnifiedLLMRuntime":
+        """Return the singleton runtime instance."""
+
+        return cls(settings)
+
+    @classmethod
+    def reset_for_tests(cls) -> None:
+        """Tear down the cached runtime instance for test isolation."""
+
+        with cls._instance_lock:
+            instance = cls._instance
+            if instance is not None:
+                instance._shutdown_asyncio()
+            cls._instance = None
+
+    def _shutdown_asyncio(self) -> None:
+        loop = getattr(self, "_async_loop", None)
+        thread = getattr(self, "_async_thread", None)
+        if loop is None:
+            return
+        loop.call_soon_threadsafe(loop.stop)
+        if thread:
+            thread.join(timeout=5)
+        loop.close()
+        self._async_loop = None
+        self._async_thread = None
+
+    def _run_blocking(self, func: Callable[[], T]) -> T:
+        async def _runner() -> T:
+            return await asyncio.to_thread(func)
+
+        loop = getattr(self, "_async_loop", None)
+        if loop is None:
+            return asyncio.run(_runner())
+        future = asyncio.run_coroutine_threadsafe(_runner(), loop)
+        return future.result()
+
+    def _build_generation_defaults(self) -> dict[str, Any]:
+        model_settings = getattr(self._settings, "model", None)
+        defaults = {
+            "max_new_tokens": getattr(model_settings, "max_new_tokens", 512),
+            "temperature": getattr(model_settings, "temperature", 0.7),
+            "top_p": getattr(model_settings, "top_p", 0.9),
+            "top_k": getattr(model_settings, "top_k", 40),
+            "repetition_penalty": getattr(
+                model_settings, "repetition_penalty", 1.05
+            ),
+            "do_sample": True,
+        }
+        return defaults
+
+    def _ensure_components(self) -> None:
+        if self._encoder and self._generator and self._tokenizer:
+            return
+        with self._load_lock:
+            if self._encoder and self._generator and self._tokenizer:
+                return
+            try:
+                self._run_blocking(self._load_components)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception(
+                    "llm.unified.load_failed",
+                    extra={"path": str(self._model_dir)},
+                )
+                raise LLMRuntimeError("Failed to load unified runtime") from exc
+
+    def _load_components(self) -> None:
+        from llm2vec import LLM2Vec
+
+        if not self._model_dir.exists():
+            raise LLMRuntimeError(
+                f"Unified model directory '{self._model_dir}' is missing"
+            )
+        quantization = self._build_quantization_config()
+        logger.info(
+            "llm.unified.loading",
+            extra={
+                "event": "llm_runtime_load",
+                "path": str(self._model_dir),
+                "device": self._device,
+                "quantized": bool(quantization),
+            },
+        )
+        encoder_kwargs: dict[str, Any] = {
+            "device_map": "auto" if self._device == "cuda" else None,
+            "torch_dtype": torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16,
+            "pooling_mode": "mean",
+            "peft_model_name_or_path": str(self._model_dir),
+        }
+        if encoder_kwargs["device_map"] is None:
+            encoder_kwargs.pop("device_map")
+        if quantization is not None:
+            encoder_kwargs["quantization_config"] = quantization
+        encoder = LLM2Vec.from_pretrained(str(self._model_dir), **encoder_kwargs)
+        tokenizer = getattr(encoder, "tokenizer", None)
+        if tokenizer is None:
+            tokenizer = AutoTokenizer.from_pretrained(
+                str(self._model_dir), trust_remote_code=True
+            )
+        generator_kwargs: dict[str, Any] = {
+            "torch_dtype": torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16,
+            "trust_remote_code": True,
+        }
+        if self._device == "cuda":
+            generator_kwargs["device_map"] = "auto"
+        if quantization is not None:
+            generator_kwargs["quantization_config"] = quantization
+        generator = AutoModelForCausalLM.from_pretrained(
+            str(self._model_dir), **generator_kwargs
+        )
+        generator.eval()
+        self._encoder = encoder
+        self._generator = generator
+        self._tokenizer = tokenizer
+        logger.info(
+            "llm.unified.ready",
+            extra={"event": "llm_runtime_load", "path": str(self._model_dir)},
+        )
+
+    def _build_quantization_config(self) -> BitsAndBytesConfig | None:
+        model_settings = getattr(self._settings, "model", None)
+        quantize = getattr(model_settings, "quantize_4bit", True)
+        if not quantize or torch is None or not torch.cuda.is_available():
+            return None
+        compute_dtype_name = getattr(model_settings, "bnb_4bit_compute_dtype", "bfloat16")
+        compute_dtype = getattr(torch, compute_dtype_name, torch.bfloat16)
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type=getattr(
+                model_settings, "bnb_4bit_quant_type", "nf4"
+            ),
+            bnb_4bit_use_double_quant=getattr(
+                model_settings, "bnb_4bit_use_double_quant", True
+            ),
+            bnb_4bit_compute_dtype=compute_dtype,
+        )
+
+    def generate(self, prompt: str, **kwargs: Any) -> str:
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt must be a non-empty string")
+        self._ensure_components()
+
+        def _execute() -> str:
+            assert self._tokenizer is not None
+            assert self._generator is not None
+            inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
+            generation_kwargs = self._build_generation_kwargs(kwargs)
+            tokens_in = int(inputs["input_ids"].shape[-1])
+            with self._generation_lock:
+                with torch.inference_mode():
+                    output = self._generator.generate(**inputs, **generation_kwargs)
+            sequences = output.sequences if hasattr(output, "sequences") else output
+            tokens = sequences[0]
+            text = self._tokenizer.decode(tokens, skip_special_tokens=True)
+            tokens_out = max(0, int(tokens.shape[-1]) - tokens_in)
+            logger.info(
+                "llm.generate",
+                extra={
+                    "event": "llm_generate",
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                },
+            )
+            return text
+
+        try:
+            return self._run_blocking(_execute)
+        except Exception as exc:  # pragma: no cover - safety net
+            logger.exception("llm.runtime.generate_failed")
+            raise LLMRuntimeError("Unified runtime generation failed") from exc
+
+    def _build_generation_kwargs(self, overrides: Mapping[str, Any]) -> dict[str, Any]:
+        resolved = dict(self._generation_defaults)
+        resolved.update({k: v for k, v in overrides.items() if v is not None})
+        if self._tokenizer is not None:
+            resolved.setdefault("pad_token_id", self._tokenizer.eos_token_id)
+        return resolved
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if not texts:
+            raise ValueError("texts must contain at least one entry")
+        cleaned = [str(text) for text in texts]
+        self._ensure_components()
+
+        def _execute() -> list[list[float]]:
+            assert self._encoder is not None
+            assert self._tokenizer is not None
+            with self._embedding_lock:
+                with torch.inference_mode():
+                    vectors = self._encoder.encode(
+                        cleaned,
+                        batch_size=max(1, min(len(cleaned), 8)),
+                        show_progress_bar=False,
+                        convert_to_tensor=True,
+                        device=self._device,
+                    )
+            if not isinstance(vectors, torch.Tensor):
+                vectors = torch.tensor(vectors)
+            vectors = vectors.detach().float().cpu()
+            vectors = torch.nn.functional.normalize(vectors, p=2, dim=1)
+            token_counts = sum(
+                len(
+                    self._tokenizer(text, return_tensors="pt")["input_ids"][0]  # type: ignore[index]
+                )
+                for text in cleaned
+            )
+            logger.info(
+                "llm.embed",
+                extra={
+                    "event": "llm_generate",
+                    "tokens_in": int(token_counts),
+                    "tokens_out": 0,
+                },
+            )
+            return vectors.tolist()
+
+        try:
+            return self._run_blocking(_execute)
+        except ValueError:
+            raise
+        except Exception as exc:  # pragma: no cover - safety net
+            logger.exception("llm.runtime.embed_failed")
+            raise LLMRuntimeError("Unified runtime embedding failed") from exc
+
+
 def _sanitize_slot_generation_options(options: Mapping[str, Any]) -> dict[str, Any]:
     """Map Ollama-style generation options to HuggingFace ``generate`` kwargs."""
 
@@ -162,95 +415,6 @@ def _sanitize_slot_generation_options(options: Mapping[str, Any]) -> dict[str, A
         sanitized["do_sample"] = False
 
     return sanitized
-
-
-_UNSLOTH_INIT_LOCK = threading.Lock()
-_UNSLOTH_STATE: dict[str, Any] | None = None
-
-
-def initialize_unsloth(force: bool = False) -> dict[str, Any]:
-    """Patch PyTorch with Unsloth's optimisations when available.
-
-    The project targets consumer GPUs such as the RTX 2070 where VRAM is a
-    limiting factor. Unsloth ships fused kernels and quantisation utilities that
-    reduce peak memory consumption for popular instruction-tuned models.
-
-    Parameters
-    ----------
-    force:
-        When ``True`` the patch is re-applied even if it was already executed.
-
-    Returns
-    -------
-    dict[str, Any]
-        Metadata describing the patch outcome.  When Unsloth is available we
-        promise a minimum 2x throughput increase and at least 70% VRAM savings
-        for the reference ``dolphin-x1`` adapter profile used during internal
-        benchmarking.
-    """
-
-    global _UNSLOTH_STATE
-
-    with _UNSLOTH_INIT_LOCK:
-        if _UNSLOTH_STATE is not None and not force:
-            return _UNSLOTH_STATE
-
-        try:
-            unsloth = importlib.import_module("unsloth")
-        except (ModuleNotFoundError, ImportError, _NotImplError):
-            logger.info(
-                "llm.unsloth.unavailable", extra={"patched": False, "available": False}
-            )
-            _UNSLOTH_STATE = {
-                "available": False,
-                "patched": False,
-                "speedup_multiplier": 1.0,
-                "vram_reduction_fraction": 0.0,
-                "reference_model": None,
-            }
-            return _UNSLOTH_STATE
-
-        try:
-            patch_result = unsloth.patch_torch()
-        except Exception:  # pragma: no cover - defensive guardrail
-            logger.exception("llm.unsloth.patch_failed")
-            _UNSLOTH_STATE = {
-                "available": True,
-                "patched": False,
-                "speedup_multiplier": 1.0,
-                "vram_reduction_fraction": 0.0,
-                "reference_model": "dolphin-x1",
-            }
-            return _UNSLOTH_STATE
-
-        patched = True
-        if patch_result is not None:
-            # ``patch_torch`` may return rich metadata; coerce truthiness to bool.
-            patched = bool(getattr(patch_result, "success", patch_result))
-
-        _UNSLOTH_STATE = {
-            "available": True,
-            "patched": patched,
-            "speedup_multiplier": 2.0,
-            "vram_reduction_fraction": 0.70,
-            "reference_model": "dolphin-x1",
-        }
-
-        logger.info(
-            "llm.unsloth.patched",
-            extra={
-                "patched": patched,
-                "speedup_multiplier": _UNSLOTH_STATE["speedup_multiplier"],
-                "vram_reduction_fraction": _UNSLOTH_STATE["vram_reduction_fraction"],
-                "reference_model": _UNSLOTH_STATE["reference_model"],
-            },
-        )
-
-        return _UNSLOTH_STATE
-
-
-class OllamaNotAvailableError(RuntimeError):
-    """Raised when the optional Ollama client is unavailable."""
 
 
 class CircuitBreakerOpenError(Exception):
@@ -440,7 +604,6 @@ class LLMIntegration:
         coding_score_threshold: int | None = None,
     ) -> None:
         self._settings = get_settings()
-        self._unsloth_state = initialize_unsloth()
         self._model_manager = LLMModelManager(self._settings)
         general_definition = self._model_manager.get_model_definition("general")
         coding_definition = self._model_manager.get_model_definition("coding")
@@ -534,7 +697,6 @@ class LLMIntegration:
                     "adapter_registry": str(self.adapter_registry_path),
                 },
             )
-        self._ollama_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
         self._ray_cb = CircuitBreaker(fail_max=3, reset_timeout=60)
         raw_system_prompt = getattr(self._settings, "llm_system_prompt", None)
         if isinstance(raw_system_prompt, str) and raw_system_prompt.strip():
@@ -554,6 +716,27 @@ class LLMIntegration:
             self._prompt_limit_override = None
         self._prompt_token_limits: dict[str, int | None] = {}
         self._generation_token_targets: dict[str, int | None] = {}
+
+    @classmethod
+    def _reset_unified_service(cls) -> None:
+        """Testing helper retained for backwards compatibility."""
+
+        UnifiedLLMRuntime.reset_for_tests()
+
+    def _runtime(self) -> UnifiedLLMRuntime:
+        return UnifiedLLMRuntime.instance(self._settings)
+
+    def generate(self, prompt: str, **kwargs: Any) -> str:
+        """Synchronously generate text via the unified Dolphin-X1 runtime."""
+
+        return self._runtime().generate(prompt, **kwargs)
+
+    def embed(self, texts: Sequence[str]) -> torch.Tensor:
+        """Return embeddings for ``texts`` using the shared LLM2Vec encoder."""
+
+        vectors = self._runtime().embed(list(texts))
+        assert torch is not None  # noqa: S101 - guarded at module import
+        return torch.tensor(vectors)
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
@@ -810,170 +993,30 @@ class LLMIntegration:
                         all_success = False
             self._models_ready = bool(report.statuses) and all_success
 
-    def _build_ollama_options(self, definition: ModelDefinition) -> dict[str, Any]:
-        base_options = {
-            "temperature": float(self._settings.AI_MODEL_TEMPERATURE),
-            "top_p": 0.9,
-            "num_predict": 512,
-            "stream": False,
-        }
-        return definition.merge_parameters(base_options)
-
-    class LocalProviderError(RuntimeError):
-        """Raised when the local provider cannot serve a request."""
-
-        def __init__(self, message: str) -> None:
-            super().__init__(message)
-            self.message = message
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=(
-            retry_if_exception_type(Exception)
-            & retry_if_not_exception_type(OllamaNotAvailableError)
-            & retry_if_not_exception_type(CircuitBreakerOpenError)
-        ),
-    )
-    async def _ollama_call(
-        self, definition: ModelDefinition, prompt: str
-    ) -> dict[str, Any]:
-        """Invoke an Ollama model with retries and circuit breaking."""
-
-        async def call_api() -> dict[str, Any]:
-            if not ollama:
-                raise OllamaNotAvailableError("Ollama client is not available")
-            return await asyncio.to_thread(
-                ollama.chat,
-                model=definition.name,
-                messages=[{"role": "user", "content": prompt}],
-                options=self._build_ollama_options(definition),
-            )
-
-        return await self._ollama_cb.call(call_api)
-
     async def _call_local_provider(self, prompt: str, task_type: str) -> dict[str, Any]:
-        """Invoke the local provider and return its response."""
+        """Invoke the unified runtime locally and return its response."""
 
         await self._ensure_local_models()
         model_definition = self._model_manager.get_model_definition(task_type)
-        model_name = model_definition.name
-        normalized_task = task_type.lower()
-        if normalized_task == "general":
-            self.general_model = model_name
-        elif normalized_task == "coding":
-            self.coding_model = model_name
+        runtime = UnifiedLLMRuntime.instance(self._settings)
+        generation_kwargs = self._slot_generation_kwargs(model_definition)
 
-        logger.info(
-            "llm.ollama.dispatch",
-            extra={
-                "model_name": model_name,
-                "task_type": task_type,
-                "provider": model_definition.provider,
-            },
-        )
-
-        if not ollama:
-            logger.error("llm.ollama.unavailable")
-            fallback = await self._slot_model_fallback(
-                prompt,
-                task_type,
-                reason="ollama_missing",
-                definition=model_definition,
-            )
-            if fallback is not None:
-                return self._validate_provider_response(fallback)
-            raise self.LocalProviderError("Ollama client is not available.")
+        def _run_generation() -> dict[str, Any]:
+            text = runtime.generate(prompt, **generation_kwargs)
+            return {"message": {"content": text}}
 
         try:
-            response = await self._ollama_call(model_definition, prompt)
-            return self._validate_provider_response(response)
-        except OllamaNotAvailableError:
-            logger.exception("llm.ollama.unavailable")
-            fallback = await self._slot_model_fallback(
-                prompt,
-                task_type,
-                reason="ollama_not_available",
-                definition=model_definition,
-            )
-            if fallback is not None:
-                return self._validate_provider_response(fallback)
-            raise self.LocalProviderError("Ollama client is not available.")
-        except RetryError:
+            response = await asyncio.to_thread(_run_generation)
+        except Exception as exc:  # pragma: no cover - defensive
             logger.exception(
-                "llm.ollama.retry_exhausted",
-                extra={"model_name": model_name, "task_type": task_type},
+                "llm.local_provider.error",
+                extra={"task_type": task_type, "model": model_definition.name},
             )
-            fallback = await self._slot_model_fallback(
-                prompt,
-                task_type,
-                reason="retry_exhausted",
-                definition=model_definition,
-            )
-            if fallback is not None:
-                return self._validate_provider_response(fallback)
-            raise self.LocalProviderError("Unable to generate response at this time.")
-        except CircuitBreakerOpenError:
-            logger.error(
-                "llm.ollama.circuit_open",
-                extra={"model_name": model_name, "task_type": task_type},
-            )
-            fallback = await self._slot_model_fallback(
-                prompt,
-                task_type,
-                reason="circuit_open",
-                definition=model_definition,
-            )
-            if fallback is not None:
-                return self._validate_provider_response(fallback)
-            raise self.LocalProviderError("Ollama circuit is temporarily open.")
-        except Exception as exc:
-            logger.exception(
-                "llm.ollama.error",
-                extra={"model_name": model_name, "task_type": task_type},
-            )
-            fallback = await self._slot_model_fallback(
-                prompt,
-                task_type,
-                reason="exception",
-                definition=model_definition,
-            )
-            if fallback is not None:
-                return self._validate_provider_response(fallback)
-            raise self.LocalProviderError(
-                "An error occurred while generating the response."
-            ) from exc
-
-    def _validate_provider_response(self, response: Any) -> dict[str, Any]:
-        """Ensure provider responses adhere to the expected mapping contract."""
+            raise LLMRuntimeError("Local provider failed to generate a response") from exc
 
         if not isinstance(response, Mapping):
-            raise self.LocalProviderError(
-                "Local provider returned an unexpected payload type."
-            )
+            raise LLMRuntimeError("Local provider returned an unexpected payload")
         return dict(response)
-
-    async def _slot_model_fallback(
-        self,
-        prompt: str,
-        task_type: str,
-        *,
-        reason: str,
-        definition: ModelDefinition | None = None,
-    ) -> dict[str, Any] | None:
-        """Attempt to satisfy a request using the slot-managed local model."""
-
-        try:
-            response = await self._generate_with_model_slot(
-                prompt, task_type, definition=definition
-            )
-        except self.LocalProviderError:
-            return None
-        logger.info(
-            "llm.slot.fallback_success",
-            extra={"task_type": task_type, "reason": reason},
-        )
-        return response
 
     async def _generate_with_model_slot(
         self,
@@ -982,53 +1025,24 @@ class LLMIntegration:
         *,
         definition: ModelDefinition | None = None,
     ) -> dict[str, Any]:
-        """Generate a response using the Unsloth-backed model slot."""
-
-        if torch is None:
-            raise self.LocalProviderError(
-                "Local slot fallback requires PyTorch. Install torch to enable this path."
-            ) from _TORCH_IMPORT_ERROR
+        """Generate a response using the unified LLM runtime."""
 
         model_definition = definition or self._model_manager.get_model_definition(
             task_type
         )
+        runtime = UnifiedLLMRuntime.instance(self._settings)
         slot_generation_kwargs = self._slot_generation_kwargs(model_definition)
 
         def _run_generation() -> dict[str, Any]:
-            assert torch is not None  # noqa: S101 - guarded above
-            with ModelSlotManager("primary") as (model, tokenizer):
-                if model is None or tokenizer is None:
-                    raise RuntimeError("Model slot returned empty artefacts")
-                device = getattr(model, "device", None)
-                inputs, _ = prepare_tokenizer_inputs(
-                    tokenizer,
-                    prompt,
-                    device=device,
-                    padding=False,
-                    truncation=False,
-                )
-                with torch.inference_mode():
-                    output = model.generate(**inputs, **slot_generation_kwargs)
-                if hasattr(output, "sequences"):
-                    output_ids = output.sequences[0]
-                else:
-                    output_ids = output[0]
-                text = tokenizer.decode(output_ids, skip_special_tokens=True)
-                return {"message": {"content": text}}
+            text = runtime.generate(prompt, **slot_generation_kwargs)
+            return {"message": {"content": text}}
 
-        try:
-            return await asyncio.to_thread(_run_generation)
-        except Exception as exc:  # pragma: no cover - safety net for inference
-            logger.exception(
-                "llm.slot.generate_failed",
-                extra={"task_type": task_type},
-            )
-            raise self.LocalProviderError("Local model generation failed.") from exc
+        return await asyncio.to_thread(_run_generation)
 
     def _slot_generation_kwargs(self, definition: ModelDefinition) -> dict[str, Any]:
         """Derive HuggingFace generation kwargs from the model definition."""
 
-        options = self._build_ollama_options(definition)
+        options = definition.merge_parameters({})
         sanitized = _sanitize_slot_generation_options(options)
 
         if sanitized.get("do_sample") and "top_p" not in sanitized:
@@ -1115,8 +1129,8 @@ class LLMIntegration:
                         )
             else:
                 response = await self._call_local_provider(active_prompt, task_type)
-        except self.LocalProviderError as exc:
-            return await self._fail(cache_key, exc.message)
+        except LLMRuntimeError as exc:
+            return await self._fail(cache_key, str(exc))
         generated_text = self._extract_text(response)
         if not generated_text and response_source == "ray":
             logger.warning(
@@ -1128,8 +1142,8 @@ class LLMIntegration:
             )
             try:
                 response = await self._call_local_provider(active_prompt, task_type)
-            except self.LocalProviderError as exc:
-                return await self._fail(cache_key, exc.message)
+            except LLMRuntimeError as exc:
+                return await self._fail(cache_key, str(exc))
             generated_text = self._extract_text(response)
             response_source = "local"
             logger.info(
