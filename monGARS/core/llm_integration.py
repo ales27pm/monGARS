@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -27,6 +27,8 @@ from tenacity import (
 )
 
 from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
 from monGARS.config import get_settings
 
 from .inference_utils import (
@@ -34,10 +36,8 @@ from .inference_utils import (
     CHATML_END_HEADER,
     CHATML_END_OF_TURN,
     CHATML_START_HEADER,
-    prepare_tokenizer_inputs,
 )
 from .model_manager import LLMModelManager, ModelDefinition
-from .model_slot_manager import ModelSlotManager
 from .ui_events import event_bus, make_event
 
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
@@ -122,6 +122,178 @@ class AsyncTTLCache:
 
 
 _RESPONSE_CACHE = AsyncTTLCache()
+
+
+class _UnifiedLLMService:
+    """Load and serve the unified Dolphin-X1 bundle for chat + embeddings."""
+
+    def __init__(self, settings: Any) -> None:
+        if torch is None:  # pragma: no cover - optional dependency guard
+            raise RuntimeError(
+                "Unified LLM runtime requires torch. Install torch to enable local inference."
+            ) from _TORCH_IMPORT_ERROR
+        self._settings = settings
+        self._model_dir = self._resolve_model_dir()
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._dtype = torch.float16 if self._device == "cuda" else torch.float32
+        self._max_length = int(os.getenv("UNIFIED_LLM_MAX_LENGTH", "1024"))
+        self._encoder: LLM2Vec | None = None
+        self._generator: AutoModelForCausalLM | None = None
+        self._tokenizer: Any | None = None
+        self._load_lock = threading.Lock()
+        self._generation_lock = threading.Lock()
+        self._embedding_lock = threading.Lock()
+        self._generation_defaults = self._build_generation_defaults()
+
+    def _build_generation_defaults(self) -> dict[str, Any]:
+        return {
+            "max_new_tokens": self._env_int("UNIFIED_LLM_MAX_NEW_TOKENS", 256),
+            "temperature": self._env_float("UNIFIED_LLM_TEMPERATURE", 0.7),
+            "top_p": self._env_float("UNIFIED_LLM_TOP_P", 0.9),
+            "top_k": self._env_int("UNIFIED_LLM_TOP_K", 40),
+            "repetition_penalty": self._env_float(
+                "UNIFIED_LLM_REPETITION_PENALTY", 1.1
+            ),
+            "do_sample": _parse_env_bool(os.getenv("UNIFIED_LLM_DO_SAMPLE", "true")),
+        }
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except ValueError:
+            logger.warning("llm.unified.invalid_int_env", extra={"name": name})
+            return default
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except ValueError:
+            logger.warning("llm.unified.invalid_float_env", extra={"name": name})
+            return default
+
+    def _resolve_model_dir(self) -> Path:
+        override = (os.getenv("MONOGARS_UNIFIED_MODEL_DIR") or "").strip()
+        if override:
+            return Path(override).expanduser()
+        configured = getattr(self._settings, "unified_model_dir", None)
+        if configured:
+            return Path(configured)
+        return Path("models/dolphin_x1_unified_enhanced")
+
+    def _build_quantization_config(self) -> BitsAndBytesConfig | None:
+        if torch is None or not torch.cuda.is_available():
+            return None
+        try:
+            compute_dtype = (
+                torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16
+            )
+        except AttributeError:  # pragma: no cover - defensive fallback
+            compute_dtype = torch.float16
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=compute_dtype,
+        )
+
+    def _ensure_components(self) -> None:
+        if self._encoder and self._generator and self._tokenizer:
+            return
+        with self._load_lock:
+            if self._encoder and self._generator and self._tokenizer:
+                return
+            self._load_components()
+
+    def _load_components(self) -> None:
+        from llm2vec import (
+            LLM2Vec,
+        )  # imported lazily to avoid heavy deps during import time
+
+        model_dir = self._model_dir
+        if not model_dir.exists():
+            raise FileNotFoundError(
+                f"Unified model directory '{model_dir}' is missing. "
+                "Configure settings.unified_model_dir or MONOGARS_UNIFIED_MODEL_DIR."
+            )
+        logger.info(
+            "llm.unified.loading",
+            extra={"path": str(model_dir), "device": self._device},
+        )
+        quantization = self._build_quantization_config()
+        encoder_kwargs: dict[str, Any] = {
+            "device_map": "auto" if self._device == "cuda" else None,
+            "torch_dtype": self._dtype,
+            "pooling_mode": "mean",
+            "max_length": self._max_length,
+            "peft_model_name_or_path": str(model_dir),
+        }
+        if encoder_kwargs["device_map"] is None:
+            encoder_kwargs.pop("device_map")
+        if quantization is not None:
+            encoder_kwargs["quantization_config"] = quantization
+        encoder = LLM2Vec.from_pretrained(str(model_dir), **encoder_kwargs)
+        tokenizer = encoder.tokenizer
+        generator_kwargs: dict[str, Any] = {
+            "torch_dtype": self._dtype,
+            "trust_remote_code": True,
+        }
+        if quantization is not None:
+            generator_kwargs["quantization_config"] = quantization
+        if self._device == "cuda":
+            generator_kwargs["device_map"] = "auto"
+        generator = AutoModelForCausalLM.from_pretrained(
+            str(model_dir), **generator_kwargs
+        )
+        generator.eval()
+        self._encoder = encoder
+        self._generator = generator
+        self._tokenizer = tokenizer
+        logger.info("llm.unified.ready", extra={"path": str(model_dir)})
+
+    def generate(self, prompt: str, **kwargs: Any) -> str:
+        """Synchronously generate text using the unified model."""
+
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt must be a non-empty string")
+        self._ensure_components()
+        assert self._tokenizer is not None  # noqa: S101 - guarded above
+        assert self._generator is not None  # noqa: S101 - guarded above
+        generation_kwargs = self._build_generation_kwargs(kwargs)
+        inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
+        with self._generation_lock:
+            assert torch is not None  # noqa: S101 - guarded at init
+            with torch.inference_mode():
+                output = self._generator.generate(**inputs, **generation_kwargs)
+        tokens = output.sequences[0] if hasattr(output, "sequences") else output[0]
+        return self._tokenizer.decode(tokens, skip_special_tokens=True)
+
+    def _build_generation_kwargs(self, overrides: Mapping[str, Any]) -> dict[str, Any]:
+        resolved = dict(self._generation_defaults)
+        resolved.update({k: v for k, v in overrides.items() if v is not None})
+        if self._tokenizer is not None:
+            resolved.setdefault("pad_token_id", self._tokenizer.eos_token_id)
+        return resolved
+
+    def embed(self, texts: Sequence[str]) -> torch.Tensor:
+        """Return embeddings for ``texts`` using LLM2Vec."""
+
+        if not texts:
+            raise ValueError("texts must contain at least one entry")
+        self._ensure_components()
+        assert self._encoder is not None  # noqa: S101 - guarded above
+        with self._embedding_lock:
+            embeddings = self._encoder.encode(
+                list(texts),
+                batch_size=max(1, min(len(texts), 8)),
+                show_progress_bar=False,
+                convert_to_tensor=True,
+                device=self._device,
+            )
+        if not isinstance(embeddings, torch.Tensor):
+            embeddings = torch.tensor(embeddings)
+        return embeddings
 
 
 def _sanitize_slot_generation_options(options: Mapping[str, Any]) -> dict[str, Any]:
@@ -323,6 +495,9 @@ class _TaskTypeRule:
 
 class LLMIntegration:
     """Adapter responsible for generating responses via local or remote LLMs."""
+
+    _unified_service: ClassVar[_UnifiedLLMService | None] = None
+    _unified_service_lock = threading.Lock()
 
     SUCCESS_ACTIONS: frozenset[str] = frozenset({"installed", "exists", "skipped"})
     FAILURE_ACTIONS: frozenset[str] = frozenset({"error", "unavailable"})
@@ -554,6 +729,31 @@ class LLMIntegration:
             self._prompt_limit_override = None
         self._prompt_token_limits: dict[str, int | None] = {}
         self._generation_token_targets: dict[str, int | None] = {}
+
+    @classmethod
+    def _reset_unified_service(cls) -> None:
+        """Testing helper to drop the cached unified runtime instance."""
+
+        with cls._unified_service_lock:
+            cls._unified_service = None
+
+    def _get_unified_service(self) -> _UnifiedLLMService:
+        cls = type(self)
+        if cls._unified_service is None:
+            with cls._unified_service_lock:
+                if cls._unified_service is None:
+                    cls._unified_service = _UnifiedLLMService(self._settings)
+        return cls._unified_service
+
+    def generate(self, prompt: str, **kwargs: Any) -> str:
+        """Synchronously generate text via the unified Dolphin-X1 runtime."""
+
+        return self._get_unified_service().generate(prompt, **kwargs)
+
+    def embed(self, texts: Sequence[str]) -> torch.Tensor:
+        """Return embeddings for ``texts`` using the shared LLM2Vec encoder."""
+
+        return self._get_unified_service().embed(texts)
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
@@ -982,12 +1182,7 @@ class LLMIntegration:
         *,
         definition: ModelDefinition | None = None,
     ) -> dict[str, Any]:
-        """Generate a response using the Unsloth-backed model slot."""
-
-        if torch is None:
-            raise self.LocalProviderError(
-                "Local slot fallback requires PyTorch. Install torch to enable this path."
-            ) from _TORCH_IMPORT_ERROR
+        """Generate a response using the unified LLM runtime."""
 
         model_definition = definition or self._model_manager.get_model_definition(
             task_type
@@ -995,26 +1190,8 @@ class LLMIntegration:
         slot_generation_kwargs = self._slot_generation_kwargs(model_definition)
 
         def _run_generation() -> dict[str, Any]:
-            assert torch is not None  # noqa: S101 - guarded above
-            with ModelSlotManager("primary") as (model, tokenizer):
-                if model is None or tokenizer is None:
-                    raise RuntimeError("Model slot returned empty artefacts")
-                device = getattr(model, "device", None)
-                inputs, _ = prepare_tokenizer_inputs(
-                    tokenizer,
-                    prompt,
-                    device=device,
-                    padding=False,
-                    truncation=False,
-                )
-                with torch.inference_mode():
-                    output = model.generate(**inputs, **slot_generation_kwargs)
-                if hasattr(output, "sequences"):
-                    output_ids = output.sequences[0]
-                else:
-                    output_ids = output[0]
-                text = tokenizer.decode(output_ids, skip_special_tokens=True)
-                return {"message": {"content": text}}
+            text = self.generate(prompt, **slot_generation_kwargs)
+            return {"message": {"content": text}}
 
         try:
             return await asyncio.to_thread(_run_generation)

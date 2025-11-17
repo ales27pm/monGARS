@@ -405,6 +405,12 @@ class Settings(BaseSettings):
         ge=0,
         description="Duration in days that curated datasets remain exportable post-review.",
     )
+    unified_model_dir: Path = Field(
+        default=Path("models/dolphin_x1_unified_enhanced"),
+        description=(
+            "Path to the unified Dolphin-X1 bundle used by the quantized LLM/LLM2Vec runtime."
+        ),
+    )
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
         description="Directory storing adapter artifacts and manifest.",

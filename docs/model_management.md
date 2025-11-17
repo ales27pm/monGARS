@@ -91,7 +91,10 @@ pipelines.
 
 - `LLMIntegration` calls `LLMModelManager.ensure_models_installed()` before
   dispatching to Ollama, ensuring the active profile is available even after
-  container rebuilds.
+  container rebuilds. When local execution is required it now lazy-loads the
+  quantized Dolphin-X1 bundle from `settings.unified_model_dir` (or the
+  `MONOGARS_UNIFIED_MODEL_DIR` override) through a singleton
+  `LLM2Vec.from_pretrained(...)` runtime so chat and embeddings share weights.
 - When Ray Serve is enabled, adapter manifests stored under
   `settings.llm_adapter_registry_path` keep API workers and Ray replicas aligned
   with the latest training artefacts.
@@ -113,11 +116,11 @@ pipelines.
   the consolidated generation options from the model definition and global
   settings. Responses stream back as text, which is surfaced to the caller and emitted on the UI event bus.
 - If Ollama is unavailable—because the socket connection fails or the client is
-  missing—the integration falls back to a local PyTorch slot via
-  `ModelSlotManager`. The slot loads the configured HuggingFace-compatible
-  checkpoint, applies the same temperature and nucleus sampling parameters, and
-  returns decoded text. Structured logs capture the transition so on-call teams
-  understand when the system is running on the degraded path.
+  missing—the integration falls back to the unified runtime via
+  `_generate_with_model_slot`, which reuses the cached LLM2Vec instance and
+  AutoModelForCausalLM weights with 4-bit NF4 quantisation. Structured logs
+  capture the transition so on-call teams understand when the system is running
+  on the degraded path without re-downloading checkpoints.
 
 ### Embedding Strategy
 
@@ -138,11 +141,12 @@ pipelines.
   drive both conversational and retrieval workloads. The embedding path uses
   mean pooling with deterministic attention-mask weighting and optional
   normalisation configured by the manifest.【F:scripts/export_llm2vec_wrapper.py†L57-L168】
-- `scripts/run_llm2vec_service.py` wraps the wrapper in a FastAPI server so the
-  embeddings can be consumed over HTTP. Launch options include toggling merged
-  weight loading, forcing 4-bit inference, or pinning the device, which makes it
-  straightforward to co-locate the embedding endpoint next to Ollama without
-  duplicating checkpoints.【F:scripts/run_llm2vec_service.py†L1-L204】
+- `LLMIntegration.generate`/`embed` are thin wrappers on top of the shared
+  runtime, meaning conversational responses and stored vectors come from the
+  same tokenizer, LoRA adapters, and mean-pooling strategy described in
+  `build_unified_dolphin_x1_enhanced.py`. Operators can still export the
+  embedding service independently via `scripts/run_llm2vec_service.py`, which
+  offers the same quantisation and device-pinning knobs for HTTP deployments.【F:scripts/run_llm2vec_service.py†L1-L204】
 
 ### Unsloth Optimisations & VRAM Troubleshooting
 

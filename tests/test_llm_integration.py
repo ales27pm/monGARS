@@ -26,6 +26,15 @@ def reset_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def reset_unified_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure the unified runtime singleton is cleared between tests."""
+
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", None, raising=False
+    )
+
+
 def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate that Unsloth can be loaded and promises expected optimisations.
 
@@ -411,6 +420,54 @@ def test_infer_task_type_detects_coding(
         )
         == "coding"
     )
+
+
+class _FakeUnifiedRuntime:
+    def __init__(self) -> None:
+        self.generate_calls: list[tuple[str, dict[str, object]]] = []
+        self.embed_calls: list[list[str]] = []
+
+    def generate(self, prompt: str, **kwargs: object) -> str:
+        self.generate_calls.append((prompt, dict(kwargs)))
+        return f"generated::{prompt}"
+
+    def embed(self, texts: list[str]) -> str:
+        self.embed_calls.append(list(texts))
+        return f"embedded::{len(texts)}"
+
+
+def test_generate_method_uses_unified_runtime(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The synchronous generate helper should delegate to the unified runtime."""
+
+    runtime = _FakeUnifiedRuntime()
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    result = fake_llm_integration.generate("hello", temperature=0.25)
+
+    assert result == "generated::hello"
+    assert runtime.generate_calls == [("hello", {"temperature": 0.25})]
+
+
+def test_embed_method_uses_unified_runtime(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Embeddings should be routed through the cached runtime."""
+
+    runtime = _FakeUnifiedRuntime()
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    result = fake_llm_integration.embed(["a", "b"])
+
+    assert result == "embedded::2"
+    assert runtime.embed_calls == [["a", "b"]]
 
 
 @pytest.mark.parametrize(
