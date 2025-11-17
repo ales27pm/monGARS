@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
+from monGARS.mlops.dataset import DOLPHIN_CHAT_TEMPLATE
+
 PROJECT_WRAPPER_TEMPLATE = """# Auto-generated wrapper: project_wrapper.py
 import os
 from collections.abc import Iterable
@@ -21,6 +23,8 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
+
+DOLPHIN_CHAT_TEMPLATE = {dolphin_chat_template!r}
 
 BASE_MODEL_ID = {base_model_id!r}
 LORA_DIR = {lora_dir!r}
@@ -68,6 +72,8 @@ class ChatAndEmbed:
         self.tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, use_fast=True)
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        if getattr(self.tokenizer, "chat_template", None) != DOLPHIN_CHAT_TEMPLATE:
+            self.tokenizer.chat_template = DOLPHIN_CHAT_TEMPLATE
 
         self.model = AutoModelForCausalLM.from_pretrained(
             BASE_MODEL_ID,
@@ -211,6 +217,7 @@ def render_project_wrapper(config: WrapperConfig) -> str:
         activation_buffer_mb=config.activation_buffer_mb,
         offload_dir=str(config.offload_dir),
         max_seq_len=config.max_seq_len,
+        dolphin_chat_template=DOLPHIN_CHAT_TEMPLATE,
     ).strip()
 
 

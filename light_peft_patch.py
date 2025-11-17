@@ -61,6 +61,8 @@ from transformers import (
 
 from datasets import load_dataset
 
+from monGARS.mlops.dataset import ensure_dolphin_chat_template
+
 # ---- Public API --------------------------------------------------------------
 
 __all__ = [
@@ -266,6 +268,8 @@ def build_sft_dataset(
         return {"prompt": prompt, "completion": out}
 
     ds = ds.map(to_pc, remove_columns=ds.column_names)
+
+    ensure_dolphin_chat_template(tokenizer)
 
     def build(ex):
         if hasattr(tokenizer, "apply_chat_template"):

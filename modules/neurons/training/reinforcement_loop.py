@@ -52,6 +52,7 @@ from monGARS.core.model_slot_manager import ModelSlotManager
 from monGARS.core.monitor import get_tracer
 from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
+from monGARS.mlops.dataset import ensure_dolphin_chat_template
 
 # Import Unsloth as early as possible to guarantee its patches execute before
 # transformer-based helpers from TRL are loaded.
@@ -1543,6 +1544,7 @@ class ReinforcementLoop:
         correct = 0
         total = 0
         device = getattr(model, "device", "cpu")
+        ensure_dolphin_chat_template(tokenizer)
         for record in dataset:
             prompt_text = tokenizer.apply_chat_template(
                 record["prompt"], tokenize=False, add_generation_prompt=True

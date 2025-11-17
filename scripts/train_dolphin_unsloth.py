@@ -83,6 +83,7 @@ try:
         build_adapter_summary,
         write_wrapper_bundle,
     )
+    from monGARS.mlops.dataset import ensure_dolphin_chat_template
 except ModuleNotFoundError:  # pragma: no cover - script execution direct from repo root
     if str(ROOT_DIR) not in sys.path:
         sys.path.insert(0, str(ROOT_DIR))
@@ -92,6 +93,7 @@ except ModuleNotFoundError:  # pragma: no cover - script execution direct from r
         build_adapter_summary,
         write_wrapper_bundle,
     )
+    from monGARS.mlops.dataset import ensure_dolphin_chat_template
 
 try:  # pragma: no cover - optional dependency
     from llm2vec import LLM2VecModel
@@ -396,6 +398,7 @@ def format_conversation(
     tokenizer,
     args: "TrainingConfig",
 ) -> str:
+    ensure_dolphin_chat_template(tokenizer)
     if args.text_column in example and example[args.text_column]:
         text_value = example[args.text_column]
         if isinstance(text_value, str) and text_value.strip():

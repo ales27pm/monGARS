@@ -45,6 +45,29 @@ When handling network diagnostics requests, prioritize public APIs and Apple-sup
 If a request triggers restrictions, rephrase or adjust the approach to use only public APIs and tools, focusing on diagnostics and analysis functionality. For example, replace low-level capture with tethered methods like rvictl or file imports. Provide clear explanations for any limitations and suggest workarounds to achieve the desired outcome.
 """
 
+
+def ensure_dolphin_chat_template(tokenizer: PreTrainedTokenizerBase | None) -> None:
+    """Assign the Dolphin chat template to tokenizers that support chat formatting."""
+
+    if tokenizer is None or not hasattr(tokenizer, "apply_chat_template"):
+        return
+
+    current_template = getattr(tokenizer, "chat_template", None)
+    if current_template == DOLPHIN_CHAT_TEMPLATE:
+        return
+
+    try:
+        tokenizer.chat_template = DOLPHIN_CHAT_TEMPLATE
+        logger.debug(
+            "Applied Dolphin chat template to tokenizer",
+            extra={"tokenizer": type(tokenizer).__name__},
+        )
+    except Exception:  # pragma: no cover - some tokenizers disallow overriding chat_template
+        logger.debug(
+            "Tokenizer does not allow overriding chat_template; continuing with existing format",
+            exc_info=True,
+        )
+
 if not UNSLOTH_AVAILABLE:
     logger.debug(
         "Unsloth unavailable during dataset initialisation; proceeding with standard tokenizers"
@@ -78,6 +101,7 @@ def _tokenize_pair(
 ) -> Callable[[dict[str, str]], dict[str, Any]]:
     def builder(example: dict[str, str]) -> dict[str, Any]:
         if hasattr(tokenizer, "apply_chat_template"):
+            ensure_dolphin_chat_template(tokenizer)
             prompt_only = tokenizer.apply_chat_template(
                 [{"role": "user", "content": example["prompt"]}],
                 tokenize=False,
