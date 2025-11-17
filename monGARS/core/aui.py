@@ -71,11 +71,16 @@ class LLMActionSuggester:
                     "context_size": len(str(trimmed_context)),
                 }
             )
-            filtered_actions = [
-                action
-                for action in ranked_actions
-                if isinstance(action, str) and action in actions
-            ]
+            seen: set[str] = set()
+            filtered_actions: list[str] = []
+            for action in ranked_actions:
+                if (
+                    isinstance(action, str)
+                    and action in actions
+                    and action not in seen
+                ):
+                    filtered_actions.append(action)
+                    seen.add(action)
             return filtered_actions or self._heuristic_fallback(prompt, actions)
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"Suggestion parsing failed: {str(e)}")
