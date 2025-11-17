@@ -18,6 +18,7 @@ import pytest
 
 from monGARS.config import LLMQuantization, Settings
 from monGARS.core import llm_integration, monitor as core_monitor
+from monGARS.core.conversation import PromptTooLargeError
 from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 
 
@@ -294,6 +295,19 @@ def test_embedding_output(llm_builder: Callable[..., LLMIntegration]) -> None:
     assert 0.99 < norm < 1.01, f"Vector not normalized: norm={norm}"
 
 
+def test_embedding_normalization(
+    llm_builder: Callable[..., LLMIntegration]
+) -> None:
+    runtime = MagicMock()
+    runtime.embed.return_value = [_normalized_embedding()]
+    llm = llm_builder(runtime_factory=lambda: runtime)
+
+    vecs = llm.embed_batch(["test text"])
+    for vec in vecs:
+        norm = np.linalg.norm(np.array(vec))
+        assert 0.999 <= norm <= 1.001, f"Vector not normalized: norm={norm}"
+
+
 @patch("monGARS.core.llm_integration.LLMIntegration._call_local_provider")
 def test_generation_accuracy(
     mock_provider: MagicMock,
@@ -337,6 +351,56 @@ def test_security_guard_integration(
     assert response["error"] == "approval_required"
     assert "token_ref" in response
     assert "4111" not in response["message"]
+
+
+def test_max_context_handling(
+    llm_builder: Callable[..., LLMIntegration]
+) -> None:
+    llm = llm_builder()
+
+    def _raise_prompt_error(*_args: object, **_kwargs: object) -> str:
+        raise PromptTooLargeError(prompt_tokens=10000, limit=8192)
+
+    llm._generate_override = _raise_prompt_error  # type: ignore[assignment]
+
+    long_text = "word " * 10000
+    with pytest.raises(PromptTooLargeError) as exc_info:
+        llm.generate(long_text)
+
+    assert exc_info.value.limit == 8192
+
+
+def test_pii_blocking(
+    llm_builder: Callable[..., LLMIntegration],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = llm_builder()
+    with patch("monGARS.core.pii_detection.detect_pii") as mock_detect:
+        mock_detect.return_value = [
+            types.SimpleNamespace(
+                type="CREDIT_CARD",
+                value="4111-1111-1111-1111",
+                start=0,
+                end=19,
+            )
+        ]
+        monkeypatch.setattr(
+            "monGARS.core.operator_approvals.log_blocked_attempt",
+            lambda **_: ("token-xyz", "approval-token"),
+        )
+
+        with pytest.raises(GuardRejectionError) as exc_info:
+            llm.generate(
+                "My credit card number is 4111-1111-1111-1111",
+                context={
+                    "allowed_actions": ["financial_operation"],
+                    "user_id": "test_user",
+                },
+            )
+
+    result = json.dumps(exc_info.value.payload)
+    assert json.loads(result)["error"] == "approval_required"
+    assert "4111" not in result
 
 
 @pytest.mark.skipif(os.getenv("CI_ENVIRONMENT") != "true", reason="Only run in CI")
@@ -526,6 +590,31 @@ async def test_generate_response_returns_expected_keys(
     cache_key = fake_llm_integration._cache_key("general", active_prompt)
     cached = await llm_integration._RESPONSE_CACHE.get(cache_key)
     assert cached == result
+
+
+@pytest.mark.asyncio
+async def test_ray_backend_fallback_when_ray_unavailable(
+    llm_builder: Callable[..., LLMIntegration],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = llm_builder()
+    llm.use_ray = True
+
+    async def _ray_call(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise RuntimeError("ray down")
+
+    async def _local(prompt: str, task_type: str) -> dict[str, Any]:
+        return {"message": {"content": f"local::{prompt}::{task_type}"}}
+
+    monkeypatch.setattr(llm, "_ray_call", _ray_call, raising=False)
+    monkeypatch.setattr(llm, "_call_local_provider", _local, raising=False)
+
+    result = await llm.generate_response("hello", "general")
+
+    assert result["text"].startswith("local::")
+    assert result["text"].endswith("::general")
+    assert "hello" in result["text"]
+    assert result["source"] == "local"
 
 
 @pytest.mark.asyncio
