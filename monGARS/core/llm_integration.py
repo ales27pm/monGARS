@@ -52,6 +52,7 @@ else:
 logger = logging.getLogger(__name__)
 
 _UNSLOTH_STATE: dict[str, Any] | None = None
+_UNSLOTH_LOCK = threading.Lock()
 
 
 def initialize_unsloth(force: bool = False) -> dict[str, Any]:
@@ -65,53 +66,52 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
     """
 
     global _UNSLOTH_STATE
-    if _UNSLOTH_STATE is not None and not force:
-        return _UNSLOTH_STATE
+    with _UNSLOTH_LOCK:
+        if _UNSLOTH_STATE is not None and not force:
+            return _UNSLOTH_STATE
 
-    state: dict[str, Any] = {
-        "available": False,
-        "patched": False,
-        "speedup_multiplier": 1.0,
-        "vram_reduction_fraction": 0.0,
-        "reference_model": "dolphin-x1-unsloth",
-    }
+        state: dict[str, Any] = {
+            "available": False,
+            "patched": False,
+            "speedup_multiplier": 1.0,
+            "vram_reduction_fraction": 0.0,
+            "reference_model": "dolphin-x1-unsloth",
+        }
 
-    try:  # pragma: no cover - defensive import guard
-        import unsloth  # type: ignore
-    except Exception as exc:  # pragma: no cover - optional dependency
-        logger.warning(
-            "llm.unsloth.unavailable", extra={"reason": str(exc)[:200]}
-        )
-        state["error"] = str(exc)
+        try:  # pragma: no cover - defensive import guard
+            import unsloth  # type: ignore
+        except Exception as exc:  # pragma: no cover - optional dependency
+            logger.warning("llm.unsloth.unavailable", extra={"reason": str(exc)[:200]})
+            state["error"] = str(exc)
+            _UNSLOTH_STATE = state
+            return state
+
+        try:
+            patch_result = unsloth.patch_torch()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("llm.unsloth.patch_failed", exc_info=exc)
+            state.update({"available": True, "error": str(exc)})
+        else:
+            if isinstance(patch_result, Mapping):
+                success_value = patch_result.get("success")
+                if success_value is None:
+                    success_value = patch_result.get("patched")
+                patched = bool(success_value)
+            elif isinstance(patch_result, bool):
+                patched = patch_result
+            else:
+                patched = bool(patch_result)
+            state.update(
+                {
+                    "available": True,
+                    "patched": patched,
+                    "speedup_multiplier": 2.0 if patched else 1.0,
+                    "vram_reduction_fraction": 0.70 if patched else 0.0,
+                }
+            )
+
         _UNSLOTH_STATE = state
         return state
-
-    try:
-        patch_result = unsloth.patch_torch()
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception("llm.unsloth.patch_failed", exc_info=exc)
-        state.update({"available": True, "error": str(exc)})
-    else:
-        if isinstance(patch_result, Mapping):
-            success_value = patch_result.get("success")
-            if success_value is None:
-                success_value = patch_result.get("patched")
-            patched = bool(success_value)
-        elif isinstance(patch_result, bool):
-            patched = patch_result
-        else:
-            patched = bool(patch_result)
-        state.update(
-            {
-                "available": True,
-                "patched": patched,
-                "speedup_multiplier": 2.0 if patched else 1.0,
-                "vram_reduction_fraction": 0.70 if patched else 0.0,
-            }
-        )
-
-    _UNSLOTH_STATE = state
-    return state
 
 
 STREAM_CHUNK_SIZE = 64
@@ -364,7 +364,9 @@ class UnifiedLLMRuntime:
         if quantization_mode in {LLMQuantization.GPTQ, LLMQuantization.FP8}:
             logger.warning(
                 "llm.quantization.unsupported",
-                extra={"requested": getattr(quantization_mode, "value", quantization_mode)},
+                extra={
+                    "requested": getattr(quantization_mode, "value", quantization_mode)
+                },
             )
             return None
         compute_dtype_name = getattr(
@@ -867,6 +869,9 @@ class LLMIntegration:
     def embed(self, texts: Sequence[str]) -> Any:
         """Return embeddings for ``texts`` using the shared LLM2Vec encoder."""
 
+        # The unified runtime exposes JSON-serialisable embeddings (currently a
+        # list of float vectors). Callers should treat the structure as
+        # runtime-defined because adapters may change the precision or shape.
         return self._runtime().embed(list(texts))
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -1138,56 +1143,73 @@ class LLMIntegration:
     async def _call_local_provider(self, prompt: str, task_type: str) -> dict[str, Any]:
         """Invoke the unified runtime locally and return its response."""
 
-        await self._ensure_local_models()
-        model_definition = self._model_manager.get_model_definition(task_type)
-        client = self._resolve_ollama_client()
         fallback_reason = "ollama_missing"
+        try:
+            await self._ensure_local_models()
+            model_definition = self._model_manager.get_model_definition(task_type)
+            client = self._resolve_ollama_client()
 
-        if client is not None and hasattr(client, "chat"):
-            fallback_reason = "ollama_error"
+            if client is not None and hasattr(client, "chat"):
+                fallback_reason = "ollama_error"
 
-            async def _ollama_request() -> dict[str, Any]:
-                messages = [{"role": "user", "content": prompt}]
-                options = self._slot_generation_kwargs(model_definition)
-                return await asyncio.to_thread(
-                    client.chat,
-                    model=model_definition.name,
-                    messages=messages,
-                    options=options,
-                )
+                async def _ollama_request() -> dict[str, Any]:
+                    messages = [{"role": "user", "content": prompt}]
+                    options = self._slot_generation_kwargs(model_definition)
+                    return await asyncio.to_thread(
+                        client.chat,
+                        model=model_definition.name,
+                        messages=messages,
+                        options=options,
+                    )
 
-            try:
-                response = await self._ollama_cb.call(_ollama_request)
-            except CircuitBreakerOpenError:
-                logger.warning(
-                    "llm.ollama.breaker_open",
-                    extra={"task_type": task_type, "model": model_definition.name},
-                )
-            except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception(
-                    "llm.ollama.error",
-                    extra={"task_type": task_type, "model": model_definition.name},
-                )
-            else:
-                normalized = self._normalize_local_response(response)
-                if normalized is not None:
-                    return normalized
+                try:
+                    response = await self._ollama_cb.call(_ollama_request)
+                except CircuitBreakerOpenError:
+                    logger.warning(
+                        "llm.ollama.breaker_open",
+                        extra={
+                            "task_type": task_type,
+                            "model": model_definition.name,
+                        },
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.exception(
+                        "llm.ollama.error",
+                        extra={
+                            "task_type": task_type,
+                            "model": model_definition.name,
+                        },
+                    )
+                else:
+                    normalized = self._normalize_local_response(response)
+                    if normalized is not None:
+                        return normalized
 
-        fallback_response = await self._slot_model_fallback(
-            prompt,
-            task_type,
-            reason=fallback_reason,
-            definition=model_definition,
-        )
-        if fallback_response is None:
-            raise self.LocalProviderError("Slot fallback unavailable")
-
-        normalized_fallback = self._normalize_local_response(fallback_response)
-        if normalized_fallback is None:
-            raise self.LocalProviderError(
-                "Slot fallback returned an unexpected payload"
+            fallback_response = await self._slot_model_fallback(
+                prompt,
+                task_type,
+                reason=fallback_reason,
+                definition=model_definition,
             )
-        return normalized_fallback
+            if fallback_response is None:
+                raise self.LocalProviderError("Slot fallback unavailable")
+
+            normalized_fallback = self._normalize_local_response(fallback_response)
+            if normalized_fallback is None:
+                raise self.LocalProviderError(
+                    "Slot fallback returned an unexpected payload"
+                )
+            return normalized_fallback
+        except self.LocalProviderError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception(
+                "llm.local_provider.unhandled_error",
+                extra={"task_type": task_type, "reason": fallback_reason},
+            )
+            raise self.LocalProviderError(
+                "Local provider raised an unexpected error"
+            ) from exc
 
     async def _generate_with_model_slot(
         self,
@@ -1228,7 +1250,7 @@ class LLMIntegration:
             return await self._generate_with_model_slot(
                 prompt, task_type, definition=definition
             )
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except Exception:  # pragma: no cover - defensive logging
             logger.exception(
                 "llm.local_provider.slot_failed",
                 extra={"task_type": task_type, "reason": reason},
@@ -1244,7 +1266,9 @@ class LLMIntegration:
         return ollama
 
     @staticmethod
-    def _normalize_local_response(payload: Mapping[str, Any] | Any) -> dict[str, Any] | None:
+    def _normalize_local_response(
+        payload: Mapping[str, Any] | Any,
+    ) -> dict[str, Any] | None:
         """Normalise provider payloads to the shared message contract."""
 
         if not isinstance(payload, Mapping):

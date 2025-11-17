@@ -9,7 +9,7 @@ import threading
 import uuid
 from concurrent.futures import Future
 from datetime import datetime
-from typing import Any, Coroutine, Optional, TypeVar
+from typing import Any, ClassVar, Coroutine, Optional, TypeVar
 
 from monGARS.config import get_settings
 from monGARS.core.cortex.curiosity_engine import CuriosityEngine
@@ -68,7 +68,7 @@ monitor = ToolReasoningMonitor()
 
 
 def generate_uuid() -> str:
-    """Generate deterministic UUID for tracing"""
+    """Generate a short random trace identifier for tool executions."""
 
     return str(uuid.uuid4())[:8]
 
@@ -245,7 +245,7 @@ class Orchestrator:
 class ReActOrchestrator:
     """Execute tools with deterministic tracing and ReAct reasoning."""
 
-    _SAFE_BUILTINS: dict[str, Any] = {
+    _SAFE_BUILTINS: ClassVar[dict[str, Any]] = {
         "abs": abs,
         "min": min,
         "max": max,
@@ -375,6 +375,10 @@ class ReActOrchestrator:
     def _execute_code(
         self, arguments: dict[str, Any], context: dict[str, Any]
     ) -> dict[str, Any]:
+        """Execute trusted Python snippets inside a constrained sandbox."""
+
+        # This helper is intended for operator-approved code only; untrusted
+        # callers must never gain access to the ``code_execution`` tool.
         code = arguments.get("code")
         if not isinstance(code, str) or not code.strip():
             return {
@@ -399,10 +403,11 @@ class ReActOrchestrator:
         stdout_buffer = io.StringIO()
         try:
             with contextlib.redirect_stdout(stdout_buffer):
-                exec(
+                exec(  # noqa: S102 - sandbox intentionally executes supplied code
                     compile(code, "<tool-exec>", "exec"), safe_globals, injected_locals
                 )
-        except Exception as exc:  # pragma: no cover - runtime execution failures
+        except Exception as exc:  # noqa: BLE001
+            # Sandbox must report arbitrary execution failures back to the caller.
             return {
                 "error": "execution_error",
                 "message": str(exc),
@@ -431,7 +436,7 @@ class ReActOrchestrator:
         def runner() -> None:
             try:
                 future.set_result(asyncio.run(coro))
-            except BaseException as exc:  # pragma: no cover - propagate failure
+            except Exception as exc:  # pragma: no cover - propagate failure
                 future.set_exception(exc)
 
         thread = threading.Thread(target=runner, daemon=True)
