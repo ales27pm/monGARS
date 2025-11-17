@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import REGISTRY, Counter, Histogram
 
-PROMETHEUS_REGISTRY = CollectorRegistry(auto_describe=True)
+PROMETHEUS_REGISTRY = REGISTRY
 
 HTTP_REQUESTS_TOTAL = Counter(
     "mongars_http_requests_total",

@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import GPUtil
 import psutil
@@ -24,6 +26,117 @@ TRAINING_TOKEN_COUNTER = meter.create_counter(
     unit="token",
     description="Approximate number of tokens processed during MNTP fine-tuning.",
 )
+LLM_TOKEN_COUNTER = meter.create_counter(
+    "llm.tokens",
+    unit="tokens",
+    description="Tokens processed",
+)
+LLM_LATENCY_HISTOGRAM = meter.create_histogram(
+    "llm.duration",
+    unit="ms",
+    description="LLM response time",
+)
+LLM_ERROR_COUNTER = meter.create_counter(
+    "llm.errors",
+    unit="errors",
+    description="LLM errors",
+)
+
+
+def _generate_uuid() -> str:
+    """Return a random hexadecimal UUID string."""
+
+    return uuid.uuid4().hex
+
+
+def generate_request_id() -> str:
+    """Return a globally unique identifier for a single LLM request."""
+
+    return _generate_uuid()
+
+
+def generate_conversation_id() -> str:
+    """Return a globally unique UUID4 identifier for ad-hoc conversations."""
+
+    return _generate_uuid()
+
+
+def _base_llm_attrs(
+    user_id: str | None,
+    conversation_id: str | None,
+) -> tuple[dict[str, str], str, str]:
+    resolved_user_id = user_id or "anonymous"
+    resolved_conversation_id = conversation_id or generate_conversation_id()
+    attributes = {
+        "user.id": resolved_user_id,
+        "conversation.id": resolved_conversation_id,
+    }
+    return attributes, resolved_user_id, resolved_conversation_id
+
+
+def annotate_llm_span(
+    span: trace.Span,
+    *,
+    model_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    temperature: float | None,
+    max_tokens: int | None,
+    user_id: str | None,
+    conversation_id: str | None,
+    request_id: str | None = None,
+) -> tuple[str, str, str]:
+    """Attach the required Dolphin-X1 metadata to an OpenTelemetry span.
+
+    Returns the resolved ``(user_id, conversation_id, request_id)`` tuple so the
+    caller can forward identifiers to downstream metrics sinks.
+    """
+
+    base_attributes, resolved_user_id, resolved_conversation_id = _base_llm_attrs(
+        user_id, conversation_id
+    )
+    resolved_request_id = request_id or generate_request_id()
+    attributes: dict[str, Any] = {
+        "llm.model_name": model_id,
+        "llm.system": "dolphin-x1",
+        "llm.token_count.prompt": input_tokens,
+        "llm.token_count.completion": output_tokens,
+        "request.id": resolved_request_id,
+        **base_attributes,
+    }
+    if temperature is not None:
+        attributes["llm.temperature"] = temperature
+    if max_tokens is not None:
+        attributes["llm.max_tokens"] = max_tokens
+    span.set_attributes(attributes)
+    return resolved_user_id, resolved_conversation_id, resolved_request_id
+
+
+def record_llm_metrics(
+    *,
+    model_id: str,
+    user_id: str,
+    conversation_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    latency_ms: float,
+    extra_attributes: dict[str, Any] | None = None,
+) -> None:
+    """Record token counts, latency, and correlation identifiers for an LLM call."""
+
+    base_attributes, _, _ = _base_llm_attrs(user_id, conversation_id)
+    attributes: dict[str, Any] = {"model": model_id, **base_attributes}
+    if extra_attributes:
+        attributes |= extra_attributes
+
+    prompt_attrs = dict(attributes)
+    prompt_attrs["llm.token_type"] = "prompt"
+    completion_attrs = dict(attributes)
+    completion_attrs["llm.token_type"] = "completion"
+
+    LLM_TOKEN_COUNTER.add(input_tokens, prompt_attrs)
+    LLM_TOKEN_COUNTER.add(output_tokens, completion_attrs)
+    LLM_LATENCY_HISTOGRAM.record(latency_ms, attributes)
 
 
 def get_tracer(name: str) -> trace.Tracer:
@@ -96,5 +209,12 @@ __all__ = [
     "TRAINING_CYCLE_COUNTER",
     "TRAINING_FAILURE_COUNTER",
     "TRAINING_TOKEN_COUNTER",
+    "LLM_TOKEN_COUNTER",
+    "LLM_LATENCY_HISTOGRAM",
+    "LLM_ERROR_COUNTER",
     "get_tracer",
+    "generate_request_id",
+    "generate_conversation_id",
+    "annotate_llm_span",
+    "record_llm_metrics",
 ]
