@@ -27,6 +27,9 @@ class ChatRequest(BaseModel):
 
     message: str
     session_id: str | None = None
+    allowed_actions: list[str] | None = None
+    approval_token: str | None = None
+    token_ref: str | None = None
 
 
 class SpeechSegment(BaseModel):

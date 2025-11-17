@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
@@ -196,3 +197,72 @@ class Credentials:
     def __init__(self, username: str, password: str) -> None:
         self.username = username
         self.password = password
+
+
+def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
+    """Check prompts for PII and enforce operator approval when required."""
+
+    from monGARS.core.operator_approvals import (
+        generate_approval_token,
+        log_blocked_attempt,
+        verify_approval_token,
+    )
+    from monGARS.core.pii_detection import detect_pii
+
+    pii_entities = detect_pii(prompt)
+    if not pii_entities:
+        return None
+
+    allowed_actions = [
+        str(action)
+        for action in context.get("allowed_actions", [])
+        if isinstance(action, str)
+    ]
+    sensitive_actions = [
+        "personal_data_access",
+        "financial_operation",
+        "identity_verification",
+    ]
+    has_sensitive_action = any(
+        action in allowed_actions for action in sensitive_actions
+    )
+    if not has_sensitive_action:
+        return None
+
+    fingerprint = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+    user_id = str(context.get("user_id") or "anonymous")
+    token_ref = str(context.get("token_ref") or context.get("approval_token_ref") or "")
+    approval_token = context.get("approval_token")
+
+    if approval_token and token_ref:
+        if verify_approval_token(
+            user_id=user_id,
+            token_ref=token_ref,
+            approval_token=str(approval_token),
+            prompt_hash=fingerprint,
+        ):
+            return None
+        log.warning(
+            "security.guard.invalid_approval_token",
+            extra={"user_id": user_id, "token_ref": token_ref},
+        )
+
+    audit_ref = log_blocked_attempt(
+        user_id=user_id,
+        prompt_hash=fingerprint,
+        pii_entities=pii_entities,
+        required_action="approval",
+        context=context,
+    )
+    approval_payload = generate_approval_token(user_id, audit_ref)
+    message = "This request requires human approval due to sensitive data"
+    if approval_token and token_ref:
+        message = "Invalid approval token provided"
+
+    return {
+        "error": "approval_required",
+        "token_ref": audit_ref,
+        "blocked_entities": [entity.type for entity in pii_entities],
+        "approval_token": approval_payload,
+        "message": message,
+    }

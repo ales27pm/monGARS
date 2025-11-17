@@ -56,6 +56,9 @@ class ChatRequest(BaseModel):
 
     message: str = Field(..., min_length=1, max_length=1000)
     session_id: str | None = Field(default=None, max_length=100)
+    allowed_actions: list[str] | None = None
+    approval_token: str | None = Field(default=None, max_length=128)
+    token_ref: str | None = Field(default=None, max_length=64)
 
     @field_validator("message")
     @classmethod
@@ -74,6 +77,30 @@ class ChatRequest(BaseModel):
         if not cleaned:
             raise ValueError("session_id cannot be empty")
         return cleaned
+
+    @field_validator("allowed_actions")
+    @classmethod
+    def validate_allowed_actions(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalised: list[str] = []
+        for action in value:
+            cleaned = action.strip()
+            if not cleaned:
+                raise ValueError("allowed_actions cannot contain empty values")
+            if cleaned not in normalised:
+                normalised.append(cleaned)
+        if not normalised:
+            raise ValueError("allowed_actions must include at least one value")
+        return normalised
+
+    @field_validator("approval_token", "token_ref")
+    @classmethod
+    def validate_tokens(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class SpeechSegmentSchema(BaseModel):

@@ -63,6 +63,32 @@
       "ChatRequest": {
         "description": "Incoming chat message sent to the conversational endpoint.",
         "properties": {
+          "allowed_actions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Actions"
+          },
+          "approval_token": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Token"
+          },
           "message": {
             "maxLength": 1000,
             "minLength": 1,
@@ -80,6 +106,18 @@
               }
             ],
             "title": "Session Id"
+          },
+          "token_ref": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Ref"
           }
         },
         "required": [
@@ -127,6 +165,67 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LLMHealthResponse": {
+        "description": "Response returned by the low-level LLM health endpoint.",
+        "properties": {
+          "backend": {
+            "enum": [
+              "local",
+              "ray",
+              "unavailable"
+            ],
+            "title": "Backend",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "last_check": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Check"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "status": {
+            "enum": [
+              "healthy",
+              "unhealthy"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "backend"
+        ],
+        "title": "LLMHealthResponse",
         "type": "object"
       },
       "LLMModelConfigurationResponse": {
@@ -1612,6 +1711,73 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/llm/chat": {
+      "post": {
+        "operationId": "chat_endpoint_llm_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Chat Endpoint",
+        "tags": [
+          "llm"
+        ]
+      }
+    },
+    "/llm/health": {
+      "get": {
+        "operationId": "llm_health_llm_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMHealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Llm Health",
+        "tags": [
+          "llm"
+        ]
       }
     },
     "/ready": {

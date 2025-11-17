@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - fallback when exceptions module changes
 
 
 from monGARS.config import get_settings
-from monGARS.core.llm_integration import LLMIntegration
+from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -78,6 +78,9 @@ class RayLLMDeployment:
         prompt = request_data.get("prompt", "")
         default_max_tokens = getattr(settings.model, "max_new_tokens", None)
         max_tokens = request_data.get("max_new_tokens", default_max_tokens)
+        context = request_data.get("context")
+        if not isinstance(context, dict):
+            context = {}
 
         if not prompt:
             return {"error": "empty_prompt", "message": "Prompt cannot be empty"}
@@ -86,7 +89,9 @@ class RayLLMDeployment:
             kwargs: dict[str, Any] = {}
             if max_tokens is not None:
                 kwargs["max_new_tokens"] = max_tokens
-            response = self.llm.generate(prompt, **kwargs)
+            response = self.llm.generate(prompt, context=context, **kwargs)
+        except GuardRejectionError as exc:
+            return dict(exc.payload)
         except Exception as exc:  # pragma: no cover - unexpected runtime failure
             logger.exception(
                 "ray_llm.generation_failed",
