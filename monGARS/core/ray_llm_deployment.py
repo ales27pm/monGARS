@@ -58,20 +58,20 @@ class RayLLMDeployment:
                     "status": "unhealthy",
                     "last_check": self.health_check_timestamp,
                     "detail": str(exc),
-                    "model": settings.llm.model_name,
+                    "model": settings.unified_model_dir.name,
                 }
             if isinstance(result, dict) and result.get("error"):
                 return {
                     "status": "unhealthy",
                     "last_check": self.health_check_timestamp,
                     "detail": result.get("message") or result.get("error"),
-                    "model": settings.llm.model_name,
+                    "model": settings.unified_model_dir.name,
                 }
             self.health_check_timestamp = now
         return {
             "status": "healthy",
             "last_check": self.health_check_timestamp,
-            "model": settings.llm.model_name,
+            "model": settings.unified_model_dir.name,
         }
 
     async def __call__(self, request_data: dict[str, Any]) -> dict[str, Any]:
@@ -104,7 +104,7 @@ class RayLLMDeployment:
                 tokens_used = None
         payload: dict[str, Any] = {
             "response": response,
-            "model": settings.llm.model_name,
+            "model": settings.unified_model_dir.name,
         }
         if tokens_used is not None:
             payload["tokens_used"] = tokens_used
