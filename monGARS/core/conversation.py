@@ -22,7 +22,6 @@ from monGARS.core.llm_integration import (
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
 from monGARS.core.neuro_symbolic.advanced_reasoner import AdvancedReasoner
-from monGARS.core.neurones import EmbeddingSystem
 from monGARS.core.persistence import PersistenceRepository, VectorMatch
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.services import MemoryService, SpeakerService
@@ -245,7 +244,6 @@ class ConversationalModule:
         speaker: Optional[SpeakerService] = None,
         persistence: Optional[PersistenceRepository] = None,
     ) -> None:
-        self.embedding_system = EmbeddingSystem()
         self.llm = llm or LLMIntegration()
         self.reasoner = reasoner or AdvancedReasoner()
         self.curiosity = curiosity or CuriosityEngine()

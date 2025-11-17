@@ -107,11 +107,6 @@ def patch_dependencies(monkeypatch):
             )
         ),
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "monGARS.core.neurones",
-        types.SimpleNamespace(EmbeddingSystem=lambda *a, **k: None),
-    )
     monkeypatch.setattr(
         trafilatura_metadata,
         "extract_metadata",

@@ -9,18 +9,24 @@ from monGARS.core.self_training import SelfTrainingEngine
 
 
 @pytest.fixture(autouse=True)
-def fake_embedding_system(monkeypatch: pytest.MonkeyPatch) -> None:
-    class DummyEmbeddingSystem:
+def fake_llm_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyLLMIntegration:
         def __init__(self) -> None:
-            self.encodes: list[str] = []
+            self.requests: list[list[str]] = []
 
-        async def encode(self, text: str) -> tuple[list[float], bool]:
-            self.encodes.append(text)
-            return [float(len(text))], False
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            cleaned = [str(text) for text in texts]
+            self.requests.append(cleaned)
+            return [[float(len(text))] for text in cleaned]
+
+    dummy = DummyLLMIntegration()
+
+    def fake_instance(cls):  # type: ignore[unused-argument]
+        return dummy
 
     monkeypatch.setattr(
-        "monGARS.core.self_training.EmbeddingSystem",
-        DummyEmbeddingSystem,
+        "monGARS.core.self_training.LLMIntegration.instance",
+        classmethod(fake_instance),
     )
 
 
