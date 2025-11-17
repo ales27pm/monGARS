@@ -33,13 +33,23 @@ operator can review it from the Django console or offline tooling.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 from uuid import uuid4
+
+from monGARS.config import get_settings
+
+if TYPE_CHECKING:
+    from .pii_detection import PIIEntity
+
+logger = logging.getLogger(__name__)
 
 ApprovalPolicy = Callable[[Mapping[str, Any]], bool]
 
@@ -243,8 +253,90 @@ class OperatorApprovalRegistry:
             yield request
 
 
+_AUDIT_SOURCE = "security.guardrail"
+_DEFAULT_APPROVALS_PATH = Path("models/encoders/operator_approvals.json")
+_GLOBAL_REGISTRY: OperatorApprovalRegistry | None = None
+_GLOBAL_REGISTRY_LOCK = threading.Lock()
+
+
+def _default_registry() -> OperatorApprovalRegistry:
+    global _GLOBAL_REGISTRY
+    with _GLOBAL_REGISTRY_LOCK:
+        if _GLOBAL_REGISTRY is None:
+            _GLOBAL_REGISTRY = OperatorApprovalRegistry(_DEFAULT_APPROVALS_PATH)
+        return _GLOBAL_REGISTRY
+
+
+def log_blocked_attempt(
+    *,
+    user_id: str,
+    prompt_hash: str,
+    pii_entities: Sequence["PIIEntity"],
+    required_action: str,
+    context: Mapping[str, Any],
+    registry: OperatorApprovalRegistry | None = None,
+) -> str:
+    """Persist details about a blocked security guardrail decision."""
+
+    if not user_id:
+        user_id = "anonymous"
+    if not prompt_hash:
+        raise ValueError("prompt_hash must not be empty")
+    if not required_action:
+        raise ValueError("required_action must not be empty")
+
+    serialized_entities = [
+        {
+            "type": entity.type,
+            "value_preview": entity.value[:64],
+            "start": entity.start,
+            "end": entity.end,
+        }
+        for entity in pii_entities
+    ]
+
+    payload = {
+        "user_id": user_id,
+        "prompt_hash": prompt_hash,
+        "required_action": required_action,
+        "pii_entities": serialized_entities,
+        "context_snapshot": _normalise_payload(context),
+        "blocked_at": _utcnow_isoformat(),
+    }
+
+    approval_registry = registry or _default_registry()
+    request = approval_registry.submit(source=_AUDIT_SOURCE, payload=payload)
+
+    logger.info(
+        "operator_approvals.blocked_request_logged",
+        extra={
+            "source": _AUDIT_SOURCE,
+            "request_id": request.request_id,
+            "user_id": user_id,
+            "prompt_hash": prompt_hash,
+            "blocked_entity_types": sorted({e["type"] for e in serialized_entities}),
+        },
+    )
+
+    return request.request_id
+
+
+def generate_approval_token(user_id: str, token_ref: str) -> str:
+    """Return a deterministic approval token tied to ``user_id`` and reference."""
+
+    if not token_ref:
+        raise ValueError("token_ref must not be empty")
+    user_identifier = user_id or "anonymous"
+    secret = get_settings().SECRET_KEY or "monGARS-approval-secret"
+    payload = f"{user_identifier}:{token_ref}".encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return digest[:32]
+
+
 __all__ = [
     "ApprovalRequest",
     "OperatorApprovalRegistry",
     "ApprovalPolicy",
+    "log_blocked_attempt",
+    "generate_approval_token",
 ]

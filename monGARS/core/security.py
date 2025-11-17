@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
@@ -196,3 +197,51 @@ class Credentials:
     def __init__(self, username: str, password: str) -> None:
         self.username = username
         self.password = password
+
+
+def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
+    """Check for PII and sensitive actions before generation"""
+    from monGARS.core.pii_detection import detect_pii
+    from monGARS.core.operator_approvals import (
+        log_blocked_attempt,
+        generate_approval_token,
+    )
+
+    # Detect PII entities in prompt
+    pii_entities = detect_pii(prompt)
+    if not pii_entities:
+        return None
+
+    # Check for sensitive actions in context
+    sensitive_actions = [
+        "personal_data_access",
+        "financial_operation",
+        "identity_verification",
+    ]
+    has_sensitive_action = any(
+        action in context.get("allowed_actions", []) for action in sensitive_actions
+    )
+
+    # Block if sensitive action requires approval
+    if has_sensitive_action and "approval_token" not in context:
+        fingerprint = hashlib.sha256(prompt.encode()).hexdigest()[:8]
+        user_id = context.get("user_id", "anonymous")
+        token_ref = log_blocked_attempt(
+            user_id=user_id,
+            prompt_hash=fingerprint,
+            pii_entities=pii_entities,
+            required_action="approval",
+            context=context,
+        )
+
+        approval_token = generate_approval_token(user_id, token_ref)
+
+        return {
+            "error": "approval_required",
+            "token_ref": token_ref,
+            "blocked_entities": [entity.type for entity in pii_entities],
+            "approval_token": approval_token,
+            "message": "This request requires human approval due to sensitive data",
+        }
+
+    return None

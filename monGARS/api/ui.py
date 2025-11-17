@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 
 from fastapi import APIRouter, Depends
@@ -39,21 +40,46 @@ async def suggestions(
         },
     }
 
-    ordered = await asyncio.to_thread(
-        _suggester.suggest,
-        prompt,
-        action_names,
-        context,
-    )
+    ordered: list[str] = []
+    explicit_scores: dict[str, float] | None = None
+    action_pairs = [(action, desc_map.get(action, action)) for action in action_names]
+
+    if hasattr(_suggester, "order"):
+        order_callable = getattr(_suggester, "order")
+        result = order_callable(prompt, action_pairs)
+        if inspect.isawaitable(result):
+            ordered_result, score_map = await result  # type: ignore[misc]
+        else:
+            ordered_result, score_map = result  # type: ignore[misc]
+        ordered = [action for action in ordered_result if isinstance(action, str)]
+        explicit_scores = {
+            str(action): float(value) for action, value in (score_map or {}).items()
+        }
+    else:
+        ordered = await asyncio.to_thread(
+            _suggester.suggest,
+            prompt,
+            action_names,
+            context,
+        )
+
     if not ordered:
         ordered = list(action_names)
     else:
         remaining = [action for action in action_names if action not in ordered]
         ordered = ordered + remaining
 
-    scores = {
-        action: float(len(ordered) - index) for index, action in enumerate(ordered)
-    }
+    if explicit_scores is None:
+        scores = {
+            action: float(len(ordered) - index) for index, action in enumerate(ordered)
+        }
+    else:
+        scores: dict[str, float] = {}
+        for index, action in enumerate(ordered):
+            value = explicit_scores.get(action)
+            if value is None:
+                value = float(len(ordered) - index)
+            scores[action] = float(value)
     model_name = _suggester.model_name
     logger.debug(
         "aui_suggestions_generated",

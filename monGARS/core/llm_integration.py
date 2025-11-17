@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import hashlib
+import json
 import logging
 import os
 import re
@@ -36,6 +37,7 @@ from .inference_utils import (
     CHATML_START_HEADER,
 )
 from .model_manager import LLMModelManager, ModelDefinition
+from .security import pre_generation_guard
 from .ui_events import event_bus, make_event
 
 _NotImplError = getattr(builtins, "NotImplemented" + "Error")
@@ -861,9 +863,14 @@ class LLMIntegration:
         self.__class__._unified_service = runtime
         return runtime
 
-    def generate(self, prompt: str, **kwargs: Any) -> str:
+    def generate(self, prompt: str, context: dict | None = None, **kwargs: Any) -> str:
         """Synchronously generate text via the unified Dolphin-X1 runtime."""
 
+        context = context or {}
+        guard_result = pre_generation_guard(prompt, context)
+        if guard_result:
+            return json.dumps(guard_result)
+        # Continue with normal generation
         return self._runtime().generate(prompt, **kwargs)
 
     def embed(self, texts: Sequence[str]) -> Any:
