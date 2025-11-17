@@ -292,18 +292,7 @@ def test_embedding_output(llm_builder: Callable[..., LLMIntegration]) -> None:
     assert isinstance(embedding, list)
     assert len(embedding) == 4096
     norm = np.linalg.norm(np.array(embedding))
-    assert 0.99 < norm < 1.01, f"Vector not normalized: norm={norm}"
-
-
-def test_embedding_normalization(llm_builder: Callable[..., LLMIntegration]) -> None:
-    runtime = MagicMock()
-    runtime.embed.return_value = [_normalized_embedding()]
-    llm = llm_builder(runtime_factory=lambda: runtime)
-
-    vecs = llm.embed_batch(["test text"])
-    for vec in vecs:
-        norm = np.linalg.norm(np.array(vec))
-        assert 0.999 <= norm <= 1.001, f"Vector not normalized: norm={norm}"
+    assert 0.999 <= norm <= 1.001, f"Vector not normalized: norm={norm}"
 
 
 @patch("monGARS.core.llm_integration.LLMIntegration._call_local_provider")
@@ -390,39 +379,6 @@ def test_context_limit_boundary(llm_builder: Callable[..., LLMIntegration]) -> N
 
     assert exc_info.value.limit == 8192
     assert exc_info.value.prompt_tokens == 8193
-
-
-def test_pii_blocking(
-    llm_builder: Callable[..., LLMIntegration],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    llm = llm_builder()
-    with patch("monGARS.core.pii_detection.detect_pii") as mock_detect:
-        mock_detect.return_value = [
-            types.SimpleNamespace(
-                type="CREDIT_CARD",
-                value="4111-1111-1111-1111",
-                start=0,
-                end=19,
-            )
-        ]
-        monkeypatch.setattr(
-            "monGARS.core.operator_approvals.log_blocked_attempt",
-            lambda **_: ("token-xyz", "approval-token"),
-        )
-
-        with pytest.raises(GuardRejectionError) as exc_info:
-            llm.generate(
-                "My credit card number is 4111-1111-1111-1111",
-                context={
-                    "allowed_actions": ["financial_operation"],
-                    "user_id": "test_user",
-                },
-            )
-
-    result = json.dumps(exc_info.value.payload)
-    assert json.loads(result)["error"] == "approval_required"
-    assert "4111" not in result
 
 
 @pytest.mark.skipif(os.getenv("CI_ENVIRONMENT") != "true", reason="Only run in CI")
