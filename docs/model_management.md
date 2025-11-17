@@ -90,11 +90,13 @@ pipelines.
 ## Runtime Behaviour
 
 - `LLMIntegration` calls `LLMModelManager.ensure_models_installed()` before
-  dispatching to Ollama, ensuring the active profile is available even after
-  container rebuilds. When local execution is required it now lazy-loads the
-  quantized Dolphin-X1 bundle from `settings.unified_model_dir` (or the
-  `MONOGARS_UNIFIED_MODEL_DIR` override) through a singleton
-  `LLM2Vec.from_pretrained(...)` runtime so chat and embeddings share weights.
+  resolving task-specific adapters and now relies on
+  `monGARS.core.llm_integration.UnifiedLLMRuntime` for both chat and
+  embeddings. The singleton loads the Dolphin-X1 checkpoint defined by
+  `settings.unified_model_dir` once, constructs both the LLM2Vec encoder and
+  `AutoModelForCausalLM` with matching tokenizers, and exposes synchronous
+  `generate`/`embed` helpers backed by 4-bit NF4 quantisation whenever CUDA is
+  available.
 - When Ray Serve is enabled, adapter manifests stored under
   `settings.llm_adapter_registry_path` keep API workers and Ray replicas aligned
   with the latest training artefacts.
@@ -103,24 +105,20 @@ pipelines.
 
 ### Inference Backend & Fallback Path
 
-- Model definitions are sourced from `configs/llm_models.json`. The default
-  profile declares two roles—`general` and `coding`—that both target the
-  Dolphin-X1 family via the Ollama provider. Each entry includes provider
-  options (`temperature`, `top_p`, `num_predict`, etc.) that are merged with the
-  runtime settings pulled from `monGARS.config.get_settings()`.
-- `LLMModelManager` currently only instantiates Ollama-backed definitions. Any
-  manifest entry referencing an unsupported provider is skipped, and a warning
-  is logged so operators can reconcile the mismatch before traffic is routed to that role.
-  During request handling, `LLMIntegration` invokes `ollama.chat` through
-  `_ollama_call`. User prompts are sent as chat messages, and Ollama receives
-  the consolidated generation options from the model definition and global
-  settings. Responses stream back as text, which is surfaced to the caller and emitted on the UI event bus.
-- If Ollama is unavailable—because the socket connection fails or the client is
-  missing—the integration falls back to the unified runtime via
-  `_generate_with_model_slot`, which reuses the cached LLM2Vec instance and
-  AutoModelForCausalLM weights with 4-bit NF4 quantisation. Structured logs
-  capture the transition so on-call teams understand when the system is running
-  on the degraded path without re-downloading checkpoints.
+- Model definitions are still sourced from `configs/llm_models.json`, but roles
+  now primarily control sampling defaults (`temperature`, `top_p`,
+  `max_new_tokens`) that are merged with the quantisation settings exposed under
+  `settings.model.*`. Each task routes directly to
+  `UnifiedLLMRuntime.generate(...)`, ensuring conversational traffic, RAG
+  reranking, and embeddings share the same tokenizer and adapter weights.
+- The runtime automatically applies 4-bit NF4 quantisation when CUDA is
+  available and falls back to BF16/FP32 execution on CPU hosts. All loading and
+  inference runs through `asyncio.to_thread(...)` so event loops remain
+  responsive even when synchronous callers trigger local inference.
+- Legacy Ollama/Unsloth slots have been removed. If the runtime fails to load
+  or serve a request, `LLMRuntimeError` bubbles up to orchestrators and API
+  handlers, which surface structured errors and fall back to deterministic
+  responses instead of attempting to invoke a second provider.
 
 ### Embedding Strategy
 
@@ -141,52 +139,29 @@ pipelines.
   drive both conversational and retrieval workloads. The embedding path uses
   mean pooling with deterministic attention-mask weighting and optional
   normalisation configured by the manifest.【F:scripts/export_llm2vec_wrapper.py†L57-L168】
-- `LLMIntegration.generate`/`embed` are thin wrappers on top of the shared
-  runtime, meaning conversational responses and stored vectors come from the
-  same tokenizer, LoRA adapters, and mean-pooling strategy described in
-  `build_unified_dolphin_x1_enhanced.py`. Operators can still export the
+- `UnifiedLLMRuntime.generate`/`embed` keep conversational responses and stored
+  vectors aligned with the tokenizer, adapters, and pooling strategy described
+  in `build_unified_dolphin_x1_enhanced.py`. Operators can still export the
   embedding service independently via `scripts/run_llm2vec_service.py`, which
   offers the same quantisation and device-pinning knobs for HTTP deployments.【F:scripts/run_llm2vec_service.py†L1-L204】
 
-### Unsloth Optimisations & VRAM Troubleshooting
+### Quantisation Controls & VRAM Troubleshooting
 
-- Local fallback slots rely on Unsloth's `FastLanguageModel` to provide 4-bit
-  loading, quantisation-aware LoRA adapters, and gradient checkpointing. These
-  hooks are applied when `ModelSlotManager` initialises a slot; if Unsloth is
-  missing, slot acquisition fails early with an actionable error.
-- `LLMIntegration.initialize_unsloth()` attempts to patch PyTorch at startup so
-  fused kernels and quantisation paths are ready before any slot is acquired. A
-  structured log (`llm.unsloth.patched`) confirms whether the patch succeeded.
-  The helper reports a 70% VRAM reduction baseline for the reference Dolphin-X1
-  adapter.
-- Use `python -m scripts.diagnose_unsloth` to inspect whether the optimisation
-  was applied and to capture current CUDA memory headroom. The command now emits
-  an extended JSON payload that records Python, PyTorch, and Unsloth versions
-  alongside per-device VRAM usage (free, reserved, and allocated bytes plus
-  utilisation ratios). Add `--all-devices` to iterate over every visible GPU,
-  `--force` to re-apply the patch, or `--no-cuda` to skip GPU inspection when
-  debugging on shared hosts. Supply `--min-free-gib` and `--min-free-ratio`
-  thresholds to tune when OOM risk should be flagged; the CLI now summarises the
-  highest observed risk level and surfaces remediation steps (context length
-  tuning, offload thresholds, gradient accumulation, allocator defragmentation)
-  for each device.
-- Review the CLI output when the patch fails: the `environment.unsloth` section
-  surfaces the installed package location and version, while
-  `environment.torch` confirms whether CUDA support is compiled in. Missing or
-  mismatched wheels often explain persistent OOM conditions even after the
-  patch reports success.
-- If you continue to hit OOM conditions even with Unsloth enabled, reduce the
-  `max_seq_length` configured for each slot (defaults to 2048 tokens) or lower
-  the `offload_threshold` so snapshots are taken earlier. Both parameters are
-  accepted by `ModelSlotManager` and can be tuned where slots are instantiated
-  (for example in worker startup code) to keep VRAM usage under the budget of
-  8–12 GB consumer GPUs.
-- When fine-tuning LoRA adapters, prefer gradient accumulation over larger
-  per-device batches so that Unsloth's quantisation savings are not offset by
-  training-time activations. The diagnostics script highlights `allocated` vs
-  `reserved` VRAM; a high reserved fraction with low allocation indicates that
-  fragmentation or peer memory pools are the bottleneck rather than model
-  weights alone.
+- Quantisation knobs have moved into `settings.model.*`. Operators can toggle
+  `quantize_4bit`, `bnb_4bit_quant_type`, `bnb_4bit_compute_dtype`, and
+  `bnb_4bit_use_double_quant` to match the hardware profile. These settings are
+  consumed directly by `UnifiedLLMRuntime` so both the generator and LLM2Vec
+  encoder share the same precision strategy.
+- Structured logs (`llm_runtime_load`, `llm_generate`, `llm_embed`) now include
+  token counts and device metadata, making it easy to spot when requests fall
+  back to CPU or when quantisation is disabled. Review these logs alongside the
+  existing `scripts.diagnose_unsloth` output to correlate memory pressure with
+  runtime behaviour.
+- When memory pressure persists, reduce the generation target exposed via
+  `settings.model.max_new_tokens` or lower the per-role overrides in
+  `configs/llm_models.json`. The runtime enforces these bounds uniformly across
+  orchestrators so aggressive defaults no longer leak through specific code
+  paths.
 
 ## Extending Profiles
 
