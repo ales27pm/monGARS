@@ -200,48 +200,69 @@ class Credentials:
 
 
 def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
-    """Check for PII and sensitive actions before generation"""
-    from monGARS.core.pii_detection import detect_pii
-    from monGARS.core.operator_approvals import (
-        log_blocked_attempt,
-        generate_approval_token,
-    )
+    """Check prompts for PII and enforce operator approval when required."""
 
-    # Detect PII entities in prompt
+    from monGARS.core.operator_approvals import (
+        generate_approval_token,
+        log_blocked_attempt,
+        verify_approval_token,
+    )
+    from monGARS.core.pii_detection import detect_pii
+
     pii_entities = detect_pii(prompt)
     if not pii_entities:
         return None
 
-    # Check for sensitive actions in context
+    allowed_actions = [
+        str(action)
+        for action in context.get("allowed_actions", [])
+        if isinstance(action, str)
+    ]
     sensitive_actions = [
         "personal_data_access",
         "financial_operation",
         "identity_verification",
     ]
     has_sensitive_action = any(
-        action in context.get("allowed_actions", []) for action in sensitive_actions
+        action in allowed_actions for action in sensitive_actions
     )
+    if not has_sensitive_action:
+        return None
 
-    # Block if sensitive action requires approval
-    if has_sensitive_action and "approval_token" not in context:
-        fingerprint = hashlib.sha256(prompt.encode()).hexdigest()[:8]
-        user_id = context.get("user_id", "anonymous")
-        token_ref = log_blocked_attempt(
+    fingerprint = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+    user_id = str(context.get("user_id") or "anonymous")
+    token_ref = str(context.get("token_ref") or context.get("approval_token_ref") or "")
+    approval_token = context.get("approval_token")
+
+    if approval_token and token_ref:
+        if verify_approval_token(
             user_id=user_id,
+            token_ref=token_ref,
+            approval_token=str(approval_token),
             prompt_hash=fingerprint,
-            pii_entities=pii_entities,
-            required_action="approval",
-            context=context,
+        ):
+            return None
+        log.warning(
+            "security.guard.invalid_approval_token",
+            extra={"user_id": user_id, "token_ref": token_ref},
         )
 
-        approval_token = generate_approval_token(user_id, token_ref)
+    audit_ref = log_blocked_attempt(
+        user_id=user_id,
+        prompt_hash=fingerprint,
+        pii_entities=pii_entities,
+        required_action="approval",
+        context=context,
+    )
+    approval_payload = generate_approval_token(user_id, audit_ref)
+    message = "This request requires human approval due to sensitive data"
+    if approval_token and token_ref:
+        message = "Invalid approval token provided"
 
-        return {
-            "error": "approval_required",
-            "token_ref": token_ref,
-            "blocked_entities": [entity.type for entity in pii_entities],
-            "approval_token": approval_token,
-            "message": "This request requires human approval due to sensitive data",
-        }
-
-    return None
+    return {
+        "error": "approval_required",
+        "token_ref": audit_ref,
+        "blocked_entities": [entity.type for entity in pii_entities],
+        "approval_token": approval_payload,
+        "message": message,
+    }

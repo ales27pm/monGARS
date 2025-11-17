@@ -53,6 +53,16 @@ else:
 
 logger = logging.getLogger(__name__)
 
+
+class GuardRejectionError(RuntimeError):
+    """Raised when the pre-generation guard blocks a request."""
+
+    def __init__(self, payload: Mapping[str, Any]) -> None:
+        message = str(payload.get("message") or "Request blocked by guardrail")
+        super().__init__(message)
+        self.payload = dict(payload)
+
+
 _UNSLOTH_STATE: dict[str, Any] | None = None
 _UNSLOTH_LOCK = threading.Lock()
 
@@ -863,14 +873,15 @@ class LLMIntegration:
         self.__class__._unified_service = runtime
         return runtime
 
-    def generate(self, prompt: str, context: dict | None = None, **kwargs: Any) -> str:
+    def generate(
+        self, prompt: str, context: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> str:
         """Synchronously generate text via the unified Dolphin-X1 runtime."""
 
-        context = context or {}
-        guard_result = pre_generation_guard(prompt, context)
+        guard_context = dict(context) if isinstance(context, Mapping) else {}
+        guard_result = pre_generation_guard(prompt, guard_context)
         if guard_result:
-            return json.dumps(guard_result)
-        # Continue with normal generation
+            raise GuardRejectionError(guard_result)
         return self._runtime().generate(prompt, **kwargs)
 
     def embed(self, texts: Sequence[str]) -> Any:

@@ -17,7 +17,7 @@ except ImportError:  # Python 3.10 fallback
     UTC = timezone.utc
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any
+from typing import Annotated, Any, Mapping
 
 try:  # pragma: no cover - ray is optional
     import ray
@@ -103,7 +103,11 @@ from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
-from monGARS.core.llm_integration import CircuitBreakerOpenError, LLMIntegration
+from monGARS.core.llm_integration import (
+    CircuitBreakerOpenError,
+    GuardRejectionError,
+    LLMIntegration,
+)
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
@@ -356,7 +360,10 @@ def _ray_backend_available() -> bool:
 
 
 async def _invoke_ray_chat(
-    prompt: str, *, max_new_tokens: int | None
+    prompt: str,
+    *,
+    max_new_tokens: int | None,
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not _ray_backend_available():
         if _ray_backend_configured() and ray is None:
@@ -373,6 +380,8 @@ async def _invoke_ray_chat(
     payload: dict[str, Any] = {"prompt": prompt}
     if max_new_tokens is not None:
         payload["max_new_tokens"] = max_new_tokens
+    if context:
+        payload["context"] = dict(context)
     try:
         return await handle.remote(payload)
     except (RayServeException, asyncio.TimeoutError) as exc:
@@ -453,19 +462,54 @@ def _chat_response_from_payload(payload: dict[str, Any]) -> ChatResponse:
     )
 
 
+def _build_guard_context(
+    chat: ChatRequest, current_user: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Construct the security guard context passed to the LLM runtime."""
+
+    allowed = chat.allowed_actions or current_user.get("allowed_actions")
+    if allowed is None:
+        allowed = current_user.get("actions")
+    normalised = [
+        str(action).strip()
+        for action in allowed or []
+        if isinstance(action, str) and action.strip()
+    ]
+    if not normalised:
+        normalised = ["personal_data_access"]
+    context: dict[str, Any] = {
+        "user_id": current_user.get("sub") or current_user.get("id"),
+        "allowed_actions": normalised,
+    }
+    token_ref = (
+        chat.token_ref
+        or current_user.get("token_ref")
+        or current_user.get("approval_token_ref")
+    )
+    if token_ref:
+        context["token_ref"] = token_ref
+    approval_token = chat.approval_token or current_user.get("approval_token")
+    if approval_token:
+        context["approval_token"] = approval_token
+    return context
+
+
 async def _generate_local_llm_payload(
     prompt: str,
     *,
     max_new_tokens: int | None,
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     llm = LLMIntegration.instance()
     start = perf_counter()
     kwargs: dict[str, Any] = {}
     if max_new_tokens is not None:
         kwargs["max_new_tokens"] = max_new_tokens
+    guard_context = dict(context) if context else {}
     response = await asyncio.to_thread(
         llm.generate,
         prompt,
+        context=guard_context,
         **kwargs,
     )
     duration = perf_counter() - start
@@ -936,8 +980,18 @@ async def chat_endpoint(
 
     prompt = data["query"]
     max_tokens = getattr(settings.model, "max_new_tokens", None)
-    ray_result = await _invoke_ray_chat(prompt, max_new_tokens=max_tokens)
+    guard_context = _build_guard_context(chat, current_user)
+    ray_result = await _invoke_ray_chat(
+        prompt,
+        max_new_tokens=max_tokens,
+        context=guard_context,
+    )
     if ray_result is not None:
+        if ray_result.get("error") == "approval_required":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ray_result,
+            )
         if ray_result.get("error"):
             logger.warning(
                 "web_api.llm_chat_ray_error",
@@ -950,7 +1004,13 @@ async def chat_endpoint(
         local_payload = await _generate_local_llm_payload(
             prompt,
             max_new_tokens=max_tokens,
+            context=guard_context,
         )
+    except GuardRejectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=exc.payload,
+        ) from exc
     except Exception as exc:  # pragma: no cover - unexpected runtime failure
         logger.exception(
             "web_api.llm_chat_local_failed",

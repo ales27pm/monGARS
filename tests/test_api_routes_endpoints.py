@@ -713,15 +713,29 @@ async def test_llm_chat_falls_back_to_local_when_ray_missing(
     calls: dict[str, Any] = {}
 
     async def fake_invoke_ray_chat(
-        prompt: str, *, max_new_tokens: int | None
+        prompt: str,
+        *,
+        max_new_tokens: int | None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        calls["ray"] = {"prompt": prompt, "max_new_tokens": max_new_tokens}
+        calls["ray"] = {
+            "prompt": prompt,
+            "max_new_tokens": max_new_tokens,
+            "context": context,
+        }
         return None
 
     async def fake_generate_local(
-        prompt: str, *, max_new_tokens: int | None
+        prompt: str,
+        *,
+        max_new_tokens: int | None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        calls["local"] = {"prompt": prompt, "max_new_tokens": max_new_tokens}
+        calls["local"] = {
+            "prompt": prompt,
+            "max_new_tokens": max_new_tokens,
+            "context": context,
+        }
         return {"response": "local reply", "processing_time": 0.42}
 
     monkeypatch.setattr(

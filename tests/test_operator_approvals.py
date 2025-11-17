@@ -4,6 +4,7 @@ from monGARS.core.operator_approvals import (
     OperatorApprovalRegistry,
     generate_approval_token,
     log_blocked_attempt,
+    verify_approval_token,
 )
 from monGARS.core.pii_detection import PIIEntity
 
@@ -61,9 +62,7 @@ def test_log_blocked_attempt_records_audit_fields(tmp_path: Path) -> None:
     assert payload["prompt_hash"] == "deadbeef"
     assert payload["required_action"] == "approval"
     assert payload["pii_entities"][0]["type"] == "email"
-    assert payload["context_snapshot"]["allowed_actions"] == [
-        "personal_data_access"
-    ]
+    assert payload["context_snapshot"]["allowed_actions"] == ["personal_data_access"]
 
 
 def test_generate_approval_token_is_deterministic() -> None:
@@ -73,3 +72,43 @@ def test_generate_approval_token_is_deterministic() -> None:
 
     assert first == second
     assert first != third
+
+
+def test_verify_approval_token_requires_approved_request(tmp_path: Path) -> None:
+    registry = OperatorApprovalRegistry(tmp_path / "verify.json")
+    entity = PIIEntity(type="email", value="user@example.com", start=0, end=16)
+    prompt_hash = "feedbead1234abcd"
+    token_ref = log_blocked_attempt(
+        user_id="carol",
+        prompt_hash=prompt_hash,
+        pii_entities=[entity],
+        required_action="approval",
+        context={"allowed_actions": ["personal_data_access"], "user_id": "carol"},
+        registry=registry,
+    )
+    token = generate_approval_token("carol", token_ref)
+
+    assert not verify_approval_token(
+        user_id="carol",
+        token_ref=token_ref,
+        approval_token=token,
+        prompt_hash=prompt_hash,
+        registry=registry,
+    )
+
+    registry.approve(token_ref, operator="ops")
+
+    assert verify_approval_token(
+        user_id="carol",
+        token_ref=token_ref,
+        approval_token=token,
+        prompt_hash=prompt_hash,
+        registry=registry,
+    )
+    assert not verify_approval_token(
+        user_id="carol",
+        token_ref=token_ref,
+        approval_token=token,
+        prompt_hash="wrong-hash",
+        registry=registry,
+    )

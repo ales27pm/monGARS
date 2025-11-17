@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any, List
 
-from .llm_integration import LLMIntegration
+from .llm_integration import GuardRejectionError, LLMIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,22 @@ class LLMActionSuggester:
             "Respond ONLY with a JSON array of action names in order of relevance:"
         )
 
+        guard_context = context if isinstance(context, dict) else {}
         try:
-            response = self.llm.generate(suggestion_prompt, max_new_tokens=150)
+            response = self.llm.generate(
+                suggestion_prompt,
+                max_new_tokens=150,
+                context=guard_context,
+            )
+        except GuardRejectionError as exc:
+            logger.info(
+                "aui.suggestions.guard_blocked",
+                extra={
+                    "reason": exc.payload.get("message"),
+                    "user": guard_context.get("user_id"),
+                },
+            )
+            return self._heuristic_fallback(prompt, actions)
         except Exception as exc:  # pragma: no cover - runtime fallback
             logger.warning("Suggestion generation failed: %s", str(exc))
             return self._heuristic_fallback(prompt, actions)
@@ -74,11 +88,7 @@ class LLMActionSuggester:
             seen: set[str] = set()
             filtered_actions: list[str] = []
             for action in ranked_actions:
-                if (
-                    isinstance(action, str)
-                    and action in actions
-                    and action not in seen
-                ):
+                if isinstance(action, str) and action in actions and action not in seen:
                     filtered_actions.append(action)
                     seen.add(action)
             return filtered_actions or self._heuristic_fallback(prompt, actions)

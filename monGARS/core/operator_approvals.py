@@ -232,6 +232,12 @@ class OperatorApprovalRegistry:
             self._persist()
             return request
 
+    def get(self, request_id: str) -> ApprovalRequest | None:
+        """Return the request associated with ``request_id`` if it exists."""
+
+        with self._lock:
+            return self._requests.get(request_id)
+
     def _mark_approved(
         self,
         request: ApprovalRequest,
@@ -333,10 +339,38 @@ def generate_approval_token(user_id: str, token_ref: str) -> str:
     return digest[:32]
 
 
+def verify_approval_token(
+    *,
+    user_id: str,
+    token_ref: str,
+    approval_token: str,
+    prompt_hash: str | None = None,
+    registry: OperatorApprovalRegistry | None = None,
+) -> bool:
+    """Return ``True`` if ``approval_token`` is valid for ``token_ref``."""
+
+    if not token_ref or not approval_token:
+        return False
+    user_identifier = user_id or "anonymous"
+    expected = generate_approval_token(user_identifier, token_ref)
+    if not hmac.compare_digest(expected, approval_token):
+        return False
+    approval_registry = registry or _default_registry()
+    request = approval_registry.get(token_ref)
+    if request is None or not request.is_approved:
+        return False
+    if prompt_hash:
+        recorded = str(request.payload.get("prompt_hash", ""))
+        if recorded != prompt_hash:
+            return False
+    return True
+
+
 __all__ = [
     "ApprovalRequest",
     "OperatorApprovalRegistry",
     "ApprovalPolicy",
     "log_blocked_attempt",
     "generate_approval_token",
+    "verify_approval_token",
 ]
