@@ -108,6 +108,7 @@ from monGARS.core.llm_integration import (
     GuardRejectionError,
     LLMIntegration,
 )
+from monGARS.core.operator_approvals import get_operator_approval_registry
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
@@ -958,6 +959,41 @@ async def peer_telemetry_snapshot(
     telemetry = communicator.get_peer_telemetry(include_self=True)
     payloads = [PeerTelemetryPayload(**entry) for entry in telemetry]
     return PeerTelemetryEnvelope(telemetry=payloads)
+
+
+@router.post("/security/approve")
+async def approve_request(token: str, operator_id: str) -> dict[str, str]:
+    """Validate an approval token and mark the associated request as approved."""
+
+    token_value = (token or "").strip()
+    operator_value = (operator_id or "").strip()
+    if not token_value or not operator_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "error", "reason": "missing_fields"},
+        )
+
+    registry = get_operator_approval_registry()
+    request = registry.find_by_token(token_value)
+    if request is None:
+        logger.warning(
+            "web_api.approval.invalid_token",
+            extra={"operator": operator_value},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "error", "reason": "token_not_found"},
+        )
+
+    if request.is_approved:
+        return {"status": "already_approved", "token_ref": request.request_id}
+
+    registry.approve(request.request_id, operator=operator_value)
+    logger.info(
+        "web_api.approval.request_approved",
+        extra={"operator": operator_value, "request_id": request.request_id},
+    )
+    return {"status": "approved", "token_ref": request.request_id}
 
 
 @router.post("/chat", response_model=ChatResponse)

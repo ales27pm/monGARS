@@ -164,6 +164,7 @@ def fake_llm_integration_with_ollama(
     monkeypatch: pytest.MonkeyPatch,
 ) -> llm_integration.LLMIntegration:
     """Return an integration configured with a fake Ollama client."""
+
     class _FakeOllamaClient:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
@@ -262,11 +263,7 @@ def _exercise_guard_block(
         ]
         monkeypatch.setattr(
             "monGARS.core.operator_approvals.log_blocked_attempt",
-            lambda **_: "token-123",
-        )
-        monkeypatch.setattr(
-            "monGARS.core.operator_approvals.generate_approval_token",
-            lambda *_, **__: "approval-token",
+            lambda **_: ("token-123", "approval-token"),
         )
 
         context = {
@@ -362,6 +359,7 @@ class _FailingRuntime:
             llm_integration.AutoModelForCausalLM.from_pretrained("dolphin-x1-test")
         except Exception as exc:
             raise RuntimeError("Failed to load unified runtime") from exc
+
 
 @pytest.mark.asyncio
 async def test_call_local_provider_errors_when_slot_unavailable(
@@ -787,8 +785,13 @@ def test_generate_records_token_counts_for_edge_cases(
 
     assert fake_counter.calls == [
         (len(prompt), {"direction": "input", "model": fake_llm_integration._model_id}),
-        (len(response), {"direction": "output", "model": fake_llm_integration._model_id}),
+        (
+            len(response),
+            {"direction": "output", "model": fake_llm_integration._model_id},
+        ),
     ]
+
+
 @pytest.mark.parametrize(
     ("prompt", "expected"),
     [

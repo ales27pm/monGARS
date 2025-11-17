@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from monGARS.core.operator_approvals import (
     OperatorApprovalRegistry,
     generate_approval_token,
@@ -45,7 +47,7 @@ def test_log_blocked_attempt_records_audit_fields(tmp_path: Path) -> None:
     registry = OperatorApprovalRegistry(tmp_path / "audit.json")
     entity = PIIEntity(type="email", value="user@example.com", start=0, end=16)
 
-    token_ref = log_blocked_attempt(
+    token_ref, approval_token = log_blocked_attempt(
         user_id="alice",
         prompt_hash="deadbeef",
         pii_entities=[entity],
@@ -55,6 +57,7 @@ def test_log_blocked_attempt_records_audit_fields(tmp_path: Path) -> None:
     )
 
     assert token_ref
+    assert len(approval_token) == 64
     pending = list(registry.pending(source="security.guardrail"))
     assert len(pending) == 1
     payload = pending[0].payload
@@ -63,22 +66,28 @@ def test_log_blocked_attempt_records_audit_fields(tmp_path: Path) -> None:
     assert payload["required_action"] == "approval"
     assert payload["pii_entities"][0]["type"] == "email"
     assert payload["context_snapshot"]["allowed_actions"] == ["personal_data_access"]
+    assert payload["approval_token"] == approval_token
 
 
-def test_generate_approval_token_is_deterministic() -> None:
+def test_generate_approval_token_changes_with_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequence = iter([1000.0, 1001.0])
+    monkeypatch.setattr("monGARS.core.security.time.time", lambda: next(sequence))
+
     first = generate_approval_token("alice", "ref123")
     second = generate_approval_token("alice", "ref123")
-    third = generate_approval_token("bob", "ref123")
 
-    assert first == second
-    assert first != third
+    assert len(first) == 64
+    assert len(second) == 64
+    assert first != second
 
 
 def test_verify_approval_token_requires_approved_request(tmp_path: Path) -> None:
     registry = OperatorApprovalRegistry(tmp_path / "verify.json")
     entity = PIIEntity(type="email", value="user@example.com", start=0, end=16)
     prompt_hash = "feedbead1234abcd"
-    token_ref = log_blocked_attempt(
+    token_ref, approval_token = log_blocked_attempt(
         user_id="carol",
         prompt_hash=prompt_hash,
         pii_entities=[entity],
@@ -86,12 +95,11 @@ def test_verify_approval_token_requires_approved_request(tmp_path: Path) -> None
         context={"allowed_actions": ["personal_data_access"], "user_id": "carol"},
         registry=registry,
     )
-    token = generate_approval_token("carol", token_ref)
 
     assert not verify_approval_token(
         user_id="carol",
         token_ref=token_ref,
-        approval_token=token,
+        approval_token=approval_token,
         prompt_hash=prompt_hash,
         registry=registry,
     )
@@ -101,14 +109,14 @@ def test_verify_approval_token_requires_approved_request(tmp_path: Path) -> None
     assert verify_approval_token(
         user_id="carol",
         token_ref=token_ref,
-        approval_token=token,
+        approval_token=approval_token,
         prompt_hash=prompt_hash,
         registry=registry,
     )
     assert not verify_approval_token(
         user_id="carol",
         token_ref=token_ref,
-        approval_token=token,
+        approval_token=approval_token,
         prompt_hash="wrong-hash",
         registry=registry,
     )

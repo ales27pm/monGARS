@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import time
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
@@ -16,6 +17,7 @@ from passlib.context import CryptContext
 from monGARS.config import Settings, ensure_secret_key, get_settings
 
 log = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class SecurityManager:
@@ -199,11 +201,17 @@ class Credentials:
         self.password = password
 
 
+def generate_approval_token(user_id: str, request_id: str) -> str:
+    """Generate cryptographically secure approval token"""
+
+    payload = f"{user_id}:{request_id}:{time.time()}"
+    return hashlib.sha256((payload + settings.SECRET_KEY).encode()).hexdigest()
+
+
 def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
     """Check prompts for PII and enforce operator approval when required."""
 
     from monGARS.core.operator_approvals import (
-        generate_approval_token,
         log_blocked_attempt,
         verify_approval_token,
     )
@@ -247,14 +255,13 @@ def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
             extra={"user_id": user_id, "token_ref": token_ref},
         )
 
-    audit_ref = log_blocked_attempt(
+    audit_ref, approval_payload = log_blocked_attempt(
         user_id=user_id,
         prompt_hash=fingerprint,
         pii_entities=pii_entities,
         required_action="approval",
         context=context,
     )
-    approval_payload = generate_approval_token(user_id, audit_ref)
     message = "This request requires human approval due to sensitive data"
     if approval_token and token_ref:
         message = "Invalid approval token provided"

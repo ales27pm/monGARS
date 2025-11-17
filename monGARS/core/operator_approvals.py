@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 from uuid import uuid4
 
-from monGARS.config import get_settings
+from monGARS.core.security import generate_approval_token
 
 if TYPE_CHECKING:
     from .pii_detection import PIIEntity
@@ -238,6 +238,18 @@ class OperatorApprovalRegistry:
         with self._lock:
             return self._requests.get(request_id)
 
+    def find_by_token(self, approval_token: str) -> ApprovalRequest | None:
+        """Locate a request matching ``approval_token`` if present."""
+
+        if not approval_token:
+            return None
+        with self._lock:
+            for request in self._requests.values():
+                stored_token = str(request.payload.get("approval_token") or "")
+                if stored_token and hmac.compare_digest(stored_token, approval_token):
+                    return request
+        return None
+
     def _mark_approved(
         self,
         request: ApprovalRequest,
@@ -273,6 +285,12 @@ def _default_registry() -> OperatorApprovalRegistry:
         return _GLOBAL_REGISTRY
 
 
+def get_operator_approval_registry() -> OperatorApprovalRegistry:
+    """Expose the singleton registry for external callers."""
+
+    return _default_registry()
+
+
 def log_blocked_attempt(
     *,
     user_id: str,
@@ -281,7 +299,7 @@ def log_blocked_attempt(
     required_action: str,
     context: Mapping[str, Any],
     registry: OperatorApprovalRegistry | None = None,
-) -> str:
+) -> tuple[str, str]:
     """Persist details about a blocked security guardrail decision."""
 
     if not user_id:
@@ -312,6 +330,9 @@ def log_blocked_attempt(
 
     approval_registry = registry or _default_registry()
     request = approval_registry.submit(source=_AUDIT_SOURCE, payload=payload)
+    approval_token = generate_approval_token(user_id, request.request_id)
+    request.payload["approval_token"] = approval_token
+    approval_registry._persist()
 
     logger.info(
         "operator_approvals.blocked_request_logged",
@@ -324,19 +345,7 @@ def log_blocked_attempt(
         },
     )
 
-    return request.request_id
-
-
-def generate_approval_token(user_id: str, token_ref: str) -> str:
-    """Return a deterministic approval token tied to ``user_id`` and reference."""
-
-    if not token_ref:
-        raise ValueError("token_ref must not be empty")
-    user_identifier = user_id or "anonymous"
-    secret = get_settings().SECRET_KEY or "monGARS-approval-secret"
-    payload = f"{user_identifier}:{token_ref}".encode("utf-8")
-    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
-    return digest[:32]
+    return request.request_id, approval_token
 
 
 def verify_approval_token(
@@ -351,13 +360,12 @@ def verify_approval_token(
 
     if not token_ref or not approval_token:
         return False
-    user_identifier = user_id or "anonymous"
-    expected = generate_approval_token(user_identifier, token_ref)
-    if not hmac.compare_digest(expected, approval_token):
-        return False
     approval_registry = registry or _default_registry()
     request = approval_registry.get(token_ref)
     if request is None or not request.is_approved:
+        return False
+    stored_token = str(request.payload.get("approval_token") or "")
+    if not stored_token or not hmac.compare_digest(stored_token, approval_token):
         return False
     if prompt_hash:
         recorded = str(request.payload.get("prompt_hash", ""))
@@ -373,4 +381,5 @@ __all__ = [
     "log_blocked_attempt",
     "generate_approval_token",
     "verify_approval_token",
+    "get_operator_approval_registry",
 ]
