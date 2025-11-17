@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import importlib
 import importlib.util
-import json
 import logging
 import math
+import sys
 import threading
 import warnings
 from collections import OrderedDict
@@ -83,8 +82,13 @@ _TRANSFORMERS_COMPONENT_CACHE: dict[tuple[str, str], tuple[Any, Any, Any, int]] 
 _TRANSFORMERS_COMPONENT_LOCK = threading.Lock()
 
 
+_SENTENCE_TRANSFORMER_CACHE: dict[str, Any] = {}
+_SENTENCE_TRANSFORMER_LOCK = threading.Lock()
+
+
 _KNOWN_MANAGER_EXCEPTIONS = _exception_tuple(
     EmbeddingBackendError,
+    LLMRuntimeError,
     RuntimeError,
     OSError,
     ConnectionError,
@@ -236,8 +240,24 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
     return components
 
 
+def _format_instruction_texts(
+    texts: Sequence[str], instruction: Optional[str]
+) -> list[str]:
+    candidates = [str(text) for text in texts]
+    if instruction is None:
+        return candidates
+    instruction_text = str(instruction).strip()
+    if not instruction_text:
+        return candidates
+    return [f"{instruction_text}\n\n{candidate}" for candidate in candidates]
+
+
 def _encode_with_transformers(
-    texts: List[str], instruction: Optional[str], settings: Settings | None = None
+    texts: List[str],
+    instruction: Optional[str],
+    settings: Settings | None = None,
+    *,
+    normalise: bool = True,
 ) -> np.ndarray:
     resolved_settings = settings or get_settings()
     tokenizer, model, device, hidden_size = _ensure_transformers_components(
@@ -262,15 +282,7 @@ def _encode_with_transformers(
 
     for start in range(0, len(texts), batch_size):
         chunk = [str(text) for text in texts[slice(start, start + batch_size)]]
-        formatted: list[str]
-        if system_prompt is None:
-            formatted = chunk
-        else:
-            instruction_text = str(system_prompt).strip()
-            formatted = [
-                f"{instruction_text}\n\n{candidate}" if instruction_text else candidate
-                for candidate in chunk
-            ]
+        formatted = _format_instruction_texts(chunk, system_prompt)
         try:
             encoded = tokenizer(
                 formatted,
@@ -315,15 +327,16 @@ def _encode_with_transformers(
         token_counts = mask.sum(dim=1).clamp_min(1.0)
         pooled = masked_hidden.sum(dim=1) / token_counts
 
-        if hasattr(torch, "linalg") and hasattr(torch.linalg, "norm"):
-            norms = torch.linalg.norm(pooled, ord=2, dim=1, keepdim=True)
-        else:  # pragma: no cover - compatibility fallback
-            norms = torch.norm(pooled, p=2, dim=1, keepdim=True)
-        safe_norms = torch.where(norms > 0, norms, torch.ones_like(norms))
-        normalized = pooled / safe_norms
+        if normalise:
+            if hasattr(torch, "linalg") and hasattr(torch.linalg, "norm"):
+                norms = torch.linalg.norm(pooled, ord=2, dim=1, keepdim=True)
+            else:  # pragma: no cover - compatibility fallback
+                norms = torch.norm(pooled, p=2, dim=1, keepdim=True)
+            safe_norms = torch.where(norms > 0, norms, torch.ones_like(norms))
+            pooled = pooled / safe_norms
 
         pooled_results.append(
-            normalized.detach().cpu().numpy().astype(np.float32, copy=False)
+            pooled.detach().cpu().numpy().astype(np.float32, copy=False)
         )
 
     return (
@@ -333,8 +346,35 @@ def _encode_with_transformers(
     )
 
 
+def _encode_with_sentence_transformers(
+    texts: List[str], instruction: Optional[str], settings: Settings
+) -> np.ndarray:
+    spec = importlib.util.find_spec("sentence_transformers")
+    if spec is None:
+        raise ImportError("sentence_transformers not installed")
+    module = importlib.import_module("sentence_transformers")
+    model_cls = getattr(module, "SentenceTransformer", None)
+    if model_cls is None:
+        raise EmbeddingBackendError(
+            "sentence_transformers does not expose SentenceTransformer"
+        )
+    model_name = getattr(settings, "transformers_embedding_model", None)
+    if not model_name:
+        raise EmbeddingBackendError("transformers_embedding_model must be configured")
+    with _SENTENCE_TRANSFORMER_LOCK:
+        model = _SENTENCE_TRANSFORMER_CACHE.get(model_name)
+        if model is None:
+            model = model_cls(model_name)
+            _SENTENCE_TRANSFORMER_CACHE[model_name] = model
+    formatted = _format_instruction_texts(texts, instruction)
+    embeddings = model.encode(
+        formatted, convert_to_numpy=True, normalize_embeddings=False
+    )
+    return np.asarray(embeddings, dtype=np.float32)
+
+
 class LLM2VecEmbedder:
-    """Thin wrapper that proxies embeddings to the unified runtime."""
+    """Generate embeddings using the configured backend with deterministic fallbacks."""
 
     def __init__(
         self,
@@ -342,15 +382,38 @@ class LLM2VecEmbedder:
         backend: str | None = None,
         settings: Settings | None = None,
         runtime: UnifiedLLMRuntime | None = None,
+        neuron_manager_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
+        configured_backend = backend or getattr(
+            self._settings, "embedding_backend", DEFAULT_EMBEDDING_BACKEND
+        )
+        self._backend = normalise_embedding_backend(configured_backend, logger=logger)
         self._runtime = runtime or UnifiedLLMRuntime.instance(self._settings)
-        self._backend = backend or "unified-runtime"
-        self._cache_size = 128
-        self._cache: OrderedDict[tuple[str, tuple[str, ...]], EmbeddingBatch] = OrderedDict()
+        self._vector_dimensions = max(
+            1, int(getattr(self._settings, "llm2vec_vector_dimensions", 4096))
+        )
+        self._batch_size = max(
+            1, int(getattr(self._settings, "llm2vec_max_batch_size", 8))
+        )
+        self._cache_size = max(
+            1, int(getattr(self._settings, "llm2vec_cache_size", 128))
+        )
+        self._cache: OrderedDict[tuple[str, tuple[str, ...]], EmbeddingBatch] = (
+            OrderedDict()
+        )
         self._cache_lock = asyncio.Lock()
         concurrency = max(1, int(getattr(self._settings, "llm2vec_max_concurrency", 4)))
         self._semaphore = asyncio.Semaphore(concurrency)
+        self._neuron_manager_factory = neuron_manager_factory
+        self._neuron_manager: Any | None = None
+        self._neuron_manager_lock = asyncio.Lock()
+        self._ollama_module = None
+        self._ollama_client = None
+        self._ollama_client_lock = asyncio.Lock()
+        self._dolphin_client = None
+        self._dolphin_client_lock = asyncio.Lock()
+        self._dolphin_dimension: int | None = None
 
     @property
     def backend(self) -> str:
@@ -361,11 +424,14 @@ class LLM2VecEmbedder:
     async def encode_batch(
         self, texts: Sequence[str], *, instruction: str | None = None
     ) -> EmbeddingBatch:
-        """Return embeddings for ``texts`` using the unified runtime."""
+        """Return embeddings for ``texts`` using the selected backend."""
 
-        prompt = instruction or self._settings.llm2vec_instruction
+        prompt = instruction
+        if prompt is None and self._backend != "transformers":
+            prompt = getattr(self._settings, "llm2vec_instruction", None)
+        resolved_prompt = str(prompt or "")
         cleaned = [str(text) for text in texts]
-        cache_key = (prompt, tuple(cleaned))
+        cache_key = (resolved_prompt, tuple(cleaned))
         cached = await self._get_cached_batch(cache_key)
         if cached is not None:
             return cached
@@ -373,17 +439,39 @@ class LLM2VecEmbedder:
             batch = EmbeddingBatch(vectors=[], used_fallback=False)
             await self._set_cached_batch(cache_key, batch)
             return batch
-        try:
-            async with self._semaphore:
-                vectors = await asyncio.to_thread(self._runtime.embed, cleaned)
-            batch = EmbeddingBatch(vectors=vectors, used_fallback=False)
-        except (LLMRuntimeError, ValueError) as exc:
-            logger.error(
-                "llm2vec.runtime.embed_failed",
-                extra={"error": str(exc), "count": len(cleaned)},
-            )
-            fallback_vectors = [self._fallback_vector(prompt, text) for text in cleaned]
-            batch = EmbeddingBatch(vectors=fallback_vectors, used_fallback=True)
+
+        if all(not candidate.strip() for candidate in cleaned):
+            fallback = [
+                self._fallback_vector(resolved_prompt, candidate)
+                for candidate in cleaned
+            ]
+            batch = EmbeddingBatch(vectors=fallback, used_fallback=True)
+            await self._set_cached_batch(cache_key, batch)
+            return batch
+
+        vectors: list[list[float]] = []
+        used_fallback = False
+        for start in range(0, len(cleaned), self._batch_size):
+            chunk = cleaned[slice(start, start + self._batch_size)]
+            try:
+                chunk_vectors, chunk_fallback = await self._dispatch_backend(
+                    chunk, resolved_prompt
+                )
+            except EmbeddingBackendError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception(
+                    "llm2vec.backend.chunk_failed",
+                    extra={"backend": self._backend, "size": len(chunk)},
+                )
+                chunk_vectors = [
+                    self._fallback_vector(resolved_prompt, text) for text in chunk
+                ]
+                chunk_fallback = True
+            vectors.extend(chunk_vectors)
+            used_fallback = used_fallback or chunk_fallback
+
+        batch = EmbeddingBatch(vectors=vectors, used_fallback=used_fallback)
         await self._set_cached_batch(cache_key, batch)
         return batch
 
@@ -414,8 +502,382 @@ class LLM2VecEmbedder:
                 self._cache.popitem(last=False)
 
     def _fallback_vector(self, instruction: str, text: str) -> list[float]:
-        size = int(getattr(self._settings, "llm2vec_vector_dimensions", 4096))
-        return [0.0] * size
+        seed = f"{instruction}\u0000{text}".encode("utf-8", "ignore")
+        digest = hashlib.sha256(seed).digest()
+        required = self._vector_dimensions
+        values: list[float] = []
+        buffer = digest
+        index = 0
+        while len(values) < required:
+            if index >= len(buffer):
+                buffer = hashlib.sha256(buffer).digest()
+                index = 0
+            byte = buffer[index]
+            index += 1
+            scaled = (byte / 255.0) * 2.0 - 1.0
+            values.append(scaled)
+        norm = math.sqrt(sum(component * component for component in values)) or 1.0
+        return [component / norm for component in values]
+
+    async def _dispatch_backend(
+        self, chunk: Sequence[str], prompt: str
+    ) -> tuple[list[list[float]], bool]:
+        backend = self._backend
+        if backend == "dolphin-x1-llm2vec":
+            return await self._encode_with_dolphin_service(chunk, prompt)
+        if backend == "ollama":
+            return await self._encode_with_ollama(chunk, prompt)
+        if backend == "transformers":
+            return await self._encode_with_transformers_backend(chunk, prompt)
+        return await self._encode_with_neuron_manager(chunk, prompt)
+
+    async def _encode_with_neuron_manager(
+        self, chunk: Sequence[str], prompt: str
+    ) -> tuple[list[list[float]], bool]:
+        rendered = self._render_chatml_batch(chunk, prompt)
+        manager = await self._ensure_neuron_manager()
+        if manager is None or not self._manager_ready(manager):
+            return self._fallback_vectors(prompt, chunk), True
+
+        try:
+            async with self._semaphore:
+                vectors = await asyncio.to_thread(
+                    manager.encode,
+                    rendered,
+                    prompt,
+                )
+        except _KNOWN_MANAGER_EXCEPTIONS as exc:
+            raise EmbeddingBackendError("Embedding backend unavailable") from exc
+
+        return self._normalise_vectors(vectors, chunk, prompt)
+
+    async def _ensure_neuron_manager(self) -> Any | None:
+        if self._neuron_manager is not None:
+            return self._neuron_manager
+
+        async with self._neuron_manager_lock:
+            if self._neuron_manager is not None:
+                return self._neuron_manager
+
+            factory = (
+                self._neuron_manager_factory or self._default_neuron_manager_factory
+            )
+            try:
+                manager = factory()
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning(
+                    "llm2vec.manager.initialisation_failed",
+                    extra={"error": str(exc)},
+                )
+                manager = self._runtime_manager()
+            self._neuron_manager = manager
+        return self._neuron_manager
+
+    def _default_neuron_manager_factory(self) -> Any:
+        spec = importlib.util.find_spec("modules.neurons.core")
+        if spec is None:
+            raise RuntimeError("NeuronManager module not available")
+        module = importlib.import_module("modules.neurons.core")
+        manager_cls = getattr(module, "NeuronManager", None)
+        if manager_cls is None:
+            raise RuntimeError("NeuronManager class unavailable")
+
+        llm2vec_options = {
+            "device_map": getattr(self._settings, "llm2vec_device_map", None),
+            "torch_dtype": getattr(self._settings, "llm2vec_torch_dtype", None),
+            "tokenizer_name": getattr(self._settings, "llm2vec_tokenizer_name", None),
+            "tokenizer_revision": getattr(
+                self._settings, "llm2vec_tokenizer_revision", None
+            ),
+            "revision": getattr(self._settings, "llm2vec_revision", None),
+            "loader": getattr(self._settings, "llm2vec_loader", None),
+            "trust_remote_code": getattr(
+                self._settings, "llm2vec_trust_remote_code", None
+            ),
+            "use_safetensors": getattr(self._settings, "llm2vec_use_safetensors", None),
+        }
+        encode_options = {
+            "pooling_strategy": getattr(
+                self._settings, "llm2vec_pooling_strategy", None
+            )
+        }
+
+        return manager_cls(
+            getattr(self._settings, "llm2vec_base_model", "nomic-ai/llm2vec-large"),
+            getattr(self._settings, "llm2vec_encoder", None),
+            fallback_dimensions=self._vector_dimensions,
+            llm2vec_options=llm2vec_options,
+            encode_options=encode_options,
+        )
+
+    def _runtime_manager(self) -> Any:
+        runtime = self._runtime
+
+        class _RuntimeManager:
+            def is_ready(self) -> bool:
+                return True
+
+            def encode(
+                self, texts: Sequence[str], instruction: str
+            ) -> list[list[float]]:
+                del instruction
+                return runtime.embed(list(texts))
+
+        return _RuntimeManager()
+
+    def _normalise_vectors(
+        self,
+        vectors: Sequence[Sequence[float]] | Any,
+        chunk: Sequence[str],
+        prompt: str,
+        *,
+        expected_dimension: int | None = None,
+    ) -> tuple[list[list[float]], bool]:
+        if hasattr(vectors, "tolist"):
+            vectors = vectors.tolist()
+        if not isinstance(vectors, Sequence) or isinstance(vectors, (str, bytes)):
+            return self._fallback_vectors(prompt, chunk), True
+        if len(vectors) != len(chunk):
+            return self._fallback_vectors(prompt, chunk), True
+
+        processed: list[list[float]] = []
+        for raw, original in zip(vectors, chunk, strict=True):
+            vector = self._coerce_vector(raw, expected_dimension)
+            if vector is None:
+                return self._fallback_vectors(prompt, chunk), True
+            processed.append(vector)
+        return processed, False
+
+    def _coerce_vector(
+        self, vector: Sequence[float] | Any, expected_dimension: int | None
+    ) -> list[float] | None:
+        if hasattr(vector, "tolist"):
+            vector = vector.tolist()
+        if not isinstance(vector, Sequence) or isinstance(vector, (str, bytes)):
+            return None
+        converted: list[float] = []
+        for component in vector:
+            try:
+                value = float(component)
+            except (TypeError, ValueError):
+                return None
+            if math.isnan(value) or math.isinf(value):
+                return None
+            converted.append(value)
+        return self._resize_vector(converted, expected_dimension)
+
+    def _resize_vector(
+        self, vector: Sequence[float], expected_dimension: int | None
+    ) -> list[float]:
+        dimension = expected_dimension or self._vector_dimensions
+        if len(vector) > dimension:
+            return list(vector[:dimension])
+        if len(vector) < dimension:
+            padding = [0.0] * (dimension - len(vector))
+            return list(vector) + padding
+        return list(vector)
+
+    def _fallback_vectors(
+        self, instruction: str, texts: Sequence[str]
+    ) -> list[list[float]]:
+        return [self._fallback_vector(instruction, text) for text in texts]
+
+    def _render_chatml_batch(self, chunk: Sequence[str], prompt: str) -> list[str]:
+        system_prompt = prompt or getattr(self._settings, "llm2vec_instruction", "")
+        return [
+            render_chat_prompt_from_text(
+                text,
+                system_prompt=system_prompt,
+                include_assistant_stub=False,
+            ).chatml
+            for text in chunk
+        ]
+
+    def _manager_ready(self, manager: Any) -> bool:
+        ready_attr = getattr(manager, "is_ready", None)
+        if callable(ready_attr):
+            try:
+                return bool(ready_attr())
+            except Exception:  # pragma: no cover - defensive fallback
+                return False
+        return bool(ready_attr)
+
+    async def _encode_with_transformers_backend(
+        self, chunk: Sequence[str], prompt: str
+    ) -> tuple[list[list[float]], bool]:
+        def _run_transformers():
+            return _encode_with_transformers(
+                list(chunk), prompt, self._settings, normalise=False
+            )
+
+        def _run_sentence_transformers():
+            return _encode_with_sentence_transformers(
+                list(chunk), prompt, self._settings
+            )
+
+        try:
+            matrix = await asyncio.to_thread(_run_sentence_transformers)
+        except ImportError:
+            logger.info("llm2vec.transformers.sentence_transformers_missing")
+            matrix = await asyncio.to_thread(_run_transformers)
+        except EmbeddingBackendError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.warning(
+                "llm2vec.transformers.sentence_transformers_failed",
+                extra={"error": str(exc)},
+            )
+            matrix = await asyncio.to_thread(_run_transformers)
+
+        return self._normalise_vectors(matrix, chunk, prompt)
+
+    async def _encode_with_dolphin_service(
+        self, chunk: Sequence[str], prompt: str
+    ) -> tuple[list[list[float]], bool]:
+        module = self._ensure_httpx_module()
+        module, client = await self._ensure_dolphin_client(module)
+        try:
+            response = await client.post("/embed", json={"texts": list(chunk)})
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.warning(
+                "llm2vec.dolphin.request_failed",
+                extra={"error": str(exc)},
+            )
+            return self._fallback_vectors(prompt, chunk), True
+
+        embeddings = None
+        dimension = None
+        if isinstance(payload, Mapping):
+            embeddings = payload.get("embeddings")
+            raw_dimension = payload.get("dimension")
+            if isinstance(raw_dimension, int) and raw_dimension > 0:
+                dimension = raw_dimension
+                self._dolphin_dimension = raw_dimension
+
+        if not isinstance(embeddings, Sequence):
+            return self._fallback_vectors(prompt, chunk), True
+
+        return self._normalise_vectors(
+            embeddings,
+            chunk,
+            prompt,
+            expected_dimension=dimension or self._dolphin_dimension,
+        )
+
+    def _ensure_httpx_module(self):  # noqa: ANN201 - dynamic import helper
+        existing = sys.modules.get("httpx")
+        if existing is not None:
+            return existing
+        spec = importlib.util.find_spec("httpx")
+        if spec is None:
+            raise EmbeddingBackendError(
+                "httpx is required for dolphin service embeddings"
+            )
+        return importlib.import_module("httpx")
+
+    async def _ensure_dolphin_client(self, module):  # noqa: ANN201 - runtime type
+        if self._dolphin_client is not None:
+            return module, self._dolphin_client
+
+        async with self._dolphin_client_lock:
+            if self._dolphin_client is not None:
+                return module, self._dolphin_client
+            timeout = getattr(
+                self._settings, "dolphin_x1_llm2vec_service_timeout", 30.0
+            )
+            timeout_config = None
+            timeout_cls = getattr(module, "Timeout", None)
+            if timeout_cls is not None:
+                timeout_config = timeout_cls(timeout, connect=timeout)
+            headers = None
+            token = getattr(self._settings, "dolphin_x1_llm2vec_service_token", None)
+            if token:
+                headers = {"Authorization": f"Bearer {token}"}
+            client = module.AsyncClient(
+                base_url=str(self._settings.dolphin_x1_llm2vec_service_url),
+                timeout=timeout_config or timeout,
+                headers=headers,
+            )
+            response = await client.get("/health")
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, Mapping):
+                dimension = payload.get("dimension")
+                if isinstance(dimension, int) and dimension > 0:
+                    self._dolphin_dimension = dimension
+            self._dolphin_client = client
+        return module, client
+
+    async def _encode_with_ollama(
+        self, chunk: Sequence[str], prompt: str
+    ) -> tuple[list[list[float]], bool]:
+        module = self._ensure_ollama_module()
+        client = await self._ensure_ollama_client(module)
+        model = getattr(self._settings, "ollama_embedding_model", None)
+        if not model:
+            raise EmbeddingBackendError("ollama_embedding_model must be configured")
+        try:
+            response = await asyncio.to_thread(
+                client.embed,
+                model=model,
+                input=list(chunk),
+            )
+        except _OLLAMA_TRANSPORT_ERRORS as exc:
+            logger.warning(
+                "llm2vec.ollama.request_failed",
+                extra={"error": str(exc)},
+            )
+            return self._fallback_vectors(prompt, chunk), True
+
+        embeddings = None
+        if isinstance(response, Mapping):
+            embeddings = response.get("embeddings")
+        if not isinstance(embeddings, Sequence):
+            return self._fallback_vectors(prompt, chunk), True
+
+        dimensions = getattr(
+            self._settings, "ollama_embedding_dimensions", self._vector_dimensions
+        )
+        return self._normalise_vectors(
+            embeddings, chunk, prompt, expected_dimension=int(dimensions)
+        )
+
+    def _ensure_ollama_module(self):  # noqa: ANN201 - dynamic import helper
+        if self._ollama_module is not None:
+            logger.debug("llm2vec.ollama.module_import.reuse")
+            return self._ollama_module
+        logger.debug("llm2vec.ollama.module_import.start")
+        spec = importlib.util.find_spec("ollama")
+        if spec is None:
+            raise EmbeddingBackendError("ollama backend requested but module missing")
+        module = importlib.import_module("ollama")
+        self._ollama_module = module
+        logger.debug("llm2vec.ollama.module_import.success")
+        return module
+
+    async def _ensure_ollama_client(self, module=None):  # noqa: ANN201 - runtime type
+        if module is None:
+            module = self._ensure_ollama_module()
+        if self._ollama_client is not None:
+            return self._ollama_client
+        async with self._ollama_client_lock:
+            if self._ollama_client is not None:
+                return self._ollama_client
+            host = getattr(self._settings, "ollama_host", None)
+            logger.debug(
+                "llm2vec.ollama.client.initialising",
+                extra={"host": host},
+            )
+            client = module.Client(host=host)
+            self._ollama_client = client
+            logger.debug(
+                "llm2vec.ollama.client.initialised",
+                extra={"host": host},
+            )
+        return self._ollama_client
+
 
 class DolphinX1Embedder:
     """Generate embeddings by mean-pooling Dolphin-X1-8B hidden states."""
