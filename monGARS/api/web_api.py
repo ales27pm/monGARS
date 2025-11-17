@@ -19,7 +19,16 @@ from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+import ray
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
@@ -70,6 +79,7 @@ from monGARS.api.schemas import (
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
+from monGARS.core.llm_integration import LLMIntegration
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.llm_integration import CircuitBreakerOpenError
@@ -110,8 +120,10 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
+router = APIRouter()
 
 _settings = get_settings()
+settings = _settings
 if _settings.otel_traces_enabled:
     if FastAPIInstrumentor is None:
         logger.warning(
@@ -135,6 +147,7 @@ app.include_router(ui_routes.router)
 app.include_router(model_management.router)
 app.include_router(ws_ticket_router)
 app.include_router(rag_routes.router)
+app.include_router(router)
 
 conversation_module: ConversationalModule | None = None
 ws_manager = _ws_manager
@@ -748,3 +761,25 @@ async def peer_telemetry_snapshot(
     telemetry = communicator.get_peer_telemetry(include_self=True)
     payloads = [PeerTelemetryPayload(**entry) for entry in telemetry]
     return PeerTelemetryEnvelope(telemetry=payloads)
+
+
+@router.post("/chat")
+async def chat_endpoint(request: Request):
+    if settings.llm.serve_backend == "ray":
+        ray_client = ray.serve.connect()
+        deployment = ray_client.get_handle("RayLLMDeployment")
+        result = await deployment.remote(await request.json())
+        return result
+    return {
+        "response": LLMIntegration.instance().generate((await request.json())["prompt"])
+    }
+
+
+@router.get("/llm/health")
+async def llm_health():
+    if settings.llm.serve_backend == "ray":
+        ray_client = ray.serve.connect()
+        deployment = ray_client.get_handle("RayLLMDeployment")
+        result = await deployment.health_check.remote()
+        return result
+    return {"status": "healthy", "model": LLMIntegration.instance()._model_id}
