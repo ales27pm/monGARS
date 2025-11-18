@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -33,6 +34,12 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "unsloth_llm2vec"
 DEFAULT_SEED_DATASET = (
     REPO_ROOT / "datasets" / "unsloth" / "monGARS_unsloth_dataset.jsonl"
 )
+DATASET_PREP_METADATA = "dataset_metadata.json"
+DATASET_PREP_CANDIDATES = (
+    "unsloth_prompt_completion.jsonl",
+    "combined_instruct.unsloth.jsonl",
+    "combined_instruct.jsonl",
+)
 
 
 def _default_repo_root() -> Path:
@@ -49,6 +56,80 @@ def _configure_logging(verbose: bool) -> None:
 
 def _normalise_paths(paths: Sequence[str]) -> list[Path]:
     return [Path(path).expanduser().resolve() for path in paths]
+
+
+def _load_dataset_prep_metadata(metadata_path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        LOGGER.warning("Dataset prep metadata %s does not exist", metadata_path)
+        return {}
+    except json.JSONDecodeError as exc:
+        LOGGER.warning("Invalid dataset prep metadata at %s: %s", metadata_path, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _discover_dataset_prep_exports(paths: Sequence[Path]) -> list[Path]:
+    """Return prompt/completion datasets derived from dataset_prep outputs."""
+
+    discovered: list[Path] = []
+    seen: set[Path] = set()
+
+    for raw_path in paths:
+        base = Path(raw_path).expanduser().resolve()
+        candidates: list[Path] = []
+        search_roots = [base.parent if base.is_file() else base]
+
+        metadata_files: list[Path] = []
+        if base.is_file() and base.suffix == ".json":
+            metadata_files.append(base)
+        elif base.is_dir():
+            metadata_files.append(base / DATASET_PREP_METADATA)
+
+        for metadata_path in metadata_files:
+            if not metadata_path.exists():
+                continue
+            payload = _load_dataset_prep_metadata(metadata_path)
+            derived = payload.get("derived_outputs") if payload else {}
+            if isinstance(derived, dict):
+                for key in ("unsloth_prompt_completion", "instruction_jsonl"):
+                    entry = derived.get(key)
+                    candidate: Path | None = None
+                    if isinstance(entry, str):
+                        candidate = Path(entry)
+                    elif isinstance(entry, dict):
+                        location = entry.get("path")
+                        if isinstance(location, str):
+                            candidate = Path(location)
+                    if candidate is None:
+                        continue
+                    if not candidate.is_absolute():
+                        candidate = (metadata_path.parent / candidate).resolve()
+                    else:
+                        candidate = candidate.resolve()
+                    candidates.append(candidate)
+
+        for root in search_roots:
+            for name in DATASET_PREP_CANDIDATES:
+                candidate = (root / name).resolve()
+                candidates.append(candidate)
+
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            if not candidate.exists():
+                continue
+            seen.add(candidate)
+            discovered.append(candidate)
+
+    if discovered:
+        LOGGER.info(
+            "Discovered %d dataset_prep exports",
+            len(discovered),
+            extra={"paths": [str(path) for path in discovered]},
+        )
+    return discovered
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,6 +177,17 @@ def build_parser() -> argparse.ArgumentParser:
                 "action": "append",
                 "default": [],
                 "help": "Additional JSONL datasets (prompt/completion) merged into the corpus.",
+            },
+        ),
+        (
+            ("--dataset-prep-output",),
+            {
+                "action": "append",
+                "default": [],
+                "help": (
+                    "Directories or metadata files produced by scripts/dataset_prep.py. "
+                    "Derived prompt/completion exports are included automatically."
+                ),
             },
         ),
         (
@@ -208,9 +300,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _resolve_seed_datasets(args: argparse.Namespace) -> list[Path]:
     seeds = _normalise_paths(args.seed_dataset)
+    dataset_prep_roots = _normalise_paths(getattr(args, "dataset_prep_output", []))
+    seeds.extend(_discover_dataset_prep_exports(dataset_prep_roots))
     if not args.no_default_seed and DEFAULT_SEED_DATASET.exists():
         seeds.append(DEFAULT_SEED_DATASET.resolve())
-    return seeds
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in seeds:
+        if not path.exists():
+            LOGGER.warning("Seed dataset %s does not exist; skipping", path)
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

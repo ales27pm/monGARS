@@ -46,12 +46,34 @@ def _extract_field(example: dict[str, Any], keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _normalise_prompt_completion(example: dict[str, Any]) -> dict[str, str]:
+    """Return prompt/completion pairs from heterogeneous dataset records."""
+
+    prompt = example.get("prompt")
+    completion = example.get("completion")
+    if isinstance(prompt, str) and isinstance(completion, str):
+        prompt = prompt.strip()
+        completion = completion.strip()
+        if prompt and completion:
+            return {"prompt": prompt, "completion": completion}
+
+    instruction = _extract_field(example, PROMPT_KEYS).strip()
+    additional = _extract_field(example, INPUT_KEYS).strip()
+    output = _extract_field(example, OUTPUT_KEYS).strip()
+
+    if additional:
+        prompt = f"{instruction}\n\n{additional}" if instruction else additional
+    else:
+        prompt = instruction
+
+    if prompt and output:
+        return {"prompt": prompt, "completion": output}
+
+    raise ValueError("Record does not contain usable prompt/completion text")
+
+
 def _format_prompt_completion(example: dict[str, Any]) -> dict[str, str]:
-    instruction = _extract_field(example, PROMPT_KEYS)
-    additional = _extract_field(example, INPUT_KEYS)
-    output = _extract_field(example, OUTPUT_KEYS)
-    prompt = f"{instruction}\n\n{additional}" if additional else instruction
-    return {"prompt": prompt, "completion": output}
+    return _normalise_prompt_completion(example)
 
 
 def _tokenize_pair(
@@ -169,16 +191,14 @@ def _load_jsonl_records(path: Path) -> list[dict[str, Any]]:
             raise ValueError(
                 f"Invalid JSON starting at line {start_line} of {path}: {exc}"
             ) from exc
-        if not {"prompt", "completion"} <= payload.keys():
+        try:
+            normalised = _normalise_prompt_completion(payload)
+        except ValueError as exc:  # pragma: no cover - defensive
             raise ValueError(
-                f"Record starting at line {start_line} missing prompt/completion fields in {path}"
-            )
-        records.append(
-            {
-                "prompt": str(payload["prompt"]),
-                "completion": str(payload["completion"]),
-            }
-        )
+                "Record starting at line "
+                f"{start_line} missing usable prompt/completion fields in {path}"
+            ) from exc
+        records.append(normalised)
 
     line_number = 0
     with path.open("r", encoding="utf-8") as handle:
