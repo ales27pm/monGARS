@@ -9,13 +9,15 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, Iterator, TypeVar
 from urllib.parse import urlparse
 
 import httpx
+import numpy as np
 from opentelemetry import metrics, trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -203,6 +205,13 @@ _RESPONSE_CACHE = AsyncTTLCache()
 
 class LLMRuntimeError(RuntimeError):
     """Raised when the unified runtime fails to serve a request."""
+
+
+class ModelUnavailableError(LLMRuntimeError):
+    """Raised when the primary LLM cannot accept new requests."""
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or "Primary model temporarily unavailable")
 
 
 class UnifiedLLMRuntime:
@@ -866,6 +875,11 @@ class LLMIntegration:
             self._prompt_limit_override = None
         self._prompt_token_limits: dict[str, int | None] = {}
         self._generation_token_targets: dict[str, int | None] = {}
+        self._breaker_fail_max = 3
+        self._breaker_reset_timeout = 30
+        self._breaker_failure_count = 0
+        self._breaker_last_failure: float | None = None
+        self._breaker_lock = threading.Lock()
 
     @classmethod
     def instance(cls) -> "LLMIntegration":
@@ -909,6 +923,67 @@ class LLMIntegration:
             return self._generate_override(prompt, **kwargs)
         return self._runtime().generate(prompt, **kwargs)
 
+    @contextmanager
+    def _circuit_breaker_context(self) -> Iterator[None]:
+        now = time.time()
+        with self._breaker_lock:
+            if (
+                self._breaker_failure_count >= self._breaker_fail_max
+                and self._breaker_last_failure is not None
+                and (now - self._breaker_last_failure) < self._breaker_reset_timeout
+            ):
+                raise ModelUnavailableError()
+        try:
+            yield
+        except (
+            LLMRuntimeError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ):
+            with self._breaker_lock:
+                self._breaker_failure_count += 1
+                self._breaker_last_failure = time.time()
+            raise
+        else:
+            with self._breaker_lock:
+                self._breaker_failure_count = 0
+                self._breaker_last_failure = None
+
+    def _fallback_generate(self, prompt: str, **_: Any) -> str:
+        stripped = prompt.strip()
+        prompt_length = len(stripped)
+        prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+        logger.info(
+            "llm.generate.fallback",
+            extra={
+                "prompt_length": prompt_length,
+                "prompt_digest": prompt_digest,
+            },
+        )
+        if not stripped:
+            metadata = "No prompt content was provided with this request."
+        else:
+            metadata = (
+                "Prompt contents are redacted for privacy. "
+                f"Length: {prompt_length} characters."
+            )
+        return (
+            "Primary model is temporarily unavailable. "
+            "Please retry in a few moments. "
+            f"Reference: {prompt_digest}. "
+            f"{metadata}"
+        )
+
+    @staticmethod
+    def _estimate_token_length(text: str) -> int:
+        if not text:
+            return 0
+        collapsed = re.sub(r"\s+", " ", text.strip())
+        if not collapsed:
+            return 0
+        return len(collapsed.split(" "))
+
     def generate(
         self, prompt: str, context: Mapping[str, Any] | None = None, **kwargs: Any
     ) -> str:
@@ -932,6 +1007,7 @@ class LLMIntegration:
         resolved_conversation_id = conversation_id or generate_conversation_id()
         request_id = generate_request_id()
         start_time = time.monotonic()
+        fallback_used = False
 
         with tracer.start_as_current_span("llm.generate", kind=SpanKind.SERVER) as span:
             span.set_attribute("llm.model_name", self._model_id)
@@ -942,7 +1018,22 @@ class LLMIntegration:
             span.set_attribute("request.id", request_id)
 
             try:
-                result = self._generate_internal(prompt, **kwargs)
+                with self._circuit_breaker_context():
+                    response = self._generate_internal(prompt, **kwargs)
+            except (ModelUnavailableError, TimeoutError) as exc:
+                fallback_used = True
+                logger.warning(
+                    "llm.generate.primary_failure",
+                    extra={
+                        "error.type": type(exc).__name__,
+                        "error.message": str(exc),
+                        "model": self._model_id,
+                        "user.id": resolved_user_id,
+                        "conversation.id": resolved_conversation_id,
+                        "request.id": request_id,
+                    },
+                )
+                response = self._fallback_generate(prompt, **kwargs)
             except Exception as exc:
                 LLM_ERROR_COUNTER.add(
                     1,
@@ -957,17 +1048,29 @@ class LLMIntegration:
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
                 raise
 
-            tokenizer = self.tokenizer
-            prompt_tokens = tokenizer.tokenize(prompt)
-            result_tokens = tokenizer.tokenize(result)
-            input_tokens = len(prompt_tokens)
-            output_tokens = len(result_tokens)
+            try:
+                tokenizer = self.tokenizer
+            except Exception:
+                tokenizer = None
 
+            if tokenizer is not None:
+                prompt_tokens = tokenizer.tokenize(prompt)
+                result_tokens = tokenizer.tokenize(response)
+                input_tokens = len(prompt_tokens)
+                output_tokens = len(result_tokens)
+            else:
+                input_tokens = self._estimate_token_length(prompt)
+                output_tokens = self._estimate_token_length(response)
             latency = (time.monotonic() - start_time) * 1000
-            span.set_attribute("output.length", len(result))
-            span.set_attribute("tokens.input", input_tokens)
-            span.set_attribute("tokens.output", output_tokens)
-            span.set_attribute("latency.ms", latency)
+            span.set_attribute("output.length", len(response))
+            span.set_attribute("llm.fallback_used", fallback_used)
+            span.set_attributes(
+                {
+                    "tokens.input": input_tokens,
+                    "tokens.output": output_tokens,
+                    "latency.ms": latency,
+                }
+            )
 
             (
                 resolved_user_id,
@@ -994,7 +1097,7 @@ class LLMIntegration:
                 extra_attributes={"request.id": request_id},
             )
 
-            return result
+            return response
 
     def embed(self, texts: Sequence[str]) -> Any:
         """Return embeddings for ``texts`` using the shared LLM2Vec encoder."""
@@ -1005,6 +1108,15 @@ class LLMIntegration:
         return self._runtime().embed(list(texts))
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._runtime().embed(list(texts))
+        normalized: list[list[float]] = []
+        for vector in vectors:
+            array = np.asarray(vector, dtype=float)
+            norm = float(np.linalg.norm(array))
+            if norm == 0 or not np.isfinite(norm):
+                normalized.append(array.tolist())
+                continue
+            normalized.append((array / norm).tolist())
         logger.info(
             {
                 "event": "embedding_requested",
@@ -1012,8 +1124,7 @@ class LLMIntegration:
                 "model": "dolphin-x1-llm2vec",
             }
         )
-        normalized = [str(text) for text in texts]
-        return self._runtime().embed(normalized)
+        return normalized
 
     def _cache_key(self, task_type: str, prompt: str) -> str:
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
