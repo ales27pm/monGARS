@@ -259,7 +259,8 @@ def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
         user_id=context.get("user_id", "anonymous"),
         prompt_hash=fingerprint,
         pii_entities=pii_entities,
-        required_action="approval"
+        required_action="approval",
+        context=context,
     )
     # fmt: on
     message = "This request requires human approval due to sensitive data"

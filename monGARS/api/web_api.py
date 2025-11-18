@@ -228,6 +228,8 @@ _chat_rate_limiter = InMemoryRateLimiter(
     prune_after_seconds=_CHAT_RATE_LIMIT_PRUNE_AFTER,
     on_reject=_log_rate_limit,
 )
+
+
 @app.middleware("http")
 async def record_request_metrics(
     request: Request,
@@ -996,8 +998,8 @@ async def peer_telemetry_snapshot(
 async def approve_request(
     token: str,
     operator_id: str,
-    current_operator: Annotated[dict, Depends(get_current_operator_user)],
-    db: Annotated[Session | None, Depends(get_approval_db_session)],
+    current_operator: dict = Depends(get_current_operator_user),
+    db: Session | None = Depends(get_approval_db_session),
 ) -> dict[str, str]:
     if current_operator.get("sub") != operator_id:
         raise HTTPException(
@@ -1035,9 +1037,7 @@ async def approve_request(
     if db is not None:
         try:
             approval = (
-                db.query(OperatorApproval)
-                .filter_by(approval_token=token_value)
-                .first()
+                db.query(OperatorApproval).filter_by(approval_token=token_value).first()
             )
             if approval is None:
                 approval = OperatorApproval(
