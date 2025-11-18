@@ -8,6 +8,13 @@ import GPUtil
 import psutil
 from opentelemetry import metrics, trace
 
+from monGARS.config import get_settings
+from monGARS.telemetry import (
+    LLM_DURATION_MILLISECONDS,
+    LLM_ERRORS_TOTAL,
+    LLM_TOKENS_TOTAL,
+)
+
 from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
@@ -36,11 +43,26 @@ LLM_LATENCY_HISTOGRAM = meter.create_histogram(
     unit="ms",
     description="LLM response time",
 )
-LLM_ERROR_COUNTER = meter.create_counter(
+_otel_llm_error_counter = meter.create_counter(
     "llm.errors",
     unit="errors",
     description="LLM errors",
 )
+
+
+class _PrometheusAwareCounter:
+    """Proxy OpenTelemetry counters into Prometheus."""
+
+    def __init__(self, otel_counter: Any) -> None:
+        self._otel_counter = otel_counter
+
+    def add(self, amount: int, attributes: dict[str, Any] | None = None) -> None:
+        attributes = attributes or {}
+        self._otel_counter.add(amount, attributes)
+        _record_prometheus_error(amount, attributes)
+
+
+LLM_ERROR_COUNTER = _PrometheusAwareCounter(_otel_llm_error_counter)
 
 
 def _generate_uuid() -> str:
@@ -72,6 +94,65 @@ def _base_llm_attrs(
         "conversation.id": resolved_conversation_id,
     }
     return attributes, resolved_user_id, resolved_conversation_id
+
+
+def _prometheus_labels(attributes: dict[str, Any]) -> dict[str, str]:
+    return {
+        "model": str(attributes.get("model") or "unknown"),
+    }
+
+
+def _prometheus_enabled() -> bool:
+    try:
+        return get_settings().otel_prometheus_enabled
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("monitor.prometheus_setting_lookup_failed", exc_info=True)
+        return False
+
+
+def _record_prometheus_tokens(
+    attributes: dict[str, Any], *, token_type: str, amount: int
+) -> None:
+    if amount <= 0:
+        return
+    if not _prometheus_enabled():
+        return
+    labels = _prometheus_labels(attributes)
+    labels["token_type"] = token_type
+    try:
+        LLM_TOKENS_TOTAL.labels(**labels).inc(amount)
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug(
+            "monitor.prometheus_token_metric_failed",
+            extra={"token_type": token_type},
+            exc_info=True,
+        )
+
+
+def _record_prometheus_latency(attributes: dict[str, Any], latency_ms: float) -> None:
+    if latency_ms < 0:
+        latency_ms = 0.0
+    if not _prometheus_enabled():
+        return
+    try:
+        LLM_DURATION_MILLISECONDS.labels(**_prometheus_labels(attributes)).observe(
+            latency_ms
+        )
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("monitor.prometheus_latency_metric_failed", exc_info=True)
+
+
+def _record_prometheus_error(amount: int, attributes: dict[str, Any]) -> None:
+    if amount <= 0:
+        return
+    if not _prometheus_enabled():
+        return
+    labels = _prometheus_labels(attributes)
+    labels["error_type"] = str(attributes.get("error.type") or "unknown")
+    try:
+        LLM_ERRORS_TOTAL.labels(**labels).inc(amount)
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("monitor.prometheus_error_metric_failed", exc_info=True)
 
 
 def annotate_llm_span(
@@ -137,6 +218,9 @@ def record_llm_metrics(
     LLM_TOKEN_COUNTER.add(input_tokens, prompt_attrs)
     LLM_TOKEN_COUNTER.add(output_tokens, completion_attrs)
     LLM_LATENCY_HISTOGRAM.record(latency_ms, attributes)
+    _record_prometheus_tokens(attributes, token_type="prompt", amount=input_tokens)
+    _record_prometheus_tokens(attributes, token_type="completion", amount=output_tokens)
+    _record_prometheus_latency(attributes, latency_ms)
 
 
 def get_tracer(name: str) -> trace.Tracer:

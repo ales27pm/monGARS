@@ -62,9 +62,7 @@ def test_metrics_endpoint_reports_llm_metrics() -> None:
             1, {"error.type": "RuntimeError", "model": "dolphin-test"}
         )
 
-        resp = client.get(
-            "/metrics", headers={"Authorization": f"Bearer {token}"}
-        )
+        resp = client.get("/metrics", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
 
         metrics_map = {
@@ -77,11 +75,11 @@ def test_metrics_endpoint_reports_llm_metrics() -> None:
                     return name, family
             raise AssertionError(f"Missing metric prefix {prefix}")
 
-        tokens_name, tokens_family = _find_metric("llm_tokens")
+        tokens_name, tokens_family = _find_metric("mongars_llm_tokens")
         assert any(sample.value >= 0 for sample in tokens_family.samples)
 
-        duration_name, duration_family = _find_metric("llm_duration")
+        duration_name, duration_family = _find_metric("mongars_llm_duration")
         assert any(sample.value >= 0 for sample in duration_family.samples)
 
-        errors_name, errors_family = _find_metric("llm_errors")
+        errors_name, errors_family = _find_metric("mongars_llm_errors")
         assert any(sample.value >= 0 for sample in errors_family.samples)
