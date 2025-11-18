@@ -297,7 +297,7 @@ def log_blocked_attempt(
     prompt_hash: str,
     pii_entities: Sequence["PIIEntity"],
     required_action: str,
-    context: Mapping[str, Any],
+    context: Mapping[str, Any] | None = None,
     registry: OperatorApprovalRegistry | None = None,
 ) -> tuple[str, str]:
     """Persist details about a blocked security guardrail decision."""
@@ -324,7 +324,7 @@ def log_blocked_attempt(
         "prompt_hash": prompt_hash,
         "required_action": required_action,
         "pii_entities": serialized_entities,
-        "context_snapshot": _normalise_payload(context),
+        "context_snapshot": _normalise_payload(context or {}),
         "blocked_at": _utcnow_isoformat(),
     }
 

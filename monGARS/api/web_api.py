@@ -74,21 +74,24 @@ except ImportError:  # pragma: no cover - optional dependency
     StatusCode = None  # type: ignore[assignment]
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from monGARS.api.authentication import (
     authenticate_user,
     get_current_admin_user,
+    get_current_operator_user,
     get_current_user,
-    oauth2_scheme,
 )
 from monGARS.api.dependencies import (
     get_adaptive_response_generator,
+    get_approval_db_session,
     get_hippocampus,
     get_peer_communicator,
     get_persistence_repository,
     get_personality_engine,
 )
 from monGARS.api.schemas import (
+    ApprovalResponse,
     ChatRequest,
     ChatResponse,
     LLMHealthResponse,
@@ -119,6 +122,7 @@ from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import BackendUnavailable, event_bus, make_event
+from monGARS.db import OperatorApproval
 from monGARS.telemetry import (
     HTTP_REQUEST_LATENCY_SECONDS,
     HTTP_REQUESTS_TOTAL,
@@ -154,35 +158,6 @@ class _SecurityManagerProxy:
 
 
 sec_manager = _SecurityManagerProxy()
-
-
-def _require_operator_claims(token: str = Depends(oauth2_scheme)) -> dict:
-    """Ensure approval calls originate from authenticated operators."""
-
-    try:
-        claims = sec_manager.verify_token(token)
-    except ValueError as exc:
-        logger.warning(
-            "web_api.approval.invalid_auth_token",
-            extra={"reason": str(exc)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"status": "error", "reason": "invalid_token"},
-        ) from exc
-
-    role = str(claims.get("role", ""))
-    if role != "operator":
-        logger.warning(
-            "web_api.approval.non_operator_claim",
-            extra={"role": role or "<missing>"},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"status": "error", "reason": "not_operator"},
-        )
-
-    return claims
 
 
 @asynccontextmanager
@@ -1020,56 +995,68 @@ async def peer_telemetry_snapshot(
     return PeerTelemetryEnvelope(telemetry=payloads)
 
 
-@router.post("/security/approve")
-@limiter.limit("5/minute")
+@router.post("/security/approve", response_model=ApprovalResponse)
 async def approve_request(
-    request: Request,
     token: str,
     operator_id: str,
-    claims: dict = Depends(_require_operator_claims),
-) -> dict[str, str]:
-    """Validate an approval token and mark the associated request as approved."""
-
-    token_value = (token or "").strip()
-    operator_value = (operator_id or "").strip()
-    if not token_value or not operator_value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"status": "error", "reason": "missing_fields"},
-        )
-
-    claimed_operator = str(claims.get("sub", "") or "")
-    if claimed_operator and claimed_operator != operator_value:
-        logger.warning(
-            "web_api.approval.operator_mismatch",
-            extra={"claimed": claimed_operator, "provided": operator_value},
-        )
+    current_operator: dict = Depends(get_current_operator_user),
+    db: Session | None = Depends(get_approval_db_session),
+) -> ApprovalResponse:
+    if current_operator.get("sub") != operator_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"status": "error", "reason": "operator_mismatch"},
         )
 
+    token_value = (token or "").strip()
+    if not token_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "error", "reason": "missing_token"},
+        )
+
     registry = get_operator_approval_registry()
-    request = registry.find_by_token(token_value)
-    if request is None:
+    request_entry = registry.find_by_token(token_value)
+    if request_entry is None:
         logger.warning(
             "web_api.approval.invalid_token",
-            extra={"operator": operator_value},
+            extra={"operator": _redact_user_id(operator_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"status": "error", "reason": "token_not_found"},
+            detail="invalid_token",
+        )
+    if request_entry.is_approved:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="already_approved",
         )
 
-    if request.is_approved:
-        return {"status": "already_approved", "token_ref": request.request_id}
+    registry.approve(request_entry.request_id, operator=operator_id)
+    token_ref = request_entry.request_id
 
-    registry.approve(request.request_id, operator=operator_value)
-    logger.info(
-        "web_api.approval.request_approved",
-        extra={"operator": operator_value, "request_id": request.request_id},
-    )
-    return {"status": "approved", "token_ref": request.request_id}
+    if db is not None:
+        try:
+            approval = (
+                db.query(OperatorApproval).filter_by(approval_token=token_value).first()
+            )
+            if approval is None:
+                approval = OperatorApproval(
+                    id=token_ref,
+                    user_id=str(request_entry.payload.get("user_id", "anonymous")),
+                    prompt_hash=str(request_entry.payload.get("prompt_hash", ""))[:8],
+                    pii_entities=request_entry.payload.get("pii_entities", []),
+                    approval_token=token_value,
+                )
+                db.add(approval)
+            approval.approved_at = datetime.now(UTC)
+            approval.approved_by = operator_id
+            db.commit()
+        except SQLAlchemyError as exc:  # pragma: no cover - database failure
+            db.rollback()
+            logger.exception("web_api.approval.commit_failed")
+
+    return ApprovalResponse(token_ref=token_ref)
 
 
 @router.post("/chat", response_model=ChatResponse)

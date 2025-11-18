@@ -44,6 +44,13 @@ class UserListResponse(BaseModel):
     users: list[str] = Field(default_factory=list)
 
 
+class ApprovalResponse(BaseModel):
+    """Response body returned after a successful approval action."""
+
+    status: Literal["approved"] = "approved"
+    token_ref: str = Field(..., min_length=1, max_length=64)
+
+
 class PasswordChangeRequest(BaseModel):
     """Payload for password change requests."""
 

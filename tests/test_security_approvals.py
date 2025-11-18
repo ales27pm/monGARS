@@ -55,3 +55,12 @@ def test_pii_block_and_operator_approval_flow() -> None:
         approval_token=approval_token,
         prompt_hash=prompt_hash,
     )
+
+
+def test_security_approve_requires_authentication() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/llm/security/approve",
+        params={"token": "dummy-token", "operator_id": "ops"},
+    )
+    assert response.status_code == 401
