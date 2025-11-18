@@ -3638,12 +3638,13 @@ def parse_args() -> PipelineConfig:
     memory_config = MemoryConfig(max_memory_gb=args.max_memory_gb)
 
     # Validate distributed options
-    if args.distributed_mode and (
-        args.node_rank < 0 or args.node_rank >= args.world_size
-    ):
-        raise ValueError(
-            "node_rank must be within [0, world_size) when distributed mode is enabled"
-        )
+    if args.distributed_mode:
+        if args.world_size <= 0:
+            raise ValueError("world_size must be greater than 0 when distributed mode is enabled")
+        if args.node_rank < 0 or args.node_rank >= args.world_size:
+            raise ValueError(
+                "node_rank must be within [0, world_size) when distributed mode is enabled"
+            )
 
     cloud_storage = None
     if args.cloud_storage:
