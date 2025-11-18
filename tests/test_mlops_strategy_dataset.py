@@ -233,6 +233,35 @@ def test_build_unsloth_dataset_from_extra_only(tmp_path: Path) -> None:
     assert result["validation"] is None
 
 
+def test_build_unsloth_dataset_accepts_instruction_pairs(tmp_path: Path) -> None:
+    dataset = tmp_path / "instruction.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "instruction": "Summarise the context",
+                "input": "Context paragraph",
+                "output": "Summary",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_unsloth_llm2vec_dataset(
+        [],
+        [],
+        tmp_path / "out",
+        validation_ratio=0.5,
+        extra_datasets=[dataset],
+    )
+
+    assert result["train"].exists()
+    with result["train"].open("r", encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle]
+    assert rows[0]["completion"] == "Summary"
+    assert "Context paragraph" in rows[0]["prompt"]
+
+
 @pytest.mark.parametrize("ratio", [0.0, -0.1, 1.0, 1.5])
 def test_build_unsloth_dataset_rejects_invalid_ratio(
     tmp_path: Path, ratio: float
