@@ -8,12 +8,14 @@ import GPUtil
 import psutil
 from opentelemetry import metrics, trace
 
-from .ui_events import event_bus, make_event
+from monGARS.config import get_settings
 from monGARS.telemetry import (
     LLM_DURATION_MILLISECONDS,
     LLM_ERRORS_TOTAL,
     LLM_TOKENS_TOTAL,
 )
+
+from .ui_events import event_bus, make_event
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +99,23 @@ def _base_llm_attrs(
 def _prometheus_labels(attributes: dict[str, Any]) -> dict[str, str]:
     return {
         "model": str(attributes.get("model") or "unknown"),
-        "user": str(attributes.get("user.id") or "anonymous"),
-        "conversation": str(attributes.get("conversation.id") or "unknown"),
     }
+
+
+def _prometheus_enabled() -> bool:
+    try:
+        return get_settings().otel_prometheus_enabled
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("monitor.prometheus_setting_lookup_failed", exc_info=True)
+        return False
 
 
 def _record_prometheus_tokens(
     attributes: dict[str, Any], *, token_type: str, amount: int
 ) -> None:
     if amount <= 0:
+        return
+    if not _prometheus_enabled():
         return
     labels = _prometheus_labels(attributes)
     labels["token_type"] = token_type
@@ -122,6 +132,8 @@ def _record_prometheus_tokens(
 def _record_prometheus_latency(attributes: dict[str, Any], latency_ms: float) -> None:
     if latency_ms < 0:
         latency_ms = 0.0
+    if not _prometheus_enabled():
+        return
     try:
         LLM_DURATION_MILLISECONDS.labels(**_prometheus_labels(attributes)).observe(
             latency_ms
@@ -132,6 +144,8 @@ def _record_prometheus_latency(attributes: dict[str, Any], latency_ms: float) ->
 
 def _record_prometheus_error(amount: int, attributes: dict[str, Any]) -> None:
     if amount <= 0:
+        return
+    if not _prometheus_enabled():
         return
     labels = _prometheus_labels(attributes)
     labels["error_type"] = str(attributes.get("error.type") or "unknown")
@@ -205,9 +219,7 @@ def record_llm_metrics(
     LLM_TOKEN_COUNTER.add(output_tokens, completion_attrs)
     LLM_LATENCY_HISTOGRAM.record(latency_ms, attributes)
     _record_prometheus_tokens(attributes, token_type="prompt", amount=input_tokens)
-    _record_prometheus_tokens(
-        attributes, token_type="completion", amount=output_tokens
-    )
+    _record_prometheus_tokens(attributes, token_type="completion", amount=output_tokens)
     _record_prometheus_latency(attributes, latency_ms)
 
 
