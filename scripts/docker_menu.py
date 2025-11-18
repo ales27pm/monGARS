@@ -181,8 +181,57 @@ class DockerMenu:
             if not stripped or stripped.startswith("#"):
                 continue
             key, _, rest = raw.partition("=")
-            values[key.strip()] = rest.strip()
+            cleaned = DockerMenu._strip_inline_comment(rest)
+            values[key.strip()] = cleaned.strip()
         return values
+
+    @staticmethod
+    def _strip_inline_comment(value: str) -> str:
+        """Remove inline shell comments from an env assignment value."""
+
+        in_single = False
+        in_double = False
+        escape_next = False
+        result: list[str] = []
+        previous: str | None = None
+
+        for char in value:
+            if escape_next:
+                result.append(char)
+                previous = char
+                escape_next = False
+                continue
+
+            if char == "\\":
+                escape_next = True
+                result.append(char)
+                previous = char
+                continue
+
+            if char == "'" and not in_double:
+                in_single = not in_single
+                result.append(char)
+                previous = char
+                continue
+
+            if char == '"' and not in_single:
+                in_double = not in_double
+                result.append(char)
+                previous = char
+                continue
+
+            if (
+                char == "#"
+                and not in_single
+                and not in_double
+                and (previous is None or previous.isspace())
+            ):
+                break
+
+            result.append(char)
+            previous = char
+
+        return "".join(result)
 
     def _write_env_updates(self, updates: Dict[str, str]) -> None:
         lines: List[str] = []

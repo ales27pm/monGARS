@@ -124,6 +124,29 @@ def test_parse_env_file_ignores_comments(tmp_path: Path):
     assert parsed == {"KEY": "value", "EMPTY": ""}
 
 
+def test_parse_env_file_strips_inline_comments(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "KEY=value # comment",
+                "PASSWORD=password#123",
+                'QUOTED="value # not comment" # trailing comment',
+                'HASHED="#prefixed" # prefixed value preserved',
+            ]
+        )
+        + "\n",
+        encoding="utf8",
+    )
+    parsed = docker_menu.DockerMenu._parse_env_file(env_file)
+    assert parsed == {
+        "KEY": "value",
+        "PASSWORD": "password#123",
+        "QUOTED": '"value # not comment"',
+        "HASHED": '"#prefixed"',
+    }
+
+
 def test_prepare_ports_updates_searx_urls(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
