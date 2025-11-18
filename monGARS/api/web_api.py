@@ -91,6 +91,7 @@ from monGARS.api.dependencies import (
     get_personality_engine,
 )
 from monGARS.api.schemas import (
+    ApprovalResponse,
     ChatRequest,
     ChatResponse,
     LLMHealthResponse,
@@ -994,13 +995,13 @@ async def peer_telemetry_snapshot(
     return PeerTelemetryEnvelope(telemetry=payloads)
 
 
-@router.post("/security/approve")
+@router.post("/security/approve", response_model=ApprovalResponse)
 async def approve_request(
     token: str,
     operator_id: str,
     current_operator: dict = Depends(get_current_operator_user),
     db: Session | None = Depends(get_approval_db_session),
-) -> dict[str, str]:
+) -> ApprovalResponse:
     if current_operator.get("sub") != operator_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1019,7 +1020,7 @@ async def approve_request(
     if request_entry is None:
         logger.warning(
             "web_api.approval.invalid_token",
-            extra={"operator": operator_id},
+            extra={"operator": _redact_user_id(operator_id)},
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1048,17 +1049,14 @@ async def approve_request(
                     approval_token=token_value,
                 )
                 db.add(approval)
-            approval.approved_at = datetime.utcnow()
+            approval.approved_at = datetime.now(UTC)
             approval.approved_by = operator_id
             db.commit()
         except SQLAlchemyError as exc:  # pragma: no cover - database failure
             db.rollback()
-            logger.error(
-                "web_api.approval.commit_failed",
-                extra={"reason": str(exc)},
-            )
+            logger.exception("web_api.approval.commit_failed")
 
-    return {"status": "approved", "token_ref": token_ref}
+    return ApprovalResponse(token_ref=token_ref)
 
 
 @router.post("/chat", response_model=ChatResponse)
