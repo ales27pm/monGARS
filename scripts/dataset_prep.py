@@ -272,11 +272,14 @@ class MemoryConfig:
     """Memory management configuration for large-scale processing."""
 
     max_memory_gb: float = 32.0
-    gc_threshold_mb: float = 1024.0  # Trigger GC when memory exceeds this threshold
-    batch_memory_limit_mb: float = 512.0
+    gc_threshold_mb: float = 512.0  # Trigger GC when memory exceeds this threshold
+    batch_memory_limit_mb: float = 256.0
     cache_clear_interval: int = 1000  # Clear cache every N examples
     aggressive_gc: bool = False
     memory_check_interval: int = 100  # Check memory every N examples
+    memory_release_strategy: Literal["aggressive", "balanced", "conservative"] = (
+        "aggressive"
+    )
 
 
 @dataclass
@@ -320,6 +323,9 @@ class PIIConfig:
             r"\b[A-Z]{2}\d{6}\b",  # Passport variant
             r"\b[A-Z]{2}\d{2}[A-Z]{2}\d{4}\b",  # Driver's license
             r"(?i)(password|pwd|pass)\s*[:=]\s*[^\s]+",  # Password patterns
+            r"(?i)(api[_-]?key|secret|token)\s*[:=]\s*[^\s]+",  # API keys
+            r"(?i)(aws[_-]?access[_-]?key[_-]?id|aws[_-]?secret[_-]?access[_-]?key)\s*[=:]",  # AWS credentials
+            r"(?i)(private[_-]?key|ssh[_-]?key)\s*[:=]\s*",  # Private keys
         ]
     )
     redaction_strategy: Literal["remove", "mask", "replace"] = "remove"
@@ -363,6 +369,13 @@ class PipelineConfig:
     validation_max_size: int = 5000
     verbose: bool = False
     unsloth_export_name: str = "unsloth_prompt_completion.jsonl"
+    cloud_storage: Optional[Dict[str, str]] = None
+    distributed_mode: bool = False
+    node_rank: int = 0
+    world_size: int = 1
+    health_check_interval: int = 60  # seconds
+    max_runtime_hours: float = 24.0
+    auto_scaling: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -1051,6 +1064,10 @@ def force_gc(aggressive: bool = False) -> float:
 # -----------------------------
 
 
+class DatasetLoaderError(RuntimeError):
+    """Raised when a dataset loader cannot complete its operation."""
+
+
 class DatasetLoader:
     """Base class for dataset loaders with common functionality."""
 
@@ -1132,6 +1149,25 @@ class DatasetLoader:
         Returns:
             List of compliance issues found
         """
+        license_value = (
+            dataset_config.license.value
+            if isinstance(dataset_config.license, LicenseType)
+            else str(dataset_config.license)
+        )
+
+        high_risk_licenses = {
+            LicenseType.RESEARCH_ONLY.value,
+            LicenseType.CUSTOM.value,
+            "custom",
+        }
+
+        allow_high_risk = (
+            os.environ.get("ALLOW_HIGH_RISK_LICENSES", "false").lower() == "true"
+        )
+
+        if license_value in high_risk_licenses and not allow_high_risk:
+            return [f"High-risk license {license_value} requires explicit approval"]
+
         if not dataset_config.license_compliance:
             return ["Missing license compliance configuration"]
 
@@ -1384,7 +1420,10 @@ class DatasetLoader:
         dataset_config: DatasetConfig,
     ) -> None:
         """Main loading method to be implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement load method")
+
+        raise DatasetLoaderError(
+            f"{type(self).__name__} does not implement a load() strategy"
+        )
 
     def _estimate_quality(
         self, dataset: Union[Dataset, Iterable], dataset_config: DatasetConfig
@@ -1512,7 +1551,9 @@ class InstructionDatasetLoader(DatasetLoader):
                     len(batch) >= dataset_config.batch_size
                     or processed_count % dataset_config.batch_size == 0
                 ):
-                    self._process_batch(batch, seen_keys, sink, dataset_config)
+                    self._process_batch_with_memory_control(
+                        batch, seen_keys, sink, dataset_config
+                    )
                     batch = []
 
                 # Memory and checkpoint management
@@ -1537,7 +1578,9 @@ class InstructionDatasetLoader(DatasetLoader):
 
             # Process remaining batch
             if batch:
-                self._process_batch(batch, seen_keys, sink, dataset_config)
+                self._process_batch_with_memory_control(
+                    batch, seen_keys, sink, dataset_config
+                )
 
             logger.info(
                 f"Loaded {self.metadata['examples_used']}/{processed_count} examples from {dataset_config.name} "
@@ -1605,6 +1648,51 @@ class InstructionDatasetLoader(DatasetLoader):
                 except Exception as e:
                     self.logger.error(f"Error processing batch item: {str(e)}")
                     self.metadata["loading_errors"] += 1
+
+    def _process_batch_with_memory_control(
+        self,
+        batch: List[Tuple[Dict[str, Any], str]],
+        seen_keys: Set[str],
+        sink: List[Dict[str, Any]],
+        dataset_config: DatasetConfig,
+    ) -> None:
+        """Process batch with active memory monitoring and adaptive sizing."""
+
+        current_batch: List[Tuple[Dict[str, Any], str]] = []
+        aggressive_gc = (
+            self.config.memory_config.memory_release_strategy == "aggressive"
+            or self.config.memory_config.aggressive_gc
+        )
+
+        for item in batch:
+            current_batch.append(item)
+
+            if len(current_batch) % 10 == 0:
+                usage_gb = memory_usage()
+                max_allowed = self.config.memory_config.max_memory_gb * 0.85
+                if usage_gb > max_allowed:
+                    self.logger.warning(
+                        "Memory usage %.2fGB exceeded soft limit %.2fGB; flushing partial batch",
+                        usage_gb,
+                        max_allowed,
+                    )
+                    self._process_batch(current_batch, seen_keys, sink, dataset_config)
+                    current_batch = []
+                    force_gc(aggressive=aggressive_gc)
+
+                    if self.config.auto_scaling and dataset_config.batch_size > 1:
+                        new_batch_size = max(1, dataset_config.batch_size // 2)
+                        if new_batch_size != dataset_config.batch_size:
+                            self.logger.info(
+                                "Auto-scaling %s batch size from %d to %d due to memory pressure",
+                                dataset_config.name,
+                                dataset_config.batch_size,
+                                new_batch_size,
+                            )
+                            dataset_config.batch_size = new_batch_size
+
+        if current_batch:
+            self._process_batch(current_batch, seen_keys, sink, dataset_config)
 
     def _save_checkpoint(self, dataset_name: str, examples_processed: int) -> None:
         """Save pipeline checkpoint."""
@@ -2413,6 +2501,9 @@ class DatasetPipeline:
             "errors": [],
         }
         self.output_artifacts: Dict[str, Dict[str, Any]] = {}
+        self._health_thread: Optional[threading.Thread] = None
+        self._health_stop_event = threading.Event()
+        self._health_violation: Optional[BaseException] = None
 
         # Initialize deduplication engine
         self.dedup_engine = None
@@ -2507,6 +2598,75 @@ class DatasetPipeline:
 
         return dataset_stats
 
+    def _start_health_monitor(self) -> None:
+        """Start background health monitoring if enabled."""
+
+        if self.config.health_check_interval <= 0:
+            return
+
+        if self._health_thread and self._health_thread.is_alive():
+            return
+
+        self._health_stop_event.clear()
+        self._health_thread = threading.Thread(
+            target=self._health_monitor_loop,
+            name="dataset-health-monitor",
+            daemon=True,
+        )
+        self._health_thread.start()
+
+    def _stop_health_monitor(self) -> None:
+        """Stop the health monitoring thread if running."""
+
+        self._health_stop_event.set()
+        if self._health_thread and self._health_thread.is_alive():
+            self._health_thread.join(timeout=5)
+        self._health_thread = None
+
+    def _health_monitor_loop(self) -> None:
+        """Continuously check runtime constraints and memory usage."""
+
+        interval = max(1, self.config.health_check_interval)
+        while not self._health_stop_event.wait(interval):
+            try:
+                usage_gb = memory_usage()
+                usage_mb = usage_gb * 1024
+                self.stats["memory_peak_mb"] = max(
+                    self.stats.get("memory_peak_mb", 0), usage_mb
+                )
+
+                if usage_gb > self.config.memory_config.max_memory_gb:
+                    self._health_violation = MemoryLimitExceeded(
+                        f"Memory usage {usage_gb:.2f}GB exceeded limit of {self.config.memory_config.max_memory_gb}GB"
+                    )
+                    self.logger.error(str(self._health_violation))
+                    self._health_stop_event.set()
+                    break
+
+                runtime_hours = (time.time() - self.stats["start_time"]) / 3600
+                if (
+                    self.config.max_runtime_hours > 0
+                    and runtime_hours > self.config.max_runtime_hours
+                ):
+                    self._health_violation = RuntimeError(
+                        f"Max runtime {self.config.max_runtime_hours}h exceeded"
+                    )
+                    self.logger.error(str(self._health_violation))
+                    self._health_stop_event.set()
+                    break
+
+            except BaseException as exc:  # Catch all to avoid silent thread death
+                self._health_violation = exc
+                self.logger.error("Health monitor encountered an error: %s", exc)
+                self._health_stop_event.set()
+                break
+
+    def _check_health_status(self) -> None:
+        """Raise recorded health violations in the main thread."""
+
+        if self._health_violation:
+            raise self._health_violation
+
     def run(self) -> None:
         """Execute the main pipeline."""
         try:
@@ -2515,21 +2675,35 @@ class DatasetPipeline:
                 f"Configuration: {json.dumps(self.config.to_dict(), indent=2)}"
             )
 
+            if self.config.distributed_mode:
+                self.logger.info(
+                    "Distributed mode enabled (rank %d/%d)",
+                    self.config.node_rank,
+                    self.config.world_size,
+                )
+
+            self._start_health_monitor()
+            self._check_health_status()
+
             # Set random seed
             random.seed(self.config.seed)
 
             # Load datasets
             self._load_all_datasets()
+            self._check_health_status()
 
             # Validate final results
             if self.config.enable_validation:
                 self._validate_results()
+            self._check_health_status()
 
             # Write outputs
             self._write_outputs()
+            self._check_health_status()
 
             # Generate comprehensive metadata
             self._generate_metadata()
+            self._sync_outputs_to_cloud()
 
             self.logger.info("Pipeline execution completed successfully")
 
@@ -2545,6 +2719,8 @@ class DatasetPipeline:
             # Stop dashboard if running
             if self.dashboard:
                 self.dashboard.stop()
+
+            self._stop_health_monitor()
 
             # Log final statistics
             duration = time.time() - self.stats["start_time"]
@@ -2563,6 +2739,7 @@ class DatasetPipeline:
         # Process instruction datasets
         self.logger.info("Loading instruction datasets...")
         for name, loader in self.loaders.items():
+            self._check_health_status()
             if self.state_manager.should_skip_dataset(name):
                 self.logger.info(f"Skipping {name} (already processed in checkpoint)")
                 continue
@@ -2599,6 +2776,7 @@ class DatasetPipeline:
                 self.state_manager.save_state(
                     self
                 )  # Save checkpoint after each dataset
+                self._check_health_status()
 
             elif isinstance(loader, RetrievalDatasetLoader):
                 self.logger.info(f"Processing retrieval dataset: {name}")
@@ -2632,6 +2810,7 @@ class DatasetPipeline:
                 self.state_manager.save_state(
                     self
                 )  # Save checkpoint after each dataset
+                self._check_health_status()
 
     def _get_dataset_config(self, dataset_name: str) -> Optional[DatasetConfig]:
         """Get dataset configuration based on name."""
@@ -2722,6 +2901,54 @@ class DatasetPipeline:
         }
         if schema:
             self.output_artifacts[key]["schema"] = dict(schema)
+
+    def _sync_outputs_to_cloud(self) -> None:
+        """Upload generated artifacts to configured cloud storage."""
+
+        if not self.config.cloud_storage:
+            return
+
+        provider = (self.config.cloud_storage.get("provider") or "").lower()
+        if provider != "aws":
+            self.logger.warning(
+                "Unsupported cloud storage provider '%s'; skipping sync", provider
+            )
+            return
+
+        bucket = self.config.cloud_storage.get("bucket")
+        if not bucket:
+            self.logger.warning("AWS cloud storage configuration missing bucket name")
+            return
+
+        prefix = (self.config.cloud_storage.get("prefix") or "").strip("/")
+
+        try:
+            import boto3
+        except ImportError:
+            self.logger.warning(
+                "boto3 not installed; cannot upload artifacts to s3://%s", bucket
+            )
+            return
+
+        s3 = boto3.client("s3")
+
+        for name, artifact in self.output_artifacts.items():
+            path = artifact.get("path")
+            if not path or not os.path.exists(path):
+                continue
+
+            file_name = os.path.basename(path)
+            key = f"{prefix}/{file_name}" if prefix else file_name
+
+            try:
+                s3.upload_file(path, bucket, key)
+                self.logger.info(
+                    "Uploaded %s artifact to s3://%s/%s", name, bucket, key
+                )
+            except Exception as exc:
+                error_msg = f"Failed to upload {path} to s3://{bucket}/{key}: {exc}"
+                self.logger.error(error_msg)
+                self.stats["errors"].append(error_msg)
 
     def _write_unsloth_ready_dataset(self, instruct_path: Path) -> Optional[Path]:
         """Materialize a prompt/completion dataset for downstream fine-tuning."""
@@ -2987,6 +3214,9 @@ class DatasetPipeline:
             # Write human-readable summary
             with open(summary_path, "w", encoding="utf-8") as f:
                 self._write_summary_report(f, metadata)
+
+            self._register_output("metadata", metadata_path, 0)
+            self._register_output("summary_report", summary_path, 0)
 
             self.logger.info(f"Metadata written to {metadata_path}")
             self.logger.info(f"Summary report written to {summary_path}")
@@ -3335,6 +3565,45 @@ def parse_args() -> PipelineConfig:
         default="unsloth_prompt_completion.jsonl",
         help="Filename for the derived prompt/completion dataset",
     )
+    parser.add_argument(
+        "--cloud_storage",
+        type=str,
+        help='JSON blob describing cloud storage target (e.g. {"provider": "aws", "bucket": "my-bucket"})',
+    )
+    parser.add_argument(
+        "--distributed_mode",
+        action="store_true",
+        help="Enable distributed coordination with node/world ranks",
+    )
+    parser.add_argument(
+        "--node_rank",
+        type=int,
+        default=0,
+        help="Rank of this node when distributed mode is enabled",
+    )
+    parser.add_argument(
+        "--world_size",
+        type=int,
+        default=1,
+        help="Total nodes participating in distributed mode",
+    )
+    parser.add_argument(
+        "--health_check_interval",
+        type=int,
+        default=60,
+        help="Seconds between health checks",
+    )
+    parser.add_argument(
+        "--max_runtime_hours",
+        type=float,
+        default=24.0,
+        help="Maximum allowed runtime before forced shutdown",
+    )
+    parser.add_argument(
+        "--disable_auto_scaling",
+        action="store_true",
+        help="Disable automatic batch down-scaling when memory pressure is detected",
+    )
 
     args = parser.parse_args()
 
@@ -3368,6 +3637,25 @@ def parse_args() -> PipelineConfig:
     # Create memory config
     memory_config = MemoryConfig(max_memory_gb=args.max_memory_gb)
 
+    # Validate distributed options
+    if args.distributed_mode and (
+        args.node_rank < 0 or args.node_rank >= args.world_size
+    ):
+        raise ValueError(
+            "node_rank must be within [0, world_size) when distributed mode is enabled"
+        )
+
+    cloud_storage = None
+    if args.cloud_storage:
+        try:
+            loaded = json.loads(args.cloud_storage)
+        except json.JSONDecodeError as exc:
+            raise ValueError("cloud_storage must be valid JSON") from exc
+
+        if not isinstance(loaded, dict):
+            raise ValueError("cloud_storage must decode to an object/dict")
+        cloud_storage = loaded
+
     return PipelineConfig(
         output_dir=args.output_dir,
         langs=langs,
@@ -3395,6 +3683,13 @@ def parse_args() -> PipelineConfig:
         validation_max_size=args.validation_max_size,
         verbose=args.verbose,
         unsloth_export_name=args.unsloth_export_name,
+        cloud_storage=cloud_storage,
+        distributed_mode=args.distributed_mode,
+        node_rank=args.node_rank,
+        world_size=args.world_size,
+        health_check_interval=args.health_check_interval,
+        max_runtime_hours=args.max_runtime_hours,
+        auto_scaling=not args.disable_auto_scaling,
     )
 
 

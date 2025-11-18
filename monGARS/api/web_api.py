@@ -133,7 +133,27 @@ from . import ws_manager
 from .rate_limiter import InMemoryRateLimiter
 
 _ws_manager = ws_manager.ws_manager
-sec_manager = SecurityManager()
+
+
+class _SecurityManagerProxy:
+    """Ensure API security manager stays in sync with refreshed settings."""
+
+    def __init__(self) -> None:
+        self._manager: SecurityManager | None = None
+        self._cached_settings = None
+
+    def _resolve(self) -> SecurityManager:
+        settings = get_settings()
+        if self._manager is None or self._cached_settings is not settings:
+            self._manager = SecurityManager(settings=settings)
+            self._cached_settings = settings
+        return self._manager
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolve(), name)
+
+
+sec_manager = _SecurityManagerProxy()
 
 
 def _require_operator_claims(token: str = Depends(oauth2_scheme)) -> dict:

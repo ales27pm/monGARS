@@ -31,8 +31,43 @@ HTTP_REQUEST_LATENCY_SECONDS = Histogram(
     ),
 )
 
+LLM_TOKENS_TOTAL = Counter(
+    "llm_tokens_total",
+    "Number of tokens processed by the LLM runtime partitioned by token type.",
+    ("token_type", "model", "user", "conversation"),
+    registry=PROMETHEUS_REGISTRY,
+)
+
+LLM_DURATION_MILLISECONDS = Histogram(
+    "llm_duration_milliseconds",
+    "Distribution of LLM response times in milliseconds.",
+    ("model", "user", "conversation"),
+    registry=PROMETHEUS_REGISTRY,
+    buckets=(
+        10,
+        25,
+        50,
+        75,
+        100,
+        250,
+        500,
+        1000,
+        2000,
+    ),
+)
+
+LLM_ERRORS_TOTAL = Counter(
+    "llm_errors_total",
+    "Number of LLM errors grouped by error type.",
+    ("error_type", "model", "user", "conversation"),
+    registry=PROMETHEUS_REGISTRY,
+)
+
 __all__ = [
     "HTTP_REQUEST_LATENCY_SECONDS",
     "HTTP_REQUESTS_TOTAL",
     "PROMETHEUS_REGISTRY",
+    "LLM_TOKENS_TOTAL",
+    "LLM_DURATION_MILLISECONDS",
+    "LLM_ERRORS_TOTAL",
 ]
