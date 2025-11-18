@@ -6,7 +6,7 @@ import json
 import logging
 import sys
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 try:
@@ -17,7 +17,7 @@ except ImportError:  # Python 3.10 fallback
     UTC = timezone.utc
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any, Iterator, Mapping
+from typing import Annotated, Any, Mapping
 
 try:  # pragma: no cover - ray is optional
     import ray
@@ -73,18 +73,18 @@ except ImportError:  # pragma: no cover - optional dependency
     Status = None  # type: ignore[assignment]
     StatusCode = None  # type: ignore[assignment]
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from monGARS.api.authentication import (
     authenticate_user,
     get_current_admin_user,
+    get_current_operator_user,
     get_current_user,
 )
 from monGARS.api.dependencies import (
     get_adaptive_response_generator,
+    get_approval_db_session,
     get_hippocampus,
     get_peer_communicator,
     get_persistence_repository,
@@ -115,6 +115,7 @@ from monGARS.core.llm_integration import (
     GuardRejectionError,
     LLMIntegration,
 )
+from monGARS.core.operator_approvals import get_operator_approval_registry
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
@@ -227,58 +228,6 @@ _chat_rate_limiter = InMemoryRateLimiter(
     prune_after_seconds=_CHAT_RATE_LIMIT_PRUNE_AFTER,
     on_reject=_log_rate_limit,
 )
-
-
-def _build_approval_sync_url() -> str | None:
-    try:
-        url = make_url(str(settings.database_url))
-    except Exception as exc:  # pragma: no cover - defensive guard
-        logger.error(
-            "web_api.approval.invalid_database_url",
-            extra={"detail": str(exc)},
-        )
-        return None
-
-    driver = url.drivername
-    if driver.endswith("+asyncpg"):
-        url = url.set(drivername=driver.replace("+asyncpg", "+psycopg"))
-    elif driver.endswith("+aiosqlite"):
-        url = url.set(drivername="sqlite")
-    elif driver.endswith("+psycopg_async"):
-        url = url.set(drivername=driver.replace("+psycopg_async", "+psycopg"))
-    return url.render_as_string(hide_password=False)
-
-
-_approval_session_factory: sessionmaker | None = None
-_approval_engine = None
-_approval_url = _build_approval_sync_url()
-if _approval_url:
-    try:
-        _approval_engine = create_engine(_approval_url, future=True)
-        _approval_session_factory = sessionmaker(
-            bind=_approval_engine,
-            autocommit=False,
-            autoflush=False,
-            expire_on_commit=False,
-        )
-    except Exception as exc:  # pragma: no cover - diagnostic logging
-        logger.error(
-            "web_api.approval.engine_initialization_failed",
-            extra={"detail": str(exc)},
-        )
-
-
-@contextmanager
-def _approval_db_session() -> Iterator[Session]:
-    if _approval_session_factory is None:
-        raise RuntimeError("Approval database session factory is not configured")
-    session: Session = _approval_session_factory()
-    try:
-        yield session
-    finally:
-        session.close()
-
-
 @app.middleware("http")
 async def record_request_metrics(
     request: Request,
@@ -1044,28 +993,72 @@ async def peer_telemetry_snapshot(
 
 
 @router.post("/security/approve")
-async def approve_request(token: str, operator_id: str):
-    if _approval_session_factory is None:
-        return {"error": "db_unavailable"}
+async def approve_request(
+    token: str,
+    operator_id: str,
+    current_operator: Annotated[dict, Depends(get_current_operator_user)],
+    db: Annotated[Session | None, Depends(get_approval_db_session)],
+) -> dict[str, str]:
+    if current_operator.get("sub") != operator_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"status": "error", "reason": "operator_mismatch"},
+        )
 
-    try:
-        with _approval_db_session() as db:
+    token_value = (token or "").strip()
+    if not token_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "error", "reason": "missing_token"},
+        )
+
+    registry = get_operator_approval_registry()
+    request_entry = registry.find_by_token(token_value)
+    if request_entry is None:
+        logger.warning(
+            "web_api.approval.invalid_token",
+            extra={"operator": operator_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="invalid_token",
+        )
+    if request_entry.is_approved:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="already_approved",
+        )
+
+    registry.approve(request_entry.request_id, operator=operator_id)
+    token_ref = request_entry.request_id
+
+    if db is not None:
+        try:
             approval = (
-                db.query(OperatorApproval).filter_by(approval_token=token).first()
+                db.query(OperatorApproval)
+                .filter_by(approval_token=token_value)
+                .first()
             )
-            if not approval or approval.approved_at:
-                return {"error": "invalid_token"}
-
+            if approval is None:
+                approval = OperatorApproval(
+                    id=token_ref,
+                    user_id=str(request_entry.payload.get("user_id", "anonymous")),
+                    prompt_hash=str(request_entry.payload.get("prompt_hash", ""))[:8],
+                    pii_entities=request_entry.payload.get("pii_entities", []),
+                    approval_token=token_value,
+                )
+                db.add(approval)
             approval.approved_at = datetime.utcnow()
             approval.approved_by = operator_id
             db.commit()
-            return {"status": "approved", "request_id": approval.id}
-    except SQLAlchemyError as exc:  # pragma: no cover - database failure
-        logger.error(
-            "web_api.approval.db_error",
-            extra={"reason": str(exc)},
-        )
-        return {"error": "db_error"}
+        except SQLAlchemyError as exc:  # pragma: no cover - database failure
+            db.rollback()
+            logger.error(
+                "web_api.approval.commit_failed",
+                extra={"reason": str(exc)},
+            )
+
+    return {"status": "approved", "token_ref": token_ref}
 
 
 @router.post("/chat", response_model=ChatResponse)

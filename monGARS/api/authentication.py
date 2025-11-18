@@ -193,3 +193,26 @@ def get_current_admin_user(current_user: dict = Depends(get_current_user)) -> di
             status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
         )
     return current_user
+
+
+def get_current_operator_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Require the caller to carry either the operator role or admin privileges."""
+
+    if current_user.get("admin"):
+        return current_user
+
+    role = current_user.get("role")
+    roles = current_user.get("roles")
+    if role == "operator":
+        return current_user
+    if isinstance(roles, (list, tuple, set)):
+        for entry in roles:
+            if isinstance(entry, str) and entry == "operator":
+                return current_user
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Operator role required",
+    )
