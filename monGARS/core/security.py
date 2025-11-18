@@ -203,7 +203,6 @@ class Credentials:
 
 def generate_approval_token(user_id: str, request_id: str) -> str:
     """Generate cryptographically secure approval token"""
-
     payload = f"{user_id}:{request_id}:{time.time()}"
     return hashlib.sha256((payload + settings.SECRET_KEY).encode()).hexdigest()
 
@@ -255,13 +254,14 @@ def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
             extra={"user_id": user_id, "token_ref": token_ref},
         )
 
+    # fmt: off
     audit_ref, approval_payload = log_blocked_attempt(
-        user_id=user_id,
+        user_id=context.get("user_id", "anonymous"),
         prompt_hash=fingerprint,
         pii_entities=pii_entities,
-        required_action="approval",
-        context=context,
+        required_action="approval"
     )
+    # fmt: on
     message = "This request requires human approval due to sensitive data"
     if approval_token and token_ref:
         message = "Invalid approval token provided"

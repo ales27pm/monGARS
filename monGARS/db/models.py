@@ -5,7 +5,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, func
+from sqlalchemy import (
+    Column,
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -155,18 +165,11 @@ class UserAccount(Base):
 
 class OperatorApproval(Base):
     __tablename__ = "operator_approvals"
-
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    prompt_hash: Mapped[str] = mapped_column(String(8), nullable=False)
-    pii_entities: Mapped[dict] = mapped_column(_JSON, nullable=False)
-    approval_token: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    approved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(64), nullable=False)
+    prompt_hash = Column(String(8), nullable=False)
+    pii_entities = Column(JSON, nullable=False)
+    approval_token = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    approved_by = Column(String(64), nullable=True)
