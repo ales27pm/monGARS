@@ -210,6 +210,9 @@ class LLMRuntimeError(RuntimeError):
 class ModelUnavailableError(LLMRuntimeError):
     """Raised when the primary LLM cannot accept new requests."""
 
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or "Primary model temporarily unavailable")
+
 
 class UnifiedLLMRuntime:
     """Singleton runtime that powers both generation and embeddings."""
@@ -929,10 +932,15 @@ class LLMIntegration:
                 and self._breaker_last_failure is not None
                 and (now - self._breaker_last_failure) < self._breaker_reset_timeout
             ):
-                raise ModelUnavailableError("Primary model temporarily unavailable")
+                raise ModelUnavailableError()
         try:
             yield
-        except Exception:
+        except (
+            LLMRuntimeError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ):
             with self._breaker_lock:
                 self._breaker_failure_count += 1
                 self._breaker_last_failure = time.time()
@@ -943,20 +951,38 @@ class LLMIntegration:
                 self._breaker_last_failure = None
 
     def _fallback_generate(self, prompt: str, **_: Any) -> str:
+        stripped = prompt.strip()
+        prompt_length = len(stripped)
+        prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
         logger.info(
             "llm.generate.fallback",
-            extra={"prompt_length": len(prompt)},
+            extra={
+                "prompt_length": prompt_length,
+                "prompt_digest": prompt_digest,
+            },
         )
-        stripped = prompt.strip()
-        if len(stripped) > 400:
-            stripped = stripped[:400].rstrip() + "…"
         if not stripped:
-            stripped = "No prompt provided."
+            metadata = "No prompt content was provided with this request."
+        else:
+            metadata = (
+                "Prompt contents are redacted for privacy. "
+                f"Length: {prompt_length} characters."
+            )
         return (
             "Primary model is temporarily unavailable. "
-            "Here's a concise summary of your request:\n\n"
-            f"{stripped}"
+            "Please retry in a few moments. "
+            f"Reference: {prompt_digest}. "
+            f"{metadata}"
         )
+
+    @staticmethod
+    def _estimate_token_length(text: str) -> int:
+        if not text:
+            return 0
+        collapsed = re.sub(r"\s+", " ", text.strip())
+        if not collapsed:
+            return 0
+        return len(collapsed.split(" "))
 
     def generate(
         self, prompt: str, context: Mapping[str, Any] | None = None, **kwargs: Any
@@ -996,7 +1022,17 @@ class LLMIntegration:
                     response = self._generate_internal(prompt, **kwargs)
             except (ModelUnavailableError, TimeoutError) as exc:
                 fallback_used = True
-                logger.warning(f"Primary model failed: {exc}, using fallback")
+                logger.warning(
+                    "llm.generate.primary_failure",
+                    extra={
+                        "error.type": type(exc).__name__,
+                        "error.message": str(exc),
+                        "model": self._model_id,
+                        "user.id": resolved_user_id,
+                        "conversation.id": resolved_conversation_id,
+                        "request.id": request_id,
+                    },
+                )
                 response = self._fallback_generate(prompt, **kwargs)
             except Exception as exc:
                 LLM_ERROR_COUNTER.add(
@@ -1012,11 +1048,19 @@ class LLMIntegration:
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
                 raise
 
-            tokenizer = self.tokenizer
-            prompt_tokens = tokenizer.tokenize(prompt)
-            result_tokens = tokenizer.tokenize(response)
-            input_tokens = len(prompt_tokens)
-            output_tokens = len(result_tokens)
+            try:
+                tokenizer = self.tokenizer
+            except Exception:
+                tokenizer = None
+
+            if tokenizer is not None:
+                prompt_tokens = tokenizer.tokenize(prompt)
+                result_tokens = tokenizer.tokenize(response)
+                input_tokens = len(prompt_tokens)
+                output_tokens = len(result_tokens)
+            else:
+                input_tokens = self._estimate_token_length(prompt)
+                output_tokens = self._estimate_token_length(response)
             latency = (time.monotonic() - start_time) * 1000
             span.set_attribute("output.length", len(response))
             span.set_attribute("llm.fallback_used", fallback_used)
