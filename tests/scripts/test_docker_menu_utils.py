@@ -176,7 +176,7 @@ def test_prepare_ports_updates_searx_urls(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -326,7 +326,7 @@ def test_generate_base_model_bundle_rejects_invalid_jsonl(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -351,3 +351,40 @@ def test_generate_base_model_bundle_rejects_invalid_jsonl(
     assert logs
     assert any(error for _, error in logs)
     assert "invalid JSON" in logs[-1][0]
+
+
+def test_generate_base_model_bundle_uses_hf_dataset_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    menu = docker_menu.DockerMenu()
+
+    default_dataset = tmp_path / "default.jsonl"
+    default_dataset.write_text('{"prompt": "p", "completion": "c"}\n', encoding="utf8")
+    install_root = tmp_path / "install"
+
+    monkeypatch.setattr(menu, "_default_dataset_path", lambda: default_dataset)
+    monkeypatch.setattr(menu, "_model_install_dir", lambda: install_root)
+
+    inputs = iter(["my_hf_dataset", "menu-run"])
+    monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+    recorded: dict[str, list[str]] = {}
+
+    def fake_run(
+        command: list[str], *, capture_output: bool, check: bool
+    ) -> CompletedProcess[str]:
+        recorded["command"] = command
+        install_root.mkdir(parents=True, exist_ok=True)
+        (install_root / "wrapper").mkdir(parents=True, exist_ok=True)
+        (install_root / "chat_lora").mkdir(parents=True, exist_ok=True)
+        return CompletedProcess(command, 0)
+
+    monkeypatch.setattr(menu, "_run_command", fake_run)
+
+    menu.generate_base_model_bundle()
+
+    command = recorded["command"]
+    assert "--dataset-id" in command
+    assert command[command.index("--dataset-id") + 1] == "my_hf_dataset"
+    assert "--dataset-path" not in command
+    assert command[command.index("--run-name") + 1] == "menu-run"

@@ -938,11 +938,6 @@ class DockerMenu:
         if selection is None:
             return
 
-        if selection.dataset_path and not self._validate_dataset_path(
-            selection.dataset_path
-        ):
-            return
-
         install_root = self._model_install_dir()
         install_root.parent.mkdir(parents=True, exist_ok=True)
         if install_root.exists() and any(install_root.iterdir()):
@@ -1117,14 +1112,18 @@ class DockerMenu:
     # ------------------------------------------------------------------
     @staticmethod
     def _looks_like_path(raw: str) -> bool:
-        return any(
-            [
-                raw.endswith(".json"),
-                raw.endswith(".jsonl"),
-                "/" in raw,
-                "\\" in raw,
-            ]
-        )
+        raw = raw.strip()
+        if not raw:
+            return False
+
+        path = Path(raw)
+        if path.suffix in {".json", ".jsonl"}:
+            return True
+        if raw.startswith(("/", "./", "../", "~")):
+            return True
+        if "\\" in raw:
+            return True
+        return False
 
     def _prompt_dataset_selection(
         self, default_dataset: Path
@@ -1159,23 +1158,27 @@ class DockerMenu:
                 dataset_path = None
                 dataset_id = raw
 
-        if dataset_path:
-            if not dataset_path.exists():
-                self.log(
-                    f"Dataset not found at {dataset_path}. Provide a valid JSONL dataset.",
-                    error=True,
-                )
-                return None
-
-            if not self._validate_dataset_path(dataset_path):
-                return None
+        if dataset_path and not self._validate_dataset_path(dataset_path):
+            return None
 
         return DatasetSelection(dataset_path, dataset_id)
 
     def _validate_dataset_path(self, dataset_path: Path) -> bool:
+        """Lightweight validation: ensure path exists, is a file, and first JSON line parses."""
+
+        if not dataset_path.exists():
+            self.log(
+                f"Dataset not found at {dataset_path}. Provide a valid JSONL dataset.",
+                error=True,
+            )
+            return False
+
         if not dataset_path.is_file():
             self.log(
-                f"Dataset path must be a JSONL file, found directory: {dataset_path}",
+                (
+                    "Dataset path must be an existing file; its contents will be "
+                    f"validated as JSON lines. Invalid path: {dataset_path}"
+                ),
                 error=True,
             )
             return False
