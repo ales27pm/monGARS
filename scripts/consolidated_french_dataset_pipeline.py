@@ -3170,6 +3170,7 @@ class DatasetPipeline:
             "xp3": DatasetConfig(
                 name="bigscience/xP3",
                 hf_path="bigscience/xP3",
+                hf_config="fr",
                 dataset_type=DatasetType.INSTRUCTION,
                 languages=self.config.langs,
                 license=LicenseType.APACHE_2_0,
