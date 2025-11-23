@@ -1,6 +1,28 @@
 {
   "components": {
     "schemas": {
+      "ApprovalResponse": {
+        "description": "Response body returned after a successful approval action.",
+        "properties": {
+          "status": {
+            "const": "approved",
+            "default": "approved",
+            "title": "Status",
+            "type": "string"
+          },
+          "token_ref": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Token Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_ref"
+        ],
+        "title": "ApprovalResponse",
+        "type": "object"
+      },
       "Body_login_token_post": {
         "properties": {
           "client_id": {
@@ -1782,7 +1804,6 @@
     },
     "/llm/security/approve": {
       "post": {
-        "description": "Validate an approval token and mark the associated request as approved.",
         "operationId": "approve_request_llm_security_approve_post",
         "parameters": [
           {
@@ -1809,11 +1830,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Approve Request Llm Security Approve Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ApprovalResponse"
                 }
               }
             },
