@@ -265,6 +265,8 @@ class DatasetConfig:
     sampling_strategy: Literal["uniform", "quality_weighted", "stratified"] = "uniform"
     batch_size: int = 1000
     cache_strategy: Literal["memory", "disk", "hybrid"] = "hybrid"
+    requires_trust_remote_code: bool = False
+    allow_trust_remote_code: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization, excluding functions."""
@@ -285,6 +287,8 @@ class DatasetConfig:
             "sampling_strategy": self.sampling_strategy,
             "batch_size": self.batch_size,
             "cache_strategy": self.cache_strategy,
+            "requires_trust_remote_code": self.requires_trust_remote_code,
+            "allow_trust_remote_code": self.allow_trust_remote_code,
             "license_compliance": {
                 "license_type": self.license_compliance.license_type.value,
                 "requires_attribution": self.license_compliance.requires_attribution,
@@ -386,6 +390,8 @@ class PipelineConfig:
     log_level: str = "INFO"
     # Remove trust_remote_code as it's deprecated
     force_download: bool = False
+    allow_trust_remote_code: bool = False
+    trusted_remote_code_datasets: Set[str] = field(default_factory=set)
     state_file: str = "pipeline_state.pkl"
     dedup_state_file: str = "dedup_state.pkl"
     resume_from_checkpoint: bool = False
@@ -425,7 +431,9 @@ class PipelineConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return asdict(self)
+        data = asdict(self)
+        data["trusted_remote_code_datasets"] = sorted(self.trusted_remote_code_datasets)
+        return data
 
 
 # -----------------------------
@@ -607,7 +615,7 @@ def load_dataset_with_retry(
     base_retry_delay: float = 1.0,
     timeout: int = 300,
     requires_auth: bool = False,
-    # Remove trust_remote_code parameter completely
+    trust_remote_code: bool = False,
     download_mode: DownloadMode = DownloadMode.REUSE_DATASET_IF_EXISTS,
 ) -> Union[Dataset, DatasetDict, Iterable[Dict]]:
     """
@@ -647,8 +655,9 @@ def load_dataset_with_retry(
                 cache_dir=cache_dir,
                 download_mode=download_mode,
                 verification_mode=VerificationMode.NO_CHECKS,
-                # Remove trust_remote_code entirely
             )
+            if trust_remote_code:
+                ds_kwargs["trust_remote_code"] = True
             if token:
                 ds_kwargs["token"] = token
 
@@ -667,10 +676,11 @@ def load_dataset_with_retry(
                 or "Dataset scripts are no longer supported" in error_str
             ):
                 logger.error(
-                    f"Dataset {hf_path} requires trust_remote_code internally or uses scripts, which is no longer supported: {error_str}"
+                    "Dataset %s requires trust_remote_code; rerun with --allow_trust_remote_code if you trust the source."
+                    % hf_path
                 )
                 raise DatasetLoadingError(
-                    f"Dataset {hf_path} requires internal script execution which is disabled: {error_str}"
+                    f"Dataset {hf_path} requires trust_remote_code. Pass allow_trust_remote_code to enable."
                 ) from e
 
             logger.error(
@@ -1084,12 +1094,19 @@ class PIIDetector:
 class DeduplicationEngine:
     """Advanced deduplication engine with state persistence and recovery."""
 
-    def __init__(self, config: DedupConfig, state_file: Optional[Path] = None):
+    def __init__(
+        self,
+        config: DedupConfig,
+        state_file: Optional[Path] = None,
+        load_existing_state: bool = False,
+    ):
         """
         Initialize deduplication engine with configurable strategies.
         Args:
             config: Deduplication configuration
             state_file: Path to state file for persistence
+            load_existing_state: Whether to hydrate dedup state from disk (used when
+                resuming from a checkpoint)
         """
         self.config = config
         self.state_file = Path(state_file) if state_file else None
@@ -1098,8 +1115,14 @@ class DeduplicationEngine:
         self.minhashes: Dict[str, MinHash] = {}
         self.quality_scores: Dict[str, float] = {}
 
-        # Load state if available
-        self.load_state()
+        # Load state if available and requested
+        if load_existing_state:
+            self.load_state()
+        elif self.state_file and self.state_file.exists():
+            logger.info(
+                "Deduplication state file present but resume_from_checkpoint is false; "
+                "starting with a fresh deduplication cache",
+            )
 
         # Initialize near-dedup engine if enabled and datasketch is available
         if config.enable_near_dedup and HAS_DATASKETCH:
@@ -1283,10 +1306,29 @@ class DatasetLoader:
             "license_compliance_issues": [],
             "pii_instances_found": 0,
         }
+
         self.pii_detector = (
             PIIDetector(config.pii_config) if config.pii_config.enabled else None
         )
         self.dedup_engine: Optional[DeduplicationEngine] = None
+
+    def _is_trust_remote_code_allowed(self, dataset_config: DatasetConfig) -> bool:
+        """Check whether trust_remote_code can be enabled for a dataset."""
+
+        if not dataset_config.allow_trust_remote_code:
+            return False
+
+        # Respect global opt-in or dataset-specific allowlist
+        dataset_keys = {
+            dataset_config.name.lower(),
+            dataset_config.hf_path.lower(),
+            dataset_config.name.lower().split("/")[-1],
+            dataset_config.hf_path.lower().split("/")[-1],
+        }
+
+        return self.config.allow_trust_remote_code or bool(
+            dataset_keys & self.config.trusted_remote_code_datasets
+        )
 
     def set_dedup_engine(self, engine: DeduplicationEngine):
         """Set shared deduplication engine."""
@@ -1634,22 +1676,25 @@ class InstructionDatasetLoader(DatasetLoader):
             }
         )
 
-        # Skip datasets that require trust_remote_code internally
-        if any(
-            name in dataset_config.hf_path
-            for name in ["bigscience/xP3", "CohereForAI/aya_collection"]
-        ):
+        # Respect trust_remote_code guardrails
+        needs_trust = dataset_config.requires_trust_remote_code
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+        if needs_trust and not allow_trust:
             self.logger.warning(
-                f"Skipping {dataset_config.hf_path} as it typically requires trust_remote_code internally, "
-                f"which is no longer supported by the Hugging Face library. "
-                f"Consider using an alternative dataset or a pre-processed version."
+                (
+                    "Dataset %s requires trust_remote_code but it is disabled; "
+                    "re-run with --allow_trust_remote_code or "
+                    "--allow_trust_remote_code_for %s"
+                ),
+                dataset_config.hf_path,
+                dataset_config.name,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
             self.metadata["error"] = (
-                f"Dataset {dataset_config.hf_path} requires internal script execution which is disabled."
+                "trust_remote_code disabled for dataset requiring remote code execution"
             )
-            return  # Exit early, do not attempt to load
+            return
 
         try:
             # Load dataset with retry logic
@@ -1661,6 +1706,7 @@ class InstructionDatasetLoader(DatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -1896,21 +1942,24 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
             }
         )
 
-        # Check if xP3 is configured to be loaded (it requires trust_remote_code internally)
-        if "xP3" in dataset_config.hf_path:
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+
+        if dataset_config.requires_trust_remote_code and not allow_trust:
             self.logger.warning(
-                f"Skipping {dataset_config.hf_path} as it requires trust_remote_code internally, "
-                f"which is no longer supported by the Hugging Face library. "
-                f"Consider using an alternative dataset or a pre-processed version."
+                (
+                    "Skipping %s because trust_remote_code is required but disabled; "
+                    "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
+                ),
+                dataset_config.hf_path,
+                dataset_config.name,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
             self.metadata["error"] = (
-                f"Dataset {dataset_config.hf_path} requires internal script execution which is disabled."
+                "trust_remote_code disabled for dataset requiring remote code execution"
             )
-            return  # Exit early, do not attempt to load
+            return
 
-        # If it's not xP3, proceed normally (this should not happen in this specific loader)
         try:
             # ... (existing license check, etc.) ...
 
@@ -1922,7 +1971,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
-                # Note: Explicit trust_remote_code is NOT passed here anymore
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -1938,7 +1987,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
                 e
             ) or "requires trust_remote_code" in str(e):
                 self.logger.error(
-                    f"Dataset {dataset_config.name} requires internal scripts which are disabled: {str(e)}"
+                    f"Dataset {dataset_config.name} requires trust_remote_code and failed to load: {str(e)}"
                 )
                 self.metadata["loading_errors"] += 1
                 self.metadata["error"] = f"Script dependency error: {str(e)}"
@@ -1984,19 +2033,24 @@ class AyaCollectionLoader(InstructionDatasetLoader):
 
         # Identify the config being used
         used_config = dataset_config.hf_config or "default"
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
 
-        # Check if the specific config is known to require scripts (like 'aya_dataset')
-        if used_config == "aya_dataset":
+        if dataset_config.requires_trust_remote_code and not allow_trust:
             self.logger.warning(
-                f"Skipping {dataset_config.hf_path} with config '{used_config}' as it typically requires trust_remote_code internally, "
-                f"which is no longer supported. Consider using an alternative config or pre-processed data."
+                (
+                    "Skipping %s/%s because trust_remote_code is required but disabled; "
+                    "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
+                ),
+                dataset_config.hf_path,
+                used_config,
+                dataset_config.name,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
             self.metadata["error"] = (
-                f"Dataset config {dataset_config.hf_path}/{used_config} requires internal script execution which is disabled."
+                "trust_remote_code disabled for dataset requiring remote code execution"
             )
-            return  # Exit early, do not attempt to load
+            return
 
         try:
             # ... (existing license check, etc.) ...
@@ -2009,7 +2063,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
-                # Note: Explicit trust_remote_code is NOT passed here anymore
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -2025,7 +2079,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
                 e
             ) or "requires trust_remote_code" in str(e):
                 self.logger.error(
-                    f"Dataset {dataset_config.name} requires internal scripts which are disabled: {str(e)}"
+                    f"Dataset {dataset_config.name} requires trust_remote_code and failed to load: {str(e)}"
                 )
                 self.metadata["loading_errors"] += 1
                 self.metadata["error"] = f"Script dependency error: {str(e)}"
@@ -2076,24 +2130,30 @@ class OpenAssistantLoader(InstructionDatasetLoader):
             ),
         )
 
-        # Build conversation trees focusing on French messages
-        messages_by_id = {}
-        root_messages = []
+        # Build conversation trees with explicit child links so that French
+        # replies nested under non-French roots are still reachable.
+        messages_by_id: Dict[str, Dict[str, Any]] = {}
+        root_messages: List[Dict[str, Any]] = []
 
         for msg in tqdm(ds, desc="Building French conversation trees"):
-            # Focus only on French messages
-            lang = msg.get("lang", "en")[:2].lower()
-            if lang != "fr":  # Only process French messages
-                continue
-
             msg_id = msg.get("message_id")
-            parent_id = msg.get("parent_id")
-
             if not msg_id:
                 continue
 
-            messages_by_id[msg_id] = msg
-            if not parent_id or parent_id not in messages_by_id:
+            # Clone to avoid mutating the dataset object and ensure we always
+            # have a replies list for tree construction.
+            msg_copy = dict(msg)
+            msg_copy.setdefault("replies", [])
+            messages_by_id[msg_id] = msg_copy
+
+        # Populate child links and identify roots
+        for msg in messages_by_id.values():
+            parent_id = msg.get("parent_id")
+            if parent_id and parent_id in messages_by_id:
+                messages_by_id[parent_id].setdefault("replies", []).append(
+                    msg["message_id"]
+                )
+            else:
                 root_messages.append(msg)
 
         # Process French conversations
@@ -2156,36 +2216,38 @@ class OpenAssistantLoader(InstructionDatasetLoader):
             current, context, depth = stack.pop()
             role = current.get("role", "")
             text = current.get("text", "").strip()
-            # Ensure we're only processing French messages
-            lang = current.get("lang", "en")[:2].lower()
+            lang = current.get("lang", "")
+            lang_matches = _lang_matches(lang, selected_langs)
 
-            if not text or lang != "fr":  # Only process French messages
-                continue
-
-            if role == "assistant" and context:
+            if role == "assistant" and context and lang_matches and text:
                 # Create instruction-output pair from context and response
                 instruction = "\n".join(
-                    [f"{ctx['role'].title()}: {ctx['text']}" for ctx in context]
+                    [
+                        f"{ctx['role'].title()}: {ctx['text']}"
+                        for ctx in context
+                        if ctx["text"]
+                    ]
                 )
                 turns.append(
                     {
                         "instruction": instruction,
                         "output": text,
-                        "language": lang,
+                        "language": lang.lower() if lang else "unknown",
                         "message_id": current.get("message_id", ""),
                         "depth": depth,
                     }
                 )
 
-            # Add children to stack (only if they are French)
+            # Add children to stack, preserving context regardless of language so
+            # French replies under non-French parents are still explored.
             replies = current.get("replies", [])
             for reply_id in reversed(replies):  # Process in order
                 if reply_id in messages_by_id:
                     reply = messages_by_id[reply_id]
-                    # Only add French replies to the stack
-                    if reply.get("lang", "en")[:2].lower() == "fr":
+                    new_context = context
+                    if text:
                         new_context = context + [{"role": role, "text": text}]
-                        stack.append((reply, new_context, depth + 1))
+                    stack.append((reply, new_context, depth + 1))
 
         return turns
 
@@ -2211,6 +2273,24 @@ class RetrievalDatasetLoader(DatasetLoader):
         )
 
         try:
+            allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+
+            needs_trust = dataset_config.requires_trust_remote_code
+            if needs_trust and not allow_trust:
+                self.logger.warning(
+                    (
+                        "Skipping %s because trust_remote_code is required but disabled; "
+                        "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
+                    ),
+                    dataset_config.hf_path,
+                    dataset_config.name,
+                )
+                self.metadata["skipped_due_to_script_requirement"] = True
+                self.metadata["loading_errors"] += 1
+                self.metadata["error"] = (
+                    "trust_remote_code disabled for dataset requiring remote code execution"
+                )
+                return
             # Load dataset
             ds = load_dataset_with_retry(
                 dataset_config.hf_path,
@@ -2220,12 +2300,30 @@ class RetrievalDatasetLoader(DatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
                     else DownloadMode.REUSE_DATASET_IF_EXISTS
                 ),
             )
+
+            # Estimate quality to avoid defaulting to zero (which triggers blanket filtering)
+            if not dataset_config.streaming:
+                estimated_quality = self._estimate_quality(ds, dataset_config)
+                if estimated_quality <= 0:
+                    fallback = max(dataset_config.quality_weight, 1.0)
+                    self.logger.warning(
+                        "Quality estimation returned %.3f for %s; defaulting to %.2f to keep candidates",
+                        estimated_quality,
+                        dataset_config.name,
+                        fallback,
+                    )
+                    estimated_quality = fallback
+                self.metadata["quality_score"] = estimated_quality
+            else:
+                # Streaming datasets skip estimation; assume neutral quality
+                self.metadata["quality_score"] = max(dataset_config.quality_weight, 1.0)
 
             # Create iterator with progress bar if needed
             iterator = ds
@@ -2689,7 +2787,9 @@ class DatasetPipeline:
         ):
             dedup_state_file = Path(config.output_dir) / config.dedup_state_file
             self.dedup_engine = DeduplicationEngine(
-                config.dedup_config, state_file=dedup_state_file
+                config.dedup_config,
+                state_file=dedup_state_file,
+                load_existing_state=config.resume_from_checkpoint,
             )
 
         # Initialize state manager
@@ -3070,9 +3170,12 @@ class DatasetPipeline:
             "xp3": DatasetConfig(
                 name="bigscience/xP3",
                 hf_path="bigscience/xP3",
+                hf_config="fr",
                 dataset_type=DatasetType.INSTRUCTION,
                 languages=self.config.langs,
                 license=LicenseType.APACHE_2_0,
+                requires_trust_remote_code=True,
+                allow_trust_remote_code=True,
                 license_compliance=LicenseCompliance(
                     license_type=LicenseType.APACHE_2_0,
                     requires_attribution=True,
@@ -3091,6 +3194,8 @@ class DatasetPipeline:
                 dataset_type=DatasetType.INSTRUCTION,
                 languages=self.config.langs,
                 license=LicenseType.APACHE_2_0,
+                requires_trust_remote_code=True,
+                allow_trust_remote_code=True,
                 license_compliance=LicenseCompliance(
                     license_type=LicenseType.APACHE_2_0,
                     requires_attribution=True,
@@ -3604,6 +3709,11 @@ class DatasetPipeline:
             if meta.get("filtered_by_pii"):
                 f.write(f"  * PII filtered: {meta.get('filtered_by_pii', 0)}\n")
             f.write(f"  * Errors: {meta.get('loading_errors', 0)}\n")
+            if meta.get("skipped_due_to_script_requirement"):
+                f.write(
+                    "  * Skipped: requires trust_remote_code (enable via "
+                    "--allow_trust_remote_code or --allow_trust_remote_code_for)\n"
+                )
             if meta.get("languages"):
                 f.write(f"  * Languages: {dict(meta['languages'])}\n")
             f.write("\n")
@@ -3689,6 +3799,40 @@ class DatasetPipeline:
 # -----------------------------
 # Command-line Interface
 # -----------------------------
+def _normalize_langs(lang_arg: str) -> List[str]:
+    """Parse comma-separated language codes and normalize casing/format."""
+
+    raw_langs = [part.strip() for part in lang_arg.split(",") if part.strip()]
+    if not raw_langs:
+        return ["fr"]
+
+    normalized = []
+    for code in raw_langs:
+        code_norm = code.lower().replace("_", "-")
+        # Keep region-specific variants (e.g., fr-ca) but also allow the base code
+        normalized.append(code_norm)
+    if "fr" not in normalized:
+        normalized.append("fr")
+    return list(dict.fromkeys(normalized))
+
+
+def _parse_trusted_dataset_allowlist(raw: str) -> Set[str]:
+    """Normalize comma-separated dataset identifiers for trust_remote_code allowlist."""
+
+    return {part.strip().lower() for part in raw.split(",") if part and part.strip()}
+
+
+def _lang_matches(lang_value: str, selected_langs: Set[str]) -> bool:
+    """Return True when a language code matches the selected set (exact or base code)."""
+
+    normalized = lang_value.lower().replace("_", "-") if lang_value else ""
+    candidates = {normalized}
+    if "-" in normalized:
+        candidates.add(normalized.split("-", 1)[0])
+
+    return any(candidate in selected_langs for candidate in candidates if candidate)
+
+
 def parse_args() -> PipelineConfig:
     """Parse command line arguments and build a PipelineConfig."""
     parser = argparse.ArgumentParser(
@@ -3810,11 +3954,26 @@ def parse_args() -> PipelineConfig:
         help="Shortcut for DEBUG logging on console",
     )
 
-    # HF + downloads (trust_remote_code removed)
+    # HF + downloads (trust_remote_code guarded)
     parser.add_argument(
         "--force_download",
         action="store_true",
         help="Force re-download of datasets instead of reusing cache",
+    )
+    parser.add_argument(
+        "--allow_trust_remote_code",
+        action="store_true",
+        help=(
+            "Allow datasets that require trust_remote_code (only enable for vetted sources)."
+        ),
+    )
+    parser.add_argument(
+        "--allow_trust_remote_code_for",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated dataset keys/paths to allow trust_remote_code for (e.g., xp3,aya)."
+        ),
     )
 
     # Memory config
@@ -3870,8 +4029,10 @@ def parse_args() -> PipelineConfig:
 
     args = parser.parse_args()
 
-    # For French-only pipeline, enforce French
-    langs = ["fr"]  # Override to French only
+    langs = _normalize_langs(args.langs)
+    trusted_allowlist = _parse_trusted_dataset_allowlist(
+        args.allow_trust_remote_code_for
+    )
 
     # Nested configs – you can later expose CLI flags for these if you want
     quality_config = QualityConfig(
@@ -3910,8 +4071,9 @@ def parse_args() -> PipelineConfig:
         enable_modification=args.enable_modification,
         dashboard_port=args.dashboard_port,
         log_level=args.log_level,
-        # Remove trust_remote_code as it's deprecated
         force_download=args.force_download,
+        allow_trust_remote_code=args.allow_trust_remote_code,
+        trusted_remote_code_datasets=trusted_allowlist,
         state_file="pipeline_state.pkl",
         dedup_state_file="dedup_state.pkl",
         resume_from_checkpoint=args.resume_from_checkpoint,

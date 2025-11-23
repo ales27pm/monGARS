@@ -147,6 +147,29 @@ def test_parse_env_file_strips_inline_comments(tmp_path: Path):
     }
 
 
+def test_parse_env_file_handles_hash_fragments_and_comments(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "KEY=value#comment",  # hash fragments in the value should be preserved
+                r"ESCAPED=value\#comment",  # escaped hash should not start a comment
+                'QUOTED="value#comment"',  # quoted hash should be preserved
+            ]
+        )
+        + "\n",
+        encoding="utf8",
+    )
+
+    parsed = docker_menu.DockerMenu._parse_env_file(env_file)
+
+    assert parsed == {
+        "KEY": "value#comment",
+        "ESCAPED": "value#comment",
+        "QUOTED": '"value#comment"',
+    }
+
+
 def test_prepare_ports_updates_searx_urls(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
