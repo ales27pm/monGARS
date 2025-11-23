@@ -356,6 +356,12 @@ def test_generate_base_model_bundle_rejects_invalid_jsonl(
 def test_generate_base_model_bundle_uses_hf_dataset_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda _menu: ["docker", "compose"],
+    )
+
     menu = docker_menu.DockerMenu()
 
     default_dataset = tmp_path / "default.jsonl"
