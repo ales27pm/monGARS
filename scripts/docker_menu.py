@@ -43,6 +43,19 @@ class DiagnosticResult:
     remediation: str | None = None
 
 
+@dataclass(frozen=True)
+class DatasetSelection:
+    dataset_path: Path | None
+    dataset_id: str | None
+
+    def label(self) -> str:
+        if self.dataset_path:
+            return str(self.dataset_path)
+        if self.dataset_id:
+            return f"HF dataset {self.dataset_id}"
+        return "unspecified dataset"
+
+
 class ComposeError(RuntimeError):
     """Raised when docker compose commands fail."""
 
@@ -88,12 +101,14 @@ class DockerMenu:
     def _model_install_dir(self) -> Path:
         """Return the canonical location for wrapper artefacts."""
 
-        return self.project_root / "models" / "encoders" / "chat_and_embed"
+        return self.project_root / "models" / "encoders" / "monGARS_unsloth"
 
     def _default_dataset_path(self) -> Path:
         """Return the default dataset path used for fine-tuning."""
 
-        return self.project_root / "datasets" / "formatted_dataset 2.jsonl"
+        return (
+            self.project_root / "datasets" / "unsloth" / "monGARS_unsloth_dataset.jsonl"
+        )
 
     def _resolve_path(self, raw_path: str) -> Path:
         """Resolve ``raw_path`` relative to the project root."""
@@ -910,7 +925,7 @@ class DockerMenu:
     def generate_base_model_bundle(self) -> None:
         """Run the LLM pipeline to fine-tune and install the project wrapper."""
 
-        script_path = self.project_root / "scripts" / "run_mongars_llm_pipeline.py"
+        script_path = self.project_root / "scripts" / "build_monGARS_llm_bundle.py"
         if not script_path.exists():
             self.log(
                 f"LLM pipeline script missing at {script_path}.",
@@ -919,24 +934,18 @@ class DockerMenu:
             return
 
         default_dataset = self._default_dataset_path()
-        dataset_prompt = input(
-            f"Instruction dataset JSONL [{default_dataset}]: "
-        ).strip()
-        if dataset_prompt:
-            dataset_path = self._resolve_path(dataset_prompt)
-        else:
-            dataset_path = default_dataset
+        selection = self._prompt_dataset_selection(default_dataset)
+        if selection is None:
+            return
 
-        if not dataset_path.exists():
-            self.log(
-                f"Dataset not found at {dataset_path}. Provide a valid JSONL dataset.",
-                error=True,
-            )
+        if selection.dataset_path and not self._validate_dataset_path(
+            selection.dataset_path
+        ):
             return
 
         install_root = self._model_install_dir()
         install_root.parent.mkdir(parents=True, exist_ok=True)
-        if install_root.exists():
+        if install_root.exists() and any(install_root.iterdir()):
             if not self._prompt_yes_no(
                 f"Existing artefacts detected at {install_root}. Overwrite?",
                 default=False,
@@ -945,29 +954,34 @@ class DockerMenu:
                 return
             shutil.rmtree(install_root)
 
-        model_default = "dphn/Dolphin-X1-8B"
-        model_id = (
-            input(f"Base model identifier [{model_default}]: ").strip() or model_default
+        registry_root = self.project_root / "models" / "encoders"
+        run_name = (
+            input("Optional run name for manifest tracking [docker-menu]: ").strip()
+            or "docker-menu"
         )
 
         command = [
             sys.executable,
             str(script_path),
-            "finetune",
-            "--model-id",
-            model_id,
-            "--dataset-path",
-            str(dataset_path),
             "--output-dir",
             str(install_root),
-            "--skip-smoke-tests",
-            "--skip-merge",
+            "--registry-path",
+            str(registry_root),
+            "--run-name",
+            run_name,
         ]
 
+        if selection.dataset_path:
+            command.extend(["--dataset-path", str(selection.dataset_path)])
+        if selection.dataset_id:
+            command.extend(["--dataset-id", selection.dataset_id])
+
         summary = [
-            f"Model: {model_id}",
-            f"Dataset: {dataset_path}",
+            "Pipeline: build_monGARS_llm_bundle.py (Unsloth + LLM2Vec)",
+            f"Dataset: {selection.label()}",
             f"Output: {install_root}",
+            f"Registry: {registry_root}",
+            f"Run name: {run_name}",
         ]
         self.log_block("Launching fine-tuning pipeline", summary)
 
@@ -998,7 +1012,7 @@ class DockerMenu:
             [
                 f"Wrapper: {wrapper_dir}",
                 f"LoRA adapters: {chat_lora_dir if chat_lora_dir.exists() else 'pending'}",
-                "Smoke tests skipped; rerun pipeline without --skip-smoke-tests if desired.",
+                "Unsloth fine-tune with LLM2Vec wrapper complete; manifests refreshed.",
             ],
         )
 
@@ -1101,6 +1115,103 @@ class DockerMenu:
     # ------------------------------------------------------------------
     # Input helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _looks_like_path(raw: str) -> bool:
+        return any(
+            [
+                raw.endswith(".json"),
+                raw.endswith(".jsonl"),
+                "/" in raw,
+                "\\" in raw,
+            ]
+        )
+
+    def _prompt_dataset_selection(
+        self, default_dataset: Path
+    ) -> DatasetSelection | None:
+        prompt = (
+            "Instruction dataset JSONL or Hugging Face dataset id "
+            f"[{default_dataset}]: "
+        )
+        raw = input(prompt).strip()
+
+        dataset_path: Path | None
+        dataset_id: str | None
+
+        if not raw:
+            dataset_path = default_dataset
+            dataset_id = None
+        else:
+            candidate_path = self._resolve_path(raw)
+            if candidate_path.exists():
+                dataset_path = candidate_path
+                dataset_id = None
+            elif self._looks_like_path(raw):
+                self.log(
+                    (
+                        f"Dataset not found at {candidate_path}. "
+                        "Provide a valid JSONL path or dataset id."
+                    ),
+                    error=True,
+                )
+                return None
+            else:
+                dataset_path = None
+                dataset_id = raw
+
+        if dataset_path:
+            if not dataset_path.exists():
+                self.log(
+                    f"Dataset not found at {dataset_path}. Provide a valid JSONL dataset.",
+                    error=True,
+                )
+                return None
+
+            if not self._validate_dataset_path(dataset_path):
+                return None
+
+        return DatasetSelection(dataset_path, dataset_id)
+
+    def _validate_dataset_path(self, dataset_path: Path) -> bool:
+        if not dataset_path.is_file():
+            self.log(
+                f"Dataset path must be a JSONL file, found directory: {dataset_path}",
+                error=True,
+            )
+            return False
+
+        try:
+            with dataset_path.open("r", encoding="utf8") as handle:
+                for line_no, line in enumerate(handle, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        json.loads(stripped)
+                    except json.JSONDecodeError as exc:
+                        self.log(
+                            (
+                                f"Dataset {dataset_path} contains invalid JSON on line "
+                                f"{line_no}: {exc.msg}"
+                            ),
+                            error=True,
+                        )
+                        return False
+                    break
+                else:
+                    self.log(
+                        f"Dataset {dataset_path} is empty; add at least one JSON line.",
+                        error=True,
+                    )
+                    return False
+        except (
+            OSError
+        ) as exc:  # pragma: no cover - filesystem failures are environment specific
+            self.log(f"Unable to read dataset {dataset_path}: {exc}", error=True)
+            return False
+
+        return True
+
     def _prompt_yes_no(self, prompt: str, *, default: bool) -> bool:
         suffix = "[Y/n]" if default else "[y/N]"
         while True:

@@ -254,7 +254,7 @@ def test_generate_base_model_bundle_invokes_pipeline(
     monkeypatch.setattr(menu, "_default_dataset_path", lambda: dataset_file)
     monkeypatch.setattr(menu, "_model_install_dir", lambda: install_root)
 
-    inputs = iter(["", "hf/test-model"])
+    inputs = iter(["", "menu-run"])
     monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
     recorded = {}
@@ -285,11 +285,11 @@ def test_generate_base_model_bundle_invokes_pipeline(
 
     command = recorded["command"]
     assert command[0] == sys.executable
-    assert command[1].endswith("run_mongars_llm_pipeline.py")
-    assert "--dataset-path" in command
-    assert "--output-dir" in command
-    assert "--skip-smoke-tests" in command
-    assert "--skip-merge" in command
+    assert command[1].endswith("build_monGARS_llm_bundle.py")
+    assert command[command.index("--dataset-path") + 1] == str(dataset_file)
+    assert command[command.index("--output-dir") + 1] == str(install_root)
+    assert command[command.index("--run-name") + 1] == "menu-run"
+    assert "--registry-path" in command
     assert blocks[-1][0] == "Base model + wrapper installation complete"
 
 
@@ -318,3 +318,36 @@ def test_generate_base_model_bundle_validates_dataset(
     assert logs
     assert any(error for _, error in logs)
     assert "Dataset not found" in logs[-1][0]
+
+
+def test_generate_base_model_bundle_rejects_invalid_jsonl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda self: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+
+    invalid_dataset = tmp_path / "invalid.jsonl"
+    invalid_dataset.write_text("not-json\n", encoding="utf8")
+
+    monkeypatch.setattr(menu, "_default_dataset_path", lambda: invalid_dataset)
+    monkeypatch.setattr("builtins.input", lambda *_args: "")
+
+    logs: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        menu, "log", lambda message, error=False: logs.append((message, error))
+    )
+
+    triggered: list[str] = []
+    monkeypatch.setattr(menu, "_run_command", lambda *_, **__: triggered.append("run"))
+
+    menu.generate_base_model_bundle()
+
+    assert not triggered
+    assert logs
+    assert any(error for _, error in logs)
+    assert "invalid JSON" in logs[-1][0]
