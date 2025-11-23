@@ -214,7 +214,7 @@ def test_synchronise_searx_urls_skips_remote_hosts(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -242,7 +242,7 @@ def test_generate_base_model_bundle_invokes_pipeline(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -299,7 +299,7 @@ def test_generate_base_model_bundle_validates_dataset(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
