@@ -1084,12 +1084,19 @@ class PIIDetector:
 class DeduplicationEngine:
     """Advanced deduplication engine with state persistence and recovery."""
 
-    def __init__(self, config: DedupConfig, state_file: Optional[Path] = None):
+    def __init__(
+        self,
+        config: DedupConfig,
+        state_file: Optional[Path] = None,
+        load_existing_state: bool = False,
+    ):
         """
         Initialize deduplication engine with configurable strategies.
         Args:
             config: Deduplication configuration
             state_file: Path to state file for persistence
+            load_existing_state: Whether to hydrate dedup state from disk (used when
+                resuming from a checkpoint)
         """
         self.config = config
         self.state_file = Path(state_file) if state_file else None
@@ -1098,8 +1105,14 @@ class DeduplicationEngine:
         self.minhashes: Dict[str, MinHash] = {}
         self.quality_scores: Dict[str, float] = {}
 
-        # Load state if available
-        self.load_state()
+        # Load state if available and requested
+        if load_existing_state:
+            self.load_state()
+        elif self.state_file and self.state_file.exists():
+            logger.info(
+                "Deduplication state file present but resume_from_checkpoint is false; "
+                "starting with a fresh deduplication cache",
+            )
 
         # Initialize near-dedup engine if enabled and datasketch is available
         if config.enable_near_dedup and HAS_DATASKETCH:
@@ -2706,7 +2719,9 @@ class DatasetPipeline:
         ):
             dedup_state_file = Path(config.output_dir) / config.dedup_state_file
             self.dedup_engine = DeduplicationEngine(
-                config.dedup_config, state_file=dedup_state_file
+                config.dedup_config,
+                state_file=dedup_state_file,
+                load_existing_state=config.resume_from_checkpoint,
             )
 
         # Initialize state manager
