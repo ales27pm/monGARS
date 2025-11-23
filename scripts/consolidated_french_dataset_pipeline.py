@@ -2455,6 +2455,13 @@ class PipelineStateManager:
         self.state_file = Path(config.output_dir) / config.state_file
         self.state: Optional[PipelineState] = None
 
+    def _compute_config_hash(self) -> str:
+        """Compute a stable hash for the current configuration."""
+
+        return hashlib.md5(
+            json.dumps(self.config.to_dict(), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
     def load_state(self) -> bool:
         """Load pipeline state from file."""
         if not self.config.resume_from_checkpoint or not self.state_file.exists():
@@ -2464,6 +2471,17 @@ class PipelineStateManager:
             with open(self.state_file, "rb") as f:
                 state_dict = pickle.load(f)
             self.state = PipelineState.from_dict(state_dict)
+            expected_hash = self._compute_config_hash()
+
+            if self.state.config_hash != expected_hash:
+                logger.warning(
+                    "Checkpoint configuration hash %s does not match current hash %s; "
+                    "ignoring saved state to avoid inconsistent resumes",
+                    self.state.config_hash,
+                    expected_hash,
+                )
+                self.state = None
+                return False
             logger.info(
                 f"Loaded pipeline state: {self.state.datasets_processed} datasets processed"
             )
@@ -2475,9 +2493,7 @@ class PipelineStateManager:
     def save_state(self, pipeline: "DatasetPipeline") -> bool:
         """Save pipeline state to file."""
         try:
-            config_hash = hashlib.md5(
-                json.dumps(self.config.to_dict()).encode("utf-8")
-            ).hexdigest()
+            config_hash = self._compute_config_hash()
 
             state = PipelineState(
                 config_hash=config_hash,
@@ -2707,9 +2723,13 @@ class DatasetPipeline:
         if instruct_path.exists():
             try:
                 with open(instruct_path, "r", encoding="utf-8") as f:
-                    self.instruct_data = [json.loads(line) for line in f if line.strip()]
+                    self.instruct_data = [
+                        json.loads(line) for line in f if line.strip()
+                    ]
                 self.seen_instruct = {
-                    make_instruct_key(item.get("instruction", ""), item.get("output", ""))
+                    make_instruct_key(
+                        item.get("instruction", ""), item.get("output", "")
+                    )
                     for item in self.instruct_data
                 }
                 self.logger.info(
@@ -2727,7 +2747,9 @@ class DatasetPipeline:
         if retrieval_path.exists():
             try:
                 with open(retrieval_path, "r", encoding="utf-8") as f:
-                    self.retrieval_data = [json.loads(line) for line in f if line.strip()]
+                    self.retrieval_data = [
+                        json.loads(line) for line in f if line.strip()
+                    ]
                 self.seen_retrieval = {
                     make_retrieval_key(
                         item.get("text_1", ""),
@@ -2754,7 +2776,9 @@ class DatasetPipeline:
 
         if self.state_manager.state:
             for dataset in self.state_manager.state.datasets_processed:
-                self.stats["datasets_processed"].setdefault(dataset, {})["status"] = "resumed"
+                self.stats["datasets_processed"].setdefault(dataset, {})[
+                    "status"
+                ] = "resumed"
 
     def _initialize_loaders(self) -> Dict[str, DatasetLoader]:
         """Initialize all dataset loaders based on configuration."""

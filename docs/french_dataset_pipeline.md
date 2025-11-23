@@ -2,7 +2,7 @@
 
 > **Last updated:** 2025-11-23
 
-The [`scripts/consolidated_french_dataset_pipeline.py`](../../scripts/consolidated_french_dataset_pipeline.py) entry point provides a production-ready ingestion pipeline for French instruction and retrieval datasets. It enforces French-only processing, layers quality and license checks, and emits validated exports plus run metadata for governance.
+The [`scripts/consolidated_french_dataset_pipeline.py`](../../scripts/consolidated_french_dataset_pipeline.py) entry point provides a production-ready ingestion pipeline for French instruction and retrieval datasets. It enforces French-only processing, layers quality and license checks, and emits validated exports plus run metadata for governance. When resuming from checkpoints, the pipeline now reloads previously written outputs so downstream consumers see consistent exports across restarts.
 
 ## Capabilities
 - Loads multiple Hugging Face datasets with checkpointing, deduplication, and sampling safeguards tailored for French corpora, then orchestrates validation and export steps via a single `DatasetPipeline.run()` flow.
@@ -15,15 +15,18 @@ The [`scripts/consolidated_french_dataset_pipeline.py`](../../scripts/consolidat
 
 To enable the optional Flask dashboard, install dependencies (e.g., `pip install -r requirements.txt`), provide a `--dashboard_port` value, and ensure the port is reachable from your operator workstation. The dashboard renders real-time instruction/retrieval counts, deduplication statistics, memory usage, and per-source breakdowns.
 
+If a dataset fails to load due to disabled `trust_remote_code` requirements, you can continue the run by passing `--ignore_failed_datasets`; the failure will be recorded in the dataset metadata while the pipeline continues with the remaining sources.
+
 ## Running the pipeline
 1. Create an output directory and invoke the script with the desired quotas and toggles, for example:
    ```bash
-   python scripts/consolidated_french_dataset_pipeline.py \
-     --output_dir /data/pipelines/french-merge \
-     --dashboard_port 8080 \
-     --max_per_dataset 75000 \
-     --enable_checkpointing \
-     --enable_validation \
+    python scripts/consolidated_french_dataset_pipeline.py \
+      --output_dir /data/pipelines/french-merge \
+      --dashboard_port 8080 \
+      --ignore_failed_datasets \
+      --max_per_dataset 75000 \
+      --enable_checkpointing \
+      --enable_validation \
      --unsloth_export_name unsloth_prompt_completion.jsonl
    ```
 2. Monitor progress via the rotating log at `dataset_pipeline.log` inside the output directory; console output also surfaces progress bar updates and configuration banners.
