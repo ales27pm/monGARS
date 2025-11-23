@@ -391,6 +391,7 @@ class PipelineConfig:
     # Remove trust_remote_code as it's deprecated
     force_download: bool = False
     allow_trust_remote_code: bool = False
+    trusted_remote_code_datasets: Set[str] = field(default_factory=set)
     state_file: str = "pipeline_state.pkl"
     dedup_state_file: str = "dedup_state.pkl"
     resume_from_checkpoint: bool = False
@@ -430,7 +431,9 @@ class PipelineConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return asdict(self)
+        data = asdict(self)
+        data["trusted_remote_code_datasets"] = sorted(self.trusted_remote_code_datasets)
+        return data
 
 
 # -----------------------------
@@ -1303,10 +1306,29 @@ class DatasetLoader:
             "license_compliance_issues": [],
             "pii_instances_found": 0,
         }
+
         self.pii_detector = (
             PIIDetector(config.pii_config) if config.pii_config.enabled else None
         )
         self.dedup_engine: Optional[DeduplicationEngine] = None
+
+    def _is_trust_remote_code_allowed(self, dataset_config: DatasetConfig) -> bool:
+        """Check whether trust_remote_code can be enabled for a dataset."""
+
+        if not dataset_config.allow_trust_remote_code:
+            return False
+
+        # Respect global opt-in or dataset-specific allowlist
+        dataset_keys = {
+            dataset_config.name.lower(),
+            dataset_config.hf_path.lower(),
+            dataset_config.name.lower().split("/")[-1],
+            dataset_config.hf_path.lower().split("/")[-1],
+        }
+
+        return self.config.allow_trust_remote_code or bool(
+            dataset_keys & self.config.trusted_remote_code_datasets
+        )
 
     def set_dedup_engine(self, engine: DeduplicationEngine):
         """Set shared deduplication engine."""
@@ -1656,14 +1678,16 @@ class InstructionDatasetLoader(DatasetLoader):
 
         # Respect trust_remote_code guardrails
         needs_trust = dataset_config.requires_trust_remote_code
-        allow_trust = (
-            dataset_config.allow_trust_remote_code
-            and self.config.allow_trust_remote_code
-        )
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
         if needs_trust and not allow_trust:
             self.logger.warning(
-                "Dataset %s requires trust_remote_code but the flag is disabled; pass --allow_trust_remote_code to enable.",
+                (
+                    "Dataset %s requires trust_remote_code but it is disabled; "
+                    "re-run with --allow_trust_remote_code or "
+                    "--allow_trust_remote_code_for %s"
+                ),
                 dataset_config.hf_path,
+                dataset_config.name,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
@@ -1918,15 +1942,16 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
             }
         )
 
-        allow_trust = (
-            dataset_config.allow_trust_remote_code
-            and self.config.allow_trust_remote_code
-        )
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
 
         if dataset_config.requires_trust_remote_code and not allow_trust:
             self.logger.warning(
-                "Skipping %s because trust_remote_code is required but disabled",
+                (
+                    "Skipping %s because trust_remote_code is required but disabled; "
+                    "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
+                ),
                 dataset_config.hf_path,
+                dataset_config.name,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
@@ -2008,16 +2033,17 @@ class AyaCollectionLoader(InstructionDatasetLoader):
 
         # Identify the config being used
         used_config = dataset_config.hf_config or "default"
-        allow_trust = (
-            dataset_config.allow_trust_remote_code
-            and self.config.allow_trust_remote_code
-        )
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
 
         if dataset_config.requires_trust_remote_code and not allow_trust:
             self.logger.warning(
-                "Skipping %s/%s because trust_remote_code is required but disabled",
+                (
+                    "Skipping %s/%s because trust_remote_code is required but disabled; "
+                    "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
+                ),
                 dataset_config.hf_path,
                 used_config,
+                dataset_config.name,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
@@ -2247,16 +2273,17 @@ class RetrievalDatasetLoader(DatasetLoader):
         )
 
         try:
-            allow_trust = (
-                dataset_config.allow_trust_remote_code
-                and self.config.allow_trust_remote_code
-            )
+            allow_trust = self._is_trust_remote_code_allowed(dataset_config)
 
             needs_trust = dataset_config.requires_trust_remote_code
             if needs_trust and not allow_trust:
                 self.logger.warning(
-                    "Skipping %s because trust_remote_code is required but disabled",
+                    (
+                        "Skipping %s because trust_remote_code is required but disabled; "
+                        "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
+                    ),
                     dataset_config.hf_path,
+                    dataset_config.name,
                 )
                 self.metadata["skipped_due_to_script_requirement"] = True
                 self.metadata["loading_errors"] += 1
@@ -3681,6 +3708,11 @@ class DatasetPipeline:
             if meta.get("filtered_by_pii"):
                 f.write(f"  * PII filtered: {meta.get('filtered_by_pii', 0)}\n")
             f.write(f"  * Errors: {meta.get('loading_errors', 0)}\n")
+            if meta.get("skipped_due_to_script_requirement"):
+                f.write(
+                    "  * Skipped: requires trust_remote_code (enable via "
+                    "--allow_trust_remote_code or --allow_trust_remote_code_for)\n"
+                )
             if meta.get("languages"):
                 f.write(f"  * Languages: {dict(meta['languages'])}\n")
             f.write("\n")
@@ -3781,6 +3813,12 @@ def _normalize_langs(lang_arg: str) -> List[str]:
     if "fr" not in normalized:
         normalized.append("fr")
     return list(dict.fromkeys(normalized))
+
+
+def _parse_trusted_dataset_allowlist(raw: str) -> Set[str]:
+    """Normalize comma-separated dataset identifiers for trust_remote_code allowlist."""
+
+    return {part.strip().lower() for part in raw.split(",") if part and part.strip()}
 
 
 def _lang_matches(lang_value: str, selected_langs: Set[str]) -> bool:
@@ -3928,6 +3966,14 @@ def parse_args() -> PipelineConfig:
             "Allow datasets that require trust_remote_code (only enable for vetted sources)."
         ),
     )
+    parser.add_argument(
+        "--allow_trust_remote_code_for",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated dataset keys/paths to allow trust_remote_code for (e.g., xp3,aya)."
+        ),
+    )
 
     # Memory config
     parser.add_argument(
@@ -3983,6 +4029,9 @@ def parse_args() -> PipelineConfig:
     args = parser.parse_args()
 
     langs = _normalize_langs(args.langs)
+    trusted_allowlist = _parse_trusted_dataset_allowlist(
+        args.allow_trust_remote_code_for
+    )
 
     # Nested configs – you can later expose CLI flags for these if you want
     quality_config = QualityConfig(
@@ -4023,6 +4072,7 @@ def parse_args() -> PipelineConfig:
         log_level=args.log_level,
         force_download=args.force_download,
         allow_trust_remote_code=args.allow_trust_remote_code,
+        trusted_remote_code_datasets=trusted_allowlist,
         state_file="pipeline_state.pkl",
         dedup_state_file="dedup_state.pkl",
         resume_from_checkpoint=args.resume_from_checkpoint,
