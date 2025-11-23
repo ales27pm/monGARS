@@ -2076,24 +2076,30 @@ class OpenAssistantLoader(InstructionDatasetLoader):
             ),
         )
 
-        # Build conversation trees focusing on French messages
-        messages_by_id = {}
-        root_messages = []
+        # Build conversation trees with explicit child links so that French
+        # replies nested under non-French roots are still reachable.
+        messages_by_id: Dict[str, Dict[str, Any]] = {}
+        root_messages: List[Dict[str, Any]] = []
 
         for msg in tqdm(ds, desc="Building French conversation trees"):
-            # Focus only on French messages
-            lang = msg.get("lang", "en")[:2].lower()
-            if lang != "fr":  # Only process French messages
-                continue
-
             msg_id = msg.get("message_id")
-            parent_id = msg.get("parent_id")
-
             if not msg_id:
                 continue
 
-            messages_by_id[msg_id] = msg
-            if not parent_id or parent_id not in messages_by_id:
+            # Clone to avoid mutating the dataset object and ensure we always
+            # have a replies list for tree construction.
+            msg_copy = dict(msg)
+            msg_copy.setdefault("replies", [])
+            messages_by_id[msg_id] = msg_copy
+
+        # Populate child links and identify roots
+        for msg in messages_by_id.values():
+            parent_id = msg.get("parent_id")
+            if parent_id and parent_id in messages_by_id:
+                messages_by_id[parent_id].setdefault("replies", []).append(
+                    msg["message_id"]
+                )
+            else:
                 root_messages.append(msg)
 
         # Process French conversations
@@ -2156,36 +2162,34 @@ class OpenAssistantLoader(InstructionDatasetLoader):
             current, context, depth = stack.pop()
             role = current.get("role", "")
             text = current.get("text", "").strip()
-            # Ensure we're only processing French messages
-            lang = current.get("lang", "en")[:2].lower()
+            lang = current.get("lang", "")
+            lang_matches = _lang_matches(lang, selected_langs)
 
-            if not text or lang != "fr":  # Only process French messages
-                continue
-
-            if role == "assistant" and context:
+            if role == "assistant" and context and lang_matches and text:
                 # Create instruction-output pair from context and response
                 instruction = "\n".join(
-                    [f"{ctx['role'].title()}: {ctx['text']}" for ctx in context]
+                    [f"{ctx['role'].title()}: {ctx['text']}" for ctx in context if ctx["text"]]
                 )
                 turns.append(
                     {
                         "instruction": instruction,
                         "output": text,
-                        "language": lang,
+                        "language": lang.lower() if lang else "unknown",
                         "message_id": current.get("message_id", ""),
                         "depth": depth,
                     }
                 )
 
-            # Add children to stack (only if they are French)
+            # Add children to stack, preserving context regardless of language so
+            # French replies under non-French parents are still explored.
             replies = current.get("replies", [])
             for reply_id in reversed(replies):  # Process in order
                 if reply_id in messages_by_id:
                     reply = messages_by_id[reply_id]
-                    # Only add French replies to the stack
-                    if reply.get("lang", "en")[:2].lower() == "fr":
+                    new_context = context
+                    if text:
                         new_context = context + [{"role": role, "text": text}]
-                        stack.append((reply, new_context, depth + 1))
+                    stack.append((reply, new_context, depth + 1))
 
         return turns
 
@@ -3689,6 +3693,34 @@ class DatasetPipeline:
 # -----------------------------
 # Command-line Interface
 # -----------------------------
+def _normalize_langs(lang_arg: str) -> List[str]:
+    """Parse comma-separated language codes and normalize casing/format."""
+
+    raw_langs = [part.strip() for part in lang_arg.split(",") if part.strip()]
+    if not raw_langs:
+        return ["fr"]
+
+    normalized = []
+    for code in raw_langs:
+        code_norm = code.lower().replace("_", "-")
+        # Keep region-specific variants (e.g., fr-ca) but also allow the base code
+        normalized.append(code_norm)
+    if "fr" not in normalized:
+        normalized.append("fr")
+    return list(dict.fromkeys(normalized))
+
+
+def _lang_matches(lang_value: str, selected_langs: Set[str]) -> bool:
+    """Return True when a language code matches the selected set (exact or base code)."""
+
+    normalized = lang_value.lower().replace("_", "-") if lang_value else ""
+    candidates = {normalized}
+    if "-" in normalized:
+        candidates.add(normalized.split("-", 1)[0])
+
+    return any(candidate in selected_langs for candidate in candidates if candidate)
+
+
 def parse_args() -> PipelineConfig:
     """Parse command line arguments and build a PipelineConfig."""
     parser = argparse.ArgumentParser(
@@ -3870,8 +3902,7 @@ def parse_args() -> PipelineConfig:
 
     args = parser.parse_args()
 
-    # For French-only pipeline, enforce French
-    langs = ["fr"]  # Override to French only
+    langs = _normalize_langs(args.langs)
 
     # Nested configs – you can later expose CLI flags for these if you want
     quality_config = QualityConfig(
