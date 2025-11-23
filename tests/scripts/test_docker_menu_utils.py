@@ -176,7 +176,7 @@ def test_prepare_ports_updates_searx_urls(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -214,7 +214,7 @@ def test_synchronise_searx_urls_skips_remote_hosts(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -242,7 +242,7 @@ def test_generate_base_model_bundle_invokes_pipeline(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -254,7 +254,7 @@ def test_generate_base_model_bundle_invokes_pipeline(
     monkeypatch.setattr(menu, "_default_dataset_path", lambda: dataset_file)
     monkeypatch.setattr(menu, "_model_install_dir", lambda: install_root)
 
-    inputs = iter(["", "hf/test-model"])
+    inputs = iter(["", "menu-run"])
     monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
 
     recorded = {}
@@ -285,11 +285,11 @@ def test_generate_base_model_bundle_invokes_pipeline(
 
     command = recorded["command"]
     assert command[0] == sys.executable
-    assert command[1].endswith("run_mongars_llm_pipeline.py")
-    assert "--dataset-path" in command
-    assert "--output-dir" in command
-    assert "--skip-smoke-tests" in command
-    assert "--skip-merge" in command
+    assert command[1].endswith("build_monGARS_llm_bundle.py")
+    assert command[command.index("--dataset-path") + 1] == str(dataset_file)
+    assert command[command.index("--output-dir") + 1] == str(install_root)
+    assert command[command.index("--run-name") + 1] == "menu-run"
+    assert "--registry-path" in command
     assert blocks[-1][0] == "Base model + wrapper installation complete"
 
 
@@ -299,7 +299,7 @@ def test_generate_base_model_bundle_validates_dataset(
     monkeypatch.setattr(
         docker_menu.DockerMenu,
         "_resolve_compose_binary",
-        lambda self: ["docker", "compose"],
+        lambda _menu: ["docker", "compose"],
     )
 
     menu = docker_menu.DockerMenu()
@@ -318,3 +318,79 @@ def test_generate_base_model_bundle_validates_dataset(
     assert logs
     assert any(error for _, error in logs)
     assert "Dataset not found" in logs[-1][0]
+
+
+def test_generate_base_model_bundle_rejects_invalid_jsonl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda _menu: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+
+    invalid_dataset = tmp_path / "invalid.jsonl"
+    invalid_dataset.write_text("not-json\n", encoding="utf8")
+
+    monkeypatch.setattr(menu, "_default_dataset_path", lambda: invalid_dataset)
+    monkeypatch.setattr("builtins.input", lambda *_args: "")
+
+    logs: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        menu, "log", lambda message, error=False: logs.append((message, error))
+    )
+
+    triggered: list[str] = []
+    monkeypatch.setattr(menu, "_run_command", lambda *_, **__: triggered.append("run"))
+
+    menu.generate_base_model_bundle()
+
+    assert not triggered
+    assert logs
+    assert any(error for _, error in logs)
+    assert "invalid JSON" in logs[-1][0]
+
+
+def test_generate_base_model_bundle_uses_hf_dataset_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        docker_menu.DockerMenu,
+        "_resolve_compose_binary",
+        lambda _menu: ["docker", "compose"],
+    )
+
+    menu = docker_menu.DockerMenu()
+
+    default_dataset = tmp_path / "default.jsonl"
+    default_dataset.write_text('{"prompt": "p", "completion": "c"}\n', encoding="utf8")
+    install_root = tmp_path / "install"
+
+    monkeypatch.setattr(menu, "_default_dataset_path", lambda: default_dataset)
+    monkeypatch.setattr(menu, "_model_install_dir", lambda: install_root)
+
+    inputs = iter(["my_hf_dataset", "menu-run"])
+    monkeypatch.setattr("builtins.input", lambda *_args: next(inputs))
+
+    recorded: dict[str, list[str]] = {}
+
+    def fake_run(
+        command: list[str], *, capture_output: bool, check: bool
+    ) -> CompletedProcess[str]:
+        recorded["command"] = command
+        install_root.mkdir(parents=True, exist_ok=True)
+        (install_root / "wrapper").mkdir(parents=True, exist_ok=True)
+        (install_root / "chat_lora").mkdir(parents=True, exist_ok=True)
+        return CompletedProcess(command, 0)
+
+    monkeypatch.setattr(menu, "_run_command", fake_run)
+
+    menu.generate_base_model_bundle()
+
+    command = recorded["command"]
+    assert "--dataset-id" in command
+    assert command[command.index("--dataset-id") + 1] == "my_hf_dataset"
+    assert "--dataset-path" not in command
+    assert command[command.index("--run-name") + 1] == "menu-run"
