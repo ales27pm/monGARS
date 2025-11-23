@@ -191,45 +191,46 @@ class DockerMenu:
 
         in_single = False
         in_double = False
-        escape_next = False
         result: list[str] = []
-        previous: str | None = None
 
-        for char in value:
-            if escape_next:
-                result.append(char)
-                previous = char
-                escape_next = False
-                continue
+        index = 0
+        length = len(value)
+        while index < length:
+            char = value[index]
+            next_char = value[index + 1] if index + 1 < length else None
 
             if char == "\\":
-                escape_next = True
+                if next_char == "#" and not in_single and not in_double:
+                    result.append("#")
+                    index += 2
+                    continue
+
                 result.append(char)
-                previous = char
+                index += 1
                 continue
 
             if char == "'" and not in_double:
                 in_single = not in_single
                 result.append(char)
-                previous = char
+                index += 1
                 continue
 
             if char == '"' and not in_single:
                 in_double = not in_double
                 result.append(char)
-                previous = char
+                index += 1
                 continue
 
             if (
                 char == "#"
                 and not in_single
                 and not in_double
-                and (previous is None or previous.isspace())
+                and (index == 0 or value[index - 1].isspace())
             ):
                 break
 
             result.append(char)
-            previous = char
+            index += 1
 
         return "".join(result)
 
