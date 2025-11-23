@@ -265,6 +265,8 @@ class DatasetConfig:
     sampling_strategy: Literal["uniform", "quality_weighted", "stratified"] = "uniform"
     batch_size: int = 1000
     cache_strategy: Literal["memory", "disk", "hybrid"] = "hybrid"
+    requires_trust_remote_code: bool = False
+    allow_trust_remote_code: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization, excluding functions."""
@@ -285,6 +287,8 @@ class DatasetConfig:
             "sampling_strategy": self.sampling_strategy,
             "batch_size": self.batch_size,
             "cache_strategy": self.cache_strategy,
+            "requires_trust_remote_code": self.requires_trust_remote_code,
+            "allow_trust_remote_code": self.allow_trust_remote_code,
             "license_compliance": {
                 "license_type": self.license_compliance.license_type.value,
                 "requires_attribution": self.license_compliance.requires_attribution,
@@ -386,6 +390,7 @@ class PipelineConfig:
     log_level: str = "INFO"
     # Remove trust_remote_code as it's deprecated
     force_download: bool = False
+    allow_trust_remote_code: bool = False
     state_file: str = "pipeline_state.pkl"
     dedup_state_file: str = "dedup_state.pkl"
     resume_from_checkpoint: bool = False
@@ -607,7 +612,7 @@ def load_dataset_with_retry(
     base_retry_delay: float = 1.0,
     timeout: int = 300,
     requires_auth: bool = False,
-    # Remove trust_remote_code parameter completely
+    trust_remote_code: bool = False,
     download_mode: DownloadMode = DownloadMode.REUSE_DATASET_IF_EXISTS,
 ) -> Union[Dataset, DatasetDict, Iterable[Dict]]:
     """
@@ -647,8 +652,9 @@ def load_dataset_with_retry(
                 cache_dir=cache_dir,
                 download_mode=download_mode,
                 verification_mode=VerificationMode.NO_CHECKS,
-                # Remove trust_remote_code entirely
             )
+            if trust_remote_code:
+                ds_kwargs["trust_remote_code"] = True
             if token:
                 ds_kwargs["token"] = token
 
@@ -667,10 +673,11 @@ def load_dataset_with_retry(
                 or "Dataset scripts are no longer supported" in error_str
             ):
                 logger.error(
-                    f"Dataset {hf_path} requires trust_remote_code internally or uses scripts, which is no longer supported: {error_str}"
+                    "Dataset %s requires trust_remote_code; rerun with --allow_trust_remote_code if you trust the source."
+                    % hf_path
                 )
                 raise DatasetLoadingError(
-                    f"Dataset {hf_path} requires internal script execution which is disabled: {error_str}"
+                    f"Dataset {hf_path} requires trust_remote_code. Pass allow_trust_remote_code to enable."
                 ) from e
 
             logger.error(
@@ -1647,22 +1654,23 @@ class InstructionDatasetLoader(DatasetLoader):
             }
         )
 
-        # Skip datasets that require trust_remote_code internally
-        if any(
-            name in dataset_config.hf_path
-            for name in ["bigscience/xP3", "CohereForAI/aya_collection"]
-        ):
+        # Respect trust_remote_code guardrails
+        needs_trust = dataset_config.requires_trust_remote_code
+        allow_trust = (
+            dataset_config.allow_trust_remote_code
+            or self.config.allow_trust_remote_code
+        )
+        if needs_trust and not allow_trust:
             self.logger.warning(
-                f"Skipping {dataset_config.hf_path} as it typically requires trust_remote_code internally, "
-                f"which is no longer supported by the Hugging Face library. "
-                f"Consider using an alternative dataset or a pre-processed version."
+                "Dataset %s requires trust_remote_code but the flag is disabled; pass --allow_trust_remote_code to enable.",
+                dataset_config.hf_path,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
             self.metadata["error"] = (
-                f"Dataset {dataset_config.hf_path} requires internal script execution which is disabled."
+                "trust_remote_code disabled for dataset requiring remote code execution"
             )
-            return  # Exit early, do not attempt to load
+            return
 
         try:
             # Load dataset with retry logic
@@ -1674,6 +1682,7 @@ class InstructionDatasetLoader(DatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -1909,21 +1918,23 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
             }
         )
 
-        # Check if xP3 is configured to be loaded (it requires trust_remote_code internally)
-        if "xP3" in dataset_config.hf_path:
+        allow_trust = (
+            dataset_config.allow_trust_remote_code
+            or self.config.allow_trust_remote_code
+        )
+
+        if dataset_config.requires_trust_remote_code and not allow_trust:
             self.logger.warning(
-                f"Skipping {dataset_config.hf_path} as it requires trust_remote_code internally, "
-                f"which is no longer supported by the Hugging Face library. "
-                f"Consider using an alternative dataset or a pre-processed version."
+                "Skipping %s because trust_remote_code is required but disabled",
+                dataset_config.hf_path,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
             self.metadata["error"] = (
-                f"Dataset {dataset_config.hf_path} requires internal script execution which is disabled."
+                "trust_remote_code disabled for dataset requiring remote code execution"
             )
-            return  # Exit early, do not attempt to load
+            return
 
-        # If it's not xP3, proceed normally (this should not happen in this specific loader)
         try:
             # ... (existing license check, etc.) ...
 
@@ -1935,7 +1946,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
-                # Note: Explicit trust_remote_code is NOT passed here anymore
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -1951,7 +1962,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
                 e
             ) or "requires trust_remote_code" in str(e):
                 self.logger.error(
-                    f"Dataset {dataset_config.name} requires internal scripts which are disabled: {str(e)}"
+                    f"Dataset {dataset_config.name} requires trust_remote_code and failed to load: {str(e)}"
                 )
                 self.metadata["loading_errors"] += 1
                 self.metadata["error"] = f"Script dependency error: {str(e)}"
@@ -1997,19 +2008,23 @@ class AyaCollectionLoader(InstructionDatasetLoader):
 
         # Identify the config being used
         used_config = dataset_config.hf_config or "default"
+        allow_trust = (
+            dataset_config.allow_trust_remote_code
+            or self.config.allow_trust_remote_code
+        )
 
-        # Check if the specific config is known to require scripts (like 'aya_dataset')
-        if used_config == "aya_dataset":
+        if dataset_config.requires_trust_remote_code and not allow_trust:
             self.logger.warning(
-                f"Skipping {dataset_config.hf_path} with config '{used_config}' as it typically requires trust_remote_code internally, "
-                f"which is no longer supported. Consider using an alternative config or pre-processed data."
+                "Skipping %s/%s because trust_remote_code is required but disabled",
+                dataset_config.hf_path,
+                used_config,
             )
             self.metadata["skipped_due_to_script_requirement"] = True
             self.metadata["loading_errors"] += 1
             self.metadata["error"] = (
-                f"Dataset config {dataset_config.hf_path}/{used_config} requires internal script execution which is disabled."
+                "trust_remote_code disabled for dataset requiring remote code execution"
             )
-            return  # Exit early, do not attempt to load
+            return
 
         try:
             # ... (existing license check, etc.) ...
@@ -2022,7 +2037,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
-                # Note: Explicit trust_remote_code is NOT passed here anymore
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -2038,7 +2053,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
                 e
             ) or "requires trust_remote_code" in str(e):
                 self.logger.error(
-                    f"Dataset {dataset_config.name} requires internal scripts which are disabled: {str(e)}"
+                    f"Dataset {dataset_config.name} requires trust_remote_code and failed to load: {str(e)}"
                 )
                 self.metadata["loading_errors"] += 1
                 self.metadata["error"] = f"Script dependency error: {str(e)}"
@@ -2232,6 +2247,10 @@ class RetrievalDatasetLoader(DatasetLoader):
         )
 
         try:
+            allow_trust = (
+                dataset_config.allow_trust_remote_code
+                or self.config.allow_trust_remote_code
+            )
             # Load dataset
             ds = load_dataset_with_retry(
                 dataset_config.hf_path,
@@ -2241,6 +2260,7 @@ class RetrievalDatasetLoader(DatasetLoader):
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
+                trust_remote_code=allow_trust,
                 download_mode=(
                     DownloadMode.FORCE_REDOWNLOAD
                     if self.config.force_download
@@ -2250,12 +2270,20 @@ class RetrievalDatasetLoader(DatasetLoader):
 
             # Estimate quality to avoid defaulting to zero (which triggers blanket filtering)
             if not dataset_config.streaming:
-                self.metadata["quality_score"] = self._estimate_quality(
-                    ds, dataset_config
-                )
+                estimated_quality = self._estimate_quality(ds, dataset_config)
+                if estimated_quality <= 0:
+                    fallback = max(dataset_config.quality_weight, 1.0)
+                    self.logger.warning(
+                        "Quality estimation returned %.3f for %s; defaulting to %.2f to keep candidates",
+                        estimated_quality,
+                        dataset_config.name,
+                        fallback,
+                    )
+                    estimated_quality = fallback
+                self.metadata["quality_score"] = estimated_quality
             else:
                 # Streaming datasets skip estimation; assume neutral quality
-                self.metadata["quality_score"] = 1.0
+                self.metadata["quality_score"] = max(dataset_config.quality_weight, 1.0)
 
             # Create iterator with progress bar if needed
             iterator = ds
@@ -3105,6 +3133,8 @@ class DatasetPipeline:
                 dataset_type=DatasetType.INSTRUCTION,
                 languages=self.config.langs,
                 license=LicenseType.APACHE_2_0,
+                requires_trust_remote_code=True,
+                allow_trust_remote_code=True,
                 license_compliance=LicenseCompliance(
                     license_type=LicenseType.APACHE_2_0,
                     requires_attribution=True,
@@ -3123,6 +3153,8 @@ class DatasetPipeline:
                 dataset_type=DatasetType.INSTRUCTION,
                 languages=self.config.langs,
                 license=LicenseType.APACHE_2_0,
+                requires_trust_remote_code=True,
+                allow_trust_remote_code=True,
                 license_compliance=LicenseCompliance(
                     license_type=LicenseType.APACHE_2_0,
                     requires_attribution=True,
@@ -3870,11 +3902,18 @@ def parse_args() -> PipelineConfig:
         help="Shortcut for DEBUG logging on console",
     )
 
-    # HF + downloads (trust_remote_code removed)
+    # HF + downloads (trust_remote_code guarded)
     parser.add_argument(
         "--force_download",
         action="store_true",
         help="Force re-download of datasets instead of reusing cache",
+    )
+    parser.add_argument(
+        "--allow_trust_remote_code",
+        action="store_true",
+        help=(
+            "Allow datasets that require trust_remote_code (only enable for vetted sources)."
+        ),
     )
 
     # Memory config
@@ -3969,8 +4008,8 @@ def parse_args() -> PipelineConfig:
         enable_modification=args.enable_modification,
         dashboard_port=args.dashboard_port,
         log_level=args.log_level,
-        # Remove trust_remote_code as it's deprecated
         force_download=args.force_download,
+        allow_trust_remote_code=args.allow_trust_remote_code,
         state_file="pipeline_state.pkl",
         dedup_state_file="dedup_state.pkl",
         resume_from_checkpoint=args.resume_from_checkpoint,
