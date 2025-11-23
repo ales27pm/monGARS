@@ -2168,7 +2168,11 @@ class OpenAssistantLoader(InstructionDatasetLoader):
             if role == "assistant" and context and lang_matches and text:
                 # Create instruction-output pair from context and response
                 instruction = "\n".join(
-                    [f"{ctx['role'].title()}: {ctx['text']}" for ctx in context if ctx["text"]]
+                    [
+                        f"{ctx['role'].title()}: {ctx['text']}"
+                        for ctx in context
+                        if ctx["text"]
+                    ]
                 )
                 turns.append(
                     {
@@ -2230,6 +2234,15 @@ class RetrievalDatasetLoader(DatasetLoader):
                     else DownloadMode.REUSE_DATASET_IF_EXISTS
                 ),
             )
+
+            # Estimate quality to avoid defaulting to zero (which triggers blanket filtering)
+            if not dataset_config.streaming:
+                self.metadata["quality_score"] = self._estimate_quality(
+                    ds, dataset_config
+                )
+            else:
+                # Streaming datasets skip estimation; assume neutral quality
+                self.metadata["quality_score"] = 1.0
 
             # Create iterator with progress bar if needed
             iterator = ds
