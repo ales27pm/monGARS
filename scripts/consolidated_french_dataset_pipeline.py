@@ -1658,7 +1658,7 @@ class InstructionDatasetLoader(DatasetLoader):
         needs_trust = dataset_config.requires_trust_remote_code
         allow_trust = (
             dataset_config.allow_trust_remote_code
-            or self.config.allow_trust_remote_code
+            and self.config.allow_trust_remote_code
         )
         if needs_trust and not allow_trust:
             self.logger.warning(
@@ -1920,7 +1920,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
 
         allow_trust = (
             dataset_config.allow_trust_remote_code
-            or self.config.allow_trust_remote_code
+            and self.config.allow_trust_remote_code
         )
 
         if dataset_config.requires_trust_remote_code and not allow_trust:
@@ -2010,7 +2010,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
         used_config = dataset_config.hf_config or "default"
         allow_trust = (
             dataset_config.allow_trust_remote_code
-            or self.config.allow_trust_remote_code
+            and self.config.allow_trust_remote_code
         )
 
         if dataset_config.requires_trust_remote_code and not allow_trust:
@@ -2249,8 +2249,21 @@ class RetrievalDatasetLoader(DatasetLoader):
         try:
             allow_trust = (
                 dataset_config.allow_trust_remote_code
-                or self.config.allow_trust_remote_code
+                and self.config.allow_trust_remote_code
             )
+
+            needs_trust = dataset_config.requires_trust_remote_code
+            if needs_trust and not allow_trust:
+                self.logger.warning(
+                    "Skipping %s because trust_remote_code is required but disabled",
+                    dataset_config.hf_path,
+                )
+                self.metadata["skipped_due_to_script_requirement"] = True
+                self.metadata["loading_errors"] += 1
+                self.metadata["error"] = (
+                    "trust_remote_code disabled for dataset requiring remote code execution"
+                )
+                return
             # Load dataset
             ds = load_dataset_with_retry(
                 dataset_config.hf_path,
