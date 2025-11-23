@@ -1920,7 +1920,13 @@ class InstructionDatasetLoader(DatasetLoader):
 
 
 class XP3MultiLanguageLoader(InstructionDatasetLoader):
-    """Loader for BigScience xP3 dataset with multi-language support."""
+    """
+    Loader for BigScience xP3 – we explicitly extract French examples
+    and convert them into instruction/output pairs.
+
+    We only use the 'fr' config (already set in DatasetConfig.hf_config),
+    so everything that passes quality checks is treated as French.
+    """
 
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
@@ -1932,41 +1938,51 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
         sink: List[Dict[str, Any]],
         dataset_config: DatasetConfig,
     ) -> None:
-        """Load xP3 for multiple languages, handling script dependency."""
         start_time = time.time()
-        self.metadata.update(
-            {
-                "source": dataset_config.hf_path,
-                "type": dataset_config.dataset_type.value,
-                "license": dataset_config.license.value,
-            }
+        self.logger.info(
+            f"Loading xP3 from {dataset_config.hf_path} (config={dataset_config.hf_config})"
         )
 
-        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
-
-        if dataset_config.requires_trust_remote_code and not allow_trust:
-            self.logger.warning(
-                (
-                    "Skipping %s because trust_remote_code is required but disabled; "
-                    "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
-                ),
-                dataset_config.hf_path,
-                dataset_config.name,
-            )
-            self.metadata["skipped_due_to_script_requirement"] = True
-            self.metadata["loading_errors"] += 1
-            self.metadata["error"] = (
-                "trust_remote_code disabled for dataset requiring remote code execution"
-            )
+        # We only care about French
+        if "fr" not in {l.lower() for l in selected_langs}:
+            self.logger.info("Skipping xP3 because 'fr' is not in selected languages")
             return
 
-        try:
-            # ... (existing license check, etc.) ...
+        # Handle trust_remote_code allowlist
+        allow_trust = False
+        if dataset_config.requires_trust_remote_code:
+            if not self.config.allow_trust_remote_code:
+                msg = (
+                    "xP3 requires trust_remote_code but global "
+                    "--allow_trust_remote_code is disabled; skipping dataset."
+                )
+                self.logger.error(msg)
+                self.metadata["error"] = msg
+                self.metadata["loading_errors"] += 1
+                return
 
+            normalized_ids = {
+                dataset_config.hf_path.lower(),
+                dataset_config.name.lower(),
+            }
+            trusted = {d.lower() for d in self.config.trusted_remote_code_datasets}
+            allow_trust = bool(normalized_ids & trusted)
+            if not allow_trust:
+                msg = (
+                    "xP3 requires trust_remote_code but dataset is not in "
+                    "trusted_remote_code_datasets; skipping dataset."
+                )
+                self.logger.error(msg)
+                self.metadata["error"] = msg
+                self.metadata["loading_errors"] += 1
+                return
+
+        # Actually load the dataset
+        try:
             ds = load_dataset_with_retry(
-                dataset_config.hf_path,
-                dataset_config.hf_config,
-                split="train",
+                hf_path=dataset_config.hf_path,
+                hf_config=dataset_config.hf_config,
+                split=dataset_config.hf_split or "train",
                 streaming=dataset_config.streaming,
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
@@ -1978,41 +1994,99 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
                     else DownloadMode.REUSE_DATASET_IF_EXISTS
                 ),
             )
+        except DatasetLoadingError as e:
+            msg = f"Failed to load xP3: {e}"
+            self.logger.error(msg)
+            self.metadata["error"] = msg
+            self.metadata["loading_errors"] += 1
+            return
 
-            # ... (rest of the processing logic) ...
+        # Metadata/init
+        self.metadata["total_records"] = 0
+        self.metadata["examples_used"] = 0
+        self.metadata["duplicates_removed"] = 0
+        self.metadata["quality_score"] = dataset_config.quality_weight
 
-        except Exception as e:
-            # Specifically catch the error related to dataset scripts
-            if "Dataset scripts are no longer supported" in str(
-                e
-            ) or "requires trust_remote_code" in str(e):
-                self.logger.error(
-                    f"Dataset {dataset_config.name} requires trust_remote_code and failed to load: {str(e)}"
-                )
-                self.metadata["loading_errors"] += 1
-                self.metadata["error"] = f"Script dependency error: {str(e)}"
-                # Decide whether to continue or stop based on config (e.g., if strict mode)
-                if not self.config.ignore_failed_datasets:
-                    raise DatasetLoadingError(
-                        f"Critical dataset failed: {str(e)}"
-                    ) from e
-                else:
-                    return  # Silently skip if configured to do so
-            else:
-                # Re-raise other errors
-                self.logger.error(
-                    f"Error loading {dataset_config.name}: {str(e)}", exc_info=True
-                )
-                self.metadata["loading_errors"] += 1
-                self.metadata["error"] = str(e)
-                raise  # Or handle differently based on severity
+        max_examples = dataset_config.max_examples or float("inf")
+
+        # Iterate over examples (streaming or not)
+        if dataset_config.streaming:
+            iterator = iter(ds)
+        else:
+            iterator = ds
+
+        for example in iterator:
+            self.metadata["total_records"] += 1
+
+            # xP3 uses "inputs" and "targets"
+            instr = (example.get("inputs") or "").strip()
+            out = (example.get("targets") or "").strip()
+
+            if not instr or not out:
+                continue
+
+            # Quick quality check on combined text
+            combined_text = instr + "\n" + out
+            if not validate_text(
+                combined_text,
+                self.config,
+                quality_score=dataset_config.quality_weight,
+            ):
+                continue
+
+            item = {
+                "instruction": instr,
+                "output": out,
+                "language": "fr",  # this config is French
+                "task": "instruction",
+                "context": None,
+                "source": "bigscience/xP3",
+            }
+
+            key = make_instruct_key(instr, out)
+
+            if self.add_to_sink(
+                item=item,
+                sink=sink,
+                seen_keys=seen_keys,
+                key_func=lambda _x, k=key: k,
+                dataset_type=dataset_config.dataset_type.value,
+                quality_score=dataset_config.quality_weight,
+            ):
+                self.metadata["examples_used"] += 1
+
+            if self.metadata["examples_used"] >= max_examples:
+                break
+
+        elapsed = time.time() - start_time
+        self.logger.info(
+            f"Completed xp3 in {elapsed:.2f}s with {self.metadata['examples_used']} examples"
+        )
 
 
 class AyaCollectionLoader(InstructionDatasetLoader):
-    """Loader for Cohere Aya Collection dataset."""
+    """
+    Loader for Cohere Aya Collection (aya_dataset config).
+
+    The config is multilingual; we explicitly filter for French-language
+    examples using the `language` field, then convert to instruction/output
+    pairs.
+    """
 
     def __init__(self, config: PipelineConfig):
         super().__init__(config)
+
+    @staticmethod
+    def _is_french_language_tag(raw: str) -> bool:
+        """Heuristic check whether Aya language tag is French."""
+        if not raw:
+            return False
+        tag = raw.strip().lower()
+        if tag.startswith("fr"):
+            return True
+        if "french" in tag:
+            return True
+        return False
 
     def load(
         self,
@@ -2021,45 +2095,52 @@ class AyaCollectionLoader(InstructionDatasetLoader):
         sink: List[Dict[str, Any]],
         dataset_config: DatasetConfig,
     ) -> None:
-        """Load Aya Collection, handling potential script dependency."""
         start_time = time.time()
-        self.metadata.update(
-            {
-                "source": dataset_config.hf_path,
-                "type": dataset_config.dataset_type.value,
-                "license": dataset_config.license.value,
-            }
+        self.logger.info(
+            f"Loading Aya collection from {dataset_config.hf_path} "
+            f"(config={dataset_config.hf_config})"
         )
 
-        # Identify the config being used
-        used_config = dataset_config.hf_config or "default"
-        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
-
-        if dataset_config.requires_trust_remote_code and not allow_trust:
-            self.logger.warning(
-                (
-                    "Skipping %s/%s because trust_remote_code is required but disabled; "
-                    "use --allow_trust_remote_code or --allow_trust_remote_code_for %s"
-                ),
-                dataset_config.hf_path,
-                used_config,
-                dataset_config.name,
-            )
-            self.metadata["skipped_due_to_script_requirement"] = True
-            self.metadata["loading_errors"] += 1
-            self.metadata["error"] = (
-                "trust_remote_code disabled for dataset requiring remote code execution"
-            )
+        if "fr" not in {l.lower() for l in selected_langs}:
+            self.logger.info("Skipping Aya because 'fr' is not in selected languages")
             return
 
-        try:
-            # ... (existing license check, etc.) ...
+        # trust_remote_code allowlist handling
+        allow_trust = False
+        if dataset_config.requires_trust_remote_code:
+            if not self.config.allow_trust_remote_code:
+                msg = (
+                    "Aya collection requires trust_remote_code but global "
+                    "--allow_trust_remote_code is disabled; skipping dataset."
+                )
+                self.logger.error(msg)
+                self.metadata["error"] = msg
+                self.metadata["loading_errors"] += 1
+                return
 
+            normalized_ids = {
+                dataset_config.hf_path.lower(),
+                dataset_config.name.lower(),
+            }
+            trusted = {d.lower() for d in self.config.trusted_remote_code_datasets}
+            allow_trust = bool(normalized_ids & trusted)
+            if not allow_trust:
+                msg = (
+                    "Aya collection requires trust_remote_code but dataset is not in "
+                    "trusted_remote_code_datasets; skipping dataset."
+                )
+                self.logger.error(msg)
+                self.metadata["error"] = msg
+                self.metadata["loading_errors"] += 1
+                return
+
+        # Load dataset (non-streaming)
+        try:
             ds = load_dataset_with_retry(
-                dataset_config.hf_path,
-                dataset_config.hf_config,
-                split="train",
-                streaming=False,  # Often not streaming for aya_collection
+                hf_path=dataset_config.hf_path,
+                hf_config=dataset_config.hf_config,
+                split=dataset_config.hf_split or "train",
+                streaming=False,
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
                 requires_auth=dataset_config.requires_auth,
@@ -2070,34 +2151,73 @@ class AyaCollectionLoader(InstructionDatasetLoader):
                     else DownloadMode.REUSE_DATASET_IF_EXISTS
                 ),
             )
+        except DatasetLoadingError as e:
+            msg = f"Failed to load Aya collection: {e}"
+            self.logger.error(msg)
+            self.metadata["error"] = msg
+            self.metadata["loading_errors"] += 1
+            return
 
-            # ... (rest of the processing logic) ...
+        self.metadata["total_records"] = 0
+        self.metadata["examples_used"] = 0
+        self.metadata["duplicates_removed"] = 0
+        self.metadata["quality_score"] = dataset_config.quality_weight
 
-        except Exception as e:
-            # Specifically catch the error related to dataset scripts
-            if "Dataset scripts are no longer supported" in str(
-                e
-            ) or "requires trust_remote_code" in str(e):
-                self.logger.error(
-                    f"Dataset {dataset_config.name} requires trust_remote_code and failed to load: {str(e)}"
-                )
-                self.metadata["loading_errors"] += 1
-                self.metadata["error"] = f"Script dependency error: {str(e)}"
-                # Decide whether to continue or stop based on config (e.g., if strict mode)
-                if not self.config.ignore_failed_datasets:
-                    raise DatasetLoadingError(
-                        f"Critical dataset failed: {str(e)}"
-                    ) from e
-                else:
-                    return  # Silently skip if configured to do so
-            else:
-                # Re-raise other errors
-                self.logger.error(
-                    f"Error loading {dataset_config.name}: {str(e)}", exc_info=True
-                )
-                self.metadata["loading_errors"] += 1
-                self.metadata["error"] = str(e)
-                raise  # Or handle differently based on severity
+        max_examples = dataset_config.max_examples or float("inf")
+
+        for example in ds:
+            self.metadata["total_records"] += 1
+
+            raw_lang = (example.get("language") or example.get("lang") or "").strip()
+            if not self._is_french_language_tag(raw_lang):
+                continue
+
+            instr = (example.get("inputs") or "").strip()
+            out = (example.get("targets") or "").strip()
+
+            if not instr or not out:
+                continue
+
+            combined_text = instr + "\n" + out
+            if not validate_text(
+                combined_text,
+                self.config,
+                quality_score=dataset_config.quality_weight,
+            ):
+                continue
+
+            # Task name as context, if present
+            context = example.get("task_name") or None
+            source_tag = example.get("source") or "aya_collection"
+
+            item = {
+                "instruction": instr,
+                "output": out,
+                "language": "fr",
+                "task": "instruction",
+                "context": context,
+                "source": f"CohereForAI/aya_collection::{source_tag}",
+            }
+
+            key = make_instruct_key(instr, out)
+
+            if self.add_to_sink(
+                item=item,
+                sink=sink,
+                seen_keys=seen_keys,
+                key_func=lambda _x, k=key: k,
+                dataset_type=dataset_config.dataset_type.value,
+                quality_score=dataset_config.quality_weight,
+            ):
+                self.metadata["examples_used"] += 1
+
+            if self.metadata["examples_used"] >= max_examples:
+                break
+
+        elapsed = time.time() - start_time
+        self.logger.info(
+            f"Completed aya in {elapsed:.2f}s with {self.metadata['examples_used']} examples"
+        )
 
 
 class OpenAssistantLoader(InstructionDatasetLoader):
