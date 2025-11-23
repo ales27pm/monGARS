@@ -389,6 +389,7 @@ class PipelineConfig:
     state_file: str = "pipeline_state.pkl"
     dedup_state_file: str = "dedup_state.pkl"
     resume_from_checkpoint: bool = False
+    ignore_failed_datasets: bool = False
     sampling_strategy: Literal["uniform", "quality_weighted", "adaptive"] = "uniform"
     quality_threshold: float = 0.6
     min_examples_per_language: int = 1000
@@ -2677,7 +2678,12 @@ class DatasetPipeline:
 
         # Initialize state manager
         self.state_manager = PipelineStateManager(config)
-        self.state_manager.load_state()
+        state_loaded = self.state_manager.load_state()
+
+        # Rehydrate previously saved results when resuming so datasets already
+        # marked as processed are also present in memory and outputs stay stable.
+        if state_loaded:
+            self._rehydrate_previous_results()
 
         # Initialize dataset loaders
         self.loaders = self._initialize_loaders()
@@ -2691,6 +2697,64 @@ class DatasetPipeline:
         # Initialize output directory
         Path(config.output_dir).mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Output directory created: {config.output_dir}")
+
+    def _rehydrate_previous_results(self) -> None:
+        """Reload previously written outputs when resuming from a checkpoint."""
+
+        instruct_path = Path(self.config.output_dir) / "combined_instruct.jsonl"
+        retrieval_path = Path(self.config.output_dir) / "combined_retrieval.jsonl"
+
+        if instruct_path.exists():
+            try:
+                with open(instruct_path, "r", encoding="utf-8") as f:
+                    self.instruct_data = [json.loads(line) for line in f if line.strip()]
+                self.seen_instruct = {
+                    make_instruct_key(item.get("instruction", ""), item.get("output", ""))
+                    for item in self.instruct_data
+                }
+                self.logger.info(
+                    "Rehydrated %d instruction examples from %s",
+                    len(self.instruct_data),
+                    instruct_path,
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "Failed to rehydrate instruction outputs from %s: %s",
+                    instruct_path,
+                    exc,
+                )
+
+        if retrieval_path.exists():
+            try:
+                with open(retrieval_path, "r", encoding="utf-8") as f:
+                    self.retrieval_data = [json.loads(line) for line in f if line.strip()]
+                self.seen_retrieval = {
+                    make_retrieval_key(
+                        item.get("text_1", ""),
+                        item.get("text_2", ""),
+                        symmetric=item.get("symmetric", True),
+                    )
+                    for item in self.retrieval_data
+                }
+                self.logger.info(
+                    "Rehydrated %d retrieval pairs from %s",
+                    len(self.retrieval_data),
+                    retrieval_path,
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "Failed to rehydrate retrieval outputs from %s: %s",
+                    retrieval_path,
+                    exc,
+                )
+
+        # Keep stats aligned with recovered data
+        self.stats["instruct_count"] = len(self.instruct_data)
+        self.stats["retrieval_count"] = len(self.retrieval_data)
+
+        if self.state_manager.state:
+            for dataset in self.state_manager.state.datasets_processed:
+                self.stats["datasets_processed"].setdefault(dataset, {})["status"] = "resumed"
 
     def _initialize_loaders(self) -> Dict[str, DatasetLoader]:
         """Initialize all dataset loaders based on configuration."""
@@ -3679,6 +3743,12 @@ def parse_args() -> PipelineConfig:
     )
 
     parser.add_argument(
+        "--ignore_failed_datasets",
+        action="store_true",
+        help="Skip datasets that fail to load instead of raising",
+    )
+
+    parser.add_argument(
         "--enable_validation",
         action="store_true",
         help="Run validation on final merged dataset",
@@ -3821,6 +3891,7 @@ def parse_args() -> PipelineConfig:
         state_file="pipeline_state.pkl",
         dedup_state_file="dedup_state.pkl",
         resume_from_checkpoint=args.resume_from_checkpoint,
+        ignore_failed_datasets=args.ignore_failed_datasets,
         sampling_strategy="uniform",
         quality_threshold=0.6,
         min_examples_per_language=1000,

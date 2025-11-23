@@ -2,7 +2,7 @@
 
 > **Last updated:** 2025-11-23
 
-The `scripts/consolidated_french_dataset_pipeline.py` entry point provides a production-ready ingestion pipeline for French instruction and retrieval datasets. It enforces French-only processing, layers quality and license checks, and emits validated exports plus run metadata for governance.
+The [`scripts/consolidated_french_dataset_pipeline.py`](../../scripts/consolidated_french_dataset_pipeline.py) entry point provides a production-ready ingestion pipeline for French instruction and retrieval datasets. It enforces French-only processing, layers quality and license checks, and emits validated exports plus run metadata for governance.
 
 ## Capabilities
 - Loads multiple Hugging Face datasets with checkpointing, deduplication, and sampling safeguards tailored for French corpora, then orchestrates validation and export steps via a single `DatasetPipeline.run()` flow.
@@ -10,14 +10,17 @@ The `scripts/consolidated_french_dataset_pipeline.py` entry point provides a pro
 - Supports crash recovery with periodic state checkpoints, resumable deduplication, and optional cloud uploads when `boto3` is available.
 
 ## Prerequisites
-- Python 3.11 with the new dependencies added to `requirements.txt`/`setup.py`: `datasets`, `datasketch`, `numpy`, `tqdm`, and `boto3` for optional cloud delivery.
+- Python 3.11 with the new dependencies added to `requirements.txt`/`setup.py`: `datasets`, `datasketch`, `numpy`, `tqdm`, `boto3` for optional cloud delivery, and `flask` for the optional dashboard server.
 - Access to Hugging Face datasets storage (local cache or configured download directory) and sufficient disk space for temporary checkpoints.
+
+To enable the optional Flask dashboard, install dependencies (e.g., `pip install -r requirements.txt`), provide a `--dashboard_port` value, and ensure the port is reachable from your operator workstation. The dashboard renders real-time instruction/retrieval counts, deduplication statistics, memory usage, and per-source breakdowns.
 
 ## Running the pipeline
 1. Create an output directory and invoke the script with the desired quotas and toggles, for example:
    ```bash
    python scripts/consolidated_french_dataset_pipeline.py \
      --output_dir /data/pipelines/french-merge \
+     --dashboard_port 8080 \
      --max_per_dataset 75000 \
      --enable_checkpointing \
      --enable_validation \
