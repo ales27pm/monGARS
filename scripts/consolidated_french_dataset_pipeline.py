@@ -1953,7 +1953,8 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
         )
 
         # We only care about French
-        if "fr" not in {lang.lower() for lang in selected_langs}:
+        normalized_langs = {lang.lower() for lang in selected_langs}
+        if "fr" not in normalized_langs:
             self.logger.info("Skipping xP3 because 'fr' is not in selected languages")
             return
 
@@ -2097,7 +2098,8 @@ class AyaCollectionLoader(InstructionDatasetLoader):
             f"(config={dataset_config.hf_config})"
         )
 
-        if "fr" not in {lang.lower() for lang in selected_langs}:
+        normalized_langs = {lang.lower() for lang in selected_langs}
+        if "fr" not in normalized_langs:
             self.logger.info("Skipping Aya because 'fr' is not in selected languages")
             return
 
