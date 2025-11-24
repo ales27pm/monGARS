@@ -1923,7 +1923,7 @@ class InstructionDatasetLoader(DatasetLoader):
 
 class XP3MultiLanguageLoader(InstructionDatasetLoader):
     """
-    Loader for BigScience xP3 – we explicitly extract French examples
+    Loader for BigScience xP3 - we explicitly extract French examples
     and convert them into instruction/output pairs.
 
     We only use the 'fr' config (already set in DatasetConfig.hf_config),
@@ -1941,43 +1941,34 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
         dataset_config: DatasetConfig,
     ) -> None:
         start_time = time.time()
+        self.metadata.update(
+            {
+                "source": dataset_config.hf_path,
+                "type": dataset_config.dataset_type.value,
+                "license": dataset_config.license.value,
+            }
+        )
         self.logger.info(
             f"Loading xP3 from {dataset_config.hf_path} (config={dataset_config.hf_config})"
         )
 
         # We only care about French
-        if "fr" not in {l.lower() for l in selected_langs}:
+        if "fr" not in {lang.lower() for lang in selected_langs}:
             self.logger.info("Skipping xP3 because 'fr' is not in selected languages")
             return
 
-        # Handle trust_remote_code allowlist
-        allow_trust = False
-        if dataset_config.requires_trust_remote_code:
-            if not self.config.allow_trust_remote_code:
-                msg = (
-                    "xP3 requires trust_remote_code but global "
-                    "--allow_trust_remote_code is disabled; skipping dataset."
-                )
-                self.logger.error(msg)
-                self.metadata["error"] = msg
-                self.metadata["loading_errors"] += 1
-                return
-
-            normalized_ids = {
-                dataset_config.hf_path.lower(),
-                dataset_config.name.lower(),
-            }
-            trusted = {d.lower() for d in self.config.trusted_remote_code_datasets}
-            allow_trust = bool(normalized_ids & trusted)
-            if not allow_trust:
-                msg = (
-                    "xP3 requires trust_remote_code but dataset is not in "
-                    "trusted_remote_code_datasets; skipping dataset."
-                )
-                self.logger.error(msg)
-                self.metadata["error"] = msg
-                self.metadata["loading_errors"] += 1
-                return
+        # Handle trust_remote_code allowlist using shared helper
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+        if dataset_config.requires_trust_remote_code and not allow_trust:
+            msg = (
+                "xP3 requires trust_remote_code but it is disabled; "
+                "re-run with --allow_trust_remote_code or --allow_trust_remote_code_for xp3"
+            )
+            self.logger.error(msg)
+            self.metadata["error"] = msg
+            self.metadata["loading_errors"] += 1
+            self.metadata["skipped_due_to_script_requirement"] = True
+            return
 
         # Actually load the dataset
         try:
@@ -1999,7 +1990,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
             )
         except DatasetLoadingError as e:
             msg = f"Failed to load xP3: {e}"
-            self.logger.error(msg)
+            self.logger.exception(msg)
             self.metadata["error"] = msg
             self.metadata["loading_errors"] += 1
             return
@@ -2048,15 +2039,14 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
 
             key = make_instruct_key(instr, out)
 
-            if self.add_to_sink(
+            self.add_to_sink(
                 item=item,
                 sink=sink,
                 seen_keys=seen_keys,
                 key_func=lambda _x, k=key: k,
                 dataset_type=dataset_config.dataset_type.value,
                 quality_score=dataset_config.quality_weight,
-            ):
-                self.metadata["examples_used"] += 1
+            )
 
             if self.metadata["examples_used"] >= max_examples:
                 break
@@ -2085,11 +2075,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
         if not raw:
             return False
         tag = raw.strip().lower()
-        if tag.startswith("fr"):
-            return True
-        if "french" in tag:
-            return True
-        return False
+        return tag.startswith("fr") or "french" in tag
 
     def load(
         self,
@@ -2099,43 +2085,34 @@ class AyaCollectionLoader(InstructionDatasetLoader):
         dataset_config: DatasetConfig,
     ) -> None:
         start_time = time.time()
+        self.metadata.update(
+            {
+                "source": dataset_config.hf_path,
+                "type": dataset_config.dataset_type.value,
+                "license": dataset_config.license.value,
+            }
+        )
         self.logger.info(
             f"Loading Aya collection from {dataset_config.hf_path} "
             f"(config={dataset_config.hf_config})"
         )
 
-        if "fr" not in {l.lower() for l in selected_langs}:
+        if "fr" not in {lang.lower() for lang in selected_langs}:
             self.logger.info("Skipping Aya because 'fr' is not in selected languages")
             return
 
         # trust_remote_code allowlist handling
-        allow_trust = False
-        if dataset_config.requires_trust_remote_code:
-            if not self.config.allow_trust_remote_code:
-                msg = (
-                    "Aya collection requires trust_remote_code but global "
-                    "--allow_trust_remote_code is disabled; skipping dataset."
-                )
-                self.logger.error(msg)
-                self.metadata["error"] = msg
-                self.metadata["loading_errors"] += 1
-                return
-
-            normalized_ids = {
-                dataset_config.hf_path.lower(),
-                dataset_config.name.lower(),
-            }
-            trusted = {d.lower() for d in self.config.trusted_remote_code_datasets}
-            allow_trust = bool(normalized_ids & trusted)
-            if not allow_trust:
-                msg = (
-                    "Aya collection requires trust_remote_code but dataset is not in "
-                    "trusted_remote_code_datasets; skipping dataset."
-                )
-                self.logger.error(msg)
-                self.metadata["error"] = msg
-                self.metadata["loading_errors"] += 1
-                return
+        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+        if dataset_config.requires_trust_remote_code and not allow_trust:
+            msg = (
+                "Aya collection requires trust_remote_code but it is disabled; "
+                "re-run with --allow_trust_remote_code or --allow_trust_remote_code_for aya"
+            )
+            self.logger.error(msg)
+            self.metadata["error"] = msg
+            self.metadata["loading_errors"] += 1
+            self.metadata["skipped_due_to_script_requirement"] = True
+            return
 
         # Load dataset (non-streaming)
         try:
@@ -2157,7 +2134,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
             )
         except DatasetLoadingError as e:
             msg = f"Failed to load Aya collection: {e}"
-            self.logger.error(msg)
+            self.logger.exception(msg)
             self.metadata["error"] = msg
             self.metadata["loading_errors"] += 1
             return
@@ -2205,15 +2182,14 @@ class AyaCollectionLoader(InstructionDatasetLoader):
 
             key = make_instruct_key(instr, out)
 
-            if self.add_to_sink(
+            self.add_to_sink(
                 item=item,
                 sink=sink,
                 seen_keys=seen_keys,
                 key_func=lambda _x, k=key: k,
                 dataset_type=dataset_config.dataset_type.value,
                 quality_score=dataset_config.quality_weight,
-            ):
-                self.metadata["examples_used"] += 1
+            )
 
             if self.metadata["examples_used"] >= max_examples:
                 break
