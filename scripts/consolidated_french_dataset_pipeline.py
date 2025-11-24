@@ -249,6 +249,7 @@ class DatasetConfig:
     name: str
     hf_path: str
     hf_config: Optional[str] = None
+    hf_split: Optional[str] = None
     dataset_type: DatasetType = DatasetType.INSTRUCTION
     languages: List[str] = field(default_factory=lambda: ["fr"])  # French only
     license: LicenseType = LicenseType.CUSTOM
@@ -274,6 +275,7 @@ class DatasetConfig:
             "name": self.name,
             "hf_path": self.hf_path,
             "hf_config": self.hf_config,
+            "hf_split": self.hf_split,
             "dataset_type": self.dataset_type.value,
             "languages": self.languages,
             "license": self.license.value,
