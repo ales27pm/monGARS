@@ -1981,10 +1981,11 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
 
         # Actually load the dataset
         try:
+            split = getattr(dataset_config, "hf_split", None) or "train"
             ds = load_dataset_with_retry(
                 hf_path=dataset_config.hf_path,
                 hf_config=dataset_config.hf_config,
-                split=dataset_config.hf_split or "train",
+                split=split,
                 streaming=dataset_config.streaming,
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
@@ -2138,10 +2139,11 @@ class AyaCollectionLoader(InstructionDatasetLoader):
 
         # Load dataset (non-streaming)
         try:
+            split = getattr(dataset_config, "hf_split", None) or "train"
             ds = load_dataset_with_retry(
                 hf_path=dataset_config.hf_path,
                 hf_config=dataset_config.hf_config,
-                split=dataset_config.hf_split or "train",
+                split=split,
                 streaming=False,
                 cache_dir=self.config.cache_dir,
                 timeout=dataset_config.timeout,
