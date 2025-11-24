@@ -67,12 +67,15 @@ setup(
         "requests-oauthlib>=2.0.0",
         "websocket-client>=1.8.0",
         "websockets>=12.0",
-        "pytest-asyncio>=0.23.8,<0.25",
     ],
     extras_require={
         "grpo": [
             "trl>=0.23.1",
             "vllm>=0.4.2,<0.5",
+        ],
+        "test": [
+            "pytest>=7.0",
+            "pytest-asyncio>=0.23.8,<0.25",
         ],
     },
 )
