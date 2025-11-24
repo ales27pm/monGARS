@@ -1,8 +1,10 @@
 """Shared pytest configuration and fixtures."""
 
+import asyncio
 import os
 import warnings
 
+import pytest
 import pytest_asyncio
 
 # Ensure the lightweight sqlite backend is used for tests to avoid external
@@ -13,6 +15,15 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./mongars_test.db"
 os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["DJANGO_SECRET_KEY"] = "test-django-secret-key"
 os.environ["JWT_ALGORITHM"] = "HS256"
+
+
+@pytest.fixture
+def event_loop():
+    """Provide a fresh event loop for tests that expect the legacy fixture."""
+
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 warnings.filterwarnings(
     "ignore",
