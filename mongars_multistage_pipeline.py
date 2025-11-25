@@ -274,20 +274,24 @@ def build_french_multitask_datasets(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # The consolidated French dataset pipeline uses underscores in its flag names.
+    # See ``scripts/consolidated_french_dataset_pipeline.py --help`` for details.
     cmd = [
         sys.executable,
         str(pipeline_script),
-        "--output-dir",
+        "--output_dir",
         str(output_dir),
-        "--languages",
+        "--langs",
         ",".join(languages),
-        "--workers",
+        "--num_workers",
         str(workers),
+        "--ignore_failed_datasets",
     ]
     if trust_remote_code:
         cmd.append("--allow_trust_remote_code")
     if max_examples is not None:
-        cmd += ["--max-examples", str(max_examples)]
+        # ``max_per_dataset`` limits the number of examples drawn from each source.
+        cmd += ["--max_per_dataset", str(max_examples)]
     run_subprocess(cmd, cwd=repo_root)
 
     # Collect resulting files.  The pipeline writes files with predictable names.
@@ -556,33 +560,281 @@ def perform_raft(
     run_dir: Path,
     retrieval_corpus: Optional[Path] = None,
     context_length: int = 1024,
+    *,
+    vram_budget_mb: int = 24000,
+    batch_size: int = 64,
+    epochs: float = 3.0,
+    lora_rank: int = 64,
+    lora_alpha: int = 16,
+    lora_dropout: float = 0.05,
 ) -> None:
     """
-    Placeholder for retrieval-augmented fine-tuning (RAFT).
+    Perform retrieval‑augmented fine‑tuning (RAFT) on each module.
 
-    RAFT involves retrieving relevant context documents for each training
-    instruction and concatenating them to the input before fine-tuning.  This
-    function is currently a stub.  It should be implemented by the user
-    depending on their retrieval engine and task requirements.
+    This implementation creates a retrieval‑augmented dataset for every module by
+    prepending relevant context from a retrieval corpus to each training prompt
+    before fine‑tuning.  A simple lexical overlap metric (token intersection)
+    determines the top candidate contexts.  Once the augmented dataset is
+    generated, the function launches a second round of QLoRA fine‑tuning on
+    top of the module’s current model directory using the same hyperparameters
+    that were passed to the supervised fine‑tuning stage.  New LoRA adapters
+    and wrapper bundles are written into a ``raft/`` subdirectory under the
+    module’s run directory, and the module state is updated accordingly.
 
     Parameters
     ----------
     modules: ModulesDict
-        Mapping of module names to dataset/adaptation information.
+        Mapping of module names to dataset/adaptation information.  Each module
+        must have ``train_path`` and ``val_path`` defined.  The ``current_model_dir``
+        will be used as the starting point for RAFT and replaced with the
+        RAFT adapter output on completion.
     run_dir: Path
-        Directory containing per-module subdirectories.
+        Directory containing per‑module subdirectories (the same directory
+        passed to the SFT and LLM2Vec stages).
     retrieval_corpus: Path, optional
-        Path to a corpus of documents that can be retrieved.  If None, the
-        function does nothing.
+        Path to a corpus of documents that can be retrieved.  If provided,
+        records will be loaded from this JSONL file; otherwise the RAFT stage
+        will be skipped with a warning.
     context_length: int
-        Maximum number of tokens from retrieved documents to prepend to each
-        instruction.
+        Upper bound on the number of characters copied from retrieved
+        documents when constructing the augmented prompt.  This is an
+        approximate limit rather than a strict token count and is intended to
+        prevent the concatenated input from overflowing the model’s context
+        window.
+
+    Notes
+    -----
+    The retrieval algorithm implemented here first tries to use a TF–IDF
+    similarity model built with scikit‑learn.  All context strings are
+    vectorised with a ``TfidfVectorizer`` and compared against each query
+    prompt using cosine similarity.  The top three contexts are selected
+    based on their similarity scores.  If scikit‑learn is not available or
+    the vectoriser cannot be initialised, a fallback lexical overlap
+    strategy is used: both query and context are tokenised by
+    whitespace/lowercasing and contexts are ranked by the size of the
+    token intersection.  In either case at most three context strings are
+    prepended to each prompt with a double newline separator and
+    truncated to the ``context_length`` character limit.
     """
-    LOGGER.warning(
-        "RAFT is not implemented in this script.  If you require retrieval-augmented fine-tuning, "
-        "please implement this function using your preferred retrieval engine and fine-tuning strategy."
-    )
-    # Implementation would go here.
+    if retrieval_corpus is None:
+        LOGGER.warning(
+            "RAFT requested but no retrieval corpus provided; skipping retrieval‑augmented fine‑tuning"
+        )
+        return
+
+    # Helper: load JSONL records and normalise them into prompt/completion pairs
+    from monGARS.mlops.dataset import _load_jsonl_records, _write_jsonl_records  # local import to avoid circular
+
+    try:
+        retrieval_records = _load_jsonl_records(retrieval_corpus)
+    except Exception as exc:
+        LOGGER.error(
+            "Failed to load retrieval corpus from %s: %s", retrieval_corpus, exc
+        )
+        return
+
+    # ---------------------------------------------------------------------
+    # Build a retrieval index over the corpus.  We attempt to use a
+    # TF‑IDF representation with cosine similarity which tends to surface
+    # more relevant context snippets than simple token overlap.  If
+    # scikit‑learn is unavailable or fails for any reason we fall back to
+    # the previous lexical overlap implementation.
+    #
+    # The index consists of a vectorizer fit on the concatenated
+    # prompt/completion pairs and a sparse matrix of document vectors.  A
+    # helper function ``retrieve_top_k`` will accept a query string and
+    # return the top k context strings ordered by similarity score.
+    #
+    # We build both the TF‑IDF index and a simple token‑set version so
+    # fallback retrieval does not require recomputation.
+
+    # Preprocess retrieval corpus into context strings
+    context_strings: list[str] = []
+    for rec in retrieval_records:
+        context = f"{rec['prompt']}\n\n{rec['completion']}".strip()
+        context_strings.append(context)
+
+    # Build lexical token sets for fallback retrieval
+    def _tokenize(text: str) -> set[str]:
+        return set(
+            token.strip().lower()
+            for token in text.replace("\n", " ").split()
+            if token.strip()
+        )
+
+    lex_corpus: list[tuple[set[str], str]] = [(_tokenize(c), c) for c in context_strings]
+
+    # Attempt to build TF-IDF index
+    vectorizer = None
+    tfidf_matrix = None
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
+        from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
+
+        # Fit a vectorizer on the entire corpus.  We deliberately allow
+        # scikit‑learn to remove English stop words and limit the
+        # vocabulary size to keep the matrix sparse and efficient.  If the
+        # corpus is very large this may still consume significant memory.
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            max_features=50000,
+            lowercase=True,
+            token_pattern=r"\b\w+\b",
+        )
+        tfidf_matrix = vectorizer.fit_transform(context_strings)
+
+        def retrieve_top_k(query: str, k: int = 3) -> list[str]:
+            """Return up to k contexts most similar to the query.
+
+            Uses cosine similarity over TF‑IDF vectors.  Falls back to
+            lexical retrieval if the vectorizer cannot transform the query.
+            """
+            try:
+                query_vec = vectorizer.transform([query])
+                # Compute dense similarity scores.  We convert the sparse
+                # matrix to a dense array only for the row of interest.
+                scores = cosine_similarity(query_vec, tfidf_matrix).ravel()
+                # Get indices of top scores
+                top_idx = scores.argsort()[::-1][:k]
+                return [context_strings[i] for i in top_idx if scores[i] > 0]
+            except Exception:
+                # Fall back to lexical retrieval if vectorization fails
+                q_tokens = _tokenize(query)
+                results: list[tuple[int, str]] = []
+                for corpus_tokens, ctx in lex_corpus:
+                    score = len(q_tokens & corpus_tokens)
+                    if score > 0:
+                        results.append((score, ctx))
+                results.sort(key=lambda t: t[0], reverse=True)
+                return [ctx for _, ctx in results[:k]]
+
+    except Exception as exc:  # noqa: BLE001
+        # Log and fall back to lexical retrieval
+        LOGGER.warning(
+            "TF-IDF retrieval could not be initialised (falling back to lexical overlap): %s",
+            exc,
+        )
+        vectorizer = None
+        tfidf_matrix = None
+
+        def retrieve_top_k(query: str, k: int = 3) -> list[str]:
+            q_tokens = _tokenize(query)
+            results: list[tuple[int, str]] = []
+            for corpus_tokens, ctx in lex_corpus:
+                score = len(q_tokens & corpus_tokens)
+                if score > 0:
+                    results.append((score, ctx))
+            results.sort(key=lambda t: t[0], reverse=True)
+            return [ctx for _, ctx in results[:k]]
+
+    # Iterate over modules and build RAFT datasets
+    for module_name, state in modules.items():
+        LOGGER.info("Starting RAFT for module %s", module_name)
+        # Verify required fields
+        if not state.train_path or not state.val_path:
+            LOGGER.warning(
+                "Module %s is missing train/val datasets; skipping RAFT", module_name
+            )
+            continue
+        if not state.current_model_dir:
+            LOGGER.warning(
+                "Module %s has no current model; skipping RAFT", module_name
+            )
+            continue
+
+        # Load training and validation records
+        try:
+            train_records = _load_jsonl_records(state.train_path)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to load training data for module %s from %s: %s",
+                module_name,
+                state.train_path,
+                exc,
+            )
+            continue
+        try:
+            val_records = _load_jsonl_records(state.val_path)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to load validation data for module %s from %s: %s",
+                module_name,
+                state.val_path,
+                exc,
+            )
+            val_records = []
+
+        # Build augmented datasets using the retrieval index
+        def build_augmented(records: list[dict[str, str]]) -> list[dict[str, str]]:
+            augmented: list[dict[str, str]] = []
+            for rec in records:
+                query = rec["prompt"]
+                # Retrieve top contexts using either TF-IDF or lexical overlap
+                top_contexts = retrieve_top_k(query, k=3)
+                # Concatenate and truncate
+                retrieved = "\n\n".join(top_contexts)[:context_length] if top_contexts else ""
+                # Prepend to the prompt if non-empty
+                new_prompt = f"{retrieved}\n\n{query}" if retrieved else query
+                augmented.append({"prompt": new_prompt, "completion": rec["completion"]})
+            return augmented
+
+        augmented_train = build_augmented(train_records)
+        augmented_val = build_augmented(val_records) if val_records else []
+
+        # Write RAFT datasets to disk
+        raft_dir = run_dir / module_name / "raft"
+        raft_train_path = raft_dir / "train.jsonl"
+        raft_val_path = raft_dir / "val.jsonl"
+        try:
+            _write_jsonl_records(raft_train_path, augmented_train)
+            if augmented_val:
+                _write_jsonl_records(raft_val_path, augmented_val)
+                eval_dataset_path = raft_val_path
+            else:
+                # Remove any existing validation file if no records
+                if raft_val_path.exists():
+                    raft_val_path.unlink()
+                eval_dataset_path = None
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to write RAFT datasets for module %s: %s", module_name, exc
+            )
+            continue
+
+        # Fine‑tune on the augmented dataset
+        output_dir = raft_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Launch fine‑tuning with the user‑supplied hyperparameters.  The
+            # ``_call_with_supported_kwargs`` helper ensures we only pass
+            # arguments accepted by the underlying Unsloth function.
+            result = _call_with_supported_kwargs(
+                run_unsloth_finetune,
+                model_id=str(state.current_model_dir),
+                output_dir=output_dir,
+                dataset_path=raft_train_path,
+                eval_dataset_path=eval_dataset_path,
+                max_seq_len=1024,
+                vram_budget_mb=vram_budget_mb,
+                batch_size=batch_size,
+                epochs=epochs,
+                lora_rank=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                eval_batch_size=batch_size,
+                run_smoke_tests=False,
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "RAFT fine‑tuning failed for module %s: %s", module_name, exc
+            )
+            continue
+        # Update module state
+        adapter_dir = Path(result["chat_lora_dir"])
+        state.adapter_dir = adapter_dir
+        state.current_model_dir = adapter_dir
+        LOGGER.info("RAFT complete for module %s", module_name)
+
     return None
 
 
@@ -886,9 +1138,27 @@ def main() -> None:
 
     # Stage 4: RAFT
     if args.raft:
+        # Attempt to derive the retrieval corpus from the dataset state.  When datasets
+        # are generated via the French pipeline a "retrieval" key will be
+        # available under the "french" entry.  If not found, the RAFT
+        # implementation will log a warning and skip augmentation.
+        retrieval_path: Optional[Path] = None
+        try:
+            retrieval_str = datasets.get("french", {}).get("retrieval")  # type: ignore[assignment]
+            if retrieval_str:
+                retrieval_path = Path(retrieval_str)
+        except Exception:
+            retrieval_path = None
         perform_raft(
             modules=modules,
             run_dir=run_dir,
+            retrieval_corpus=retrieval_path,
+            vram_budget_mb=args.vram_budget_mb,
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            lora_rank=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
         )
         save_state(state_path, datasets, modules)
 
