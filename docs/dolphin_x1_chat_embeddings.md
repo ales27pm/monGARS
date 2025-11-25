@@ -1,6 +1,6 @@
 # Reusing Dolphin-X1-8B for Chat and Embeddings
 
-> **Last updated:** 2025-05-18 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-16 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The Dolphin-X1-8B checkpoint already powers monGARS chat flows via
 Ollama. This guide explains how to reuse the very same weights for retrieval
@@ -38,6 +38,20 @@ embeddings so the assistant and the vector index stay aligned.
   NF4 quantisation, device maps, and offloading heuristics. This means the same
   model directory can be mounted by both the chat service and the embedding
   wrapper without duplicating checkpoints.【F:monGARS/mlops/model.py†L41-L120】
+
+## Enhanced unified builder
+- `build_unified_dolphin_x1_enhanced.py` packages dataset prep, LoRA fine-tuning
+  (via Unsloth), TRL supervision, and inference/embedding export into a single
+  script so operators can train, validate, and immediately REPL against the
+  resulting checkpoint. The script exposes structured configuration via
+  Pydantic, optional HF dataset pulls, 4-bit loading, and automatic README/model
+  card generation for uploads.【F:build_unified_dolphin_x1_enhanced.py†L1-L388】【F:build_unified_dolphin_x1_enhanced.py†L518-L639】【F:build_unified_dolphin_x1_enhanced.py†L744-L863】
+- Post-training, `EnhancedUnifiedModel` wraps both AutoModelForCausalLM and
+  `LLM2Vec.from_pretrained(...)` so the exact LoRA adapters serve text
+  generation and embeddings simultaneously. The bundled REPL supports internal
+  reasoning loops, history export, status readouts, and optional PCA plots of
+  user utterance embeddings, making the script suitable for smoke-testing new
+  adapters before registering them in the manifests.【F:build_unified_dolphin_x1_enhanced.py†L392-L743】【F:build_unified_dolphin_x1_enhanced.py†L865-L1134】
 
 ### Wrapper Manifest & Metadata
 - The training pipeline now captures tokenizer details, chat defaults, embedding

@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - handled gracefully during runtime
     CrossEncoder = None
 
 from monGARS.config import get_settings
+from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
 
 log = logging.getLogger(__name__)
 
@@ -305,6 +306,9 @@ class RagContextEnricher:
             return references[:limit]
         cross_encoder = self._get_cross_encoder()
         if cross_encoder is None:
+            embedded = await self._embed_rank_references(query, references, limit)
+            if embedded is not None:
+                return embedded
             log.warning(
                 "rag.context_enrichment.cross_encoder_unavailable",
                 extra={
@@ -340,6 +344,45 @@ class RagContextEnricher:
         if reference.repository:
             parts.append(reference.repository)
         return "\n".join(part for part in parts if part)
+
+    async def _embed_rank_references(
+        self,
+        query: str,
+        references: list[RagCodeReference],
+        limit: int,
+    ) -> list[RagCodeReference] | None:
+        runtime = UnifiedLLMRuntime.instance(self._settings)
+        payloads = [query] + [self._reference_text(reference) for reference in references]
+        try:
+            embeddings = await asyncio.to_thread(runtime.embed, payloads)
+        except (LLMRuntimeError, ValueError):
+            return None
+        if not embeddings or len(embeddings) != len(payloads):
+            return None
+        query_vector = embeddings[0]
+        reference_vectors = embeddings[1:]
+        scores: list[float] = []
+        for reference, vector in zip(references, reference_vectors):
+            score = self._cosine_similarity(query_vector, vector)
+            reference.score = score
+            scores.append(score)
+        ranked = sorted(
+            references,
+            key=lambda item: item.score if item.score is not None else 0.0,
+            reverse=True,
+        )
+        return ranked[:limit]
+
+    @staticmethod
+    def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+        if not left or not right or len(left) != len(right):
+            return 0.0
+        dot = sum(l * r for l, r in zip(left, right))
+        left_norm = sum(component * component for component in left) ** 0.5
+        right_norm = sum(component * component for component in right) ** 0.5
+        if left_norm == 0 or right_norm == 0:
+            return 0.0
+        return dot / (left_norm * right_norm)
 
     def _get_cross_encoder(self) -> Any | None:
         if CrossEncoder is None:

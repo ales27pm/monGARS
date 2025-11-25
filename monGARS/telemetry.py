@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import REGISTRY, Counter, Histogram
 
-PROMETHEUS_REGISTRY = CollectorRegistry(auto_describe=True)
+PROMETHEUS_REGISTRY = REGISTRY
 
 HTTP_REQUESTS_TOTAL = Counter(
     "mongars_http_requests_total",
@@ -31,8 +31,43 @@ HTTP_REQUEST_LATENCY_SECONDS = Histogram(
     ),
 )
 
+LLM_TOKENS_TOTAL = Counter(
+    "mongars_llm_tokens_total",
+    "Number of tokens processed by the LLM runtime partitioned by token type.",
+    ("token_type", "model"),
+    registry=PROMETHEUS_REGISTRY,
+)
+
+LLM_DURATION_MILLISECONDS = Histogram(
+    "mongars_llm_duration_milliseconds",
+    "Distribution of LLM response times in milliseconds.",
+    ("model",),
+    registry=PROMETHEUS_REGISTRY,
+    buckets=(
+        10,
+        25,
+        50,
+        75,
+        100,
+        250,
+        500,
+        1000,
+        2000,
+    ),
+)
+
+LLM_ERRORS_TOTAL = Counter(
+    "mongars_llm_errors_total",
+    "Number of LLM errors grouped by error type.",
+    ("error_type", "model"),
+    registry=PROMETHEUS_REGISTRY,
+)
+
 __all__ = [
     "HTTP_REQUEST_LATENCY_SECONDS",
     "HTTP_REQUESTS_TOTAL",
     "PROMETHEUS_REGISTRY",
+    "LLM_TOKENS_TOTAL",
+    "LLM_DURATION_MILLISECONDS",
+    "LLM_ERRORS_TOTAL",
 ]

@@ -27,6 +27,7 @@ from monGARS.api.web_api import (
     reset_chat_rate_limiter_async,
     sec_manager,
 )
+from monGARS.api.web_api import settings as api_settings
 from monGARS.core.conversation import PromptTooLargeError
 from monGARS.core.hippocampus import MemoryItem
 from monGARS.core.model_manager import (
@@ -700,6 +701,105 @@ async def test_chat_unexpected_error_returns_502(api_context: ApiTestContext) ->
     )
     assert response.status_code == status.HTTP_502_BAD_GATEWAY
     assert response.json()["detail"] == "Failed to generate chat response"
+
+
+@pytest.mark.asyncio
+async def test_llm_chat_falls_back_to_local_when_ray_missing(
+    api_context: ApiTestContext, monkeypatch
+) -> None:
+    api_context.repo.seed_user("llm", "pw")
+    token = await _get_token(api_context.client, "llm", "pw")
+
+    calls: dict[str, Any] = {}
+
+    async def fake_invoke_ray_chat(
+        prompt: str,
+        *,
+        max_new_tokens: int | None,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        calls["ray"] = {
+            "prompt": prompt,
+            "max_new_tokens": max_new_tokens,
+            "context": context,
+        }
+        return None
+
+    async def fake_generate_local(
+        prompt: str,
+        *,
+        max_new_tokens: int | None,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        calls["local"] = {
+            "prompt": prompt,
+            "max_new_tokens": max_new_tokens,
+            "context": context,
+        }
+        return {"response": "local reply", "processing_time": 0.42}
+
+    monkeypatch.setattr(
+        "monGARS.api.web_api._invoke_ray_chat",
+        fake_invoke_ray_chat,
+    )
+    monkeypatch.setattr(
+        "monGARS.api.web_api._generate_local_llm_payload",
+        fake_generate_local,
+    )
+
+    response = await api_context.client.post(
+        "/llm/chat",
+        headers=_bearer(token),
+        json={"message": "ping"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["response"] == "local reply"
+    assert "local" in calls
+    assert calls["local"]["prompt"] == "ping"
+
+
+@pytest.mark.asyncio
+async def test_llm_health_reports_local_backend_by_default(
+    api_context: ApiTestContext, monkeypatch
+) -> None:
+    monkeypatch.setattr(api_settings.llm, "serve_backend", "local")
+
+    response = await api_context.client.get("/llm/health")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["backend"] == "local"
+    assert body["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_llm_health_marks_ray_unavailable_when_not_ready(
+    api_context: ApiTestContext, monkeypatch
+) -> None:
+    monkeypatch.setattr(api_settings.llm, "serve_backend", "ray")
+
+    async def fake_health_check() -> dict[str, Any] | None:
+        return None
+
+    def fake_backend_available() -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "monGARS.api.web_api._invoke_ray_health_check",
+        fake_health_check,
+    )
+    monkeypatch.setattr(
+        "monGARS.api.web_api._ray_backend_available",
+        fake_backend_available,
+    )
+
+    response = await api_context.client.get("/llm/health")
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["backend"] == "unavailable"
+    assert body["status"] == "unhealthy"
 
 
 @pytest.mark.asyncio

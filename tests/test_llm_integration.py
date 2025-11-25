@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import pathlib
+import re
 import sys
 import types
+from collections.abc import Callable
+from typing import Any
+from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
-from monGARS.core import llm_integration
+from monGARS.config import LLMQuantization, Settings
+from monGARS.core import llm_integration, monitor as core_monitor
+from monGARS.core.conversation import PromptTooLargeError
+from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +35,15 @@ def reset_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         llm_integration, "_RESPONSE_CACHE", llm_integration.AsyncTTLCache()
+    )
+
+
+@pytest.fixture(autouse=True)
+def reset_unified_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure the unified runtime singleton is cleared between tests."""
+
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", None, raising=False
     )
 
 
@@ -187,6 +208,200 @@ async def test_call_local_provider_uses_slot_fallback(
         "general",
         "coding",
     ]
+
+
+# --- LLM integration CI-focused tests ---
+
+
+@pytest.fixture
+def ci_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAY_SERVE_ENABLED", "false")
+    monkeypatch.setenv("CI_ENVIRONMENT", "true")
+
+
+@pytest.fixture
+def mock_settings(ci_test_env: None, tmp_path: pathlib.Path) -> Settings:
+    settings = Settings()
+    llm_settings = settings.llm
+    if hasattr(llm_settings, "quantization"):
+        llm_settings.quantization = LLMQuantization.NONE
+    if hasattr(llm_settings, "load_in_4bit"):
+        llm_settings.load_in_4bit = False
+    settings.unified_model_dir = str(tmp_path / "unified-model")
+    if hasattr(settings, "model") and hasattr(settings.model, "max_new_tokens"):
+        settings.model.max_new_tokens = 256
+    (tmp_path / "unified-model").mkdir(parents=True, exist_ok=True)
+    return settings
+
+
+@pytest.fixture
+def llm_builder(mock_settings: Settings) -> Callable[..., LLMIntegration]:
+    def _builder(**overrides: object) -> LLMIntegration:
+        with patch(
+            "monGARS.core.llm_integration.get_settings", return_value=mock_settings
+        ):
+            return LLMIntegration(**overrides)
+
+    return _builder
+
+
+def _normalized_embedding(dim: int = 4096) -> list[float]:
+    vec = np.ones(dim, dtype=np.float32)
+    vec /= np.linalg.norm(vec)
+    return vec.tolist()
+
+
+def _exercise_guard_block(
+    llm: LLMIntegration, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, str]:
+    with patch("monGARS.core.pii_detection.detect_pii") as mock_detect:
+        mock_detect.return_value = [
+            types.SimpleNamespace(
+                type="CREDIT_CARD",
+                value="4111-1111-1111-1111",
+                start=0,
+                end=19,
+            )
+        ]
+        monkeypatch.setattr(
+            "monGARS.core.operator_approvals.log_blocked_attempt",
+            lambda **_: ("token-123", "approval-token"),
+        )
+
+        context = {
+            "allowed_actions": ["financial_operation"],
+            "user_id": "test_user",
+        }
+
+        with pytest.raises(GuardRejectionError) as exc_info:
+            llm.generate(
+                "Process my credit card 4111-1111-1111-1111",
+                context=context,
+            )
+
+    serialized = json.dumps(exc_info.value.payload)
+    return json.loads(serialized)
+
+
+def test_embedding_output(llm_builder: Callable[..., LLMIntegration]) -> None:
+    runtime = MagicMock()
+    runtime.embed.return_value = [_normalized_embedding()]
+    llm = llm_builder(runtime_factory=lambda: runtime)
+    embedding = llm.embed_batch(["hello"])[0]
+
+    assert isinstance(embedding, list)
+    assert len(embedding) == 4096
+    norm = np.linalg.norm(np.array(embedding))
+    assert 0.999 <= norm <= 1.001, f"Vector not normalized: norm={norm}"
+
+
+@patch("monGARS.core.llm_integration.LLMIntegration._call_local_provider")
+def test_generation_accuracy(
+    mock_provider: MagicMock,
+    llm_builder: Callable[..., LLMIntegration],
+) -> None:
+    mock_provider.return_value = {
+        "message": {
+            "content": "The answer is 4. Let me explain: 2+2 equals 4.",
+        }
+    }
+
+    tokenizer = MagicMock()
+    tokenizer.tokenize.side_effect = lambda text: text.split()
+    runtime = MagicMock(tokenizer=tokenizer)
+
+    async def _invoke(prompt: str, **kwargs: object) -> dict[str, object]:
+        return await mock_provider(prompt, **kwargs)
+
+    def _generate(prompt: str, **kwargs: object) -> str:
+        response = asyncio.run(_invoke(prompt, **kwargs))
+        return str(response["message"]["content"])
+
+    llm = llm_builder(
+        runtime_factory=lambda: runtime,
+        generate_override=_generate,
+    )
+    result = llm.generate("2+2=", max_new_tokens=256)
+
+    match = re.search(r"The answer is\s*(\d+)\b", result)
+    assert match is not None, "Expected answer not found in result"
+    assert match.group(1) == "4", f"Expected answer '4', got '{match.group(1)}'"
+    mock_provider.assert_awaited_once_with("2+2=", max_new_tokens=256)
+
+
+def test_security_guard_integration(
+    llm_builder: Callable[..., LLMIntegration],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = llm_builder()
+    response = _exercise_guard_block(llm, monkeypatch)
+    assert response["error"] == "approval_required"
+    assert "token_ref" in response
+    assert "4111" not in response["message"]
+
+
+def test_max_context_handling(llm_builder: Callable[..., LLMIntegration]) -> None:
+    llm = llm_builder()
+
+    def _raise_prompt_error(*_args: object, **_kwargs: object) -> str:
+        raise PromptTooLargeError(prompt_tokens=10000, limit=8192)
+
+    llm._generate_override = _raise_prompt_error  # type: ignore[assignment]
+
+    long_text = "word " * 10000
+    with pytest.raises(PromptTooLargeError) as exc_info:
+        llm.generate(long_text)
+
+    assert exc_info.value.limit == 8192
+
+
+def test_context_limit_boundary(llm_builder: Callable[..., LLMIntegration]) -> None:
+    runtime = _FakeUnifiedRuntime()
+    llm = llm_builder(runtime_factory=lambda: runtime)
+
+    def _generate_override(prompt: str, *_args: object, **_kwargs: object) -> str:
+        prompt_tokens = len(prompt.split())
+        if prompt_tokens > 8192:
+            raise PromptTooLargeError(prompt_tokens=prompt_tokens, limit=8192)
+        return "ok"
+
+    llm._generate_override = _generate_override  # type: ignore[assignment]
+
+    at_limit_text = "word " * 8192
+    assert llm.generate(at_limit_text) == "ok"
+
+    below_limit_text = "word " * 8191
+    assert llm.generate(below_limit_text) == "ok"
+
+    above_limit_text = "word " * 8193
+    with pytest.raises(PromptTooLargeError) as exc_info:
+        llm.generate(above_limit_text)
+
+    assert exc_info.value.limit == 8192
+    assert exc_info.value.prompt_tokens == 8193
+
+
+@pytest.mark.skipif(os.getenv("CI_ENVIRONMENT") != "true", reason="Only run in CI")
+def test_model_loading_fails_gracefully(
+    llm_builder: Callable[..., LLMIntegration],
+) -> None:
+    with patch(
+        "monGARS.core.llm_integration.AutoModelForCausalLM.from_pretrained"
+    ) as mock_load:
+        mock_load.side_effect = Exception("Model loading failed")
+        llm = llm_builder(runtime_factory=_FailingRuntime)
+        with pytest.raises(RuntimeError) as exc_info:
+            llm.embed_batch(["trigger failure"])
+
+    assert "Failed to load" in str(exc_info.value)
+
+
+class _FailingRuntime:
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            llm_integration.AutoModelForCausalLM.from_pretrained("dolphin-x1-test")
+        except Exception as exc:
+            raise RuntimeError("Failed to load unified runtime") from exc
 
 
 @pytest.mark.asyncio
@@ -356,6 +571,31 @@ async def test_generate_response_returns_expected_keys(
 
 
 @pytest.mark.asyncio
+async def test_ray_backend_fallback_when_ray_unavailable(
+    llm_builder: Callable[..., LLMIntegration],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = llm_builder()
+    llm.use_ray = True
+
+    async def _ray_call(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise RuntimeError("ray down")
+
+    async def _local(prompt: str, task_type: str) -> dict[str, Any]:
+        return {"message": {"content": f"local::{prompt}::{task_type}"}}
+
+    monkeypatch.setattr(llm, "_ray_call", _ray_call, raising=False)
+    monkeypatch.setattr(llm, "_call_local_provider", _local, raising=False)
+
+    result = await llm.generate_response("hello", "general")
+
+    assert result["text"].startswith("local::")
+    assert result["text"].endswith("::general")
+    assert "hello" in result["text"]
+    assert result["source"] == "local"
+
+
+@pytest.mark.asyncio
 async def test_generate_response_handles_local_provider_errors(
     fake_llm_integration: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
@@ -411,6 +651,302 @@ def test_infer_task_type_detects_coding(
         )
         == "coding"
     )
+
+
+class _FakeTokenizer:
+    def tokenize(self, text: str) -> list[str]:
+        return list(text)
+
+
+class _FakeUnifiedRuntime:
+    def __init__(self) -> None:
+        self.generate_calls: list[tuple[str, dict[str, object]]] = []
+        self.embed_calls: list[list[str]] = []
+        self.tokenizer = _FakeTokenizer()
+        self.next_response: str | None = None
+
+    def generate(self, prompt: str, **kwargs: object) -> str:
+        self.generate_calls.append((prompt, dict(kwargs)))
+        if self.next_response is not None:
+            return self.next_response
+        return f"generated::{prompt}"
+
+    def embed(self, texts: list[str]) -> str:
+        self.embed_calls.append(list(texts))
+        return f"embedded::{len(texts)}"
+
+
+class _FakeSpan:
+    def __init__(self, name: str, kind: object) -> None:
+        self.name = name
+        self.kind = kind
+        self.attributes: dict[str, object] = {}
+        self.status: object | None = None
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+    def set_attributes(self, attributes: dict[str, object]) -> None:
+        for key, value in attributes.items():
+            self.attributes[key] = value
+
+    def set_status(self, status: object) -> None:
+        self.status = status
+
+
+class _SpanContextManager:
+    def __init__(self, span: _FakeSpan) -> None:
+        self._span = span
+
+    def __enter__(self) -> _FakeSpan:
+        return self._span
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _FakeTracer:
+    def __init__(self) -> None:
+        self.spans: list[_FakeSpan] = []
+
+    def start_as_current_span(self, name: str, kind: object | None = None):
+        span = _FakeSpan(name, kind)
+        self.spans.append(span)
+        return _SpanContextManager(span)
+
+
+def test_generate_method_uses_unified_runtime(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The synchronous generate helper should delegate to the unified runtime."""
+
+    runtime = _FakeUnifiedRuntime()
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    result = fake_llm_integration.generate("hello", temperature=0.25)
+
+    assert result == "generated::hello"
+    assert runtime.generate_calls == [("hello", {"temperature": 0.25})]
+
+
+def test_embed_method_uses_unified_runtime(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Embeddings should be routed through the cached runtime."""
+
+    runtime = _FakeUnifiedRuntime()
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    result = fake_llm_integration.embed(["a", "b"])
+
+    assert result == "embedded::2"
+    assert runtime.embed_calls == [["a", "b"]]
+
+
+def test_generate_records_span_attributes_and_metrics(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure OpenTelemetry spans and metrics capture model, user, and latency."""
+
+    runtime = _FakeUnifiedRuntime()
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    fake_tracer = _FakeTracer()
+    monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
+
+    metrics_calls: list[dict[str, Any]] = []
+
+    def _record_metrics(**payload: Any) -> None:
+        metrics_calls.append(payload)
+
+    monkeypatch.setattr(
+        llm_integration,
+        "record_llm_metrics",
+        _record_metrics,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        core_monitor,
+        "generate_request_id",
+        lambda: "req-test",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        llm_integration,
+        "generate_request_id",
+        lambda: "req-test",
+        raising=False,
+    )
+
+    time_values = iter([100.0, 100.2])
+    monkeypatch.setattr(
+        llm_integration.time, "monotonic", lambda: next(time_values), raising=False
+    )
+
+    result = fake_llm_integration.generate(
+        "hi",
+        context={"user_id": "researcher", "conversation_id": "thread-7"},
+        temperature=0.5,
+        max_new_tokens=64,
+    )
+
+    assert result == "generated::hi"
+    assert len(fake_tracer.spans) == 1
+    span = fake_tracer.spans[0]
+    assert span.name == "llm.generate"
+    assert span.kind == llm_integration.SpanKind.SERVER
+    assert span.attributes["llm.model_name"] == fake_llm_integration._model_id
+    assert span.attributes["enduser.id"] == "researcher"
+    assert span.attributes["user.id"] == "researcher"
+    assert span.attributes["conversation.id"] == "thread-7"
+    assert span.attributes["request.id"] == "req-test"
+    assert span.attributes["llm.system"] == "dolphin-x1"
+    assert span.attributes["llm.token_count.prompt"] == 2
+    assert span.attributes["llm.token_count.completion"] == len("generated::hi")
+    assert span.attributes["llm.temperature"] == 0.5
+    assert span.attributes["llm.max_tokens"] == 64
+    assert span.attributes["input.length"] == 2
+    assert span.attributes["output.length"] == len("generated::hi")
+    assert span.attributes["tokens.input"] == 2
+    assert span.attributes["tokens.output"] == len("generated::hi")
+    assert span.attributes["latency.ms"] == pytest.approx(200.0)
+    assert metrics_calls == [
+        {
+            "model_id": fake_llm_integration._model_id,
+            "user_id": "researcher",
+            "conversation_id": "thread-7",
+            "input_tokens": 2,
+            "output_tokens": len("generated::hi"),
+            "latency_ms": pytest.approx(200.0),
+            "extra_attributes": {"request.id": "req-test"},
+        }
+    ]
+
+
+def test_generate_records_error_attributes_and_metrics(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Span attributes and counters should capture correlation info on errors."""
+
+    fake_tracer = _FakeTracer()
+    monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
+
+    error_calls: list[tuple[int, dict[str, Any]]] = []
+
+    class _FakeCounter:
+        def add(self, value: int, attrs: dict[str, Any]) -> None:
+            error_calls.append((value, dict(attrs)))
+
+    monkeypatch.setattr(llm_integration, "LLM_ERROR_COUNTER", _FakeCounter())
+    monkeypatch.setattr(
+        llm_integration,
+        "generate_conversation_id",
+        lambda: "thread-auto",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        llm_integration,
+        "generate_request_id",
+        lambda: "req-error",
+        raising=False,
+    )
+
+    def _boom(prompt: str, **_: Any) -> str:
+        raise RuntimeError("runtime exploded")
+
+    fake_llm_integration._generate_override = _boom
+
+    with pytest.raises(RuntimeError):
+        fake_llm_integration.generate(
+            "fail", context={"user_id": "researcher"}, temperature=0.1
+        )
+
+    assert len(fake_tracer.spans) == 1
+    span = fake_tracer.spans[0]
+    assert span.attributes["user.id"] == "researcher"
+    assert span.attributes["conversation.id"] == "thread-auto"
+    assert span.attributes["request.id"] == "req-error"
+    assert span.attributes["llm.model_name"] == fake_llm_integration._model_id
+    assert span.attributes["enduser.id"] == "researcher"
+    assert span.attributes["input.length"] == len("fail")
+    assert error_calls == [
+        (
+            1,
+            {
+                "error.type": "RuntimeError",
+                "model": fake_llm_integration._model_id,
+                "user.id": "researcher",
+                "conversation.id": "thread-auto",
+                "request.id": "req-error",
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("prompt", "response"),
+    [
+        ("", ""),
+        ("   \t", " \n"),
+        ("x" * 4096, "y" * 2048),
+    ],
+)
+def test_generate_records_token_counts_for_edge_cases(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt: str,
+    response: str,
+) -> None:
+    """Token counter should accurately capture edge-case prompts and outputs."""
+
+    runtime = _FakeUnifiedRuntime()
+    runtime.next_response = response
+    monkeypatch.setattr(
+        llm_integration.LLMIntegration, "_unified_service", runtime, raising=False
+    )
+
+    fake_tracer = _FakeTracer()
+    monkeypatch.setattr(llm_integration, "tracer", fake_tracer, raising=False)
+
+    metrics_calls: list[dict[str, Any]] = []
+
+    def _record_metrics(**payload: Any) -> None:
+        metrics_calls.append(payload)
+
+    monkeypatch.setattr(
+        llm_integration,
+        "record_llm_metrics",
+        _record_metrics,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        core_monitor,
+        "generate_request_id",
+        lambda: "req-edge",
+        raising=False,
+    )
+
+    time_values = iter([10.0, 10.1])
+    monkeypatch.setattr(
+        llm_integration.time, "monotonic", lambda: next(time_values), raising=False
+    )
+
+    fake_llm_integration.generate(prompt)
+
+    assert metrics_calls
+    measurement = metrics_calls[0]
+    assert measurement["input_tokens"] == len(prompt)
+    assert measurement["output_tokens"] == len(response)
 
 
 @pytest.mark.parametrize(

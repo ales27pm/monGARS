@@ -7,6 +7,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal, Optional, TypeAlias, get_args
@@ -197,6 +198,103 @@ class HardwareHeuristics(BaseModel):
     warm_pool_divisor: int = Field(default=4, ge=1)
     warm_pool_cap: int = Field(default=2, ge=1)
     warm_pool_floor: int = Field(default=1, ge=1)
+
+
+class ModelRuntimeSettings(BaseModel):
+    """Quantization and sampling controls for the unified LLM runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quantize_4bit: bool = Field(
+        default=True,
+        description=(
+            "Enable 4-bit NF4 quantization when CUDA is available to reduce memory usage."
+        ),
+    )
+    bnb_4bit_quant_type: str = Field(
+        default="nf4",
+        description="Quantization scheme applied by bitsandbytes when quantizing in 4-bit mode.",
+    )
+    bnb_4bit_compute_dtype: str = Field(
+        default="bfloat16",
+        description="Torch dtype used for computation when 4-bit quantization is active.",
+    )
+    bnb_4bit_use_double_quant: bool = Field(
+        default=True,
+        description="Enable double quantization for improved accuracy when quantizing to 4-bit.",
+    )
+    max_new_tokens: int = Field(
+        default=512,
+        ge=1,
+        description="Default number of tokens the unified runtime may generate per request.",
+    )
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        description="Sampling temperature applied to unified runtime generations by default.",
+    )
+    top_p: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Top-p nucleus sampling parameter for unified runtime generations.",
+    )
+    top_k: int = Field(
+        default=40,
+        ge=0,
+        description="Top-k sampling parameter for unified runtime generations.",
+    )
+    repetition_penalty: float = Field(
+        default=1.05,
+        ge=0.0,
+        description="Penalty applied to repeated tokens while sampling.",
+    )
+
+
+class LLMPooling(str, Enum):
+    MEAN = "mean"
+    MAX = "max"
+    CLS = "cls"
+
+
+class LLMQuantization(str, Enum):
+    NONE = "none"
+    NF4 = "nf4"
+    GPTQ = "gptq"
+    FP8 = "fp8"
+
+
+class LLMSettings(BaseModel):
+    """LLM-specific runtime configuration."""
+
+    model_config = ConfigDict(
+        extra="forbid", alias_generator=str.upper, populate_by_name=True
+    )
+
+    quantization: LLMQuantization = Field(
+        default=LLMQuantization.NF4,
+        description="BitsAndBytes quantization strategy applied to LLM weights.",
+    )
+    load_in_4bit: bool = Field(
+        default=True,
+        description="Toggle 4-bit quantized loading when CUDA resources are available.",
+    )
+    embedding_pooling: LLMPooling = Field(
+        default=LLMPooling.MEAN,
+        description="Pooling strategy applied to encoder embeddings.",
+    )
+    serve_backend: Literal["local", "ray"] = Field(
+        default="local",
+        description=(
+            "Backend used by the /llm API router. When set to 'ray' the API"
+            " will attempt to route requests through the Ray Serve deployment"
+            " before falling back to the local runtime."
+        ),
+    )
+    use_gpu: bool = Field(
+        default=False,
+        description="Request GPU resources for Ray Serve replicas when available.",
+    )
 
 
 class Settings(BaseSettings):
@@ -404,6 +502,20 @@ class Settings(BaseSettings):
         default=7,
         ge=0,
         description="Duration in days that curated datasets remain exportable post-review.",
+    )
+    unified_model_dir: Path = Field(
+        default=Path("models/dolphin_x1_unified_enhanced"),
+        description=(
+            "Path to the unified Dolphin-X1 bundle used by the quantized LLM/LLM2Vec runtime."
+        ),
+    )
+    model: ModelRuntimeSettings = Field(
+        default_factory=ModelRuntimeSettings,
+        description="Runtime quantization and sampling controls for the unified model.",
+    )
+    llm: LLMSettings = Field(
+        default_factory=LLMSettings,
+        description="LLM runtime configuration covering quantization and pooling.",
     )
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
@@ -1116,9 +1228,7 @@ def configure_telemetry(settings: Settings) -> None:
 
     if settings.otel_prometheus_enabled:
         try:
-            metric_readers.append(
-                PrometheusMetricReader(collector_registry=PROMETHEUS_REGISTRY)
-            )
+            metric_readers.append(PrometheusMetricReader())
         except Exception as exc:  # pragma: no cover - optional metrics
             log.warning("Failed to configure Prometheus metrics exporter: %s", exc)
 
@@ -1145,6 +1255,17 @@ def get_settings() -> Settings:
     """Load configuration with debug, Vault, and production policies applied."""
 
     settings = Settings()
+
+    deprecated_model_overrides: list[str] = []
+    for attr in ("llm_general_model", "llm_coding_model"):
+        value = getattr(settings, attr, None)
+        if value:
+            deprecated_model_overrides.append(attr)
+    if deprecated_model_overrides:
+        log.warning(
+            "Legacy llm_* model overrides are deprecated; configure unified_model_dir instead.",
+            extra={"deprecated_fields": deprecated_model_overrides},
+        )
 
     if settings.debug:
         debug_secret = _generate_secret_key()

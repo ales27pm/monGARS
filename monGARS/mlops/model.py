@@ -23,6 +23,8 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
+from monGARS.mlops.chat_templates import ensure_dolphin_chat_template
+
 try:  # pragma: no cover - accelerate optional during some tests
     from accelerate.hooks import remove_hook_from_module as _ACCELERATE_REMOVE_HOOK
 except Exception:  # pragma: no cover - fallback path exercised in unit tests
@@ -747,10 +749,16 @@ def _initialise_tokenizer(model_id: str, *, trust_remote_code: bool) -> Any:
     """Create a tokenizer with consistent padding defaults across loader paths."""
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_id, use_fast=True, trust_remote_code=trust_remote_code
+        model_id,
+        use_fast=True,
+        trust_remote_code=trust_remote_code,
     )
-    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+    if (
+        getattr(tokenizer, "pad_token_id", None) is None
+        and getattr(tokenizer, "eos_token", None) is not None
+    ):
         tokenizer.pad_token = tokenizer.eos_token
+    ensure_dolphin_chat_template(tokenizer)
     return tokenizer
 
 

@@ -17,13 +17,45 @@ except ImportError:  # Python 3.10 fallback
     UTC = timezone.utc
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any
+from typing import Annotated, Any, Mapping
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+try:  # pragma: no cover - ray is optional
+    import ray
+    from ray import serve
+except ImportError:  # pragma: no cover - fallback when ray is unavailable
+    ray = None  # type: ignore[assignment]
+    serve = None  # type: ignore[assignment]
+
+
+class RayServeException(RuntimeError):
+    """Fallback Ray Serve exception type when the package is unavailable."""
+
+
+if serve is not None:  # pragma: no cover - only executed when ray is installed
+    try:
+        from ray.serve.exceptions import RayServeException as _RayServeException
+    except Exception:  # pragma: no cover - defensive against API drift
+        pass
+    else:  # pragma: no cover - executed when import succeeds
+        RayServeException = _RayServeException
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
+from pydantic import ValidationError
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 try:
     from opentelemetry import trace
@@ -42,28 +74,35 @@ except ImportError:  # pragma: no cover - optional dependency
     StatusCode = None  # type: ignore[assignment]
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from monGARS.api.authentication import (
     authenticate_user,
     get_current_admin_user,
+    get_current_operator_user,
     get_current_user,
 )
 from monGARS.api.dependencies import (
     get_adaptive_response_generator,
+    get_approval_db_session,
     get_hippocampus,
     get_peer_communicator,
     get_persistence_repository,
     get_personality_engine,
 )
 from monGARS.api.schemas import (
+    ApprovalResponse,
     ChatRequest,
     ChatResponse,
+    LLMHealthResponse,
     PasswordChangeRequest,
     PeerLoadSnapshot,
     PeerMessage,
     PeerRegistration,
     PeerTelemetryEnvelope,
     PeerTelemetryPayload,
+    SpeechSegmentSchema,
+    SpeechTurnSchema,
     UserListResponse,
     UserRegistration,
 )
@@ -72,12 +111,18 @@ from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import MemoryItem
-from monGARS.core.llm_integration import CircuitBreakerOpenError
+from monGARS.core.llm_integration import (
+    CircuitBreakerOpenError,
+    GuardRejectionError,
+    LLMIntegration,
+)
+from monGARS.core.operator_approvals import get_operator_approval_registry
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
 from monGARS.core.security import SecurityManager, validate_user_input
 from monGARS.core.ui_events import BackendUnavailable, event_bus, make_event
+from monGARS.db import OperatorApproval
 from monGARS.telemetry import (
     HTTP_REQUEST_LATENCY_SECONDS,
     HTTP_REQUESTS_TOTAL,
@@ -92,7 +137,27 @@ from . import ws_manager
 from .rate_limiter import InMemoryRateLimiter
 
 _ws_manager = ws_manager.ws_manager
-sec_manager = SecurityManager()
+
+
+class _SecurityManagerProxy:
+    """Ensure API security manager stays in sync with refreshed settings."""
+
+    def __init__(self) -> None:
+        self._manager: SecurityManager | None = None
+        self._cached_settings = None
+
+    def _resolve(self) -> SecurityManager:
+        settings = get_settings()
+        if self._manager is None or self._cached_settings is not settings:
+            self._manager = SecurityManager(settings=settings)
+            self._cached_settings = settings
+        return self._manager
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolve(), name)
+
+
+sec_manager = _SecurityManagerProxy()
 
 
 @asynccontextmanager
@@ -110,8 +175,17 @@ STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 app = FastAPI(title="monGARS API", lifespan=lifespan)
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/llm", tags=["llm"])
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+_RAY_DEPLOYMENT_NAME = "RayLLMDeployment"
 
 _settings = get_settings()
+settings = _settings
 if _settings.otel_traces_enabled:
     if FastAPIInstrumentor is None:
         logger.warning(
@@ -306,6 +380,177 @@ def get_conversational_module(
     return conversation_module
 
 
+def _ray_backend_configured() -> bool:
+    backend = getattr(settings.llm, "serve_backend", "local")
+    return backend == "ray"
+
+
+def _ray_backend_available() -> bool:
+    return (
+        _ray_backend_configured()
+        and ray is not None
+        and serve is not None
+        and hasattr(serve, "get_deployment_handle")
+    )
+
+
+async def _invoke_ray_chat(
+    prompt: str,
+    *,
+    max_new_tokens: int | None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not _ray_backend_available():
+        if _ray_backend_configured() and ray is None:
+            logger.warning("web_api.ray_dependency_missing")
+        return None
+    try:
+        handle = serve.get_deployment_handle(_RAY_DEPLOYMENT_NAME)
+    except Exception as exc:  # pragma: no cover - transport errors
+        logger.warning(
+            "web_api.ray_handle_unavailable",
+            extra={"detail": str(exc)},
+        )
+        return None
+    payload: dict[str, Any] = {"prompt": prompt}
+    if max_new_tokens is not None:
+        payload["max_new_tokens"] = max_new_tokens
+    if context:
+        payload["context"] = dict(context)
+    try:
+        return await handle.remote(payload)
+    except (RayServeException, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "web_api.ray_generation_failed",
+            extra={"detail": str(exc)},
+        )
+        return None
+
+
+async def _invoke_ray_health_check() -> dict[str, Any] | None:
+    if not _ray_backend_available():
+        return None
+    try:
+        handle = serve.get_deployment_handle(_RAY_DEPLOYMENT_NAME)
+    except Exception as exc:  # pragma: no cover - transport errors
+        logger.warning(
+            "web_api.ray_handle_unavailable",
+            extra={"detail": str(exc)},
+        )
+        return None
+    try:
+        return await handle.options(method_name="health_check").remote()
+    except (RayServeException, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "web_api.ray_health_failed",
+            extra={"detail": str(exc)},
+        )
+        return None
+
+
+def _build_default_speech_turn(text: str) -> SpeechTurnSchema:
+    created_at = datetime.now(UTC)
+    word_count = len(text.split())
+    estimated_duration = max(word_count / 2.5, 0.0)
+    segment = SpeechSegmentSchema(
+        text=text,
+        estimated_duration=estimated_duration,
+        pause_after=0.0,
+    )
+    avg_wps = word_count / estimated_duration if estimated_duration else 0.0
+    return SpeechTurnSchema(
+        turn_id=f"llm-{hashlib.blake2s(text.encode('utf-8'), digest_size=6).hexdigest()}",
+        text=text,
+        created_at=created_at,
+        segments=[segment],
+        average_words_per_second=avg_wps,
+        tempo=0.0,
+    )
+
+
+def _chat_response_from_payload(payload: dict[str, Any]) -> ChatResponse:
+    response_text = str(payload.get("response", ""))
+    speech_turn_data = payload.get("speech_turn")
+    speech_turn: SpeechTurnSchema | None = None
+    if isinstance(speech_turn_data, SpeechTurnSchema):
+        speech_turn = speech_turn_data
+    elif isinstance(speech_turn_data, dict):
+        try:
+            speech_turn = SpeechTurnSchema(**speech_turn_data)
+        except (ValidationError, TypeError, ValueError):
+            speech_turn = None
+    if speech_turn is None:
+        speech_turn = _build_default_speech_turn(response_text)
+    try:
+        confidence = float(payload.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    try:
+        processing_time = float(payload.get("processing_time", 0.0))
+    except (TypeError, ValueError):
+        processing_time = 0.0
+    return ChatResponse(
+        response=response_text,
+        confidence=confidence,
+        processing_time=processing_time,
+        speech_turn=speech_turn,
+    )
+
+
+def _build_guard_context(
+    chat: ChatRequest, current_user: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Construct the security guard context passed to the LLM runtime."""
+
+    allowed = chat.allowed_actions or current_user.get("allowed_actions")
+    if allowed is None:
+        allowed = current_user.get("actions")
+    normalised = [
+        str(action).strip()
+        for action in allowed or []
+        if isinstance(action, str) and action.strip()
+    ]
+    if not normalised:
+        normalised = ["personal_data_access"]
+    context: dict[str, Any] = {
+        "user_id": current_user.get("sub") or current_user.get("id"),
+        "allowed_actions": normalised,
+    }
+    token_ref = (
+        chat.token_ref
+        or current_user.get("token_ref")
+        or current_user.get("approval_token_ref")
+    )
+    if token_ref:
+        context["token_ref"] = token_ref
+    approval_token = chat.approval_token or current_user.get("approval_token")
+    if approval_token:
+        context["approval_token"] = approval_token
+    return context
+
+
+async def _generate_local_llm_payload(
+    prompt: str,
+    *,
+    max_new_tokens: int | None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    llm = LLMIntegration.instance()
+    start = perf_counter()
+    kwargs: dict[str, Any] = {}
+    if max_new_tokens is not None:
+        kwargs["max_new_tokens"] = max_new_tokens
+    guard_context = dict(context) if context else {}
+    response = await asyncio.to_thread(
+        llm.generate,
+        prompt,
+        context=guard_context,
+        **kwargs,
+    )
+    duration = perf_counter() - start
+    return {"response": response, "processing_time": duration}
+
+
 @app.post("/token")
 async def login(
     repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
@@ -465,7 +710,7 @@ async def change_password(
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics_endpoint(
+async def secured_metrics_endpoint(
     _: Annotated[dict, Depends(get_current_user)],
 ) -> Response:
     """Expose Prometheus metrics collected from the API process."""
@@ -748,3 +993,174 @@ async def peer_telemetry_snapshot(
     telemetry = communicator.get_peer_telemetry(include_self=True)
     payloads = [PeerTelemetryPayload(**entry) for entry in telemetry]
     return PeerTelemetryEnvelope(telemetry=payloads)
+
+
+@router.post("/security/approve", response_model=ApprovalResponse)
+async def approve_request(
+    token: str,
+    operator_id: str,
+    current_operator: dict = Depends(get_current_operator_user),
+    db: Session | None = Depends(get_approval_db_session),
+) -> ApprovalResponse:
+    if current_operator.get("sub") != operator_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"status": "error", "reason": "operator_mismatch"},
+        )
+
+    token_value = (token or "").strip()
+    if not token_value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "error", "reason": "missing_token"},
+        )
+
+    registry = get_operator_approval_registry()
+    request_entry = registry.find_by_token(token_value)
+    if request_entry is None:
+        logger.warning(
+            "web_api.approval.invalid_token",
+            extra={"operator": _redact_user_id(operator_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="invalid_token",
+        )
+    if request_entry.is_approved:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="already_approved",
+        )
+
+    registry.approve(request_entry.request_id, operator=operator_id)
+    token_ref = request_entry.request_id
+
+    if db is not None:
+        try:
+            approval = (
+                db.query(OperatorApproval).filter_by(approval_token=token_value).first()
+            )
+            if approval is None:
+                approval = OperatorApproval(
+                    id=token_ref,
+                    user_id=str(request_entry.payload.get("user_id", "anonymous")),
+                    prompt_hash=str(request_entry.payload.get("prompt_hash", ""))[:8],
+                    pii_entities=request_entry.payload.get("pii_entities", []),
+                    approval_token=token_value,
+                )
+                db.add(approval)
+            approval.approved_at = datetime.now(UTC)
+            approval.approved_by = operator_id
+            db.commit()
+        except SQLAlchemyError as exc:  # pragma: no cover - database failure
+            db.rollback()
+            logger.exception("web_api.approval.commit_failed")
+
+    return ApprovalResponse(token_ref=token_ref)
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(
+    chat: ChatRequest,
+    current_user: Annotated[dict, Depends(enforce_chat_rate_limit)],
+) -> ChatResponse:
+    user_id = current_user["sub"]
+    try:
+        data = validate_user_input({"user_id": user_id, "query": chat.message})
+    except ValueError as exc:
+        logger.warning(
+            "web_api.llm_chat_invalid_input",
+            extra={"user": _redact_user_id(user_id), "detail": str(exc)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    prompt = data["query"]
+    max_tokens = getattr(settings.model, "max_new_tokens", None)
+    guard_context = _build_guard_context(chat, current_user)
+    ray_result = await _invoke_ray_chat(
+        prompt,
+        max_new_tokens=max_tokens,
+        context=guard_context,
+    )
+    if ray_result is not None:
+        if ray_result.get("error") == "approval_required":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ray_result,
+            )
+        if ray_result.get("error"):
+            logger.warning(
+                "web_api.llm_chat_ray_error",
+                extra={"user": _redact_user_id(user_id), "error": ray_result},
+            )
+        else:
+            return _chat_response_from_payload(ray_result)
+
+    try:
+        local_payload = await _generate_local_llm_payload(
+            prompt,
+            max_new_tokens=max_tokens,
+            context=guard_context,
+        )
+    except GuardRejectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=exc.payload,
+        ) from exc
+    except Exception as exc:  # pragma: no cover - unexpected runtime failure
+        logger.exception(
+            "web_api.llm_chat_local_failed",
+            extra={"user": _redact_user_id(user_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate chat response",
+        ) from exc
+    return _chat_response_from_payload(local_payload)
+
+
+@router.get("/health", response_model=LLMHealthResponse)
+async def llm_health() -> LLMHealthResponse:
+    model_name = getattr(settings.llm, "model_name", None)
+    if _ray_backend_configured():
+        health_payload = await _invoke_ray_health_check()
+        if health_payload is not None:
+            status_value = str(health_payload.get("status", "healthy"))
+            detail = health_payload.get("detail") or health_payload.get("error")
+            return LLMHealthResponse(
+                status="healthy" if status_value == "healthy" else "unhealthy",
+                backend="ray",
+                model=health_payload.get("model", model_name),
+                last_check=health_payload.get("last_check"),
+                detail=detail,
+            )
+        backend = "ray" if _ray_backend_available() else "unavailable"
+        detail = (
+            "Ray Serve deployment is unavailable"
+            if backend == "ray"
+            else "Ray Serve integration is not installed"
+        )
+        return LLMHealthResponse(
+            status="unhealthy",
+            backend=backend,
+            model=model_name,
+            detail=detail,
+        )
+
+    return LLMHealthResponse(status="healthy", backend="local", model=model_name)
+
+
+@router.get("/metrics", include_in_schema=False)
+async def metrics_endpoint() -> Response:
+    if not _settings.otel_prometheus_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return Response(
+        generate_latest(PROMETHEUS_REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
+
+app.include_router(router)
