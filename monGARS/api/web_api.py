@@ -7,37 +7,11 @@ import logging
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
-
-try:
-    from datetime import UTC  # Python 3.11+
-except ImportError:  # Python 3.10 fallback
-    from datetime import timezone
-
-    UTC = timezone.utc
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Any, Mapping
 
-try:  # pragma: no cover - ray is optional
-    import ray
-    from ray import serve
-except ImportError:  # pragma: no cover - fallback when ray is unavailable
-    ray = None  # type: ignore[assignment]
-    serve = None  # type: ignore[assignment]
-
-
-class RayServeException(RuntimeError):
-    """Fallback Ray Serve exception type when the package is unavailable."""
-
-
-if serve is not None:  # pragma: no cover - only executed when ray is installed
-    try:
-        from ray.serve.exceptions import RayServeException as _RayServeException
-    except Exception:  # pragma: no cover - defensive against API drift
-        pass
-    else:  # pragma: no cover - executed when import succeeds
-        RayServeException = _RayServeException
 from fastapi import (
     APIRouter,
     Depends,
@@ -51,28 +25,12 @@ from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
-
-try:
-    from opentelemetry import trace
-except ImportError:  # pragma: no cover - optional dependency
-    trace = None  # type: ignore[assignment]
-
-try:
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-except ImportError:  # pragma: no cover - optional dependency
-    FastAPIInstrumentor = None  # type: ignore[assignment]
-
-try:
-    from opentelemetry.trace import Status, StatusCode
-except ImportError:  # pragma: no cover - optional dependency
-    Status = None  # type: ignore[assignment]
-    StatusCode = None  # type: ignore[assignment]
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -135,6 +93,38 @@ from . import rag as rag_routes
 from . import ui as ui_routes
 from . import ws_manager
 from .rate_limiter import InMemoryRateLimiter
+
+try:  # pragma: no cover - ray is optional
+    import ray
+    from ray import serve
+    from ray.serve.exceptions import RayServeException as _RayServeException
+except Exception:  # pragma: no cover - defensive fallback
+    ray = None  # type: ignore[assignment]
+    serve = None  # type: ignore[assignment]
+    _RayServeException = None
+
+
+class _RayServeUnavailable(Exception):
+    """Sentinel used when Ray Serve is not installed."""
+
+try:
+    from opentelemetry import trace
+except ImportError:  # pragma: no cover - optional dependency
+    trace = None  # type: ignore[assignment]
+
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+except ImportError:  # pragma: no cover - optional dependency
+    FastAPIInstrumentor = None  # type: ignore[assignment]
+
+try:
+    from opentelemetry.trace import Status, StatusCode
+except ImportError:  # pragma: no cover - optional dependency
+    Status = None  # type: ignore[assignment]
+    StatusCode = None  # type: ignore[assignment]
+
+UTC = datetime.UTC if hasattr(datetime, "UTC") else timezone.utc
+RayServeException = _RayServeException or _RayServeUnavailable
 
 _ws_manager = ws_manager.ws_manager
 
@@ -1052,7 +1042,7 @@ async def approve_request(
             approval.approved_at = datetime.now(UTC)
             approval.approved_by = operator_id
             db.commit()
-        except SQLAlchemyError as exc:  # pragma: no cover - database failure
+        except SQLAlchemyError:  # pragma: no cover - database failure
             db.rollback()
             logger.exception("web_api.approval.commit_failed")
 

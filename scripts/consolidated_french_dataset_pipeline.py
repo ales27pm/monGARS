@@ -28,9 +28,7 @@ import os
 import pickle
 import random
 import re
-import shutil
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -49,25 +47,19 @@ from typing import (
     Optional,
     Set,
     Tuple,
-    TypedDict,
     TypeVar,
     Union,
 )
 
-import numpy as np
 import psutil
 from tqdm import tqdm
 
-# Third-party imports
-import datasets
 from datasets import (
     Dataset,
     DatasetDict,
     DownloadMode,
     VerificationMode,
-    concatenate_datasets,
     load_dataset,
-    load_from_disk,
 )
 
 # Optional dependency on datasketch for near-duplicate detection
@@ -2691,8 +2683,8 @@ class MIRACLLoader(RetrievalDatasetLoader):
             # Merge metadata
             for key, value in lang_loader.metadata.items():
                 if key == "languages":
-                    for l, count in value.items():
-                        self.metadata["languages"][l] += count
+                    for lang_code, count in value.items():
+                        self.metadata["languages"][lang_code] += count
                 elif isinstance(value, int) or isinstance(value, float):
                     self.metadata[key] = self.metadata.get(key, 0) + value
 

@@ -6,9 +6,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Column,
     JSON,
     Boolean,
+    Column,
     DateTime,
     Float,
     Index,

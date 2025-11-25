@@ -28,7 +28,6 @@ from monGARS.db import (
     ConversationHistory,
     Interaction,
     MemoryEntry,
-    OperatorApproval,
     UserAccount,
     UserPersonality,
     UserPreferences,

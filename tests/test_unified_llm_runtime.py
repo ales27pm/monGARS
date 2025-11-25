@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from monGARS.config import LLMQuantization, LLMPooling
-from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
+from monGARS.config import LLMPooling, LLMQuantization
+from monGARS.core.llm_integration import UnifiedLLMRuntime
 
 
 class FakeUnifiedLLMRuntime:
@@ -63,7 +63,9 @@ def test_runtime_singleton(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     UnifiedLLMRuntime.reset_for_tests()
 
 
-def test_cpu_quantisation_disabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cpu_quantisation_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     UnifiedLLMRuntime.reset_for_tests()
     settings = _make_settings(tmp_path)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
@@ -73,7 +75,9 @@ def test_cpu_quantisation_disabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     UnifiedLLMRuntime.reset_for_tests()
 
 
-def test_model_quantize_flag_is_respected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_model_quantize_flag_is_respected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     UnifiedLLMRuntime.reset_for_tests()
     settings = _make_settings(tmp_path)
     settings.model.quantize_4bit = False
@@ -99,7 +103,9 @@ def test_unsupported_quantization_modes_are_ignored(
     os.getenv("CI", "false").lower() == "true",
     reason="Tiny fixture models are only loaded in local environments",
 )
-def test_runtime_generates_and_embeds_from_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_generates_and_embeds_from_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     UnifiedLLMRuntime.reset_for_tests()
     fixture_dir = Path("tests/fixtures/tiny_dolphin").resolve()
 
@@ -114,10 +120,14 @@ def test_runtime_generates_and_embeds_from_fixture(monkeypatch: pytest.MonkeyPat
         eos_token_id = 0
         pad_token_id = 0
 
-        def __call__(self, prompt: str, return_tensors: str | None = None) -> _FakeEncoding:  # noqa: ARG002
+        def __call__(  # noqa: ARG002
+            self, prompt: str, return_tensors: str | None = None
+        ) -> _FakeEncoding:
             return _FakeEncoding(prompt)
 
-        def decode(self, tokens, skip_special_tokens: bool = True) -> str:  # noqa: ARG002
+        def decode(  # noqa: ARG002
+            self, tokens, skip_special_tokens: bool = True
+        ) -> str:
             return "2+2=4"
 
     class _FakeLLM2Vec:
@@ -129,7 +139,7 @@ def test_runtime_generates_and_embeds_from_fixture(monkeypatch: pytest.MonkeyPat
             assert Path(path) == fixture_dir
             return _FakeLLM2Vec()
 
-        def encode(
+        def encode(  # noqa: ARG002
             self,
             texts: list[str],
             *,
@@ -137,7 +147,7 @@ def test_runtime_generates_and_embeds_from_fixture(monkeypatch: pytest.MonkeyPat
             show_progress_bar: bool,
             convert_to_tensor: bool,
             device: str,
-        ) -> torch.Tensor:  # noqa: ARG002
+        ) -> torch.Tensor:
             vectors = torch.ones((len(texts), 4096), dtype=torch.float32)
             return vectors
 
@@ -157,7 +167,9 @@ def test_runtime_generates_and_embeds_from_fixture(monkeypatch: pytest.MonkeyPat
             tokens = torch.tensor([[1, 2, 3, 4]])
             return SimpleNamespace(sequences=[tokens])
 
-    monkeypatch.setattr("monGARS.core.llm_integration.AutoModelForCausalLM", _FakeGenerator)
+    monkeypatch.setattr(
+        "monGARS.core.llm_integration.AutoModelForCausalLM", _FakeGenerator
+    )
     monkeypatch.setattr("monGARS.core.llm_integration.AutoTokenizer", _FakeTokenizer)
     monkeypatch.setitem(sys.modules, "llm2vec", SimpleNamespace(LLM2Vec=_FakeLLM2Vec))
 

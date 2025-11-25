@@ -50,7 +50,9 @@ def ensure_dolphin_chat_template(
             "Applied Dolphin chat template to tokenizer",
             extra={"tokenizer": type(tokenizer).__name__},
         )
-    except Exception:  # pragma: no cover - some tokenizers disallow overriding chat_template
+    except (
+        Exception
+    ):  # pragma: no cover - some tokenizers disallow overriding chat_template
         logger.debug(
             "Tokenizer does not allow overriding chat_template; continuing with existing format",
             exc_info=True,

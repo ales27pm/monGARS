@@ -459,7 +459,7 @@ class LLM2VecEmbedder:
                 )
             except EmbeddingBackendError:
                 raise
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except Exception:  # pragma: no cover - defensive logging
                 logger.exception(
                     "llm2vec.backend.chunk_failed",
                     extra={"backend": self._backend, "size": len(chunk)},
