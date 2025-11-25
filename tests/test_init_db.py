@@ -13,6 +13,7 @@ import pytest
 
 try:
     from sqlalchemy.engine.url import make_url
+
     from monGARS import init_db
 except ModuleNotFoundError:
     missing_dependencies = [
