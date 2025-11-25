@@ -265,7 +265,7 @@ class EmbeddingModel:
 
         embeddings: List[List[float]] = []
         for start in range(0, len(texts), batch_size):
-            chunk = [str(item) for item in texts[start : start + batch_size]]
+            chunk = [str(item) for item in texts[start:start + batch_size]]
             LOGGER.debug("Embedding batch %d:%d", start, start + len(chunk))
             with torch.inference_mode():
                 encoded = self.tokenizer(
