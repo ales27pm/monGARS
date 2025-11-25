@@ -287,12 +287,8 @@ def collect_hardware_snapshot() -> HardwareSnapshot:
                     # GPUtil already reports memoryTotal/memoryFree in megabytes,
                     # so we intentionally keep the raw values without additional scaling
                     # to ensure VRAM-aware auto-tuning receives accurate capacities.
-                    total_memory_mb=_safe_float(
-                        getattr(device, "memoryTotal", None)
-                    ),
-                    free_memory_mb=_safe_float(
-                        getattr(device, "memoryFree", None)
-                    ),
+                    total_memory_mb=_safe_float(getattr(device, "memoryTotal", None)),
+                    free_memory_mb=_safe_float(getattr(device, "memoryFree", None)),
                     temperature_c=_safe_float(getattr(device, "temperature", None)),
                     utilisation_percent=_safe_float(
                         getattr(device, "load", None), scale=100
@@ -461,9 +457,7 @@ def run_benchmark(
         reason = "Unsloth is not available in this runtime."
         if _UNSLOTH_IMPORT_ERROR is not None:
             reason = f"Unsloth import failed: {_UNSLOTH_IMPORT_ERROR}"
-        raise RuntimeError(
-            f"Cannot run the benchmark without Unsloth. {reason}"
-        )
+        raise RuntimeError(f"Cannot run the benchmark without Unsloth. {reason}")
 
     hardware = snapshot or collect_hardware_snapshot()
     configure_cuda_allocator()

@@ -3640,7 +3640,9 @@ def parse_args() -> PipelineConfig:
     # Validate distributed options
     if args.distributed_mode:
         if args.world_size <= 0:
-            raise ValueError("world_size must be greater than 0 when distributed mode is enabled")
+            raise ValueError(
+                "world_size must be greater than 0 when distributed mode is enabled"
+            )
         if args.node_rank < 0 or args.node_rank >= args.world_size:
             raise ValueError(
                 "node_rank must be within [0, world_size) when distributed mode is enabled"

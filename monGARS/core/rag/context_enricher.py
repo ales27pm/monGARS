@@ -352,7 +352,9 @@ class RagContextEnricher:
         limit: int,
     ) -> list[RagCodeReference] | None:
         runtime = UnifiedLLMRuntime.instance(self._settings)
-        payloads = [query] + [self._reference_text(reference) for reference in references]
+        payloads = [query] + [
+            self._reference_text(reference) for reference in references
+        ]
         try:
             embeddings = await asyncio.to_thread(runtime.embed, payloads)
         except (LLMRuntimeError, ValueError):

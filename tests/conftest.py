@@ -9,6 +9,7 @@ import pytest
 try:
     import pytest_asyncio
 except ImportError:  # pragma: no cover - dependency guard for lightweight test runs
+
     class _PytestAsyncioFallback:
         """Provide a graceful skip when pytest-asyncio is not installed."""
 
@@ -46,6 +47,7 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 warnings.filterwarnings(
     "ignore",
