@@ -1,0 +1,16 @@
+name: Python with uv setup
+description: Set up Python and uv with pinned GitHub Actions
+inputs:
+  python-version:
+    description: Python version to install
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@82c7e631f4724d4740e2c8cbbd0d8ea9e0d09e18 # v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@baaad665d0d4f325d0753be9c5c8f67fe3e5f6b6 # v3

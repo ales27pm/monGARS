@@ -142,13 +142,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python with uv tooling
+        uses: ./.github/actions/python-uv-setup
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Set up Python with uv
-        uses: astral-sh/setup-uv@v3
 
       - name: Prepare virtual environment
         run: |
@@ -315,13 +312,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python with uv tooling
+        uses: ./.github/actions/python-uv-setup
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Set up Python with uv
-        uses: astral-sh/setup-uv@v3
 
       - name: Prepare virtual environment
         run: |
