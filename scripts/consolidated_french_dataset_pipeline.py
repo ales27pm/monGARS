@@ -1336,9 +1336,6 @@ class DatasetLoader:
     def _is_trust_remote_code_allowed(self, dataset_config: DatasetConfig) -> bool:
         """Check whether trust_remote_code can be enabled for a dataset."""
 
-        if not TRUST_REMOTE_CODE_SUPPORTED:
-            return False
-
         if not dataset_config.allow_trust_remote_code:
             return False
 
@@ -1350,9 +1347,20 @@ class DatasetLoader:
             dataset_config.hf_path.lower().split("/")[-1],
         }
 
-        return self.config.allow_trust_remote_code or bool(
+        allow_requested = self.config.allow_trust_remote_code or bool(
             dataset_keys & self.config.trusted_remote_code_datasets
         )
+
+        if not allow_requested:
+            return False
+
+        if not TRUST_REMOTE_CODE_SUPPORTED:
+            self.logger.debug(
+                "trust_remote_code not supported by installed datasets version; "
+                "proceeding because it was explicitly allowed and relying on loader safeguards"
+            )
+
+        return True
 
     def set_dedup_engine(self, engine: DeduplicationEngine):
         """Set shared deduplication engine."""
