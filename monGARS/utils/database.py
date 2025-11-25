@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncContextManager, AsyncIterator, Mapping, Protocol
 
-from sqlalchemy.engine import URL
+from sqlalchemy.engine.url import URL
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
