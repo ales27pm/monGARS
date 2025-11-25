@@ -8,7 +8,10 @@ Covers the primary FastAPI app, cognition services, persistence layer, and share
 
 ## Automation
 
-- Auto-maintained via `scripts/manage_agents.py`.
+- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
+    scripts/manage_agents.py refresh` instead of editing charters manually.
+- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
+    is detected—apply it locally with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 

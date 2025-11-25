@@ -8,7 +8,10 @@ Applies to neuron trainers and utilities under `modules/neurons/`.
 
 ## Automation
 
-- Auto-updated via the agents manager script.
+- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
+    scripts/manage_agents.py refresh` instead of editing charters manually.
+- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
+    is detected—apply it locally with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 

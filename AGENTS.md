@@ -9,8 +9,10 @@ highlights the non-negotiable guardrails and shared context.
 
 ## Automation
 
-- Generated via `python scripts/manage_agents.py refresh`. Edit the JSON profile instead of the
-    Markdown when updating scope or requirements.
+- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
+    scripts/manage_agents.py refresh` instead of editing charters manually.
+- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
+    is detected—apply it locally with `git apply docs_metadata.patch`.
 - Run `python scripts/manage_agents.py create <directory>` to scaffold a scoped AGENTS.md when a new
     subsystem lands.
 

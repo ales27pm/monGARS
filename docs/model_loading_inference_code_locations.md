@@ -1,6 +1,6 @@
 # Model Loading & Inference Code Locations
 
-> **Last updated:** 2025-11-16 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-25 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This reference pinpoints the files that orchestrate model configuration, provisioning, and runtime inference so operators can jump directly to the relevant logic when debugging or extending the stack.
 

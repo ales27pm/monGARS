@@ -61,10 +61,25 @@ def parse_sections(raw_sections: Sequence[Mapping[str, Any]]) -> List[Section]:
     return sections
 
 
+def merge_dynamic_notes(
+    base_notes: Sequence[str] | None, specific_notes: Sequence[str] | None
+) -> List[str]:
+    merged: List[str] = []
+    for note in list(base_notes or []) + list(specific_notes or []):
+        if note and note not in merged:
+            merged.append(note)
+    return merged
+
+
 def load_profiles(config: Mapping[str, Any]) -> List[FileProfile]:
     files = config.get("files")
     if not isinstance(files, list):
         raise AgentsConfigError("Configuration must define a `files` list")
+
+    defaults = config.get("defaults", {})
+    base_dynamic_notes = defaults.get("dynamic_notes", [])
+    if not isinstance(base_dynamic_notes, list):
+        raise AgentsConfigError("`defaults.dynamic_notes` must be a list when provided")
 
     profiles: List[FileProfile] = []
     for entry in files:
@@ -73,7 +88,7 @@ def load_profiles(config: Mapping[str, Any]) -> List[FileProfile]:
             raise AgentsConfigError("Each file entry must include a `path`")
         title = entry.get("title")
         scope = entry.get("scope")
-        dynamic_notes = entry.get("dynamic_notes", [])
+        dynamic_notes = merge_dynamic_notes(base_dynamic_notes, entry.get("dynamic_notes"))
         roadmap_focus = entry.get("roadmap_focus", [])
         raw_sections = entry.get("sections", [])
         if not title or not scope:

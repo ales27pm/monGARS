@@ -1,6 +1,6 @@
 # Documentation Maintenance Checklist
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-25 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This checklist keeps every Markdown guide in the repository dynamic. Follow the
 steps whenever you touch project documentation so contributors always land on
@@ -18,11 +18,15 @@ fresh instructions that match the shipped code.
 ## Update workflow
 1. **Track scope** – List every affected guide in your pull request description
  and mention the owner who should review the change (ops, SDK, research, etc.).
-2. **Refresh the banner** – Run `python scripts/update_docs_metadata.py` to
-   sync the `Last updated` line for every Markdown or MDX file you touched. The script
-   derives timestamps from Git history and removes stale manual banners. CI enforces
-   this via the `docs-metadata` workflow job, which reruns the helper and fails the
-   build if it detects drift.
+2. **Refresh the banner and charters** – Run `python scripts/update_docs_metadata.py`
+   to sync the `Last updated` line for every Markdown or MDX file you touched. The
+   script derives timestamps from Git history and removes stale manual banners.
+   Follow it with `python scripts/manage_agents.py refresh` whenever you edit
+   scoped AGENTS files or their config. CI reruns both helpers in the
+   `docs-metadata` workflow job after changes land; if the rerun finds drift it
+   uploads a `docs_metadata.patch` artifact covering banners and AGENTS text,
+   then lists the impacted files in the job summary so you can apply the fix
+   locally with `git apply docs_metadata.patch`.
 3. **Validate links** – Run `npx markdownlint-cli@0.39.0 "docs/**/*.md" "README.md"` to enforce shared formatting rules and
    follow it with `npx markdown-link-check -q README.md` plus `npx markdown-link-check -q docs/index.md` for external link verification.
 4. **Keep commands accurate** – Execute the documented command locally or paste

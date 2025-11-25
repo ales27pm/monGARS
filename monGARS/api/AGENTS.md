@@ -8,7 +8,10 @@ Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGAR
 
 ## Automation
 
-- Refresh via the agents manager script to pick up roadmap changes or new endpoints.
+- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
+    scripts/manage_agents.py refresh` instead of editing charters manually.
+- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
+    is detected—apply it locally with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
