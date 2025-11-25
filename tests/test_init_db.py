@@ -10,6 +10,9 @@ import types
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine.url import make_url
+
+from monGARS import init_db
 
 _missing_dependencies = [
     name
@@ -33,10 +36,6 @@ if _missing_dependencies:
         ),
         allow_module_level=True,
     )
-
-from sqlalchemy.engine.url import make_url
-
-from monGARS import init_db
 
 
 def _load_init_db_script(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
