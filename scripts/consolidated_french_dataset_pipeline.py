@@ -19,6 +19,7 @@ Combined features from both original scripts:
 import argparse
 import gc
 import hashlib
+import inspect
 import itertools
 import json
 import logging
@@ -457,6 +458,12 @@ class DatasetLoadingError(PipelineError):
     pass
 
 
+class DatasetScriptNotSupportedError(DatasetLoadingError):
+    """Raised when a dataset relies on remote scripts that are no longer supported."""
+
+    pass
+
+
 class DataProcessingError(PipelineError):
     """Exception raised when data processing fails."""
 
@@ -607,6 +614,11 @@ def validate_text(
     return True
 
 
+TRUST_REMOTE_CODE_SUPPORTED = (
+    "trust_remote_code" in inspect.signature(load_dataset).parameters
+)
+
+
 def load_dataset_with_retry(
     hf_path: str,
     hf_config: Optional[str] = None,
@@ -645,6 +657,14 @@ def load_dataset_with_retry(
         os.environ["HF_DATASETS_CACHE"] = cache_dir
         os.environ["HF_HOME"] = cache_dir
 
+    if trust_remote_code and not TRUST_REMOTE_CODE_SUPPORTED:
+        message = (
+            "Dataset scripts are no longer supported by the installed datasets version; "
+            f"cannot enable trust_remote_code for {hf_path}."
+        )
+        logger.warning(message)
+        raise DatasetScriptNotSupportedError(message)
+
     token = True if requires_auth else None
 
     for attempt in range(max_retries):
@@ -658,7 +678,7 @@ def load_dataset_with_retry(
                 download_mode=download_mode,
                 verification_mode=VerificationMode.NO_CHECKS,
             )
-            if trust_remote_code:
+            if trust_remote_code and TRUST_REMOTE_CODE_SUPPORTED:
                 ds_kwargs["trust_remote_code"] = True
             if token:
                 ds_kwargs["token"] = token
@@ -677,13 +697,12 @@ def load_dataset_with_retry(
                 "trust_remote_code" in error_str
                 or "Dataset scripts are no longer supported" in error_str
             ):
-                logger.error(
-                    "Dataset %s requires trust_remote_code; rerun with --allow_trust_remote_code if you trust the source."
-                    % hf_path
+                message = (
+                    "Dataset scripts are no longer supported by the current datasets library; "
+                    f"{hf_path} must be provided in a script-free format (e.g., parquet)."
                 )
-                raise DatasetLoadingError(
-                    f"Dataset {hf_path} requires trust_remote_code. Pass allow_trust_remote_code to enable."
-                ) from e
+                logger.warning(message)
+                raise DatasetScriptNotSupportedError(message) from None
 
             logger.error(
                 f"Failed to load {hf_path} (attempt {attempt + 1}/{max_retries}): {str(e)}"
@@ -1317,6 +1336,9 @@ class DatasetLoader:
     def _is_trust_remote_code_allowed(self, dataset_config: DatasetConfig) -> bool:
         """Check whether trust_remote_code can be enabled for a dataset."""
 
+        if not TRUST_REMOTE_CODE_SUPPORTED:
+            return False
+
         if not dataset_config.allow_trust_remote_code:
             return False
 
@@ -1795,6 +1817,20 @@ class InstructionDatasetLoader(DatasetLoader):
                 f"{self.metadata['filtered_by_quality']} quality filtered, "
                 f"{self.metadata['filtered_by_pii']} PII filtered)"
             )
+        except DatasetScriptNotSupportedError as e:
+            message = (
+                f"Skipping {dataset_config.name} because the hub release depends on a dataset script, "
+                "which is not supported by the installed datasets version. "
+                "Provide a script-free export (e.g., parquet) to enable ingestion."
+            )
+            self.logger.warning(message)
+            self.metadata["loading_errors"] += 1
+            self.metadata["skipped_due_to_script_requirement"] = True
+            self.metadata["error"] = str(e)
+        except DatasetLoadingError as e:
+            self.logger.error(f"Error loading {dataset_config.name}: {str(e)}")
+            self.metadata["loading_errors"] += 1
+            self.metadata["error"] = str(e)
         except Exception as e:
             self.logger.error(
                 f"Error loading {dataset_config.name}: {str(e)}", exc_info=True
@@ -1989,9 +2025,20 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
                     else DownloadMode.REUSE_DATASET_IF_EXISTS
                 ),
             )
+        except DatasetScriptNotSupportedError as e:
+            msg = (
+                "Failed to load xP3 because the dataset now ships as a remote script, "
+                "which is unsupported in the current datasets release. "
+                "Please provide a parquet export instead."
+            )
+            self.logger.warning(msg)
+            self.metadata["error"] = str(e)
+            self.metadata["loading_errors"] += 1
+            self.metadata["skipped_due_to_script_requirement"] = True
+            return
         except DatasetLoadingError as e:
             msg = f"Failed to load xP3: {e}"
-            self.logger.exception(msg)
+            self.logger.error(msg)
             self.metadata["error"] = msg
             self.metadata["loading_errors"] += 1
             return
@@ -2134,9 +2181,20 @@ class AyaCollectionLoader(InstructionDatasetLoader):
                     else DownloadMode.REUSE_DATASET_IF_EXISTS
                 ),
             )
+        except DatasetScriptNotSupportedError as e:
+            msg = (
+                "Aya collection cannot be loaded because the hub version relies on a remote script, "
+                "which is unsupported by the installed datasets library. "
+                "Please supply a script-free export (e.g., parquet) to include Aya."
+            )
+            self.logger.warning(msg)
+            self.metadata["error"] = str(e)
+            self.metadata["loading_errors"] += 1
+            self.metadata["skipped_due_to_script_requirement"] = True
+            return
         except DatasetLoadingError as e:
             msg = f"Failed to load Aya collection: {e}"
-            self.logger.exception(msg)
+            self.logger.error(msg)
             self.metadata["error"] = msg
             self.metadata["loading_errors"] += 1
             return
@@ -2479,6 +2537,19 @@ class RetrievalDatasetLoader(DatasetLoader):
                 f"({self.metadata['duplicates_removed']} duplicates, "
                 f"{self.metadata['filtered_by_quality']} quality filtered)"
             )
+        except DatasetScriptNotSupportedError as e:
+            message = (
+                f"Skipping {dataset_config.name} because dataset scripts are no longer supported; "
+                "provide a script-free export to enable retrieval ingestion."
+            )
+            self.logger.warning(message)
+            self.metadata["loading_errors"] += 1
+            self.metadata["skipped_due_to_script_requirement"] = True
+            self.metadata["error"] = str(e)
+        except DatasetLoadingError as e:
+            self.logger.error(f"Error loading {dataset_config.name}: {str(e)}")
+            self.metadata["loading_errors"] += 1
+            self.metadata["error"] = str(e)
         except Exception as e:
             self.logger.error(
                 f"Error loading {dataset_config.name}: {str(e)}", exc_info=True
@@ -3296,8 +3367,8 @@ class DatasetPipeline:
                 dataset_type=DatasetType.INSTRUCTION,
                 languages=self.config.langs,
                 license=LicenseType.APACHE_2_0,
-                requires_trust_remote_code=True,
-                allow_trust_remote_code=True,
+                requires_trust_remote_code=False,
+                allow_trust_remote_code=False,
                 license_compliance=LicenseCompliance(
                     license_type=LicenseType.APACHE_2_0,
                     requires_attribution=True,
