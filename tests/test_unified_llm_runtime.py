@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from monGARS.config import LLMQuantization, LLMPooling
+from monGARS.config import LLMPooling, LLMQuantization
 from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
 
 

@@ -58,10 +58,9 @@ LOGGER = logging.getLogger("llm2vec_service")
 # The wrapper manifest loader lives in export_llm2vec_wrapper.py. Importing it here keeps
 # backwards compatibility with older callers (and tests) that monkeypatch the function
 # directly on this module.
-from scripts.export_llm2vec_wrapper import (
+from scripts.export_llm2vec_wrapper import (  # noqa: E402  (import after LOGGER)
     load_wrapper_config,
-)  # noqa: E402  (import after LOGGER)
-
+)
 
 # ---------------------------------------------------------------------------
 # CLI configuration
