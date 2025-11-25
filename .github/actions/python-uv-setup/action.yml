@@ -8,9 +8,9 @@ runs:
   using: composite
   steps:
     - name: Set up Python
-      uses: actions/setup-python@82c7e631f4724d4740e2c8cbbd0d8ea9e0d09e18 # v5
+      uses: actions/setup-python@39cd14951b08e74b54015e9e001cdefcf80e669f # v5.1.1
       with:
         python-version: ${{ inputs.python-version }}
 
     - name: Set up uv
-      uses: astral-sh/setup-uv@baaad665d0d4f325d0753be9c5c8f67fe3e5f6b6 # v3
+      uses: astral-sh/setup-uv@3b9817b1bf26186f03ab8277bab9b827ea5cc254 # v3.2.0
