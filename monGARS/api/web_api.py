@@ -103,6 +103,10 @@ except Exception:  # pragma: no cover - defensive fallback
     serve = None  # type: ignore[assignment]
     _RayServeException = None
 
+
+class _RayServeUnavailable(Exception):
+    """Sentinel used when Ray Serve is not installed."""
+
 try:
     from opentelemetry import trace
 except ImportError:  # pragma: no cover - optional dependency
@@ -120,7 +124,7 @@ except ImportError:  # pragma: no cover - optional dependency
     StatusCode = None  # type: ignore[assignment]
 
 UTC = datetime.UTC if hasattr(datetime, "UTC") else timezone.utc
-RayServeException = _RayServeException or RuntimeError
+RayServeException = _RayServeException or _RayServeUnavailable
 
 _ws_manager = ws_manager.ws_manager
 

@@ -120,14 +120,14 @@ def test_runtime_generates_and_embeds_from_fixture(
         eos_token_id = 0
         pad_token_id = 0
 
-        def __call__(
+        def __call__(  # noqa: ARG002
             self, prompt: str, return_tensors: str | None = None
-        ) -> _FakeEncoding:  # noqa: ARG002
+        ) -> _FakeEncoding:
             return _FakeEncoding(prompt)
 
-        def decode(
+        def decode(  # noqa: ARG002
             self, tokens, skip_special_tokens: bool = True
-        ) -> str:  # noqa: ARG002
+        ) -> str:
             return "2+2=4"
 
     class _FakeLLM2Vec:
@@ -139,7 +139,7 @@ def test_runtime_generates_and_embeds_from_fixture(
             assert Path(path) == fixture_dir
             return _FakeLLM2Vec()
 
-        def encode(
+        def encode(  # noqa: ARG002
             self,
             texts: list[str],
             *,
@@ -147,7 +147,7 @@ def test_runtime_generates_and_embeds_from_fixture(
             show_progress_bar: bool,
             convert_to_tensor: bool,
             device: str,
-        ) -> torch.Tensor:  # noqa: ARG002
+        ) -> torch.Tensor:
             vectors = torch.ones((len(texts), 4096), dtype=torch.float32)
             return vectors
 
