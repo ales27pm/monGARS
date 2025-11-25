@@ -36,3 +36,13 @@ models/base_snapshots/dphn__Dolphin-X1-8B/special_tokens_map.json
 models/base_snapshots/dphn__Dolphin-X1-8B/tokenizer_config.json
 models/base_snapshots/dphn__Dolphin-X1-8B/tokenizer.json
 models/base_snapshots/dphn__Dolphin-X1-8B/.gitattributes
+amazon-massive-dataset-1.0.tar.gz
+dataset_metadata.json
+dataset_stats.json
+.venv_datasets/
+datasets/
+hf_cache/
+merged_data/
+prepared_data/
+promptsource_venv/
+runs/
