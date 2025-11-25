@@ -346,7 +346,7 @@ class ReActOrchestrator:
             )
 
         reasoning_lines: list[str] = []
-        first_content = lines[0][len("[THOUGHT]"):].strip()
+        first_content = lines[0][len("[THOUGHT]") :].strip()
         if not first_content:
             self._raise_invalid_reasoning(
                 trace_id,
@@ -363,7 +363,7 @@ class ReActOrchestrator:
             if stripped.startswith("[ACTION]"):
                 break
             if stripped.startswith("[THOUGHT]"):
-                block = stripped[len("[THOUGHT]"):].strip()
+                block = stripped[len("[THOUGHT]") :].strip()
                 if not block:
                     self._raise_invalid_reasoning(
                         trace_id,

@@ -814,7 +814,7 @@ class EnhancedUnifiedModel:
             )
         text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         if text.startswith(prompt):
-            text = text[len(prompt):].strip()
+            text = text[len(prompt) :].strip()
         return text
 
     @memory_cleanup
