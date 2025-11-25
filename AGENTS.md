@@ -48,6 +48,10 @@ highlights the non-negotiable guardrails and shared context.
     shipping.
 - Regenerate these instructions with `python scripts/manage_agents.py refresh` after editing
     `configs/agents/agents_config.json`.
+- Partial or experimental code is acceptable only when it is intentionally fenced: hide incomplete
+    flows behind feature flags or environment toggles, include TODOs that link to a tracking issue, and
+    document downgrade/rollback steps in the PR summary. Avoid shipping unreachable stubs or dead code
+    without a retirement plan.
 
 ## Observability & Security
 
