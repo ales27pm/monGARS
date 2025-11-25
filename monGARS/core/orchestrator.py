@@ -31,6 +31,8 @@ from monGARS.core.rag import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+THOUGHT_PREFIX = "[THOUGHT]"
+ACTION_PREFIX = "[ACTION]"
 T = TypeVar("T")
 
 
@@ -283,8 +285,8 @@ class ReActOrchestrator:
 
         reasoning_prompt = f"""
         You are Dolphin, an AI assistant. Use ReAct format to solve this:
-        [THOUGHT] Your step-by-step reasoning about which tool to use and why
-        [ACTION] {{"tool": "{tool_name}", "arguments": {json.dumps(arguments)}}}
+        {THOUGHT_PREFIX} Your step-by-step reasoning about which tool to use and why
+        {ACTION_PREFIX} {{"tool": "{tool_name}", "arguments": {json.dumps(arguments)}}}
 
         Current context: {json.dumps(context)}
         """
@@ -330,7 +332,7 @@ class ReActOrchestrator:
         """Validate and extract the [THOUGHT] reasoning block."""
 
         normalized = response.lstrip()
-        if not normalized.startswith("[THOUGHT]"):
+        if not normalized.startswith(THOUGHT_PREFIX):
             self._raise_invalid_reasoning(
                 trace_id,
                 response,
@@ -346,7 +348,7 @@ class ReActOrchestrator:
             )
 
         reasoning_lines: list[str] = []
-        first_content = lines[0][len("[THOUGHT]") :].strip()
+        first_content = lines[0][len(THOUGHT_PREFIX):].strip()
         if not first_content:
             self._raise_invalid_reasoning(
                 trace_id,
@@ -360,10 +362,10 @@ class ReActOrchestrator:
             if not stripped:
                 reasoning_lines.append("")
                 continue
-            if stripped.startswith("[ACTION]"):
+            if stripped.startswith(ACTION_PREFIX):
                 break
-            if stripped.startswith("[THOUGHT]"):
-                block = stripped[len("[THOUGHT]") :].strip()
+            if stripped.startswith(THOUGHT_PREFIX):
+                block = stripped[len(THOUGHT_PREFIX):].strip()
                 if not block:
                     self._raise_invalid_reasoning(
                         trace_id,
