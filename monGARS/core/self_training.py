@@ -65,7 +65,9 @@ class SelfTrainingEngine:
         try:
             self._llm = LLMIntegration.instance()
         except Exception as exc:  # pragma: no cover - optional dependency
-            logger.warning("self_training.embedding_unavailable", extra={"error": repr(exc)})
+            logger.warning(
+                "self_training.embedding_unavailable", extra={"error": repr(exc)}
+            )
             self._llm = None
         self.lock = asyncio.Lock()
         self._shutdown_event = asyncio.Event()
@@ -191,7 +193,9 @@ class SelfTrainingEngine:
 
             vectors = await self._embed_texts([sanitized_text])
             if not vectors:
-                logger.warning("Embedding failed for curated record: %s", sanitized_text[:40])
+                logger.warning(
+                    "Embedding failed for curated record: %s", sanitized_text[:40]
+                )
                 continue
 
             trimmed_embedding = self._trim_embedding(vectors[0])
@@ -252,7 +256,9 @@ class SelfTrainingEngine:
         try:
             return await asyncio.to_thread(self._llm.embed_batch, list(texts))
         except Exception as exc:  # pragma: no cover - runtime failure
-            logger.warning("self_training.embedding_runtime_error", extra={"error": repr(exc)})
+            logger.warning(
+                "self_training.embedding_runtime_error", extra={"error": repr(exc)}
+            )
             return None
 
     def _persist_curated_dataset(

@@ -42,7 +42,6 @@ from monGARS.core.constants import (
     SUPPORTED_EMBEDDING_BACKENDS,
 )
 from monGARS.core.embedding_backends import normalise_embedding_backend
-from monGARS.telemetry import PROMETHEUS_REGISTRY
 from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 

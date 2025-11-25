@@ -23,6 +23,7 @@ Key Features:
 import argparse
 import gc
 import hashlib
+import itertools
 import json
 import logging
 import logging.handlers
@@ -30,8 +31,6 @@ import os
 import pickle
 import random
 import re
-import shutil
-import tempfile
 import threading
 import time
 import uuid
@@ -50,26 +49,20 @@ from typing import (
     Optional,
     Set,
     Tuple,
-    TypedDict,
     TypeVar,
     Union,
 )
 
-import numpy as np
 import psutil
 from datasketch import MinHash, MinHashLSH
 from tqdm import tqdm
 
-# Third-party imports
-import datasets
 from datasets import (
     Dataset,
     DatasetDict,
     DownloadMode,
     VerificationMode,
-    concatenate_datasets,
     load_dataset,
-    load_from_disk,
 )
 
 # -----------------------------
@@ -1821,8 +1814,8 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
             # Merge metadata
             for key, value in lang_loader.metadata.items():
                 if key == "languages":
-                    for l, count in value.items():
-                        self.metadata["languages"][l] += count
+                    for lang_code, count in value.items():
+                        self.metadata["languages"][lang_code] += count
                 elif isinstance(value, int) or isinstance(value, float):
                     self.metadata[key] = self.metadata.get(key, 0) + value
 
@@ -2270,8 +2263,8 @@ class MIRACLLoader(RetrievalDatasetLoader):
             # Merge metadata
             for key, value in lang_loader.metadata.items():
                 if key == "languages":
-                    for l, count in value.items():
-                        self.metadata["languages"][l] += count
+                    for lang_code, count in value.items():
+                        self.metadata["languages"][lang_code] += count
                 elif isinstance(value, int) or isinstance(value, float):
                     self.metadata[key] = self.metadata.get(key, 0) + value
 
@@ -3640,7 +3633,9 @@ def parse_args() -> PipelineConfig:
     # Validate distributed options
     if args.distributed_mode:
         if args.world_size <= 0:
-            raise ValueError("world_size must be greater than 0 when distributed mode is enabled")
+            raise ValueError(
+                "world_size must be greater than 0 when distributed mode is enabled"
+            )
         if args.node_rank < 0 or args.node_rank >= args.world_size:
             raise ValueError(
                 "node_rank must be within [0, world_size) when distributed mode is enabled"

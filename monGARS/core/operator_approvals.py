@@ -33,7 +33,6 @@ operator can review it from the Django console or offline tooling.
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import json
 import logging

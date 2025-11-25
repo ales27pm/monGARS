@@ -58,8 +58,9 @@ LOGGER = logging.getLogger("llm2vec_service")
 # The wrapper manifest loader lives in export_llm2vec_wrapper.py. Importing it here keeps
 # backwards compatibility with older callers (and tests) that monkeypatch the function
 # directly on this module.
-from scripts.export_llm2vec_wrapper import load_wrapper_config  # noqa: E402  (import after LOGGER)
-
+from scripts.export_llm2vec_wrapper import (  # noqa: E402  (import after LOGGER)
+    load_wrapper_config,
+)
 
 # ---------------------------------------------------------------------------
 # CLI configuration
@@ -439,9 +440,7 @@ def _create_legacy_app(service: EmbeddingService) -> FastAPI:
         return HealthResponse(
             status="ok",
             model=service.model_dir,
-            dimension=int(
-                getattr(service.settings, "llm2vec_vector_dimensions", 0)
-            ),
+            dimension=int(getattr(service.settings, "llm2vec_vector_dimensions", 0)),
         )
 
     @app.post("/embed", response_model=LegacyEmbedResponse)
