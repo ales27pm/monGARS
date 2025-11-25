@@ -17,7 +17,8 @@ import numpy as np
 import pytest
 
 from monGARS.config import LLMQuantization, Settings
-from monGARS.core import llm_integration, monitor as core_monitor
+from monGARS.core import llm_integration
+from monGARS.core import monitor as core_monitor
 from monGARS.core.conversation import PromptTooLargeError
 from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 

@@ -352,7 +352,9 @@ class RagContextEnricher:
         limit: int,
     ) -> list[RagCodeReference] | None:
         runtime = UnifiedLLMRuntime.instance(self._settings)
-        payloads = [query] + [self._reference_text(reference) for reference in references]
+        payloads = [query] + [
+            self._reference_text(reference) for reference in references
+        ]
         try:
             embeddings = await asyncio.to_thread(runtime.embed, payloads)
         except (LLMRuntimeError, ValueError):
@@ -377,7 +379,10 @@ class RagContextEnricher:
     def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
         if not left or not right or len(left) != len(right):
             return 0.0
-        dot = sum(l * r for l, r in zip(left, right))
+        dot = sum(
+            left_component * right_component
+            for left_component, right_component in zip(left, right)
+        )
         left_norm = sum(component * component for component in left) ** 0.5
         right_norm = sum(component * component for component in right) ** 0.5
         if left_norm == 0 or right_norm == 0:

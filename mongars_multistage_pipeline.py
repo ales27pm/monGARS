@@ -119,7 +119,9 @@ def _call_with_supported_kwargs(func, **kwargs):
 
     if skipped:
         LOGGER.warning(
-            "Skipping unsupported parameters for %s: %s", func.__name__, ", ".join(skipped)
+            "Skipping unsupported parameters for %s: %s",
+            func.__name__,
+            ", ".join(skipped),
         )
 
     return func(**accepted)

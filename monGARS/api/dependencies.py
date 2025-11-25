@@ -38,7 +38,7 @@ def _build_approval_sync_url() -> str | None:
     settings = get_settings()
     try:
         url = make_url(str(settings.database_url))
-    except Exception as exc:  # pragma: no cover - defensive configuration guard
+    except Exception:  # pragma: no cover - defensive configuration guard
         logger.exception("dependencies.approval.invalid_database_url")
         return None
 
@@ -71,7 +71,7 @@ def _resolve_approval_session_factory() -> sessionmaker | None:
                 autoflush=False,
                 expire_on_commit=False,
             )
-        except Exception as exc:  # pragma: no cover - engine initialisation
+        except Exception:  # pragma: no cover - engine initialisation
             logger.exception("dependencies.approval.engine_initialization_failed")
             return None
 
