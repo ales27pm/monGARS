@@ -374,8 +374,15 @@ def build_internal_instruction_datasets(
         strategy_path.unlink(missing_ok=True)
         interaction_path.unlink(missing_ok=True)
         tmp_dir.rmdir()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug(
+            "Cleanup failed for %s, %s, %s: %s",
+            strategy_path,
+            interaction_path,
+            tmp_dir,
+            exc,
+            exc_info=True,
+        )
     return module_info
 
 
@@ -816,7 +823,7 @@ def main() -> None:
                 "No modules found in state.  Run --build-datasets first."
             )
         if not args.base_model:
-            raise ValueError("--base-model is required when running SFT")
+            parser.error("--base-model is required when running SFT")
         perform_sft(
             modules=modules,
             run_dir=run_dir,
@@ -840,10 +847,12 @@ def main() -> None:
             raise RuntimeError(
                 "No modules available for LLM2Vec adaptation.  Run previous stages first."
             )
-        if not args.llm2vec_root or not args.mntp_config or not args.simcse_config:
-            raise ValueError(
-                "--llm2vec-root, --mntp-config, and --simcse-config are required when running LLM2Vec"
-            )
+        if not args.llm2vec_root:
+            parser.error("--llm2vec-root is required when running --llm2vec")
+        if not args.mntp_config:
+            parser.error("--mntp-config is required when running --llm2vec")
+        if not args.simcse_config:
+            parser.error("--simcse-config is required when running --llm2vec")
         perform_llm2vec(
             modules=modules,
             run_dir=run_dir,
@@ -872,7 +881,7 @@ def main() -> None:
                 "No modules available for export.  Run previous stages first."
             )
         if not args.base_model:
-            raise ValueError("--base-model is required when exporting")
+            parser.error("--base-model is required when running --export")
         perform_export(
             modules=modules,
             run_dir=run_dir,
