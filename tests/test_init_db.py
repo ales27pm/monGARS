@@ -10,7 +10,31 @@ import types
 from pathlib import Path
 
 import pytest
-from sqlalchemy.engine import make_url
+
+_missing_dependencies = [
+    name
+    for name in (
+        "sqlalchemy",
+        "hvac",
+        "dotenv",
+        "opentelemetry",
+        "pydantic",
+        "pydantic_settings",
+    )
+    if importlib.util.find_spec(name) is None
+]
+
+if _missing_dependencies:
+    pytest.skip(
+        (
+            "Skipping init_db tests because required dependencies are missing: "
+            f"{', '.join(sorted(_missing_dependencies))}. "
+            "Install monGARS[test] or the full requirements to run these tests."
+        ),
+        allow_module_level=True,
+    )
+
+from sqlalchemy.engine.url import make_url
 
 from monGARS import init_db
 

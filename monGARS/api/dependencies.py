@@ -6,7 +6,7 @@ from threading import Lock
 from weakref import WeakKeyDictionary
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from monGARS.config import get_settings

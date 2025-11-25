@@ -34,7 +34,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
 from monGARS.core.constants import (
