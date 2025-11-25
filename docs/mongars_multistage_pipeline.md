@@ -1,6 +1,6 @@
 # monGARS multi-stage pipeline runbook
 
-> **Last updated:** 2026-06-03
+> **Last updated:** 2025-11-25
 
 This runbook explains how to operate `mongars_multistage_pipeline.py`, the
 end-to-end CLI that assembles dataset generation, supervised fine-tuning (SFT),
@@ -66,8 +66,8 @@ python mongars_multistage_pipeline.py \
     fine-tuning logic to `perform_raft` inside
     `mongars_multistage_pipeline.py`.
 - **Export**
-  - Exports each module’s `current_model_dir` to GGUF in
-    `runs/<run-id>/<module>/gguf/<module>.gguf` via
+  - Exports each module’s `current_model_dir` to GGUF under
+    `runs/<run-id>/<module>/gguf/` via
     `monGARS.mlops.exporters.export_gguf` (or a custom shell command if
     `--export-cmd` is provided).
 
