@@ -199,7 +199,7 @@ def parse_module_from_instruction(instr: str) -> Tuple[str, str]:
         end = instr.find("]")
         if end > 5:
             module = instr[5:end]
-            stripped = instr[end + 1:].lstrip()
+            stripped = instr[end + 1 :].lstrip()
             return module, stripped
         LOGGER.warning("Malformed module prefix found in instruction: %s", instr)
     return "General", instr
