@@ -1,6 +1,6 @@
 # monGARS Documentation Hub
 
-> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The monGARS docs collection is organised so that contributors, operators, and
 researchers can land on the right guidance without paging through unrelated
