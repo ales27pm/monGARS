@@ -89,9 +89,9 @@ from monGARS.mlops.code_analysis import (
     scan_module_interactions,
 )
 from monGARS.mlops.dataset import (
+    _load_jsonl_records,
     build_module_interaction_dataset,
     build_mongars_strategy_dataset,
-    prepare_local_instruction_dataset,
 )
 from monGARS.mlops.exporters import export_gguf
 from monGARS.mlops.pipelines.unsloth import run_unsloth_finetune
@@ -249,10 +249,11 @@ def build_french_multitask_datasets(
         str(output_dir),
         "--languages",
         ",".join(languages),
-        "--trust-remote-code" if trust_remote_code else "--no-trust-remote-code",
         "--workers",
         str(workers),
     ]
+    if trust_remote_code:
+        cmd.append("--allow_trust_remote_code")
     if max_examples is not None:
         cmd += ["--max-examples", str(max_examples)]
     run_subprocess(cmd, cwd=repo_root)
@@ -322,7 +323,7 @@ def build_internal_instruction_datasets(
     # Load and group by [MOD=module] annotation
     records: List[Dict[str, Any]] = []
     for path in [strategy_path, interaction_path]:
-        records.extend(iter(prepare_local_instruction_dataset(path)))
+        records.extend(_load_jsonl_records(path))
 
     examples_by_module: Dict[str, List[Dict[str, str]]] = {}
     for rec in records:
@@ -611,21 +612,29 @@ def perform_export(
         mod_dir = run_dir / module
         gguf_dir = mod_dir / "gguf"
         gguf_dir.mkdir(parents=True, exist_ok=True)
-        gguf_path = gguf_dir / f"{module}.gguf"
+        exported_files: List[Path]
         if export_cmd_template:
+            gguf_path = gguf_dir / f"{module}.gguf"
             cmd = export_cmd_template.format(
                 model_dir=model_dir, gguf_path=gguf_path
             )
             run_subprocess(shlex.split(cmd), cwd=mod_dir)
+            exported_files = [gguf_path] if gguf_path.exists() else []
         else:
             export_gguf(
-                model=base_model,
-                lora_dir=str(model_dir),
-                output_dir=str(gguf_dir),
-                method=method,
+                source_dir=model_dir,
+                gguf_dir=gguf_dir,
+                quantization_method=method,
             )
-        LOGGER.info("Exported module %s to %s", module, gguf_path)
-        state.gguf_path = gguf_path
+            exported_files = sorted(gguf_dir.glob("*.gguf"))
+        if exported_files:
+            state.gguf_path = exported_files[0]
+            LOGGER.info("Exported module %s to %s", module, exported_files[0])
+        else:
+            state.gguf_path = None
+            LOGGER.warning(
+                "No GGUF artefacts found for module %s in %s", module, gguf_dir
+            )
 
 
 def parse_cli() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
