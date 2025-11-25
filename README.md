@@ -147,6 +147,17 @@ python init_db.py      # applies Alembic migrations and prepares persistence tab
 uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+- Quick path: `scripts/install_test_dependencies.sh` installs the runtime and
+  test dependencies defined in `requirements.txt` so `pytest` can start
+  collecting modules without import errors.
+
+### Multi-stage training & export pipeline
+- Use [`mongars_multistage_pipeline.py`](mongars_multistage_pipeline.py) to
+  orchestrate dataset generation, module-level SFT, LLM2Vec adaptation, and
+  export in one CLI. The runbook in
+  [`docs/mongars_multistage_pipeline.md`](docs/mongars_multistage_pipeline.md)
+  lists the stage flags, state/resume behaviour, and troubleshooting tips.
+
 ### Docker Compose Stack
 ```bash
 python scripts/docker_menu.py

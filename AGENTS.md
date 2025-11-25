@@ -48,10 +48,6 @@ highlights the non-negotiable guardrails and shared context.
     shipping.
 - Regenerate these instructions with `python scripts/manage_agents.py refresh` after editing
     `configs/agents/agents_config.json`.
-- Partial or experimental code is acceptable only when it is intentionally fenced: hide incomplete
-    flows behind feature flags or environment toggles, include TODOs that link to a tracking issue, and
-    document downgrade/rollback steps in the PR summary. Avoid shipping unreachable stubs or dead code
-    without a retirement plan.
 
 ## Observability & Security
 
@@ -67,6 +63,8 @@ highlights the non-negotiable guardrails and shared context.
 - Update runbooks, diagrams, and `monGARS_structure.txt` whenever module layout or workflows shift.
 - Cross-link roadmap entries, docs, and code so operators can trace feature readiness and
     configuration changes.
+- Capture multi-stage training/export updates in `docs/mongars_multistage_pipeline.md` whenever the
+    CLI or orchestration flow changes.
 
 ## Roadmap Integration
 

@@ -1,6 +1,6 @@
 # monGARS Documentation Hub
 
-> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2026-06-02 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The monGARS docs collection is organised so that contributors, operators, and
 researchers can land on the right guidance without paging through unrelated
@@ -58,6 +58,7 @@ audiences, and calls out the live sources of truth inside the repository.
 | [dolphin_x1_chat_embeddings.md](dolphin_x1_chat_embeddings.md) | Dolphin-X1 stack reuse for chat and embeddings with deployment parameters. |
 | [reinforcement_rollout_runbook.md](reinforcement_rollout_runbook.md) | Operator actions for the reinforcement loop, approvals, and soak testing. |
 | [advanced_fine_tuning.md](advanced_fine_tuning.md) | (Also in Developer Essentials) — adapter training and Ray Serve automation backlog. |
+| [mongars_multistage_pipeline.md](mongars_multistage_pipeline.md) | End-to-end training/export CLI runbook covering datasets, SFT, LLM2Vec, RAFT, and GGUF export. |
 
 ## SDKs & Client Integrations
 
