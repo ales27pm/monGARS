@@ -83,7 +83,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
 from monGARS.mlops.code_analysis import (
     scan_llm_usage,
     scan_module_interactions,
@@ -124,7 +123,11 @@ class ModuleState:
             n_train=int(data["n_train"]),
             n_val=int(data["n_val"]),
             adapter_dir=Path(data["adapter_dir"]) if data.get("adapter_dir") else None,
-            current_model_dir=Path(data["current_model_dir"]) if data.get("current_model_dir") else None,
+            current_model_dir=(
+                Path(data["current_model_dir"])
+                if data.get("current_model_dir")
+                else None
+            ),
             gguf_path=Path(data["gguf_path"]) if data.get("gguf_path") else None,
         )
 
@@ -429,46 +432,23 @@ def perform_sft(
         LOGGER.info("Starting SFT for module %s", module)
         mod_dir = run_dir / module
         mod_dir.mkdir(parents=True, exist_ok=True)
-        adapter_dir = mod_dir / "chat_lora"
-        adapter_dir.mkdir(parents=True, exist_ok=True)
-        dataset_spec = {
-            "train": str(state.train_path),
-            "validation": str(state.val_path),
-        }
-        run_unsloth_finetune(
+        result = run_unsloth_finetune(
             model_id=base_model,
-            dataset=dataset_spec,
-            lora_r=lora_r,
+            output_dir=mod_dir,
+            dataset_path=state.train_path,
+            max_seq_len=1024,
+            vram_budget_mb=vram_budget_mb,
+            batch_size=batch_size,
+            epochs=epochs,
+            lora_rank=lora_r,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
-            epochs=epochs,
-            train_batch_size=batch_size,
-            per_device_eval_batch_size=batch_size,
-            eval_dataset=None,
-            skip_smoke_test=True,
-            output_dir=str(adapter_dir),
-            merge_full_weights=True,
-            update_manifest=False,
-            save_merged=True,
-            eval_steps=0,
-            warmup_ratio=0.1,
-            lr=2e-4,
-            weight_decay=0.01,
-            max_seq_len=1024,
-            vram_budget_mb=vram_budget_mb,
-            hf_token=hf_token,
+            eval_dataset_path=state.val_path,
+            eval_batch_size=batch_size,
+            run_smoke_tests=False,
         )
         LOGGER.info("Finished SFT for module %s", module)
-        # Write wrapper bundle for the chat model
-        wrapper_cfg = WrapperConfig(
-            base_model_id=base_model,
-            lora_dir=adapter_dir,
-            max_seq_len=1024,
-            vram_budget_mb=vram_budget_mb,
-            offload_dir=mod_dir / "offload",
-            activation_buffer_mb=1024,
-        )
-        write_wrapper_bundle(wrapper_cfg, mod_dir)
+        adapter_dir = Path(result["chat_lora_dir"])
         state.adapter_dir = adapter_dir
         state.current_model_dir = adapter_dir
 
@@ -615,9 +595,7 @@ def perform_export(
         exported_files: List[Path]
         if export_cmd_template:
             gguf_path = gguf_dir / f"{module}.gguf"
-            cmd = export_cmd_template.format(
-                model_dir=model_dir, gguf_path=gguf_path
-            )
+            cmd = export_cmd_template.format(model_dir=model_dir, gguf_path=gguf_path)
             run_subprocess(shlex.split(cmd), cwd=mod_dir)
             exported_files = [gguf_path] if gguf_path.exists() else []
         else:
