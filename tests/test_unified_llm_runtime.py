@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from monGARS.config import LLMPooling, LLMQuantization
-from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
+from monGARS.core.llm_integration import UnifiedLLMRuntime
 
 
 class FakeUnifiedLLMRuntime:

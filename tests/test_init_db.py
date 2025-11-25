@@ -34,9 +34,9 @@ if _missing_dependencies:
         allow_module_level=True,
     )
 
-from sqlalchemy.engine.url import make_url
+from sqlalchemy.engine.url import make_url  # noqa: E402
 
-from monGARS import init_db
+from monGARS import init_db  # noqa: E402
 
 
 def _load_init_db_script(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:

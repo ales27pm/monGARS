@@ -15,7 +15,6 @@ import importlib
 import importlib.util
 import json
 import logging
-import math
 import platform
 import statistics
 import sys
@@ -30,8 +29,8 @@ repo_root = Path(__file__).resolve().parents[1]
 if importlib.util.find_spec("monGARS") is None and str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from monGARS.mlops.pipelines import run_unsloth_finetune
-from monGARS.mlops.utils import configure_cuda_allocator, ensure_directory
+from monGARS.mlops.pipelines import run_unsloth_finetune  # noqa: E402
+from monGARS.mlops.utils import configure_cuda_allocator, ensure_directory  # noqa: E402
 
 logger = logging.getLogger("benchmark.unsloth_llm2vec")
 
@@ -40,7 +39,7 @@ _UNSLOTH_IMPORT_ERROR: Exception | None = None
 _NOT_IMPLEMENTED_SENTINEL = "Not" "ImplementedError"
 
 try:  # pragma: no cover - depends on runtime accelerators
-    import unsloth  # type: ignore
+    import unsloth  # type: ignore  # noqa: F401
 except ModuleNotFoundError as exc:
     _UNSLOTH_IMPORT_ERROR = exc
     logger.info("Unsloth is not installed; benchmark CLI will raise on execution.")

@@ -15,10 +15,7 @@ from typing import Any, Callable, Iterable, Sequence
 from transformers import PreTrainedTokenizerBase
 
 from datasets import Dataset, DatasetDict, load_dataset
-from monGARS.mlops.chat_templates import (
-    DOLPHIN_CHAT_TEMPLATE,
-    ensure_dolphin_chat_template,
-)
+from monGARS.mlops.chat_templates import ensure_dolphin_chat_template
 from monGARS.mlops.code_analysis import (
     LLMUsage,
     ModuleInteraction,

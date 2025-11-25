@@ -44,8 +44,11 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+import GPUtil
 import numpy as np
+import psutil
 import torch
+from pydantic import BaseModel, Field, validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
@@ -94,10 +97,6 @@ except ImportError as e:
     """
     )
     raise SystemExit(1)
-
-import GPUtil
-import psutil
-from pydantic import BaseModel, Field, validator
 
 # ---------------------------------------------------------------------------
 # Logging configuration
@@ -815,7 +814,7 @@ class EnhancedUnifiedModel:
             )
         text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         if text.startswith(prompt):
-            text = text[len(prompt) :].strip()
+            text = text[len(prompt):].strip()
         return text
 
     @memory_cleanup

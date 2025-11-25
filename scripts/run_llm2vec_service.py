@@ -259,31 +259,31 @@ class EmbeddingModel:
     def _l2_normalize(tensor: torch.Tensor) -> torch.Tensor:
         return tensor / tensor.norm(dim=-1, keepdim=True).clamp(min=1e-9)
 
-    def embed_texts(self, texts: List[str], batch_size: int) -> List[List[float]]:
-        if not texts:
-            raise ValueError("texts must be a non-empty list")
+        def embed_texts(self, texts: List[str], batch_size: int) -> List[List[float]]:
+            if not texts:
+                raise ValueError("texts must be a non-empty list")
 
-        embeddings: List[List[float]] = []
-        for start in range(0, len(texts), batch_size):
-            chunk = [str(item) for item in texts[start : start + batch_size]]
-            LOGGER.debug("Embedding batch %d:%d", start, start + len(chunk))
-            with torch.inference_mode():
-                encoded = self.tokenizer(
-                    chunk,
-                    padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors="pt",
-                )
-                encoded = {k: v.to(self.device) for k, v in encoded.items()}
-                outputs = self.model(**encoded)
-                last_hidden = self._extract_last_hidden(outputs)
-                pooled = self._pool(last_hidden, encoded["attention_mask"])
-                if self.normalize:
-                    pooled = self._l2_normalize(pooled)
-                embeddings.extend(pooled.to("cpu").tolist())
+            embeddings: List[List[float]] = []
+            for start in range(0, len(texts), batch_size):
+                chunk = [str(item) for item in texts[start:start + batch_size]]
+                LOGGER.debug("Embedding batch %d:%d", start, start + len(chunk))
+                with torch.inference_mode():
+                    encoded = self.tokenizer(
+                        chunk,
+                        padding=True,
+                        truncation=True,
+                        max_length=self.max_length,
+                        return_tensors="pt",
+                    )
+                    encoded = {k: v.to(self.device) for k, v in encoded.items()}
+                    outputs = self.model(**encoded)
+                    last_hidden = self._extract_last_hidden(outputs)
+                    pooled = self._pool(last_hidden, encoded["attention_mask"])
+                    if self.normalize:
+                        pooled = self._l2_normalize(pooled)
+                    embeddings.extend(pooled.to("cpu").tolist())
 
-        return embeddings
+            return embeddings
 
 
 # ---------------------------------------------------------------------------
