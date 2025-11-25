@@ -72,6 +72,7 @@ root, and that the LLM2Vec MNTP and SimCSE scripts live under
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -96,6 +97,32 @@ from monGARS.mlops.exporters import export_gguf
 from monGARS.mlops.pipelines.unsloth import run_unsloth_finetune
 
 LOGGER = logging.getLogger("mongars_multistage_pipeline")
+
+
+def _call_with_supported_kwargs(func, **kwargs):
+    """Invoke ``func`` with only the keyword arguments it supports.
+
+    This guards the pipeline against signature drift in lower-level helpers by
+    removing unsupported parameters rather than propagating a ``TypeError``
+    mid-run. Any skipped arguments are logged for visibility so that callers can
+    keep configurations aligned with the current API.
+    """
+
+    signature = inspect.signature(func)
+    accepted = {}
+    skipped = []
+    for key, value in kwargs.items():
+        if key in signature.parameters:
+            accepted[key] = value
+        else:
+            skipped.append(key)
+
+    if skipped:
+        LOGGER.warning(
+            "Skipping unsupported parameters for %s: %s", func.__name__, ", ".join(skipped)
+        )
+
+    return func(**accepted)
 
 
 @dataclass
@@ -432,7 +459,8 @@ def perform_sft(
         LOGGER.info("Starting SFT for module %s", module)
         mod_dir = run_dir / module
         mod_dir.mkdir(parents=True, exist_ok=True)
-        result = run_unsloth_finetune(
+        result = _call_with_supported_kwargs(
+            run_unsloth_finetune,
             model_id=base_model,
             output_dir=mod_dir,
             dataset_path=state.train_path,
@@ -599,7 +627,8 @@ def perform_export(
             run_subprocess(shlex.split(cmd), cwd=mod_dir)
             exported_files = [gguf_path] if gguf_path.exists() else []
         else:
-            export_gguf(
+            _call_with_supported_kwargs(
+                export_gguf,
                 source_dir=model_dir,
                 gguf_dir=gguf_dir,
                 quantization_method=method,
