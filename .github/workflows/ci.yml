@@ -23,6 +23,10 @@ env:
   MOBILE_NODE_VERSION: "18"
   PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
   UV_PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  # The upstream PyTorch project does not publish CPU-only images for 2.2.2.
+  # Use the closest available runtime image, which remains compatible with CPU
+  # environments, to keep CI docker builds green.
+  PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime
 
 jobs:
   changes:
@@ -363,7 +367,7 @@ jobs:
 
       - name: Build runtime image
         env:
-          PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cpu-py3.11
+          PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime
         run: |
           set -euo pipefail
           docker build \
