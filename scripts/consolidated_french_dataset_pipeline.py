@@ -1333,11 +1333,8 @@ class DatasetLoader:
         )
         self.dedup_engine: Optional[DeduplicationEngine] = None
 
-    def _is_trust_remote_code_allowed(self, dataset_config: DatasetConfig) -> bool:
-        """Check whether trust_remote_code can be enabled for a dataset."""
-
-        if not TRUST_REMOTE_CODE_SUPPORTED:
-            return False
+    def _should_attempt_trust_remote_code(self, dataset_config: DatasetConfig) -> bool:
+        """Check whether trust_remote_code is permitted/requested for a dataset."""
 
         if not dataset_config.allow_trust_remote_code:
             return False
@@ -1350,9 +1347,23 @@ class DatasetLoader:
             dataset_config.hf_path.lower().split("/")[-1],
         }
 
-        return self.config.allow_trust_remote_code or bool(
+        allow_requested = self.config.allow_trust_remote_code or bool(
             dataset_keys & self.config.trusted_remote_code_datasets
         )
+
+        if not allow_requested:
+            return False
+
+        if not TRUST_REMOTE_CODE_SUPPORTED:
+            self.logger.debug(
+                "trust_remote_code not supported by installed datasets version; proceeding "
+                "because it was explicitly allowed and relying on loader safeguards (dataset=%s, "
+                "hf_path=%s)",
+                dataset_config.name,
+                dataset_config.hf_path,
+            )
+
+        return True
 
     def set_dedup_engine(self, engine: DeduplicationEngine):
         """Set shared deduplication engine."""
@@ -1702,7 +1713,7 @@ class InstructionDatasetLoader(DatasetLoader):
 
         # Respect trust_remote_code guardrails
         needs_trust = dataset_config.requires_trust_remote_code
-        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+        allow_trust = self._should_attempt_trust_remote_code(dataset_config)
         if needs_trust and not allow_trust:
             self.logger.warning(
                 (
@@ -1995,7 +2006,7 @@ class XP3MultiLanguageLoader(InstructionDatasetLoader):
             return
 
         # Handle trust_remote_code allowlist using shared helper
-        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+        allow_trust = self._should_attempt_trust_remote_code(dataset_config)
         if dataset_config.requires_trust_remote_code and not allow_trust:
             msg = (
                 "xP3 requires trust_remote_code but it is disabled; "
@@ -2151,7 +2162,7 @@ class AyaCollectionLoader(InstructionDatasetLoader):
             return
 
         # trust_remote_code allowlist handling
-        allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+        allow_trust = self._should_attempt_trust_remote_code(dataset_config)
         if dataset_config.requires_trust_remote_code and not allow_trust:
             msg = (
                 "Aya collection requires trust_remote_code but it is disabled; "
@@ -2433,7 +2444,7 @@ class RetrievalDatasetLoader(DatasetLoader):
         )
 
         try:
-            allow_trust = self._is_trust_remote_code_allowed(dataset_config)
+            allow_trust = self._should_attempt_trust_remote_code(dataset_config)
 
             needs_trust = dataset_config.requires_trust_remote_code
             if needs_trust and not allow_trust:
