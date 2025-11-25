@@ -200,7 +200,7 @@ class LLMActionSuggester:
             elif char == "]" and depth > 0:
                 depth -= 1
                 if depth == 0 and start_index != -1:
-                    return stripped[start_index:index + 1]
+                    return stripped[start_index : index + 1]
 
         if inline := re.search(r"\[(?:[^\]\[]|\[[^\]]*\])*\]", stripped):
             return inline[0]
