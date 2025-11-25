@@ -1,6 +1,6 @@
 # Full-Stack Deployment Automation
 
-> **Last updated:** 2025-02-16 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The `scripts/full_stack_visual_deploy.py` helper orchestrates every
 prerequisite required to bring the monGARS research stack online. It

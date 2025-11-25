@@ -1,5 +1,7 @@
 # monGARS Unsloth Fine-Tuning Dataset
 
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This directory contains a curated JSONL dataset optimised for adapting `dphn/Dolphin-X1-8B` to monGARS-specific communication patterns. Each record pairs a prompt describing a system situation with a completion that encodes the canonical response structure monGARS should follow.
 
 ## File Overview
