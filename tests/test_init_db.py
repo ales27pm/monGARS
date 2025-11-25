@@ -10,7 +10,7 @@ import types
 from pathlib import Path
 
 import pytest
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine.url import make_url
 
 from monGARS import init_db
 

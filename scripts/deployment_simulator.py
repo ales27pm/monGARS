@@ -18,7 +18,7 @@ from typing import Any, Iterable, Literal, Sequence
 
 import yaml
 from pydantic import ValidationError
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
 from monGARS.config import Settings, ensure_secret_key, validate_jwt_configuration
