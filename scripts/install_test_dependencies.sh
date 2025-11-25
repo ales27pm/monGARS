@@ -2,4 +2,5 @@
 set -euo pipefail
 
 echo "Installing monGARS runtime and test dependencies..."
-pip install -r requirements.txt
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+pip install -r "$SCRIPT_DIR/../requirements.txt"

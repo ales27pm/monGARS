@@ -79,6 +79,7 @@ import random
 import shlex
 import subprocess
 import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -98,24 +99,78 @@ from monGARS.mlops.pipelines.unsloth import run_unsloth_finetune
 LOGGER = logging.getLogger("mongars_multistage_pipeline")
 
 
-def _stringify_paths(value: Any) -> Any:
-    """Recursively convert :class:`pathlib.Path` objects to strings for JSON serialization."""
+@dataclass
+class ModuleState:
+    train_path: Path
+    val_path: Path
+    n_train: int
+    n_val: int
+    adapter_dir: Optional[Path] = None
+    current_model_dir: Optional[Path] = None
+    gguf_path: Optional[Path] = None
 
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {k: _stringify_paths(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_stringify_paths(v) for v in value]
-    return value
+    def to_json(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        return {
+            key: (str(value) if isinstance(value, Path) else value)
+            for key, value in payload.items()
+        }
+
+    @classmethod
+    def from_json(cls, data: Dict[str, Any]) -> "ModuleState":
+        return cls(
+            train_path=Path(data["train_path"]),
+            val_path=Path(data["val_path"]),
+            n_train=int(data["n_train"]),
+            n_val=int(data["n_val"]),
+            adapter_dir=Path(data["adapter_dir"]) if data.get("adapter_dir") else None,
+            current_model_dir=Path(data["current_model_dir"]) if data.get("current_model_dir") else None,
+            gguf_path=Path(data["gguf_path"]) if data.get("gguf_path") else None,
+        )
 
 
-def save_state(path: Path, state: Dict[str, Any]) -> None:
+ModulesDict = Dict[str, ModuleState]
+
+
+def save_state(path: Path, datasets: Dict[str, Any], modules: ModulesDict) -> None:
     """Persist pipeline state to disk with path values converted to strings."""
 
-    serializable_state = _stringify_paths(state)
+    state = {
+        "datasets": datasets,
+        "modules": {name: module.to_json() for name, module in modules.items()},
+    }
     with path.open("w", encoding="utf-8") as f:
-        json.dump(serializable_state, f, indent=2)
+        json.dump(state, f, indent=2)
+
+
+def load_state(path: Path) -> Tuple[Dict[str, Any], ModulesDict]:
+    if not path.exists():
+        return {}, {}
+    with path.open("r", encoding="utf-8") as f:
+        raw_state = json.load(f)
+    modules = {
+        name: ModuleState.from_json(data)
+        for name, data in raw_state.get("modules", {}).items()
+    }
+    return raw_state.get("datasets", {}), modules
+
+
+def parse_module_from_instruction(instr: str) -> Tuple[str, str]:
+    """Extract module name and instruction text from a ``[MOD=...]`` prefix.
+
+    Returns a tuple of ``(module_name, stripped_instruction)``. If no prefix is
+    present or the prefix is malformed, the module defaults to "General" and the
+    original instruction is returned unchanged.
+    """
+
+    if instr.startswith("[MOD="):
+        end = instr.find("]")
+        if end > 5:
+            module = instr[5:end]
+            stripped = instr[end + 1 :].lstrip()
+            return module, stripped
+        LOGGER.warning("Malformed module prefix found in instruction: %s", instr)
+    return "General", instr
 
 
 def run_subprocess(
@@ -123,11 +178,13 @@ def run_subprocess(
 ) -> None:
     """Execute a command via subprocess and raise on failure."""
 
+    if not cmd:
+        raise ValueError("Command cannot be empty")
     cmd_str = " ".join(shlex.quote(str(c)) for c in cmd)
     LOGGER.info("Running command: %s", cmd_str)
     proc_env = os.environ.copy()
     if env:
-        proc_env.update(env)
+        proc_env |= env
     result = subprocess.run(cmd, cwd=cwd, env=proc_env)
     if result.returncode != 0:
         raise RuntimeError(
@@ -219,7 +276,7 @@ def build_internal_instruction_datasets(
     val_split: float = 0.06,
     split_seed: int = 42,
     min_val_examples: int = 1,
-) -> Dict[str, Dict[str, Any]]:
+) -> ModulesDict:
     """
     Build monGARS internal datasets by statically analysing the codebase.
 
@@ -241,10 +298,10 @@ def build_internal_instruction_datasets(
 
     Returns
     -------
-    Dict[str, Dict[str, Any]]
-        A mapping from module name to a dictionary containing paths and counts for
-        the training and validation files.  The returned structure matches that
-        produced by the interactive pipeline’s ``build_datasets`` helper.
+    ModulesDict
+        A mapping from module name to its dataset metadata. The returned
+        structure matches that produced by the interactive pipeline’s
+        ``build_datasets`` helper.
     """
     LOGGER.info("Scanning repository for LLM usage...")
     usages = scan_llm_usage(repo_root)
@@ -265,31 +322,25 @@ def build_internal_instruction_datasets(
     # Load and group by [MOD=module] annotation
     records: List[Dict[str, Any]] = []
     for path in [strategy_path, interaction_path]:
-        for rec in prepare_local_instruction_dataset(path):
-            records.append(rec)
+        records.extend(iter(prepare_local_instruction_dataset(path)))
 
     examples_by_module: Dict[str, List[Dict[str, str]]] = {}
     for rec in records:
-        instr: str = rec["instruction"]
-        if instr.startswith("[MOD="):
-            end = instr.find("]")
-            module = instr[5:end]
-            payload = {
-                "instruction": instr[end + 2 :],
-                "input": rec.get("input", ""),
-                "output": rec["output"],
-            }
-            examples_by_module.setdefault(module, []).append(payload)
-        else:
-            # Records without a [MOD=...] tag are grouped under "General"
-            examples_by_module.setdefault("General", []).append(rec)
+        module, stripped_instr = parse_module_from_instruction(rec["instruction"])
+        payload = {
+            **rec,
+            "instruction": stripped_instr,
+            "input": rec.get("input", ""),
+            "output": rec["output"],
+        }
+        examples_by_module.setdefault(module, []).append(payload)
 
-    random.seed(split_seed)
-    module_info: Dict[str, Dict[str, Any]] = {}
+    rng = random.Random(split_seed)
+    module_info: ModulesDict = {}
     for module, recs in examples_by_module.items():
         if not recs:
             continue
-        random.shuffle(recs)
+        rng.shuffle(recs)
         total = len(recs)
         n_val = max(min_val_examples, int(total * val_split)) if total > 1 else 0
         n_val = min(n_val, total)
@@ -306,12 +357,12 @@ def build_internal_instruction_datasets(
         with val_path.open("w", encoding="utf-8") as vf:
             for ex in val_recs:
                 vf.write(json.dumps(ex, ensure_ascii=False) + "\n")
-        module_info[module] = {
-            "train_path": train_path,
-            "val_path": val_path,
-            "n_train": len(train_recs),
-            "n_val": len(val_recs),
-        }
+        module_info[module] = ModuleState(
+            train_path=train_path,
+            val_path=val_path,
+            n_train=len(train_recs),
+            n_val=len(val_recs),
+        )
         LOGGER.info(
             "Module %s → %d train examples, %d val examples",
             module,
@@ -329,7 +380,7 @@ def build_internal_instruction_datasets(
 
 
 def perform_sft(
-    modules: Dict[str, Dict[str, Any]],
+    modules: ModulesDict,
     run_dir: Path,
     base_model: str,
     lora_r: int = 64,
@@ -345,7 +396,7 @@ def perform_sft(
 
     Parameters
     ----------
-    modules: dict
+    modules: ModulesDict
         Mapping of module names to dataset information as returned by
         ``build_internal_instruction_datasets``.
     run_dir: Path
@@ -366,17 +417,15 @@ def perform_sft(
     The resulting adapter directories are stored back into the ``modules`` mapping
     for later stages.
     """
-    for module, info in modules.items():
+    for module, state in modules.items():
         LOGGER.info("Starting SFT for module %s", module)
         mod_dir = run_dir / module
         mod_dir.mkdir(parents=True, exist_ok=True)
         adapter_dir = mod_dir / "chat_lora"
         adapter_dir.mkdir(parents=True, exist_ok=True)
-        train_path = Path(info["train_path"]).expanduser()
-        val_path = Path(info["val_path"]).expanduser()
         dataset_spec = {
-            "train": str(train_path),
-            "validation": str(val_path),
+            "train": str(state.train_path),
+            "validation": str(state.val_path),
         }
         run_unsloth_finetune(
             model_id=base_model,
@@ -412,12 +461,12 @@ def perform_sft(
             activation_buffer_mb=1024,
         )
         write_wrapper_bundle(wrapper_cfg, mod_dir)
-        info["adapter_dir"] = str(adapter_dir)
-        info["current_model_dir"] = str(adapter_dir)
+        state.adapter_dir = adapter_dir
+        state.current_model_dir = adapter_dir
 
 
 def perform_llm2vec(
-    modules: Dict[str, Dict[str, Any]],
+    modules: ModulesDict,
     run_dir: Path,
     llm2vec_root: Path,
     mntp_config: Path,
@@ -428,8 +477,8 @@ def perform_llm2vec(
 
     Parameters
     ----------
-    modules: dict
-        Mapping of module names to dataset/adaptation information.  The mapping
+    modules: ModulesDict
+        Mapping of module names to dataset/adaptation information. The mapping
         will be updated in place with ``current_model_dir`` pointing to the
         SimCSE-adapted model directory.
     run_dir: Path
@@ -448,18 +497,17 @@ def perform_llm2vec(
         raise FileNotFoundError(
             f"Could not locate LLM2Vec scripts at {mntp_script} and {simcse_script}."
         )
-    for module, info in modules.items():
-        model_dir = info.get("current_model_dir")
+    for module, state in modules.items():
+        model_dir = state.current_model_dir
         if not model_dir:
             LOGGER.warning("No model dir for module %s; skipping LLM2Vec", module)
             continue
-        model_dir_path = Path(model_dir).expanduser()
         mod_dir = run_dir / module
         LOGGER.info("Running MNTP for module %s", module)
         mntp_out = mod_dir / "mntp"
         mntp_out.mkdir(parents=True, exist_ok=True)
         env = {
-            "LLM2VEC_BASE_MODEL_DIR": str(model_dir_path),
+            "LLM2VEC_BASE_MODEL_DIR": str(model_dir),
             "LLM2VEC_OUTPUT_DIR": str(mntp_out),
         }
         run_subprocess(
@@ -482,11 +530,11 @@ def perform_llm2vec(
             env=env,
         )
         LOGGER.info("SimCSE complete for module %s", module)
-        info["current_model_dir"] = str(simcse_out)
+        state.current_model_dir = simcse_out
 
 
 def perform_raft(
-    modules: Dict[str, Dict[str, Any]],
+    modules: ModulesDict,
     run_dir: Path,
     retrieval_corpus: Optional[Path] = None,
     context_length: int = 1024,
@@ -501,7 +549,7 @@ def perform_raft(
 
     Parameters
     ----------
-    modules: dict
+    modules: ModulesDict
         Mapping of module names to dataset/adaptation information.
     run_dir: Path
         Directory containing per-module subdirectories.
@@ -521,7 +569,7 @@ def perform_raft(
 
 
 def perform_export(
-    modules: Dict[str, Dict[str, Any]],
+    modules: ModulesDict,
     run_dir: Path,
     base_model: str,
     method: str = "auto",
@@ -532,8 +580,8 @@ def perform_export(
 
     Parameters
     ----------
-    modules: dict
-        Mapping of module names to dataset/adaptation information.  It will be
+    modules: ModulesDict
+        Mapping of module names to dataset/adaptation information. It will be
         updated with ``gguf_path`` pointing to the exported file.
     run_dir: Path
         Directory containing per-module subdirectories.
@@ -548,30 +596,29 @@ def perform_export(
         and executed as a shell command to perform the export.  Use this when
         you have a custom exporter not covered by the built-in ``export_gguf``.
     """
-    for module, info in modules.items():
-        model_dir = info.get("current_model_dir")
+    for module, state in modules.items():
+        model_dir = state.current_model_dir
         if not model_dir:
             LOGGER.warning("No model directory for module %s; skipping export", module)
             continue
-        model_dir_path = Path(model_dir).expanduser()
         mod_dir = run_dir / module
         gguf_dir = mod_dir / "gguf"
         gguf_dir.mkdir(parents=True, exist_ok=True)
         gguf_path = gguf_dir / f"{module}.gguf"
         if export_cmd_template:
             cmd = export_cmd_template.format(
-                model_dir=model_dir_path, gguf_path=gguf_path
+                model_dir=model_dir, gguf_path=gguf_path
             )
             run_subprocess(shlex.split(cmd), cwd=mod_dir)
         else:
             export_gguf(
                 model=base_model,
-                lora_dir=str(model_dir_path),
+                lora_dir=str(model_dir),
                 output_dir=str(gguf_dir),
                 method=method,
             )
         LOGGER.info("Exported module %s to %s", module, gguf_path)
-        info["gguf_path"] = str(gguf_path)
+        state.gguf_path = gguf_path
 
 
 def parse_cli() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
@@ -593,8 +640,11 @@ def parse_cli() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
     )
     parser.add_argument(
         "--base-model",
-        required=True,
-        help="HuggingFace model identifier to use as the base model for SFT.",
+        default=None,
+        help=(
+            "HuggingFace model identifier to use as the base model for SFT and export. "
+            "Required when running --sft or --export."
+        ),
     )
     parser.add_argument(
         "--languages",
@@ -617,20 +667,27 @@ def parse_cli() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
     parser.add_argument(
         "--mntp-config",
         type=str,
-        required=True,
-        help="Path to LLM2Vec MNTP config JSON",
+        default=None,
+        help=(
+            "Path to LLM2Vec MNTP config JSON. Required when running the LLM2Vec stage."
+        ),
     )
     parser.add_argument(
         "--simcse-config",
         type=str,
-        required=True,
-        help="Path to LLM2Vec SimCSE config JSON",
+        default=None,
+        help=(
+            "Path to LLM2Vec SimCSE config JSON. Required when running the LLM2Vec stage."
+        ),
     )
     parser.add_argument(
         "--llm2vec-root",
         type=str,
-        required=True,
-        help="Root directory of the LLM2Vec repository (contains experiments/).",
+        default=None,
+        help=(
+            "Root directory of the LLM2Vec repository (contains experiments/). "
+            "Required when running the LLM2Vec stage."
+        ),
     )
     parser.add_argument(
         "--build-datasets",
@@ -726,11 +783,7 @@ def main() -> None:
 
     # Prepare state storage
     state_path = run_dir / "state.json"
-    if state_path.exists():
-        with state_path.open("r", encoding="utf-8") as f:
-            state: Dict[str, Any] = json.load(f)
-    else:
-        state = {"datasets": {}, "modules": {}}
+    datasets, modules = load_state(state_path)
 
     # Stage 1: dataset generation
     if args.build_datasets:
@@ -742,37 +795,30 @@ def main() -> None:
             output_dir=french_output,
             languages=languages,
         )
-        state["datasets"]["french"] = {k: str(v) for k, v in ds_paths.items()}
+        datasets["french"] = {k: str(v) for k, v in ds_paths.items()}
         # Internal instruction datasets
         internal_output = run_dir / "internal_datasets"
-        module_info = build_internal_instruction_datasets(
+        modules = build_internal_instruction_datasets(
             repo_root=repo_root,
             output_dir=internal_output,
             val_split=args.val_split,
             split_seed=args.split_seed,
         )
-        state["modules"] = {
-            m: {
-                "train_path": str(info["train_path"]),
-                "val_path": str(info["val_path"]),
-                "n_train": info["n_train"],
-                "n_val": info["n_val"],
-            }
-            for m, info in module_info.items()
-        }
-        save_state(state_path, state)
+        save_state(state_path, datasets, modules)
         LOGGER.info(
             "Dataset generation complete.  Stored dataset info in %s", state_path
         )
 
     # Stage 2: SFT
     if args.sft:
-        if not state.get("modules"):
+        if not modules:
             raise RuntimeError(
                 "No modules found in state.  Run --build-datasets first."
             )
+        if not args.base_model:
+            raise ValueError("--base-model is required when running SFT")
         perform_sft(
-            modules=state["modules"],
+            modules=modules,
             run_dir=run_dir,
             base_model=args.base_model,
             lora_r=args.lora_r,
@@ -783,25 +829,29 @@ def main() -> None:
             vram_budget_mb=args.vram_budget_mb,
             hf_token=args.hf_token,
         )
-        save_state(state_path, state)
+        save_state(state_path, datasets, modules)
         LOGGER.info(
             "SFT completed for all modules.  Updated state saved to %s", state_path
         )
 
     # Stage 3: LLM2Vec
     if args.llm2vec:
-        if not state.get("modules"):
+        if not modules:
             raise RuntimeError(
                 "No modules available for LLM2Vec adaptation.  Run previous stages first."
             )
+        if not args.llm2vec_root or not args.mntp_config or not args.simcse_config:
+            raise ValueError(
+                "--llm2vec-root, --mntp-config, and --simcse-config are required when running LLM2Vec"
+            )
         perform_llm2vec(
-            modules=state["modules"],
+            modules=modules,
             run_dir=run_dir,
             llm2vec_root=Path(args.llm2vec_root).resolve(),
             mntp_config=Path(args.mntp_config).resolve(),
             simcse_config=Path(args.simcse_config).resolve(),
         )
-        save_state(state_path, state)
+        save_state(state_path, datasets, modules)
         LOGGER.info(
             "LLM2Vec adaptation completed for all modules.  Updated state saved to %s",
             state_path,
@@ -810,25 +860,27 @@ def main() -> None:
     # Stage 4: RAFT
     if args.raft:
         perform_raft(
-            modules=state.get("modules", {}),
+            modules=modules,
             run_dir=run_dir,
         )
-        save_state(state_path, state)
+        save_state(state_path, datasets, modules)
 
     # Stage 5: Export
     if args.export:
-        if not state.get("modules"):
+        if not modules:
             raise RuntimeError(
                 "No modules available for export.  Run previous stages first."
             )
+        if not args.base_model:
+            raise ValueError("--base-model is required when exporting")
         perform_export(
-            modules=state["modules"],
+            modules=modules,
             run_dir=run_dir,
             base_model=args.base_model,
             method=args.export_method,
             export_cmd_template=args.export_cmd,
         )
-        save_state(state_path, state)
+        save_state(state_path, datasets, modules)
         LOGGER.info("Export completed for all modules.  State saved to %s", state_path)
 
     if not any([args.build_datasets, args.sft, args.llm2vec, args.raft, args.export]):

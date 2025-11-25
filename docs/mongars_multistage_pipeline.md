@@ -1,6 +1,6 @@
 # monGARS multi-stage pipeline runbook
 
-> **Last updated:** 2026-06-02
+> **Last updated:** 2026-06-03
 
 This runbook explains how to operate `mongars_multistage_pipeline.py`, the
 end-to-end CLI that assembles dataset generation, supervised fine-tuning (SFT),
@@ -12,25 +12,28 @@ repository without stitching together individual scripts.
 - Python 3.11 with the repository installed (`pip install -e .` or inside the
   repo root) so imports under `monGARS.mlops` resolve.
 - Access to the LLM2Vec repository with `experiments/run_mntp.py` and
-  `experiments/run_simcse.py` available on disk.
+  `experiments/run_simcse.py` available on disk (only when running the
+  `--llm2vec` stage).
 - A Hugging Face model identifier for the base model (e.g.
-  `mistralai/Mistral-7B-v0.2`) and an optional HF token for private weights.
+  `mistralai/Mistral-7B-v0.2`) and an optional HF token for private weights
+  (only when running `--sft` and/or `--export`).
 - Sufficient GPU VRAM for Unsloth/QLoRA training (defaults assume ~24GB). If
   dependencies are missing locally, run `scripts/install_test_dependencies.sh`
   to install the runtime/test stack before launching the pipeline.
 
 ## Quick start
-Run from the repository root so the relative paths resolve:
+Run from the repository root so the relative paths resolve. Include only the
+flags for the stages you plan to execute:
 
 ```bash
 python mongars_multistage_pipeline.py \
   --run-id myexperiment \
   --repo-root . \
+  --build-datasets --sft --llm2vec --export \
   --base-model mistralai/Mistral-7B-v0.2 \
   --mntp-config path/to/mntp_config.json \
   --simcse-config path/to/simcse_config.json \
-  --llm2vec-root /path/to/llm2vec \
-  --build-datasets --sft --llm2vec --export
+  --llm2vec-root /path/to/llm2vec
 ```
 
 ### Stage-specific runs
@@ -38,6 +41,7 @@ python mongars_multistage_pipeline.py \
 - Resume SFT after datasets exist: `python mongars_multistage_pipeline.py --run-id demo --sft --base-model <id>`
 - Apply LLM2Vec to existing adapters: `python mongars_multistage_pipeline.py --run-id demo --llm2vec --mntp-config <file> --simcse-config <file> --llm2vec-root <path>`
 - Export current adapters to GGUF: `python mongars_multistage_pipeline.py --run-id demo --export --base-model <id>`
+- Run export only (relying on previous state): `python mongars_multistage_pipeline.py --run-id demo --export --base-model <id>`
 
 ## How the stages behave
 - **Dataset generation**
@@ -73,7 +77,9 @@ python mongars_multistage_pipeline.py \
   `current_model_dir` per module.
 - Re-running with new stage flags reads the existing state to skip completed
   work. If `state.json` is missing or corrupted, regenerate datasets with
-  `--build-datasets` before continuing.
+  `--build-datasets` before continuing. The CLI validates stage-specific
+  requirements (e.g., `--base-model` for SFT/export and LLM2Vec paths for the
+  LLM2Vec stage) before starting work.
 - Outputs remain isolated per `--run-id`; use different run IDs to compare
   hyperparameters without clobbering artefacts.
 
