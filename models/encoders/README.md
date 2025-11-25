@@ -1,6 +1,6 @@
 # Encoder Artefact Registry
 
-> **Last updated:** 2025-05-18 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This directory stores trained LLM2Vec adapter weights and metadata consumed by
 `monGARS.core.llm_integration` and the evolution engine.

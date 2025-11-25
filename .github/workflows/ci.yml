@@ -91,6 +91,37 @@ jobs:
             echo "- Workflows: ${{ steps.filter.outputs.workflows }}";
           } >> "$GITHUB_STEP_SUMMARY"
 
+  docs-metadata:
+    name: Docs metadata guardrail
+    needs: changes
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.docs == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Sync documentation metadata
+        run: |
+          set -euo pipefail
+          python scripts/update_docs_metadata.py docs README.md ROADMAP.md .github/ISSUE_TEMPLATE .github/PULL_REQUEST_TEMPLATE.md
+
+      - name: Fail on drift
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet; then
+            echo "Detected outdated Last updated banners. Run python scripts/update_docs_metadata.py locally." >&2
+            git status --short
+            git diff --stat
+            exit 1
+          fi
+
   python:
     name: Backend lint, typecheck & tests
     needs: changes
