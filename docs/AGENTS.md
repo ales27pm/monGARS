@@ -35,6 +35,8 @@ Covers runbooks, API references, and architectural notes under `docs/`.
     `docs/testing.md`, deployment ports, feature flags).
 - Document new configuration keys, sustainability controls, or operator workflows before declaring
     roadmap items complete.
+- Sync `docs/mongars_multistage_pipeline.md` with pipeline CLI changes so operators can run the staged
+    workflow without reading code.
 
 ## Cross-Linking
 

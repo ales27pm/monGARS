@@ -53,7 +53,8 @@
           "heading": "Documentation & Runbooks",
           "bullets": [
             "Update runbooks, diagrams, and `monGARS_structure.txt` whenever module layout or workflows shift.",
-            "Cross-link roadmap entries, docs, and code so operators can trace feature readiness and configuration changes."
+            "Cross-link roadmap entries, docs, and code so operators can trace feature readiness and configuration changes.",
+            "Capture multi-stage training/export updates in `docs/mongars_multistage_pipeline.md` whenever the CLI or orchestration flow changes."
           ]
         },
         {
@@ -459,7 +460,8 @@
           "heading": "Maintenance",
           "bullets": [
             "Update metrics, counts, and configuration tables when behaviour changes (e.g., test totals in `docs/testing.md`, deployment ports, feature flags).",
-            "Document new configuration keys, sustainability controls, or operator workflows before declaring roadmap items complete."
+            "Document new configuration keys, sustainability controls, or operator workflows before declaring roadmap items complete.",
+            "Sync `docs/mongars_multistage_pipeline.md` with pipeline CLI changes so operators can run the staged workflow without reading code."
           ]
         },
         {
