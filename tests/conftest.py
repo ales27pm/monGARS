@@ -5,7 +5,29 @@ import os
 import warnings
 
 import pytest
-import pytest_asyncio
+
+try:
+    import pytest_asyncio
+except ImportError:  # pragma: no cover - dependency guard for lightweight test runs
+    class _PytestAsyncioFallback:
+        """Provide a graceful skip when pytest-asyncio is not installed."""
+
+        @staticmethod
+        def fixture(*args, **kwargs):
+            def decorator(func):
+                @pytest.fixture(*args, **kwargs)
+                def wrapper(*fargs, **fkwargs):
+                    pytest.skip(
+                        "pytest-asyncio is required for async fixtures; install monGARS[test] "
+                        "or add pytest-asyncio to your environment to run this test.",
+                        allow_module_level=False,
+                    )
+
+                return wrapper
+
+            return decorator
+
+    pytest_asyncio = _PytestAsyncioFallback()
 
 # Ensure the lightweight sqlite backend is used for tests to avoid external
 # database dependencies while pgvector-backed code paths remain exercised in
