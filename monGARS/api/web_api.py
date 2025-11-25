@@ -104,8 +104,9 @@ except Exception:  # pragma: no cover - defensive fallback
     _RayServeException = None
 
 
-class _RayServeUnavailable(Exception):
+class _RayServeUnavailable(RuntimeError):
     """Sentinel used when Ray Serve is not installed."""
+
 
 try:
     from opentelemetry import trace

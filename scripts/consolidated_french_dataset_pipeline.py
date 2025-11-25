@@ -2685,7 +2685,7 @@ class MIRACLLoader(RetrievalDatasetLoader):
                 if key == "languages":
                     for lang_code, count in value.items():
                         self.metadata["languages"][lang_code] += count
-                elif isinstance(value, int) or isinstance(value, float):
+                elif isinstance(value, (int, float)):
                     self.metadata[key] = self.metadata.get(key, 0) + value
 
             total_pairs += lang_loader.metadata["examples_used"]
