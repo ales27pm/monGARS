@@ -361,13 +361,40 @@ def build_internal_instruction_datasets(
         records.extend(_load_jsonl_records(path))
 
     examples_by_module: Dict[str, List[Dict[str, str]]] = {}
+
     for rec in records:
-        module, stripped_instr = parse_module_from_instruction(rec["instruction"])
+        # Be robust to schema drift between helper functions – they might emit
+        # "instruction" or "prompt"/"query"/"question".
+        instr = (
+            rec.get("instruction")
+            or rec.get("prompt")
+            or rec.get("query")
+            or rec.get("question")
+        )
+
+        if not instr:
+            LOGGER.warning(
+                "Skipping record without instruction/prompt-like field: %s", rec
+            )
+            continue
+
+        # Extract module prefix if present: [MOD=Something] Rest of the instruction...
+        module, stripped_instr = parse_module_from_instruction(instr)
+
+        # Normalise output / target field
+        output = (
+            rec.get("output")
+            or rec.get("completion")
+            or rec.get("answer")
+            or rec.get("response")
+            or ""
+        )
+
         payload = {
             **rec,
             "instruction": stripped_instr,
             "input": rec.get("input", ""),
-            "output": rec["output"],
+            "output": output,
         }
         examples_by_module.setdefault(module, []).append(payload)
 
