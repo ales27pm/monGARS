@@ -352,7 +352,7 @@ def build_internal_instruction_datasets(
     strategy_path = tmp_dir / "strategy_data.jsonl"
     interaction_path = tmp_dir / "interaction_data.jsonl"
 
-    build_mongars_strategy_dataset(usages, interactions, strategy_path)
+    build_mongars_strategy_dataset(usages, strategy_path)
     build_module_interaction_dataset(interactions, interaction_path)
 
     # Load and group by [MOD=module] annotation
