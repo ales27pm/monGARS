@@ -49,7 +49,9 @@ def patch_hf_datasets_for_list_feature() -> None:
             )
         else:
             # On 4.x+ 'List' is already present; nothing to do.
-            logger.debug("HF datasets compat: 'List' feature already registered; no-op.")
+            logger.debug(
+                "HF datasets compat: 'List' feature already registered; no-op."
+            )
 
     except Exception as e:
         logger.exception(
