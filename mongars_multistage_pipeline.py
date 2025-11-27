@@ -838,7 +838,10 @@ def parse_cli() -> Tuple[argparse.ArgumentParser, argparse.Namespace]:
     )
     return parser, parser.parse_args()
 
-def run_interactive_menu(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+
+def run_interactive_menu(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> None:
     """
     Interactive menu for configuring and running the monGARS pipeline.
 
@@ -854,7 +857,9 @@ def run_interactive_menu(args: argparse.Namespace, parser: argparse.ArgumentPars
 
     # Determine sensible defaults from provided args.
     default_run_id = getattr(args, "run_id", None) or "001"
-    run_id = input(f"Enter a unique run identifier [default: {default_run_id}]: ").strip()
+    run_id = input(
+        f"Enter a unique run identifier [default: {default_run_id}]: "
+    ).strip()
     if not run_id:
         run_id = default_run_id
 
@@ -879,6 +884,7 @@ def run_interactive_menu(args: argparse.Namespace, parser: argparse.ArgumentPars
 
     # Prompt for stage selection
     print("\nSelect stages to run (answer yes/no for each):")
+
     def yes_no(prompt: str, default: bool = False) -> bool:
         resp = input(prompt).strip().lower()
         if not resp:
@@ -888,7 +894,9 @@ def run_interactive_menu(args: argparse.Namespace, parser: argparse.ArgumentPars
     build_ds = yes_no("1. Build datasets? [y/N]: ", default=False)
     run_sft = yes_no("2. Supervised fine‑tuning (SFT)? [y/N]: ", default=False)
     run_llm2vec = yes_no("3. LLM2Vec adaptation? [y/N]: ", default=False)
-    run_raft = yes_no("4. Retrieval‑augmented fine‑tuning (RAFT)? [y/N]: ", default=False)
+    run_raft = yes_no(
+        "4. Retrieval‑augmented fine‑tuning (RAFT)? [y/N]: ", default=False
+    )
     run_export = yes_no("5. Export to GGUF? [y/N]: ", default=False)
 
     # Dataset parameters
@@ -901,7 +909,11 @@ def run_interactive_menu(args: argparse.Namespace, parser: argparse.ArgumentPars
         languages_in = input(
             f"Languages for French dataset (comma‑separated) [default: {lang_default}]: "
         ).strip()
-        languages = [lang.strip() for lang in (languages_in or lang_default).split(",") if lang.strip()]
+        languages = [
+            lang.strip()
+            for lang in (languages_in or lang_default).split(",")
+            if lang.strip()
+        ]
 
         max_in = input(
             "Maximum examples per dataset (leave blank for unlimited/default): "
@@ -1010,13 +1022,9 @@ def run_interactive_menu(args: argparse.Namespace, parser: argparse.ArgumentPars
             "Path to LLM2Vec repository root (containing experiments/) (required): "
         ).strip()
         llm2vec_root = Path(root_in).resolve() if root_in else None
-        mntp_in = input(
-            "Path to LLM2Vec MNTP config JSON (required): "
-        ).strip()
+        mntp_in = input("Path to LLM2Vec MNTP config JSON (required): ").strip()
         mntp_config = Path(mntp_in).resolve() if mntp_in else None
-        simcse_in = input(
-            "Path to LLM2Vec SimCSE config JSON (required): "
-        ).strip()
+        simcse_in = input("Path to LLM2Vec SimCSE config JSON (required): ").strip()
         simcse_config = Path(simcse_in).resolve() if simcse_in else None
 
         if not llm2vec_root or not mntp_config or not simcse_config:
