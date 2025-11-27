@@ -8,10 +8,8 @@ Covers runbooks, API references, and architectural notes under `docs/`.
 
 ## Automation
 
-- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
-    scripts/manage_agents.py refresh` instead of editing charters manually.
-- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
-    is detected—apply it locally with `git apply docs_metadata.patch`.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -28,20 +26,18 @@ Covers runbooks, API references, and architectural notes under `docs/`.
 
 ## Style & Accuracy
 
-- Write in present tense, reference canonical module paths/tests, and refresh `Last updated` stamps
-    when present.
+- Write in present tense, reference canonical module paths/tests, and refresh `Last updated` stamps when present.
 - Include direct links to source files or diagrams so readers can jump to implementations quickly.
 
 ## Maintenance
 
-- Update metrics, counts, and configuration tables when behaviour changes (e.g., test totals in
-    `docs/testing.md`, deployment ports, feature flags).
-- Document new configuration keys, sustainability controls, or operator workflows before declaring
-    roadmap items complete.
-- Sync `docs/mongars_multistage_pipeline.md` with pipeline CLI changes so operators can run the staged
-    workflow without reading code.
+- Update metrics, counts, and configuration tables when behaviour changes (e.g., test totals in `docs/testing.md`,
+    deployment ports, feature flags).
+- Document new configuration keys, sustainability controls, or operator workflows before declaring roadmap items complete.
+- Sync `docs/mongars_multistage_pipeline.md` with pipeline CLI changes so operators can run the staged workflow without
+    reading code.
 
 ## Cross-Linking
 
-Cross-reference roadmap milestones and other docs when closing loops so contributors understand how
-features land across API, core, modules, and webapp layers.
+Cross-reference roadmap milestones and other docs when closing loops so contributors understand how features land across
+API, core, modules, and webapp layers.

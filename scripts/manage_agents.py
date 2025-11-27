@@ -169,7 +169,7 @@ def parse_roadmap(roadmap_path: Path) -> Mapping[str, List[str]]:
 
 
 def format_paragraph(text: str, indent: int = 0) -> List[str]:
-    wrapper = textwrap.TextWrapper(width=100, subsequent_indent=" " * indent)
+    wrapper = textwrap.TextWrapper(width=120, subsequent_indent=" " * indent)
     return wrapper.fill(text).splitlines() or [""]
 
 
@@ -286,6 +286,13 @@ def create_profile(
         else []
     )
 
+    defaults = config.get("defaults", {})
+    if defaults is not None and not isinstance(defaults, Mapping):
+        raise AgentsConfigError("`defaults` must be a mapping when provided")
+    base_dynamic_notes = validate_dynamic_notes(
+        defaults.get("dynamic_notes", []), "defaults.dynamic_notes"
+    )
+
     default_section = Section(
         heading="Implementation Checklist",
         bullets=[
@@ -325,9 +332,12 @@ def create_profile(
         path=relative_path,
         title=title,
         scope=scope,
-        dynamic_notes=[
-            "Generated via `scripts/manage_agents.py create`. Update the shared config and refresh to customise sections.",
-        ],
+        dynamic_notes=merge_dynamic_notes(
+            base_dynamic_notes,
+            [
+                "Generated via `scripts/manage_agents.py create`. Update the shared config and refresh to customise sections.",
+            ],
+        ),
         roadmap_focus=new_entry["roadmap_focus"],
         sections=[default_section],
     )

@@ -4,15 +4,12 @@
 
 ## Scope
 
-Applies to the Django project in `webapp/`, covering async views, services, templates, and
-middleware.
+Applies to the Django project in `webapp/`, covering async views, services, templates, and middleware.
 
 ## Automation
 
-- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
-    scripts/manage_agents.py refresh` instead of editing charters manually.
-- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
-    is detected—apply it locally with `git apply docs_metadata.patch`.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -25,21 +22,20 @@ middleware.
 
 ## Views & Services
 
-- Keep views asynchronous and delegate outbound HTTP calls to `chat/services.py` for centralised auth,
-    retries, logging, and WebSocket ticket exchange.
-- Pull configuration from environment variables/Django settings; never hardcode secrets or URLs and
-    keep parity with FastAPI settings.
+- Keep views asynchronous and delegate outbound HTTP calls to `chat/services.py` for centralised auth, retries, logging,
+    and WebSocket ticket exchange.
+- Pull configuration from environment variables/Django settings; never hardcode secrets or URLs and keep parity with
+    FastAPI settings.
 - Apply `require_token` to authenticated routes and document context variables in docstrings.
 
 ## Templates & Frontend
 
-- Keep business logic in views/services; templates focus on presentation with progressive enhancement
-    and localisation-ready strings.
-- Ensure JavaScript bundles built via `webapp/static/js/build.mjs` have graceful degradation paths;
-    run `npm run lint`/`npm run test` when editing them.
+- Keep business logic in views/services; templates focus on presentation with progressive enhancement and localisation-
+    ready strings.
+- Ensure JavaScript bundles built via `webapp/static/js/build.mjs` have graceful degradation paths; run `npm run
+    lint`/`npm run test` when editing them.
 
 ## Testing
 
-Update `tests/test_webapp_chat_services.py`, `tests/test_webapp_settings.py`,
-`tests/test_webapp_database_settings.py`, and `tests/test_websocket.py` when UI flows change; mock
-FastAPI interactions with `respx`/`httpx`.
+Update `tests/test_webapp_chat_services.py`, `tests/test_webapp_settings.py`, `tests/test_webapp_database_settings.py`,
+and `tests/test_websocket.py` when UI flows change; mock FastAPI interactions with `respx`/`httpx`.

@@ -142,7 +142,7 @@ jobs:
           fi
 
           echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "files<<'EOF'" >> "$GITHUB_OUTPUT"
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
           git diff --name-only >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
           git status --short
@@ -157,6 +157,7 @@ jobs:
           path: docs_metadata.patch
 
       - name: Summarise docs metadata maintenance
+        if: always()
         run: |
           if [ "${{ steps.docs-drift.outputs.changed }}" = "true" ]; then
             {
@@ -175,6 +176,12 @@ jobs:
               echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed, with no drift detected.";
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Fail on docs metadata drift
+        if: steps.docs-drift.outputs.changed == 'true' && github.event_name == 'pull_request'
+        run: |
+          echo "Docs metadata drift detected. Download the docs-metadata-fix artifact and apply it with 'git apply docs_metadata.patch'." >&2
+          exit 1
 
   python:
     name: Backend lint, typecheck & tests

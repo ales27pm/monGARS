@@ -8,10 +8,8 @@ Guides orchestrators, schedulers, and memory abstractions under `monGARS/core/`.
 
 ## Automation
 
-- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
-    scripts/manage_agents.py refresh` instead of editing charters manually.
-- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
-    is detected—apply it locally with `git apply docs_metadata.patch`.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -35,22 +33,21 @@ Guides orchestrators, schedulers, and memory abstractions under `monGARS/core/`.
 ## Architectural Principles
 
 - Keep orchestrators asynchronous, inject collaborators explicitly, and favour existing services
-    (`AdaptiveResponseGenerator`, `ConversationalModule`, `PeerCommunicator`, `LongHaulValidation`)
-    over ad-hoc state machines.
-- Route UI events through `ui_events.event_bus`, persist approvals via `operator_approvals`, and
-    coordinate sustainability metrics with `sustainability_dashboard` when adding new workflows.
+    (`AdaptiveResponseGenerator`, `ConversationalModule`, `PeerCommunicator`, `LongHaulValidation`) over ad-hoc state
+    machines.
+- Route UI events through `ui_events.event_bus`, persist approvals via `operator_approvals`, and coordinate sustainability
+    metrics with `sustainability_dashboard` when adding new workflows.
 
 ## Operational Discipline
 
-- Offload blocking work with `asyncio.to_thread` or executors and avoid sharing mutable globals across
-    tasks.
-- Emit metrics through `monGARS.telemetry`/OpenTelemetry where available and prefer timezone-aware
-    timestamps (`datetime.now(datetime.UTC)`) in new code.
+- Offload blocking work with `asyncio.to_thread` or executors and avoid sharing mutable globals across tasks.
+- Emit metrics through `monGARS.telemetry`/OpenTelemetry where available and prefer timezone-aware timestamps
+    (`datetime.now(datetime.UTC)`) in new code.
 - Handle optional ML dependencies defensively with explicit fallbacks and structured warnings.
 
 ## Test Coverage
 
 Expand cognition, reinforcement, and sustainability suites when behaviour
 shifts—`tests/test_conversation_semantic_context.py`, `tests/test_llm_integration.py`,
-`tests/test_peer_communication.py`, `tests/test_reinforcement_loop.py`,
-`tests/test_long_haul_validation.py`, and `tests/test_sustainability_dashboard.py` anchor this area.
+`tests/test_peer_communication.py`, `tests/test_reinforcement_loop.py`, `tests/test_long_haul_validation.py`, and
+`tests/test_sustainability_dashboard.py` anchor this area.

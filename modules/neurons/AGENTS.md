@@ -8,10 +8,8 @@ Applies to neuron trainers and utilities under `modules/neurons/`.
 
 ## Automation
 
-- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
-    scripts/manage_agents.py refresh` instead of editing charters manually.
-- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
-    is detected—apply it locally with `git apply docs_metadata.patch`.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -27,16 +25,16 @@ Applies to neuron trainers and utilities under `modules/neurons/`.
 
 ## Runtime Expectations
 
-- Import heavy ML frameworks lazily; fall back gracefully when dependencies are missing and document
-    deterministic adapter paths.
-- Accept explicit arguments for output directories, manifests, approvals, and config paths so
-    orchestration remains testable.
-- Persist artefacts with helper methods (e.g., `_save_config`, `_save_placeholder`) and document
-    layouts in docstrings for catalog consumers.
+- Import heavy ML frameworks lazily; fall back gracefully when dependencies are missing and document deterministic adapter
+    paths.
+- Accept explicit arguments for output directories, manifests, approvals, and config paths so orchestration remains
+    testable.
+- Persist artefacts with helper methods (e.g., `_save_config`, `_save_placeholder`) and document layouts in docstrings for
+    catalog consumers.
 
 ## Telemetry & Tests
 
-- Stream progress logs with model, dataset, loss, and sustainability context; emit metrics when long-
-    running jobs are introduced.
-- Keep `tests/test_mntp_trainer.py`, `tests/test_reinforcement_loop.py`, and
-    `tests/test_training_pipeline.py` up to date and constrain property-based tests for speed.
+- Stream progress logs with model, dataset, loss, and sustainability context; emit metrics when long-running jobs are
+    introduced.
+- Keep `tests/test_mntp_trainer.py`, `tests/test_reinforcement_loop.py`, and `tests/test_training_pipeline.py` up to date
+    and constrain property-based tests for speed.

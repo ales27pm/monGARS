@@ -8,10 +8,8 @@ Covers optional subsystems under `modules/`, including evolution and neuron trai
 
 ## Automation
 
-- Auto-generated; update `configs/agents/agents_config.json` and rerun `python
-    scripts/manage_agents.py refresh` instead of editing charters manually.
-- CI reruns the refresh in the docs-metadata guardrail and publishes `docs_metadata.patch` when drift
-    is detected—apply it locally with `git apply docs_metadata.patch`.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -27,17 +25,16 @@ Covers optional subsystems under `modules/`, including evolution and neuron trai
 
 ## Design Tenets
 
-- Gate heavy dependencies (Torch, datasets, GPU tooling) behind runtime checks with informative
-    warnings and deterministic fallbacks.
-- Accept configuration via explicit parameters or config bundles from `configs/` and surface artefact
-    metadata for the catalog.
-- Log with contextual metadata (model, dataset, artefact path) using `logging.getLogger(__name__)` and
-    feed sustainability metrics when available.
+- Gate heavy dependencies (Torch, datasets, GPU tooling) behind runtime checks with informative warnings and deterministic
+    fallbacks.
+- Accept configuration via explicit parameters or config bundles from `configs/` and surface artefact metadata for the
+    catalog.
+- Log with contextual metadata (model, dataset, artefact path) using `logging.getLogger(__name__)` and feed sustainability
+    metrics when available.
 
 ## Documentation & Testing
 
-- Add scoped AGENTS.md files for new subpackages and update `monGARS_structure.txt` when landing
-    modules.
-- Keep `tests/test_evolution_engine.py`, `tests/test_training_pipeline.py`,
-    `tests/test_mntp_trainer.py`, `tests/test_run_dolphin_unsloth_workflow.py`, and
-    `tests/test_mlops_training.py` current as features evolve; patch heavy integrations for speed.
+- Add scoped AGENTS.md files for new subpackages and update `monGARS_structure.txt` when landing modules.
+- Keep `tests/test_evolution_engine.py`, `tests/test_training_pipeline.py`, `tests/test_mntp_trainer.py`,
+    `tests/test_run_dolphin_unsloth_workflow.py`, and `tests/test_mlops_training.py` current as features evolve; patch
+    heavy integrations for speed.
