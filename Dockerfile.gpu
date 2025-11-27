@@ -4,7 +4,9 @@ ARG PYTORCH_IMAGE=pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 # --- Build Stage ---
 FROM ${PYTORCH_IMAGE} AS builder
-ENV PATH="/opt/conda/bin:${PATH}"
+ENV PATH="/opt/conda/bin:${PATH}" \
+    # Preserve resolver headroom for pip >=25 in case the pin is revisited.
+    PIP_RESOLVER_BACKTRACKING_LIMIT=1000
 ARG JOBS=1
 ENV MAKEFLAGS="-j${JOBS}"
 
@@ -36,9 +38,10 @@ RUN git lfs install --system
 WORKDIR /app
 COPY requirements.txt .
 COPY vendor/llm2vec_monGARS ./vendor/llm2vec_monGARS
+# pip 25+ enforces a backtracking depth cap that our broad dependency ranges can exceed during Docker builds.
 RUN python -m venv /opt/venv \
     && . /opt/venv/bin/activate \
-    && pip install --upgrade pip \
+    && pip install --no-cache-dir --upgrade "pip<25" \
     && pip install --no-cache-dir -r requirements.txt \
     && python -m spacy download fr_core_news_sm
 COPY . /app
