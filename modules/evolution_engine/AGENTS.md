@@ -4,12 +4,12 @@
 
 ## Scope
 
-Defines how retraining orchestration and self-healing pipelines behave under
-`modules/evolution_engine/`.
+Defines how retraining orchestration and self-healing pipelines behave under `modules/evolution_engine/`.
 
 ## Automation
 
-- Managed by the global agents script.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -25,22 +25,20 @@ Defines how retraining orchestration and self-healing pipelines behave under
 
 ## Pipeline Discipline
 
-- Keep `EvolutionOrchestrator` focused on sequencing; instantiate trainers from
-    `modules.neurons.training` and return artefact metadata for catalog updates.
-- Represent pipeline stages with explicit methods for validation, training, deployment, rollback, and
-    sustainability checks.
-- Wrap external calls with targeted exception handling—log the action, include artefact identifiers,
-    and propagate unexpected errors.
+- Keep `EvolutionOrchestrator` focused on sequencing; instantiate trainers from `modules.neurons.training` and return
+    artefact metadata for catalog updates.
+- Represent pipeline stages with explicit methods for validation, training, deployment, rollback, and sustainability
+    checks.
+- Wrap external calls with targeted exception handling—log the action, include artefact identifiers, and propagate
+    unexpected errors.
 
 ## Configuration
 
-- Default to configs in `configs/training/` (`mntp_dolphin_config.json`, sustainability policies) with
-    constructor overrides for deterministic tests.
-- Document config changes in the README/docs and roadmap when defaults move or new sustainability
-    gates are added.
+- Default to configs in `configs/training/` (`mntp_dolphin_config.json`, sustainability policies) with constructor
+    overrides for deterministic tests.
+- Document config changes in the README/docs and roadmap when defaults move or new sustainability gates are added.
 
 ## Validation
 
-Extend `tests/test_evolution_engine.py`, `tests/test_sustainability_policy.py`, and long-haul
-integration tests to cover success, failure, artefact validation, and sustainability gate scenarios.
-Use fakes for `MNTPTrainer` in unit tests.
+Extend `tests/test_evolution_engine.py`, `tests/test_sustainability_policy.py`, and long-haul integration tests to cover
+success, failure, artefact validation, and sustainability gate scenarios. Use fakes for `MNTPTrainer` in unit tests.

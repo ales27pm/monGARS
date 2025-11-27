@@ -61,19 +61,59 @@ def parse_sections(raw_sections: Sequence[Mapping[str, Any]]) -> List[Section]:
     return sections
 
 
+def validate_dynamic_notes(raw_notes: Any, context: str) -> List[str]:
+    if raw_notes is None:
+        return []
+    if not isinstance(raw_notes, list):
+        raise AgentsConfigError(f"`{context}` must be a list when provided")
+
+    for idx, note in enumerate(raw_notes):
+        if not isinstance(note, str):
+            raise AgentsConfigError(
+                f"`{context}[{idx}]` must be a string; got {type(note).__name__}"
+            )
+
+    return raw_notes
+
+
+def merge_dynamic_notes(
+    base_notes: Sequence[str] | None, specific_notes: Sequence[str] | None
+) -> List[str]:
+    merged: List[str] = []
++    for note in list(base_notes or []) + ([specific_notes] if isinstance(specific_notes, str) else list(specific_notes or [])):
+        if note and note not in merged:
+            merged.append(note)
+    return merged
+
+
 def load_profiles(config: Mapping[str, Any]) -> List[FileProfile]:
     files = config.get("files")
     if not isinstance(files, list):
         raise AgentsConfigError("Configuration must define a `files` list")
 
+    defaults = config.get("defaults", {})
+    if defaults is not None and not isinstance(defaults, Mapping):
+        raise AgentsConfigError("`defaults` must be a mapping when provided")
+
+    base_dynamic_notes = validate_dynamic_notes(
+        (defaults or {}).get("dynamic_notes", []), "defaults.dynamic_notes"
+    )
+
     profiles: List[FileProfile] = []
-    for entry in files:
+    for idx, entry in enumerate(files):
+        if not isinstance(entry, Mapping):
+            raise AgentsConfigError(
+                f"Each file entry must be a mapping; got {type(entry).__name__}"
+            )
         path_value = entry.get("path")
         if not path_value:
             raise AgentsConfigError("Each file entry must include a `path`")
         title = entry.get("title")
         scope = entry.get("scope")
-        dynamic_notes = entry.get("dynamic_notes", [])
+        file_dynamic_notes = validate_dynamic_notes(
+            entry.get("dynamic_notes"), f"files[{idx}].dynamic_notes"
+        )
+        dynamic_notes = merge_dynamic_notes(base_dynamic_notes, file_dynamic_notes)
         roadmap_focus = entry.get("roadmap_focus", [])
         raw_sections = entry.get("sections", [])
         if not title or not scope:
@@ -129,7 +169,7 @@ def parse_roadmap(roadmap_path: Path) -> Mapping[str, List[str]]:
 
 
 def format_paragraph(text: str, indent: int = 0) -> List[str]:
-    wrapper = textwrap.TextWrapper(width=100, subsequent_indent=" " * indent)
+    wrapper = textwrap.TextWrapper(width=120, subsequent_indent=" " * indent)
     return wrapper.fill(text).splitlines() or [""]
 
 
@@ -246,6 +286,13 @@ def create_profile(
         else []
     )
 
+    defaults = config.get("defaults", {})
+    if defaults is not None and not isinstance(defaults, Mapping):
+        raise AgentsConfigError("`defaults` must be a mapping when provided")
+    base_dynamic_notes = validate_dynamic_notes(
+        defaults.get("dynamic_notes", []), "defaults.dynamic_notes"
+    )
+
     default_section = Section(
         heading="Implementation Checklist",
         bullets=[
@@ -285,9 +332,12 @@ def create_profile(
         path=relative_path,
         title=title,
         scope=scope,
-        dynamic_notes=[
-            "Generated via `scripts/manage_agents.py create`. Update the shared config and refresh to customise sections.",
-        ],
+        dynamic_notes=merge_dynamic_notes(
+            base_dynamic_notes,
+            [
+                "Generated via `scripts/manage_agents.py create`. Update the shared config and refresh to customise sections.",
+            ],
+        ),
         roadmap_focus=new_entry["roadmap_focus"],
         sections=[default_section],
     )

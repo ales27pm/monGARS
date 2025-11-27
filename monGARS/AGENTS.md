@@ -8,7 +8,8 @@ Covers the primary FastAPI app, cognition services, persistence layer, and share
 
 ## Automation
 
-- Auto-maintained via `scripts/manage_agents.py`.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -31,25 +32,24 @@ Covers the primary FastAPI app, cognition services, persistence layer, and share
 
 ## Dependency & Configuration Discipline
 
-- Resolve configuration once with `monGARS.config.get_settings()` and pass dependencies into
-    constructors or FastAPI dependency overrides instead of storing module-level state.
-- Guard optional integrations (Ray Serve, Torch, MLflow, Ollama) with capability checks and fall back
-    to deterministic adapters (`AdaptiveResponseGenerator`, linear manifest paths) when unavailable.
-- Coordinate shared singletons like `ui_events.event_bus`, cache layers, and rate limiters through the
-    central `monGARS.core` modules so API routes, workers, and background schedulers stay in sync.
+- Resolve configuration once with `monGARS.config.get_settings()` and pass dependencies into constructors or FastAPI
+    dependency overrides instead of storing module-level state.
+- Guard optional integrations (Ray Serve, Torch, MLflow, Ollama) with capability checks and fall back to deterministic
+    adapters (`AdaptiveResponseGenerator`, linear manifest paths) when unavailable.
+- Coordinate shared singletons like `ui_events.event_bus`, cache layers, and rate limiters through the central
+    `monGARS.core` modules so API routes, workers, and background schedulers stay in sync.
 
 ## Logging & Persistence
 
-- Emit logs via `logging.getLogger(__name__)` with structured `extra` metadata; propagate correlation
-    IDs surfaced by API and peer events.
-- Route database access through `core.persistence.PersistenceRepository` and keep Alembic migrations
-    in `alembic_migrations/` authoritative for schema changes.
-- Use caching helpers in `core.caching` / `core.hippocampus` and ensure tests clear caches via
-    fixtures to avoid state bleed.
+- Emit logs via `logging.getLogger(__name__)` with structured `extra` metadata; propagate correlation IDs surfaced by API
+    and peer events.
+- Route database access through `core.persistence.PersistenceRepository` and keep Alembic migrations in
+    `alembic_migrations/` authoritative for schema changes.
+- Use caching helpers in `core.caching` / `core.hippocampus` and ensure tests clear caches via fixtures to avoid state
+    bleed.
 
 ## Testing Map
 
 Update cognition, persistence, and networking suites together—`tests/test_conversation_flow.py`,
-`tests/test_llm_integration.py`, `tests/test_peer_communication.py`,
-`tests/test_long_haul_validation.py`, `tests/test_sustainability_dashboard.py`, and
-`tests/test_research_long_haul_service.py` exercise this package.
+`tests/test_llm_integration.py`, `tests/test_peer_communication.py`, `tests/test_long_haul_validation.py`,
+`tests/test_sustainability_dashboard.py`, and `tests/test_research_long_haul_service.py` exercise this package.

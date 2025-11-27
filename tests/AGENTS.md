@@ -4,12 +4,12 @@
 
 ## Scope
 
-Applies to everything in `tests/`, including async fixtures, integration checks, and long-running
-suites.
+Applies to everything in `tests/`, including async fixtures, integration checks, and long-running suites.
 
 ## Automation
 
-- Auto-generated; run the refresh command after adding new suites or fixtures.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -30,24 +30,23 @@ suites.
 
 ## Structure & Conventions
 
-- Annotate async tests with `pytest.mark.asyncio` and lean on fixtures in `conftest.py`; never create
-    event loops manually.
+- Annotate async tests with `pytest.mark.asyncio` and lean on fixtures in `conftest.py`; never create event loops
+    manually.
 - Reset shared state (hippocampus caches, global singletons) in fixtures to keep tests hermetic.
-- Stub heavy dependencies (Torch, spaCy, HTTP clients) with fakes or patches to keep runs
-    deterministic.
+- Stub heavy dependencies (Torch, spaCy, HTTP clients) with fakes or patches to keep runs deterministic.
 
 ## Coverage Expectations
 
-- Exercise success and failure paths for HTTP endpoints, WebSockets, orchestration flows,
-    sustainability gates, and SDK tooling.
-- Run `chaos_test.py`, `integration_test.py`, `self_training_test.py`, and reinforcement long-haul
-    suites before releases or infrastructure-heavy changes.
+- Exercise success and failure paths for HTTP endpoints, WebSockets, orchestration flows, sustainability gates, and SDK
+    tooling.
+- Run `chaos_test.py`, `integration_test.py`, `self_training_test.py`, and reinforcement long-haul suites before releases
+    or infrastructure-heavy changes.
 - Constrain property-based tests to stay fast and deterministic; document skipped suites in PR notes.
 
 ## Tooling
 
-Default command is `pytest`; run from the repository root so module paths resolve (631 tests
-currently pass in ~110 seconds). Use `pytest -k <pattern>` for focused runs, `pytest --maxfail=1`
-for triage, and `pytest --cov=monGARS --cov=modules` when coverage is required.
+Default command is `pytest`; run from the repository root so module paths resolve (631 tests currently pass in ~110
+seconds). Use `pytest -k <pattern>` for focused runs, `pytest --maxfail=1` for triage, and `pytest --cov=monGARS
+--cov=modules` when coverage is required.
 
 Invoke `npm run test` when frontend/TypeScript assets change so lint and Jest suites stay green.

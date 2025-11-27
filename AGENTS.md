@@ -4,15 +4,14 @@
 
 ## Scope
 
-Applies to every repository change. Nested AGENTS.md files add stricter rules; this root charter
-highlights the non-negotiable guardrails and shared context.
+Applies to every repository change. Nested AGENTS.md files add stricter rules; this root charter highlights the non-
+negotiable guardrails and shared context.
 
 ## Automation
 
-- Generated via `python scripts/manage_agents.py refresh`. Edit the JSON profile instead of the
-    Markdown when updating scope or requirements.
-- Run `python scripts/manage_agents.py create <directory>` to scaffold a scoped AGENTS.md when a new
-    subsystem lands.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
+- Run `python scripts/manage_agents.py create <directory>` to scaffold a scoped AGENTS.md when a new subsystem lands.
 
 ## Roadmap Alignment
 
@@ -40,33 +39,29 @@ highlights the non-negotiable guardrails and shared context.
 ## Workflow Guardrails
 
 - Target **Python 3.11** for backend tooling and **Node.js 18+** for frontend builds.
-- Format Python with `black` and `isort` (configured via `pyproject.toml`) and lint
-    TypeScript/JavaScript assets with `npm run lint` before committing.
-- Run `pytest` (631 tests, ~110s) and record skips; execute `npm run test` when web assets or SDKs
-    change.
-- Document architecture, configuration, and operator workflow changes in `docs/` or the README before
-    shipping.
+- Format Python with `black` and `isort` (configured via `pyproject.toml`) and lint TypeScript/JavaScript assets with `npm
+    run lint` before committing.
+- Run `pytest` (631 tests, ~110s) and record skips; execute `npm run test` when web assets or SDKs change.
+- Document architecture, configuration, and operator workflow changes in `docs/` or the README before shipping.
 - Regenerate these instructions with `python scripts/manage_agents.py refresh` after editing
     `configs/agents/agents_config.json`.
 
 ## Observability & Security
 
-- Load configuration through `monGARS.config.get_settings()` so cached settings stay coherent across
-    services.
-- Redact secrets in logs and wire new background tasks into `monGARS.telemetry` counters and
-    OpenTelemetry toggles (`otel_prometheus_enabled`, `otel_traces_enabled`).
-- Keep Dockerfiles, Compose stacks, and Kubernetes manifests aligned; review Vault/ExternalSecret
-    usage whenever credentials change.
+- Load configuration through `monGARS.config.get_settings()` so cached settings stay coherent across services.
+- Redact secrets in logs and wire new background tasks into `monGARS.telemetry` counters and OpenTelemetry toggles
+    (`otel_prometheus_enabled`, `otel_traces_enabled`).
+- Keep Dockerfiles, Compose stacks, and Kubernetes manifests aligned; review Vault/ExternalSecret usage whenever
+    credentials change.
 
 ## Documentation & Runbooks
 
 - Update runbooks, diagrams, and `monGARS_structure.txt` whenever module layout or workflows shift.
-- Cross-link roadmap entries, docs, and code so operators can trace feature readiness and
-    configuration changes.
-- Capture multi-stage training/export updates in `docs/mongars_multistage_pipeline.md` whenever the
-    CLI or orchestration flow changes.
+- Cross-link roadmap entries, docs, and code so operators can trace feature readiness and configuration changes.
+- Capture multi-stage training/export updates in `docs/mongars_multistage_pipeline.md` whenever the CLI or orchestration
+    flow changes.
 
 ## Roadmap Integration
 
-Use the focus list below to link workstreams with the active roadmap. The script keeps this section
-current when the roadmap evolves.
+Use the focus list below to link workstreams with the active roadmap. The script keeps this section current when the
+roadmap evolves.
