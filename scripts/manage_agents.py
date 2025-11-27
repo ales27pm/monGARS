@@ -96,7 +96,7 @@ def load_profiles(config: Mapping[str, Any]) -> List[FileProfile]:
         raise AgentsConfigError("`defaults` must be a mapping when provided")
 
     base_dynamic_notes = validate_dynamic_notes(
-        defaults.get("dynamic_notes", []), "defaults.dynamic_notes"
+        (defaults or {}).get("dynamic_notes", []), "defaults.dynamic_notes"
     )
 
     profiles: List[FileProfile] = []
