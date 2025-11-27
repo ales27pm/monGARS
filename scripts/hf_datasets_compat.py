@@ -30,7 +30,9 @@ def patch_hf_datasets_for_list_feature() -> None:
 
         # Different layouts between versions; try both.
         try:
-            from datasets.features import features as features_module  # type: ignore[attr-defined]
+            from datasets.features import (
+                features as features_module,  # type: ignore[attr-defined]
+            )
         except Exception:  # datasets<=3.6 fallback
             import datasets.features.features as features_module  # type: ignore[import]
 

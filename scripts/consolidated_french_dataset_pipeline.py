@@ -68,7 +68,9 @@ except ImportError:
         sys.path.insert(0, str(repo_root))
 
     # When run from repo root, module is scripts/hf_datasets_compat.py
-    from scripts.hf_datasets_compat import patch_hf_datasets_for_list_feature  # type: ignore
+    from scripts.hf_datasets_compat import (
+        patch_hf_datasets_for_list_feature,  # type: ignore
+    )
 
 patch_hf_datasets_for_list_feature()
 # --- end compat patch ---
