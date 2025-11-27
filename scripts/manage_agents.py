@@ -80,7 +80,7 @@ def merge_dynamic_notes(
     base_notes: Sequence[str] | None, specific_notes: Sequence[str] | None
 ) -> List[str]:
     merged: List[str] = []
-    for note in list(base_notes or []) + list(specific_notes or []):
++    for note in list(base_notes or []) + ([specific_notes] if isinstance(specific_notes, str) else list(specific_notes or [])):
         if note and note not in merged:
             merged.append(note)
     return merged
