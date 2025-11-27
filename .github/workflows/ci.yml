@@ -126,6 +126,7 @@ jobs:
           python scripts/update_docs_metadata.py docs README.md ROADMAP.md .github/ISSUE_TEMPLATE .github/PULL_REQUEST_TEMPLATE.md
 
       - name: Refresh scoped AGENTS charters
+        if: needs.changes.outputs.agents == 'true'
         run: |
           set -euo pipefail
           python scripts/manage_agents.py refresh
@@ -161,7 +162,7 @@ jobs:
             {
               echo "### Docs metadata updates";
               echo;
-              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters. Drift detected—apply docs_metadata.patch locally with 'git apply docs_metadata.patch' to align metadata and charter text.";
+              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed. Drift detected—apply docs_metadata.patch locally with 'git apply docs_metadata.patch' to align metadata and charter text.";
               echo;
               echo "Impacted files:";
               echo;
@@ -171,7 +172,7 @@ jobs:
             {
               echo "### Docs metadata updates";
               echo;
-              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters with no drift detected.";
+              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed, with no drift detected.";
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
