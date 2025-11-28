@@ -543,6 +543,15 @@ class PersistenceManager:
         return torch
 
     @staticmethod
+    def _ensure_subpath(base_path: Path, child_path: Path, what: str) -> Path:
+        resolved_child = child_path.resolve(strict=True)
+        if not resolved_child.is_relative_to(base_path):
+            raise ValueError(
+                f"{what} path escapes snapshot directory (symlinks are rejected)"
+            )
+        return resolved_child
+
+    @staticmethod
     def snapshot_model(
         model: Any,
         tokenizer: Any,
@@ -622,11 +631,9 @@ class PersistenceManager:
 
         torch = PersistenceManager._import_torch()
         resolved_snapshot_path = snapshot_path.resolve(strict=True)
-        resolved_model_path = model_path.resolve(strict=True)
-        if not resolved_model_path.is_relative_to(resolved_snapshot_path):
-            raise ValueError(
-                "model path escapes snapshot directory (symlinks are rejected)"
-            )
+        resolved_model_path = PersistenceManager._ensure_subpath(
+            resolved_snapshot_path, model_path, "model"
+        )
 
         state_dict = torch.load(
             resolved_model_path,
@@ -646,19 +653,28 @@ class PersistenceManager:
             tokenizer_dir = snapshot_path / "tokenizer"
             fallback_path = tokenizer_dir / "tokenizer.pkl"
             if fallback_path.exists():
-                resolved_fallback = fallback_path.resolve(strict=True)
-                if not resolved_fallback.is_relative_to(resolved_snapshot_path):
-                    raise ValueError(
-                        "tokenizer path escapes snapshot directory (symlinks are rejected)"
-                    )
-                with fallback_path.open("rb") as handle:
+                resolved_fallback = PersistenceManager._ensure_subpath(
+                    resolved_snapshot_path, fallback_path, "tokenizer"
+                )
+                with resolved_fallback.open("rb") as handle:
                     tokenizer_obj = pickle.load(handle)
             elif tokenizer_dir.exists():
-                resolved_tokenizer_dir = tokenizer_dir.resolve(strict=True)
-                if not resolved_tokenizer_dir.is_relative_to(resolved_snapshot_path):
-                    raise ValueError(
-                        "tokenizer path escapes snapshot directory (symlinks are rejected)"
-                    )
+                resolved_tokenizer_dir = PersistenceManager._ensure_subpath(
+                    resolved_snapshot_path, tokenizer_dir, "tokenizer"
+                )
+                tokenizer_dir = resolved_tokenizer_dir
+                critical_tokenizer_files = [
+                    tokenizer_dir / "tokenizer.json",
+                    tokenizer_dir / "config.json",
+                    tokenizer_dir / "special_tokens_map.json",
+                    tokenizer_dir / "vocab.json",
+                    tokenizer_dir / "merges.txt",
+                ]
+                for critical_path in critical_tokenizer_files:
+                    if critical_path.exists():
+                        PersistenceManager._ensure_subpath(
+                            resolved_snapshot_path, critical_path, "tokenizer"
+                        )
                 if AutoTokenizer is None:
                     logger.warning(
                         "persistence.snapshot.tokenizer_unavailable",
