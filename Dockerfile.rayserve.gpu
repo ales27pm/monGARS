@@ -17,7 +17,8 @@ ARG VLLM_VERSION
 ARG XFORMERS_VERSION
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=1200
+    PIP_DEFAULT_TIMEOUT=1200 \
+    PIP_RESOLVER_BACKTRACKING_LIMIT=1000
 
 # Elevate to root to install system level dependencies, then drop back to the
 # default non-root user for runtime execution.
@@ -46,7 +47,7 @@ COPY vendor/llm2vec_monGARS /tmp/llm2vec_monGARS
 # Faster, resilient installs (cache + retries) with CUDA wheels bundled directly
 # in the PyTorch wheel to avoid long dependency chains.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -U --retries 5 pip \
+    pip install --no-cache-dir --retries 5 --upgrade "pip<25" \
     && pip install --no-cache-dir --retries 5 --extra-index-url ${TORCH_WHEEL_INDEX} \
         torch==${TORCH_VERSION} \
         "ray[serve]==${RAY_SERVE_VERSION}" \
