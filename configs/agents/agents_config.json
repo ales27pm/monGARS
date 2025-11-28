@@ -3,13 +3,18 @@
   "roadmap": {
     "file": "ROADMAP.md"
   },
+  "defaults": {
+    "dynamic_notes": [
+      "Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.",
+      "CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`."
+    ]
+  },
   "files": [
     {
       "path": "AGENTS.md",
       "title": "monGARS Delivery Charter",
       "scope": "Applies to every repository change. Nested AGENTS.md files add stricter rules; this root charter highlights the non-negotiable guardrails and shared context.",
       "dynamic_notes": [
-        "Generated via `python scripts/manage_agents.py refresh`. Edit the JSON profile instead of the Markdown when updating scope or requirements.",
         "Run `python scripts/manage_agents.py create <directory>` to scaffold a scoped AGENTS.md when a new subsystem lands."
       ],
       "roadmap_focus": [
@@ -69,9 +74,6 @@
       "path": "monGARS/AGENTS.md",
       "title": "monGARS Package Contract",
       "scope": "Covers the primary FastAPI app, cognition services, persistence layer, and shared utilities.",
-      "dynamic_notes": [
-        "Auto-maintained via `scripts/manage_agents.py`."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 3 – Hardware & Performance (✅ Completed Q3 2025)",
@@ -115,9 +117,6 @@
       "path": "monGARS/api/AGENTS.md",
       "title": "FastAPI Surface Standards",
       "scope": "Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGARS/api/`.",
-      "dynamic_notes": [
-        "Refresh via the agents manager script to pick up roadmap changes or new endpoints."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
@@ -159,9 +158,6 @@
       "path": "monGARS/core/AGENTS.md",
       "title": "Cognition Engine Protocol",
       "scope": "Guides orchestrators, schedulers, and memory abstractions under `monGARS/core/`.",
-      "dynamic_notes": [
-        "Sourced from the central JSON profile; run the refresh command after substantial engine work."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 3 – Hardware & Performance (✅ Completed Q3 2025)",
@@ -204,9 +200,6 @@
       "path": "modules/AGENTS.md",
       "title": "Optional Modules Charter",
       "scope": "Covers optional subsystems under `modules/`, including evolution and neuron trainers.",
-      "dynamic_notes": [
-        "Generated from the shared JSON profile; use the manager script to refresh."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
@@ -239,9 +232,6 @@
       "path": "modules/evolution_engine/AGENTS.md",
       "title": "Evolution Engine Playbook",
       "scope": "Defines how retraining orchestration and self-healing pipelines behave under `modules/evolution_engine/`.",
-      "dynamic_notes": [
-        "Managed by the global agents script."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
@@ -280,9 +270,6 @@
       "path": "modules/neurons/AGENTS.md",
       "title": "Neuron Trainer Guidelines",
       "scope": "Applies to neuron trainers and utilities under `modules/neurons/`.",
-      "dynamic_notes": [
-        "Auto-updated via the agents manager script."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 6 – Self-Improvement & Research (✅ Completed Q1 2026)",
@@ -315,9 +302,6 @@
       "path": "webapp/AGENTS.md",
       "title": "Django Webapp Guardrails",
       "scope": "Applies to the Django project in `webapp/`, covering async views, services, templates, and middleware.",
-      "dynamic_notes": [
-        "Refresh via the agents manager script to sync with roadmap and API contracts."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
@@ -352,9 +336,6 @@
       "path": "webapp/chat/AGENTS.md",
       "title": "Chat Interface Standards",
       "scope": "Covers views, services, forms, and templates for `webapp/chat/`.",
-      "dynamic_notes": [
-        "Managed through the central JSON profile."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",
@@ -388,9 +369,6 @@
       "path": "tests/AGENTS.md",
       "title": "Test Suite Expectations",
       "scope": "Applies to everything in `tests/`, including async fixtures, integration checks, and long-running suites.",
-      "dynamic_notes": [
-        "Auto-generated; run the refresh command after adding new suites or fixtures."
-      ],
       "roadmap_focus": [
         {
           "phase": "Immediate Priorities (Security & Stability)",
@@ -435,9 +413,6 @@
       "path": "docs/AGENTS.md",
       "title": "Documentation Authoring Guide",
       "scope": "Covers runbooks, API references, and architectural notes under `docs/`.",
-      "dynamic_notes": [
-        "Generated via the agents manager script; edit the JSON profile and refresh after updating guidance."
-      ],
       "roadmap_focus": [
         {
           "phase": "Phase 5 – Web Interface & API Refinement (✅ Completed Q4 2025)",

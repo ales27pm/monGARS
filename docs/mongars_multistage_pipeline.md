@@ -1,6 +1,6 @@
 # monGARS multi-stage pipeline runbook
 
-> **Last updated:** 2025-11-25
+> **Last updated:** 2025-11-25 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This runbook explains how to operate `mongars_multistage_pipeline.py`, the
 end-to-end CLI that assembles dataset generation, supervised fine-tuning (SFT),

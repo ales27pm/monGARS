@@ -1,6 +1,6 @@
 # monGARS
 
-> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-25 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 **monGARS** (Modular Neural Guardian for Autonomous Research & Support) is a
 privacy-first AI assistant designed for resilient deployment on workstations,

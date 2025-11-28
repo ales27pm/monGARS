@@ -1,6 +1,6 @@
 # French Dataset Pipeline
 
-> **Last updated:** 2025-11-23 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+> **Last updated:** 2025-11-25 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 The [`scripts/consolidated_french_dataset_pipeline.py`](../../scripts/consolidated_french_dataset_pipeline.py) entry point provides a production-ready ingestion pipeline for French instruction and retrieval datasets. It enforces French-only processing, layers quality and license checks, and emits validated exports plus run metadata for governance. When resuming from checkpoints, the pipeline now reloads previously written outputs so downstream consumers see consistent exports across restarts.
 

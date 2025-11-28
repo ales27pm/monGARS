@@ -8,7 +8,8 @@ Covers views, services, forms, and templates for `webapp/chat/`.
 
 ## Automation
 
-- Managed through the central JSON profile.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -21,19 +22,17 @@ Covers views, services, forms, and templates for `webapp/chat/`.
 
 ## Architecture
 
-- Route logic through `services.py` and wrap protected views with `require_token`; reuse async clients
-    for history, chat, and ticket exchange.
-- Mirror payloads defined in `monGARS.api.web_api.ChatRequest` and related schemas; document new
-    context variables in docstrings/templates.
+- Route logic through `services.py` and wrap protected views with `require_token`; reuse async clients for history, chat,
+    and ticket exchange.
+- Mirror payloads defined in `monGARS.api.web_api.ChatRequest` and related schemas; document new context variables in
+    docstrings/templates.
 
 ## Networking & Error Handling
 
-- Centralise HTTP calls in `services.py` to reuse retries, error handling, structured logging, and
-    token refresh logic.
-- Surface actionable operator errors for network issues and capture exceptions with context for
-    downstream telemetry.
+- Centralise HTTP calls in `services.py` to reuse retries, error handling, structured logging, and token refresh logic.
+- Surface actionable operator errors for network issues and capture exceptions with context for downstream telemetry.
 
 ## Verification
 
-Revise `tests/test_webapp_chat_services.py`, `tests/test_websocket.py`, and end-to-end suites
-alongside chat changes; rely on async clients or httpx mocks.
+Revise `tests/test_webapp_chat_services.py`, `tests/test_websocket.py`, and end-to-end suites alongside chat changes;
+rely on async clients or httpx mocks.

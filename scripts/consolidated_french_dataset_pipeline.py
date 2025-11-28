@@ -56,23 +56,6 @@ from typing import (
 import psutil
 from tqdm import tqdm
 
-# --- HF datasets 3.6.0 compatibility patch for 'List' feature ---
-try:
-    # hf_datasets_compat.py lives in the same scripts/ directory
-    from hf_datasets_compat import patch_hf_datasets_for_list_feature
-except ImportError:
-    # Fallback: add repo root to sys.path and retry
-    this_dir = Path(__file__).resolve().parent
-    repo_root = this_dir.parent
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-
-    # When run from repo root, module is scripts/hf_datasets_compat.py
-    from scripts.hf_datasets_compat import patch_hf_datasets_for_list_feature  # type: ignore
-
-patch_hf_datasets_for_list_feature()
-# --- end compat patch ---
-
 from datasets import (
     Dataset,
     DatasetDict,
@@ -108,6 +91,35 @@ try:
 except ImportError:
     HAS_RESOURCE = False
     resource = None
+
+
+def _load_patch_hf_datasets_for_list_feature():
+    """Load the datasets compatibility patch without triggering E402."""
+
+    try:
+        # hf_datasets_compat.py lives in the same scripts/ directory
+        from hf_datasets_compat import patch_hf_datasets_for_list_feature
+
+        return patch_hf_datasets_for_list_feature
+    except ImportError:
+        # Fallback: add repo root to sys.path and retry
+        this_dir = Path(__file__).resolve().parent
+        repo_root = this_dir.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+
+        # When run from repo root, module is scripts/hf_datasets_compat.py
+        from scripts.hf_datasets_compat import (  # type: ignore
+            patch_hf_datasets_for_list_feature,
+        )
+
+        return patch_hf_datasets_for_list_feature
+
+
+patch_hf_datasets_for_list_feature = _load_patch_hf_datasets_for_list_feature()
+patch_hf_datasets_for_list_feature()
+del _load_patch_hf_datasets_for_list_feature
+# --- end compat patch ---
 
 
 # -----------------------------

@@ -38,6 +38,7 @@ jobs:
       mobile: ${{ steps.filter.outputs.mobile }}
       docker: ${{ steps.filter.outputs.docker }}
       docs: ${{ steps.filter.outputs.docs }}
+      agents: ${{ steps.filter.outputs.agents }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - name: Checkout
@@ -77,6 +78,10 @@ jobs:
               - 'docs/**'
               - 'README.md'
               - 'ROADMAP.md'
+            agents:
+              - 'configs/agents/**'
+              - '**/AGENTS.md'
+              - 'scripts/manage_agents.py'
             workflows:
               - '.github/workflows/**'
               - '.github/*.yml'
@@ -92,6 +97,7 @@ jobs:
             echo "- Mobile: ${{ steps.filter.outputs.mobile }}";
             echo "- Docker: ${{ steps.filter.outputs.docker }}";
             echo "- Docs: ${{ steps.filter.outputs.docs }}";
+            echo "- Agents: ${{ steps.filter.outputs.agents }}";
             echo "- Workflows: ${{ steps.filter.outputs.workflows }}";
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -99,7 +105,10 @@ jobs:
     name: Docs metadata guardrail
     needs: changes
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.docs == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.agents == 'true' || github.event_name != 'pull_request'
+    outputs:
+      drifted: ${{ steps.docs-drift.outputs.changed }}
+      files: ${{ steps.docs-drift.outputs.files }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,15 +125,63 @@ jobs:
           set -euo pipefail
           python scripts/update_docs_metadata.py docs README.md ROADMAP.md .github/ISSUE_TEMPLATE .github/PULL_REQUEST_TEMPLATE.md
 
-      - name: Fail on drift
+      - name: Refresh scoped AGENTS charters
+        if: needs.changes.outputs.agents == 'true'
         run: |
           set -euo pipefail
-          if ! git diff --quiet; then
-            echo "Detected outdated Last updated banners. Run python scripts/update_docs_metadata.py locally." >&2
-            git status --short
-            git diff --stat
-            exit 1
+          python scripts/manage_agents.py refresh
+
+      - id: docs-drift
+        name: Check docs metadata drift
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "files=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          git diff --name-only >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          git status --short
+          git diff --stat
+          git diff > docs_metadata.patch
+
+      - name: Upload docs metadata patch
+        if: steps.docs-drift.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-metadata-fix
+          path: docs_metadata.patch
+
+      - name: Summarise docs metadata maintenance
+        if: always()
+        run: |
+          if [ "${{ steps.docs-drift.outputs.changed }}" = "true" ]; then
+            {
+              echo "### Docs metadata updates";
+              echo;
+              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed. Drift detected—apply docs_metadata.patch locally with 'git apply docs_metadata.patch' to align metadata and charter text.";
+              echo;
+              echo "Impacted files:";
+              echo;
+              echo '${{ steps.docs-drift.outputs.files }}' | sed '/^$/d' | sed 's/^/- /';
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Docs metadata updates";
+              echo;
+              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed, with no drift detected.";
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail on docs metadata drift
+        if: steps.docs-drift.outputs.changed == 'true' && github.event_name == 'pull_request'
+        run: |
+          echo "Docs metadata drift detected. Download the docs-metadata-fix artifact and apply it with 'git apply docs_metadata.patch'." >&2
+          exit 1
 
   python:
     name: Backend lint, typecheck & tests

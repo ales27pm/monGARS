@@ -8,7 +8,8 @@ Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGAR
 
 ## Automation
 
-- Refresh via the agents manager script to pick up roadmap changes or new endpoints.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -21,29 +22,29 @@ Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGAR
 
 ## Endpoint Design
 
-- Expose asynchronous routes returning typed Pydantic responses; define request/response models in
-    `schemas.py` and reuse dependency helpers from `dependencies.py`.
-- Register routers with explicit prefixes/tags and share singletons (rate limiter, WebSocket manager,
-    ticket signer) via module-level references to avoid reinitialisation races.
+- Expose asynchronous routes returning typed Pydantic responses; define request/response models in `schemas.py` and reuse
+    dependency helpers from `dependencies.py`.
+- Register routers with explicit prefixes/tags and share singletons (rate limiter, WebSocket manager, ticket signer) via
+    module-level references to avoid reinitialisation races.
 
 ## Security, Tickets & Rate Limiting
 
-- Authenticate through `core.security.SecurityManager`/`authenticate_user` and guard chat endpoints
-    with `InMemoryRateLimiter` while logging rejects via `_log_rate_limit`.
-- Issue and verify WebSocket tickets using `ws_ticket.py`/`ticket_signer.py`; ensure `ws_manager`
-    respects queue sizes and token-bucket settings from configuration.
-- Translate domain failures into FastAPI `HTTPException`s and capture upstream errors (`HTTPError`,
-    `SQLAlchemyError`, `CircuitBreakerOpenError`) before re-raising.
+- Authenticate through `core.security.SecurityManager`/`authenticate_user` and guard chat endpoints with
+    `InMemoryRateLimiter` while logging rejects via `_log_rate_limit`.
+- Issue and verify WebSocket tickets using `ws_ticket.py`/`ticket_signer.py`; ensure `ws_manager` respects queue sizes and
+    token-bucket settings from configuration.
+- Translate domain failures into FastAPI `HTTPException`s and capture upstream errors (`HTTPError`, `SQLAlchemyError`,
+    `CircuitBreakerOpenError`) before re-raising.
 
 ## Observability & Static Assets
 
-- Expose `/metrics` via `PROMETHEUS_REGISTRY` and enable OpenTelemetry instrumentation only when
-    `_settings.otel_*` toggles demand it.
-- Serve static assets through `StaticFiles` when the build output exists; log actionable warnings when
-    assets are missing during development builds.
+- Expose `/metrics` via `PROMETHEUS_REGISTRY` and enable OpenTelemetry instrumentation only when `_settings.otel_*`
+    toggles demand it.
+- Serve static assets through `StaticFiles` when the build output exists; log actionable warnings when assets are missing
+    during development builds.
 
 ## Testing Hooks
 
 Keep `tests/test_api_chat.py`, `tests/test_api_history.py`, `tests/test_api_model_management.py`,
-`tests/test_api_rag.py`, `tests/test_ticket_signer.py`, `tests/test_websocket.py`, and
-`tests/test_ws_manager.py` aligned when contracts evolve.
+`tests/test_api_rag.py`, `tests/test_ticket_signer.py`, `tests/test_websocket.py`, and `tests/test_ws_manager.py`
+aligned when contracts evolve.
