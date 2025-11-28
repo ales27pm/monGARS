@@ -4,12 +4,16 @@ from collections import defaultdict
 from pathlib import Path
 from typing import DefaultDict, Dict, List, Set
 
-from packaging.requirements import Requirement
+from packaging.requirements import InvalidRequirement, Requirement
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP_PATH = REPO_ROOT / "setup.py"
 REQUIREMENTS_PATH = REPO_ROOT / "requirements.txt"
 VENDOR_SENTINEL = "llm2vec-local"
+VENDOR_DIRECTORY = REPO_ROOT / "vendor"
+VENDOR_PACKAGE_NAME = "llm2vec_monGARS"
+VENDOR_PACKAGE_PATH = VENDOR_DIRECTORY / VENDOR_PACKAGE_NAME
+VENDOR_PACKAGE_URI = VENDOR_PACKAGE_PATH.resolve().as_uri()
 TEST_DEPENDENCIES = {"pytest", "pytest-asyncio", "coverage", "packaging"}
 
 
@@ -18,9 +22,7 @@ def _normalize_requirement(raw: str) -> str:
     if not cleaned:
         return cleaned
     base_part = cleaned.split(";", 1)[0].strip()
-    if base_part.startswith("./vendor/") or base_part.startswith("vendor/"):
-        return VENDOR_SENTINEL
-    if base_part.startswith("llm2vec @"):
+    if _is_vendor_requirement(base_part):
         return VENDOR_SENTINEL
     return base_part
 
@@ -47,10 +49,19 @@ def _parse_requirements() -> Dict[str, Set[str]]:
         if not stripped or stripped.startswith("#"):
             continue
         requirement: Requirement | None = None
+        base_part = stripped.split(";", 1)[0].strip()
         try:
             requirement = Requirement(stripped)
-        except Exception:
-            requirement = None
+        except InvalidRequirement as exc:
+            if _is_vendor_requirement(base_part):
+                requirement = None
+            elif base_part.startswith("git+"):
+                requirement = None
+            else:
+                raise AssertionError(
+                    f"Failed to parse requirement line '{stripped}': {exc}. "
+                    "Update dependency alignment test if the format is intentional."
+                ) from exc
         group = _detect_group(stripped, requirement)
         grouped[group].add(_normalize_requirement(stripped))
     return grouped
@@ -59,26 +70,36 @@ def _parse_requirements() -> Dict[str, Set[str]]:
 def _evaluate_string(node) -> str:
     import ast
 
+    def _unsupported(context: str, failing_node) -> ValueError:
+        return ValueError(
+            "Unsupported {context} in setup.py AST: {node_dump}. "
+            "Adjust dependency alignment parsing to reflect setup.py changes.".format(
+                context=context,
+                node_dump=ast.dump(failing_node, include_attributes=False),
+            )
+        )
+
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    if isinstance(node, ast.Name) and node.id == "LLM2VEC_URI":
+        return VENDOR_PACKAGE_URI
     if isinstance(node, ast.JoinedStr):
         parts: List[str] = []
         for value in node.values:
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 parts.append(value.value)
-            elif isinstance(value, ast.FormattedValue):
+                continue
+            if isinstance(value, ast.FormattedValue):
                 if (
                     isinstance(value.value, ast.Name)
                     and value.value.id == "LLM2VEC_URI"
                 ):
-                    uri = (REPO_ROOT / "vendor" / "llm2vec_monGARS").resolve().as_uri()
-                    parts.append(uri)
-                else:
-                    raise ValueError("Unsupported formatted value in setup.py")
-            else:
-                raise ValueError("Unsupported node structure in setup.py")
+                    parts.append(VENDOR_PACKAGE_URI)
+                    continue
+                raise _unsupported("formatted value", value.value)
+            raise _unsupported("joined string part", value)
         return "".join(parts)
-    raise ValueError("Unsupported requirement node in setup.py")
+    raise _unsupported("requirement node", node)
 
 
 def _parse_setup_requirements() -> Dict[str, Set[str]]:
@@ -111,14 +132,26 @@ def _parse_setup_requirements() -> Dict[str, Set[str]]:
                         key_node.value, str
                     ):
                         continue
-                    extra_key = key_node.value
                     if isinstance(value_node, ast.List):
+                        extra_key = key_node.value
                         normalized_extra = (
                             _normalize_requirement(_evaluate_string(item))
                             for item in value_node.elts
                         )
                         grouped[extra_key].update(normalized_extra)
     return grouped
+
+
+def _is_vendor_requirement(base_part: str) -> bool:
+    normalized = base_part.replace("\\", "/")
+    vendor_prefix = f"{VENDOR_DIRECTORY.name}/"
+    return (
+        normalized.startswith(f"./{vendor_prefix}")
+        or normalized.startswith(vendor_prefix)
+        or normalized.startswith(str(VENDOR_PACKAGE_PATH))
+        or normalized.startswith(VENDOR_PACKAGE_URI)
+        or normalized.startswith("llm2vec @")
+    )
 
 
 def _assert_group_alignment(
