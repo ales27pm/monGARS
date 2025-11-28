@@ -44,7 +44,8 @@ tqdm==4.67.1
 transformers==4.57.3
 sentence-transformers==3.0.1
 peft==0.13.2
-accelerate==0.30.1
+# Accelerate must stay aligned with the unsloth_zoo companion package requirements.
+accelerate==0.34.2
 git+https://github.com/unslothai/unsloth.git@39f006bde8a9f4a4081f579308b7f5dea472379a
 # The core Unsloth package now requires the companion unsloth_zoo wheel at import time,
 # so install it explicitly to keep pytest bootstrap checks passing.
