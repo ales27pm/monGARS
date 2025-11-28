@@ -49,7 +49,7 @@ setup(
         "spacy>=3.8.7",
         "sqlalchemy>=2.0.41",
         "tenacity>=9.1.2",
-        "torch>=2.7.1",
+        "torch>=2.2.2,<2.3",
         "tqdm>=4.66.5",
         "transformers>=4.45.0",
         "sentence-transformers>=3.0.1",
