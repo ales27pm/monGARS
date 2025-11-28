@@ -4,8 +4,8 @@ ARG PYTORCH_IMAGE=pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
 
 # --- Build Stage ---
 FROM ${PYTORCH_IMAGE} AS builder
+# Guard against the pip 25 backtracking cap even if the pin is lifted.
 ENV PATH="/opt/conda/bin:${PATH}" \
-    # Guard against the pip 25 backtracking cap even if the pin is lifted.
     PIP_RESOLVER_BACKTRACKING_LIMIT=1000
 ARG JOBS=1
 ENV MAKEFLAGS="-j${JOBS}"
