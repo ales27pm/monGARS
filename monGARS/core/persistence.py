@@ -543,6 +543,15 @@ class PersistenceManager:
         return torch
 
     @staticmethod
+    def _ensure_subpath(base_path: Path, child_path: Path, what: str) -> Path:
+        resolved_child = child_path.resolve(strict=True)
+        if not resolved_child.is_relative_to(base_path):
+            raise ValueError(
+                f"{what} path escapes snapshot directory (symlinks are rejected)"
+            )
+        return resolved_child
+
+    @staticmethod
     def snapshot_model(
         model: Any,
         tokenizer: Any,
@@ -621,7 +630,16 @@ class PersistenceManager:
             raise FileNotFoundError(model_path)
 
         torch = PersistenceManager._import_torch()
-        state_dict = torch.load(model_path, map_location=map_location)
+        resolved_snapshot_path = snapshot_path.resolve(strict=True)
+        resolved_model_path = PersistenceManager._ensure_subpath(
+            resolved_snapshot_path, model_path, "model"
+        )
+
+        state_dict = torch.load(
+            resolved_model_path,
+            map_location=map_location,
+            weights_only=True,
+        )
 
         tokenizer_obj: Any | None = None
         metadata: dict[str, Any] | None = None
@@ -635,9 +653,28 @@ class PersistenceManager:
             tokenizer_dir = snapshot_path / "tokenizer"
             fallback_path = tokenizer_dir / "tokenizer.pkl"
             if fallback_path.exists():
-                with fallback_path.open("rb") as handle:
+                resolved_fallback = PersistenceManager._ensure_subpath(
+                    resolved_snapshot_path, fallback_path, "tokenizer"
+                )
+                with resolved_fallback.open("rb") as handle:
                     tokenizer_obj = pickle.load(handle)
             elif tokenizer_dir.exists():
+                resolved_tokenizer_dir = PersistenceManager._ensure_subpath(
+                    resolved_snapshot_path, tokenizer_dir, "tokenizer"
+                )
+                tokenizer_dir = resolved_tokenizer_dir
+                critical_tokenizer_files = [
+                    tokenizer_dir / "tokenizer.json",
+                    tokenizer_dir / "config.json",
+                    tokenizer_dir / "special_tokens_map.json",
+                    tokenizer_dir / "vocab.json",
+                    tokenizer_dir / "merges.txt",
+                ]
+                for critical_path in critical_tokenizer_files:
+                    if critical_path.exists():
+                        PersistenceManager._ensure_subpath(
+                            resolved_snapshot_path, critical_path, "tokenizer"
+                        )
                 if AutoTokenizer is None:
                     logger.warning(
                         "persistence.snapshot.tokenizer_unavailable",
