@@ -41,7 +41,7 @@ setup(
         "channels>=4.0,<5.0",
         "pillow>=11.3.0",
         "psutil>=7.0.0",
-        "numpy>=1.26.4",
+        "numpy>=1.26.4,<2.0",
         "python-jose>=3.5.0",
         "pydantic>=2.11.7",
         "pydantic-settings>=2.10.1",
@@ -49,7 +49,7 @@ setup(
         "spacy>=3.8.7",
         "sqlalchemy>=2.0.41",
         "tenacity>=9.1.2",
-        "torch>=2.2.2,<2.3",
+        "torch>=2.6.0,<3.0",
         "tqdm>=4.66.5",
         "transformers>=4.45.0",
         "sentence-transformers>=3.0.1",
@@ -71,7 +71,7 @@ setup(
     extras_require={
         "grpo": [
             "trl>=0.23.1",
-            "vllm>=0.4.2,<0.5",
+            "vllm>=0.11.0,<0.12",
         ],
         "test": [
             "pytest>=7.0",

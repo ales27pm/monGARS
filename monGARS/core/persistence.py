@@ -621,7 +621,15 @@ class PersistenceManager:
             raise FileNotFoundError(model_path)
 
         torch = PersistenceManager._import_torch()
-        state_dict = torch.load(model_path, map_location=map_location)
+        resolved_model_path = model_path.resolve()
+        if not resolved_model_path.is_relative_to(snapshot_path.resolve()):
+            raise ValueError("model path escapes snapshot directory")
+
+        state_dict = torch.load(
+            resolved_model_path,
+            map_location=map_location,
+            weights_only=True,
+        )
 
         tokenizer_obj: Any | None = None
         metadata: dict[str, Any] | None = None
