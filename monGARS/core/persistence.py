@@ -621,7 +621,18 @@ class PersistenceManager:
             raise FileNotFoundError(model_path)
 
         torch = PersistenceManager._import_torch()
-        state_dict = torch.load(model_path, map_location=map_location)
+        resolved_snapshot_path = snapshot_path.resolve(strict=True)
+        resolved_model_path = model_path.resolve(strict=True)
+        if not resolved_model_path.is_relative_to(resolved_snapshot_path):
+            raise ValueError(
+                "model path escapes snapshot directory (symlinks are rejected)"
+            )
+
+        state_dict = torch.load(
+            resolved_model_path,
+            map_location=map_location,
+            weights_only=True,
+        )
 
         tokenizer_obj: Any | None = None
         metadata: dict[str, Any] | None = None
@@ -635,9 +646,19 @@ class PersistenceManager:
             tokenizer_dir = snapshot_path / "tokenizer"
             fallback_path = tokenizer_dir / "tokenizer.pkl"
             if fallback_path.exists():
+                resolved_fallback = fallback_path.resolve(strict=True)
+                if not resolved_fallback.is_relative_to(resolved_snapshot_path):
+                    raise ValueError(
+                        "tokenizer path escapes snapshot directory (symlinks are rejected)"
+                    )
                 with fallback_path.open("rb") as handle:
                     tokenizer_obj = pickle.load(handle)
             elif tokenizer_dir.exists():
+                resolved_tokenizer_dir = tokenizer_dir.resolve(strict=True)
+                if not resolved_tokenizer_dir.is_relative_to(resolved_snapshot_path):
+                    raise ValueError(
+                        "tokenizer path escapes snapshot directory (symlinks are rejected)"
+                    )
                 if AutoTokenizer is None:
                     logger.warning(
                         "persistence.snapshot.tokenizer_unavailable",

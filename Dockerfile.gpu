@@ -38,10 +38,11 @@ RUN git lfs install --system
 WORKDIR /app
 COPY requirements.txt .
 COPY vendor/llm2vec_monGARS ./vendor/llm2vec_monGARS
-# pip 25+ enforces a backtracking depth cap that our broad dependency ranges can exceed during Docker builds.
+# pip 24 introduced a resolver depth cap that breaks our broad dependency ranges; stick to pip 23.3.x to keep
+# Docker builds reliable until the requirements are tightened.
 RUN python -m venv /opt/venv \
     && . /opt/venv/bin/activate \
-    && pip install --no-cache-dir --upgrade "pip<25" \
+    && pip install --no-cache-dir --upgrade "pip==23.3.2" \
     && pip install --no-cache-dir -r requirements.txt \
     && python -m spacy download fr_core_news_sm
 COPY . /app
