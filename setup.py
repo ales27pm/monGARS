@@ -58,7 +58,7 @@ setup(
         "peft==0.18.0",
         "accelerate==1.12.0",
         "autoawq==0.2.9",
-        "git+https://github.com/unslothai/unsloth.git@39f006bde8a9f4a4081f579308b7f5dea472379a",
+        "unsloth @ git+https://github.com/unslothai/unsloth.git@39f006bde8a9f4a4081f579308b7f5dea472379a#egg=unsloth",
         "unsloth_zoo==2025.11.5",
         "trafilatura==2.0.0",
         "uvicorn==0.38.0",

@@ -1161,7 +1161,7 @@ def run_interactive_menu(
             run_dir=run_dir,
             base_model=base_model,
             method=export_method,
-            export_cmd=export_cmd,
+            export_cmd_template=export_cmd,
         )
         save_state(state_path, datasets, modules)
         print("[EXPORT] Export completed.")
