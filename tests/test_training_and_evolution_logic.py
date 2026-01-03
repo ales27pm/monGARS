@@ -48,7 +48,7 @@ def test_collect_curated_data_reads_jsonl(tmp_path: Path):
     if hasattr(records, "to_dict"):
         # Dataset-like object
         as_list = records.to_dict()
-        assert any(v for v in as_list.values())
+        assert any(as_list.values())
     else:
         assert isinstance(records, list)
         assert records[0]["text"] == "hello"
