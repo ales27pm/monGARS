@@ -7,6 +7,7 @@ steps whenever you touch project documentation so contributors always land on
 fresh instructions that match the shipped code.
 
 ## Quick reference
+
 | Action | Where to record it | Owner |
 | --- | --- | --- |
 | Add or update a runbook | Link it from [docs/index.md](index.md) and note the change in the pull request summary | Author |
