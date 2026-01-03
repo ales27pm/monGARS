@@ -31,6 +31,7 @@ Tooling so owners can keep the backlog dynamic as implementation details land.
   when new artefacts land.
 
 ## Telemetry anchors to monitor
+
 | Signal | Source of truth | Purpose |
 | --- | --- | --- |
 | `llm.ray.*` counters | `monGARS/core/llm_integration.py` | Confirms retries, fallbacks, and latency histograms stay healthy across releases. |
