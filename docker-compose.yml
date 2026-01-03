@@ -178,6 +178,9 @@ services:
       - "${WEBAPP_PORT:-8001}:8001"
     environment:
       <<: *app-environment
+      MONGARS_DB_PASSWORD: ${MONGARS_DB_PASSWORD}
+      DATABASE_URL: postgresql+asyncpg://mongars:${MONGARS_DB_PASSWORD}@postgres:5432/mongars_db
+      DJANGO_DATABASE_URL: postgresql+psycopg://mongars:${MONGARS_DB_PASSWORD}@postgres:5432/mongars_db
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
