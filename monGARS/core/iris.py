@@ -279,6 +279,11 @@ class Iris:
 
     async def _search_with_duckduckgo(self, query: str, cache_key: str) -> str | None:
         search_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+async def _search_with_duckduckgo(self, query: str, cache_key: str) -> str | None:
+    search_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+
+    async with self._semaphore:
+        response = await self._request_with_retries("GET", search_url)
 
         async with self._semaphore:
             response = await self._request_with_retries("GET", search_url)
