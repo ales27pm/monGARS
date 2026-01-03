@@ -1,83 +1,141 @@
-const DEFAULT_STORAGE_KEY = "mongars_jwt";
+// auth.js
+// -------
+// Small auth token helper.
+//
+// The backend expects a Bearer JWT on protected endpoints (e.g. /api/v1/auth/ws/ticket).
+// Historically, a couple of storage keys have been used; we read them all to be
+// tolerant during refactors.
 
-function hasLocalStorage() {
+const DEFAULT_STORAGE_KEY = "mongars_jwt";
+const LEGACY_STORAGE_KEYS = ["jwt", "access_token"];
+
+function normaliseJwt(token) {
+  if (!token) return undefined;
+  if (typeof token !== "string") return undefined;
+
+  let t = token.trim();
+  if (!t) return undefined;
+
+  if (t.toLowerCase().startsWith("bearer ")) {
+    t = t.slice(7).trim();
+  }
+
+  // Strip common accidental quoting.
+  t = t.replace(/^"+|"+$/g, "").trim();
+
+  if (!t) return undefined;
+  if (t === "null" || t === "undefined") return undefined;
+
+  return t;
+}
+
+function safeGet(storage, key) {
   try {
-    return typeof window !== "undefined" && Boolean(window.localStorage);
-  } catch (err) {
-    console.warn("Accessing localStorage failed", err);
-    return false;
+    return normaliseJwt(storage.getItem(key));
+  } catch {
+    return undefined;
   }
 }
 
-export function createAuthService(config = {}) {
-  const storageKey = config.storageKey || DEFAULT_STORAGE_KEY;
-  let fallbackToken =
-    typeof config.token === "string" && config.token.trim() !== ""
-      ? config.token.trim()
-      : undefined;
+function safeSet(storage, key, value) {
+  try {
+    if (value === undefined || value === null) storage.removeItem(key);
+    else storage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
 
-  function persistToken(token) {
-    if (typeof token === "string") {
-      token = token.trim();
-    }
-    fallbackToken = token || undefined;
-    if (!token) {
-      clearToken();
-      return;
-    }
+function safeDel(storage, key) {
+  try {
+    storage.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
 
-    if (!hasLocalStorage()) {
-      return;
-    }
+function readTokenFromStorage(primaryKey) {
+  const keys = [primaryKey, ...LEGACY_STORAGE_KEYS.filter((k) => k !== primaryKey)];
+  const storages = [];
 
-    try {
-      window.localStorage.setItem(storageKey, token);
-    } catch (err) {
-      console.warn("Unable to persist JWT in localStorage", err);
+  if (typeof window !== "undefined") {
+    if (window.localStorage) storages.push(window.localStorage);
+    if (window.sessionStorage) storages.push(window.sessionStorage);
+  }
+
+  for (const storage of storages) {
+    for (const key of keys) {
+      const v = safeGet(storage, key);
+      if (v) return v;
     }
   }
 
-  function readStoredToken() {
-    if (!hasLocalStorage()) {
-      return undefined;
+  return undefined;
+}
+
+function seedTokenFromUrlOnce(primaryKey) {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const u = new URL(window.location.href);
+    const fromQuery = u.searchParams.get("jwt") || u.searchParams.get("token");
+    const v = normaliseJwt(fromQuery);
+    if (!v) return undefined;
+
+    // Persist and scrub the URL (avoid leaking tokens via copy/paste).
+    safeSet(window.localStorage, primaryKey, v);
+    u.searchParams.delete("jwt");
+    u.searchParams.delete("token");
+    window.history.replaceState({}, "", u.toString());
+    return v;
+  } catch {
+    return undefined;
+  }
+}
+
+export function createAuthService({ storageKey = DEFAULT_STORAGE_KEY } = {}) {
+  let currentJwt = undefined;
+
+  function getJwt() {
+    if (currentJwt) return currentJwt;
+
+    const seeded = seedTokenFromUrlOnce(storageKey);
+    if (seeded) {
+      currentJwt = seeded;
+      return currentJwt;
     }
 
-    try {
-      const stored = window.localStorage.getItem(storageKey);
-      return stored || undefined;
-    } catch (err) {
-      console.warn("Unable to read JWT from localStorage", err);
-      return undefined;
+    currentJwt = readTokenFromStorage(storageKey);
+    return currentJwt;
+  }
+
+  function persistToken(token, { alsoLegacyKeys = false } = {}) {
+    const v = normaliseJwt(token);
+    if (!v) return;
+
+    currentJwt = v;
+
+    if (typeof window === "undefined" || !window.localStorage) return;
+    safeSet(window.localStorage, storageKey, v);
+
+    if (alsoLegacyKeys) {
+      for (const key of LEGACY_STORAGE_KEYS) {
+        if (key !== storageKey) safeSet(window.localStorage, key, v);
+      }
     }
   }
 
   function clearToken() {
-    fallbackToken = undefined;
+    currentJwt = undefined;
 
-    if (!hasLocalStorage()) {
-      return;
-    }
+    if (typeof window === "undefined") return;
+    const storages = [];
+    if (window.localStorage) storages.push(window.localStorage);
+    if (window.sessionStorage) storages.push(window.sessionStorage);
 
-    try {
-      window.localStorage.removeItem(storageKey);
-    } catch (err) {
-      console.warn("Unable to clear JWT from localStorage", err);
+    for (const storage of storages) {
+      safeDel(storage, storageKey);
+      for (const key of LEGACY_STORAGE_KEYS) safeDel(storage, key);
     }
-  }
-
-  if (fallbackToken) {
-    persistToken(fallbackToken);
-  }
-
-  async function getJwt() {
-    const stored = readStoredToken();
-    if (stored) {
-      return stored;
-    }
-    if (fallbackToken) {
-      return fallbackToken;
-    }
-    throw new Error("Missing JWT for chat authentication.");
   }
 
   return {
