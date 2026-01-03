@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import math
+import os
 import types
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -14,6 +15,11 @@ import spacy
 from cachetools import TTLCache
 
 try:  # pragma: no cover - optional dependency at import time
+    from neo4j.async_driver import AsyncGraphDatabase
+except ImportError:  # pragma: no cover - driver not installed in tests
+    AsyncGraphDatabase = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency at import time
     from sqlalchemy import select
 except ImportError:  # pragma: no cover - SQLAlchemy not installed in tests
     select = None  # type: ignore[assignment]
@@ -21,8 +27,16 @@ except ImportError:  # pragma: no cover - SQLAlchemy not installed in tests
 from opentelemetry import metrics
 
 from monGARS.config import get_settings
+from monGARS.core.cortex.prompt_enricher import build_context_snippet
 from monGARS.core.iris import Iris
-from monGARS.core.neurones import EmbeddingSystem
+from monGARS.core.llm_integration import LLMIntegration
+from monGARS.core.search import (
+    NormalizedHit,
+    SearchOrchestrator,
+    VerifiedBundle,
+    Verifier,
+    parse_schema_org,
+)
 
 try:  # pragma: no cover - optional dependency at import time
     from ...init_db import ConversationHistory, async_session_factory
@@ -52,10 +66,94 @@ _research_cache_counter = meter.create_counter(
 AsyncClientFactory = Callable[[], AsyncIterator[httpx.AsyncClient]]
 
 
+class _NoOpResult:
+    async def single(self) -> dict[str, Any]:
+        return {"exists": False}
+
+    async def data(self) -> list[dict[str, Any]]:
+        return []
+
+    def records(self) -> list[dict[str, Any]]:
+        return []
+
+    def __aiter__(self) -> "_NoOpResult":
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        raise StopAsyncIteration
+
+
+class _NoOpSession:
+    async def __aenter__(self) -> "_NoOpSession":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> None:
+        return None
+
+    async def run(self, *args: Any, **kwargs: Any) -> _NoOpResult:
+        return _NoOpResult()
+
+
+class _NoOpDriver:
+    def session(self) -> _NoOpSession:
+        return _NoOpSession()
+
+    async def close(self) -> None:  # pragma: no cover - no-op close
+        return None
+
+
+def _create_kg_driver() -> Any:
+    if AsyncGraphDatabase is None:
+        logger.debug("Neo4j driver not installed; using no-op driver")
+        return _NoOpDriver()
+
+    uri = os.getenv("NEO4J_URI")
+    user = os.getenv("NEO4J_USER")
+    password = os.getenv("NEO4J_PASSWORD")
+    if not (uri and user and password):
+        logger.debug("Neo4j credentials missing; using no-op driver")
+        return _NoOpDriver()
+    try:
+        driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        logger.info("Connected to Neo4j at %s", uri)
+        return driver
+    except Exception as exc:  # pragma: no cover - driver optional
+        logger.warning("Failed to initialise Neo4j driver: %s", exc)
+        return _NoOpDriver()
+
+
 def _tokenize(text: str) -> set[str]:
     """Return a lower-cased token set without empty strings."""
 
     return {token for token in text.lower().split() if token}
+
+
+class _EmbeddingCompatibilityAdapter:
+    """Backwards-compatible embedding façade used by historical tests."""
+
+    def __init__(self, engine: "CuriosityEngine") -> None:
+        self._engine = engine
+        self.driver: Any | None = None
+        self._model_dependency_available = engine._llm is not None
+
+    async def encode(self, text: str) -> tuple[list[float], bool]:
+        llm = self._engine._llm
+        if llm is None:
+            raise RuntimeError("Embedding runtime unavailable")
+
+        cleaned = text.strip() if isinstance(text, str) else ""
+
+        def _run() -> list[list[float]]:
+            return llm.embed_batch([cleaned])
+
+        vectors = await asyncio.to_thread(_run)
+        vector = vectors[0] if vectors else []
+        return vector, True
 
 
 class CuriosityEngine:
@@ -69,10 +167,22 @@ class CuriosityEngine:
         iris: Iris | None = None,
         *,
         http_client_factory: AsyncClientFactory | None = None,
+        search_orchestrator: SearchOrchestrator | None = None,
+        verifier: Verifier | None = None,
     ) -> None:
         """Initialise the curiosity engine with NLP and embedding utilities."""
 
-        self.embedding_system = EmbeddingSystem()
+        self._llm: LLMIntegration | None
+        try:
+            self._llm = LLMIntegration.instance()
+        except Exception as exc:  # pragma: no cover - optional dependency
+            logger.warning(
+                "curiosity.embedding_runtime_unavailable", extra={"error": repr(exc)}
+            )
+            self._llm = None
+        self.embedding_system = _EmbeddingCompatibilityAdapter(self)
+        self._kg_driver = _create_kg_driver()
+        self.embedding_system.driver = self._kg_driver
         self.similarity_threshold = settings.curiosity_similarity_threshold
         self.similar_history_threshold = max(
             0, settings.curiosity_minimum_similar_history
@@ -123,6 +233,100 @@ class CuriosityEngine:
             self._http_client_factory = default_http_client_factory
         else:
             self._http_client_factory = http_client_factory
+
+        self._search_orchestrator = search_orchestrator or SearchOrchestrator(
+            http_client_factory=self._http_client_factory,
+            document_fetcher=self.iris.fetch_document,
+        )
+        attach = getattr(self.iris, "attach_search_orchestrator", None)
+        if callable(attach):
+            attach(self._search_orchestrator)
+        self._verifier = verifier or Verifier()
+        self._research_workflow = ResearchWorkflow(
+            search_orchestrator=self._search_orchestrator,
+            verifier=self._verifier,
+            iris=self.iris,
+            http_client_factory=self._http_client_factory,
+            research_cache=self._research_cache,
+            research_cache_lock=self._research_cache_lock,
+        )
+
+    async def build_prompt_context(
+        self, question: str, *, lang: str = "en"
+    ) -> dict[str, object]:
+        """Return enriched research context for ``question`` suitable for prompts."""
+
+        normalised_question = (question or "").strip()
+        if not normalised_question:
+            return {"error": "empty query"}
+
+        hits = await self._search_orchestrator.search(
+            normalised_question, lang=lang, max_results=20
+        )
+        bundle = self._verifier.cross_check(normalised_question, hits)
+
+        if not hits:
+            return {"error": "no results"}
+
+        metadata_hit = None
+        if bundle.primary_citation:
+            metadata_hit = next(
+                (hit for hit in hits if hit.url == bundle.primary_citation),
+                None,
+            )
+        if metadata_hit is None and hits:
+            metadata_hit = hits[0]
+
+        if metadata_hit is None:
+            return {"error": "no results"}
+
+        top_url = metadata_hit.url
+        try:
+            document = await self.iris.fetch_document(top_url)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - network dependent
+            logger.debug(
+                "curiosity.prompt_enrich.document_error",
+                exc_info=True,
+                extra={"url": top_url},
+            )
+            document = None
+
+        if document and document.published_at is None:
+            try:
+                async with self._http_client_factory() as client:
+                    response = await client.get(top_url)
+                    response.raise_for_status()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover - network dependent
+                logger.debug(
+                    "curiosity.prompt_enrich.schema_fetch_error",
+                    exc_info=True,
+                    extra={"url": top_url},
+                )
+            else:
+                schema = parse_schema_org(response.text)
+                if schema:
+                    if schema.date_published and document.published_at is None:
+                        document.published_at = schema.date_published
+                    if schema.date_modified and document.modified_at is None:
+                        document.modified_at = schema.date_modified
+                    if schema.event_start and document.event_start is None:
+                        document.event_start = schema.event_start
+                    if schema.event_end and document.event_end is None:
+                        document.event_end = schema.event_end
+                    if schema.authors and not document.authors:
+                        document.authors = list(schema.authors)
+                    if schema.publisher and document.publisher is None:
+                        document.publisher = schema.publisher
+                    if schema.organization and document.organization is None:
+                        document.organization = schema.organization
+                    if schema.location_name and document.location_name is None:
+                        document.location_name = schema.location_name
+
+        return dict(build_context_snippet(document, bundle))
 
     async def detect_gaps(self, conversation_context: dict) -> dict:
         """Identify knowledge gaps using previous history and entity checks."""
@@ -254,14 +458,20 @@ class CuriosityEngine:
         if not history_candidates:
             return 0
 
-        if not self.embedding_system.is_model_available:
-            logger.debug("Vector similarity skipped; embedding model unavailable")
+        embedding_component = getattr(self, "embedding_system", None)
+        embeddings_ready = bool(
+            embedding_component
+            and getattr(embedding_component, "_model_dependency_available", False)
+            and hasattr(embedding_component, "encode")
+        )
+
+        if not embeddings_ready:
+            logger.debug("Vector similarity skipped; embedding runtime unavailable")
             return self._count_token_similarity(query_terms, history_candidates)
 
+        payloads = [query_text, *history_candidates]
         try:
-            query_vector, query_used_fallback = await self.embedding_system.encode(
-                query_text
-            )
+            embeddings = await self._embed_payloads(payloads)
         except Exception as exc:  # pragma: no cover - embedding optional
             logger.debug(
                 "Vector similarity fallback due to embedding error: %s",
@@ -269,43 +479,22 @@ class CuriosityEngine:
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
-        if query_used_fallback:
-            logger.debug("Vector similarity fallback due to query embedding fallback")
-            return self._count_token_similarity(query_terms, history_candidates)
-
-        query_norm = math.sqrt(sum(value * value for value in query_vector))
-        if query_norm == 0:
-            logger.debug(
-                "Vector similarity fallback due to zero-length query embedding"
-            )
-            return self._count_token_similarity(query_terms, history_candidates)
-
-        try:
-            history_results = await asyncio.gather(
-                *(self.embedding_system.encode(item) for item in history_candidates)
-            )
-        except Exception as exc:  # pragma: no cover - embedding optional
-            logger.debug(
-                "Vector similarity fallback due to embedding error: %s",
-                exc,
-            )
-            return self._count_token_similarity(query_terms, history_candidates)
-
-        if len(history_results) != len(history_candidates):
+        if len(embeddings) != len(payloads):
             logger.debug(
                 "Vector similarity fallback due to embedding count mismatch",
             )
             return self._count_token_similarity(query_terms, history_candidates)
 
+        query_vector = embeddings[0]
+        query_norm = math.sqrt(sum(value * value for value in query_vector))
+        if query_norm == 0:
+            logger.debug(
+                "Vector similarity fallback due to zero-length query embedding",
+            )
+            return self._count_token_similarity(query_terms, history_candidates)
+
         similar = 0
-        for _candidate_text, (history_vector, history_used_fallback) in zip(
-            history_candidates, history_results
-        ):
-            if history_used_fallback:
-                logger.debug(
-                    "Vector similarity fallback due to history embedding fallback",
-                )
-                return self._count_token_similarity(query_terms, history_candidates)
+        for history_vector in embeddings[1:]:
             if len(history_vector) != len(query_vector):
                 logger.debug(
                     "Vector similarity fallback due to embedding length mismatch",
@@ -322,6 +511,44 @@ class CuriosityEngine:
             if similarity >= self.similarity_threshold:
                 similar += 1
         return similar
+
+    async def _embed_payloads(self, payloads: Sequence[str]) -> list[list[float]]:
+        cleaned = [
+            value.strip() if isinstance(value, str) else "" for value in payloads
+        ]
+        embedding_component = getattr(self, "embedding_system", None)
+        embeddings_ready = bool(
+            embedding_component
+            and getattr(embedding_component, "_model_dependency_available", False)
+            and hasattr(embedding_component, "encode")
+        )
+        if embeddings_ready:
+            vectors: list[list[float]] = []
+            for text in cleaned:
+                response = embedding_component.encode(text)
+                if inspect.isawaitable(response):
+                    response = await response  # type: ignore[assignment]
+                vector = self._coerce_embedding_vector(response)
+                vectors.append(vector)
+            return vectors
+
+        if self._llm is None:
+            raise RuntimeError("Embedding runtime unavailable")
+        return await asyncio.to_thread(self._llm.embed_batch, cleaned)
+
+    def _coerce_embedding_vector(self, payload: Any) -> list[float]:
+        vector_payload = payload[0] if isinstance(payload, tuple) else payload
+        if not isinstance(vector_payload, Sequence):
+            raise TypeError("Embedding response must be a sequence")
+        coerced: list[float] = []
+        for value in vector_payload:
+            try:
+                coerced.append(float(value))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Embedding response must contain numeric values"
+                ) from exc
+        return coerced
 
     def _count_token_similarity(
         self, query_terms: set[str], history_candidates: Iterable[str]
@@ -473,7 +700,7 @@ class CuriosityEngine:
         if not normalized_entities:
             return {}
 
-        driver = getattr(self.embedding_system, "driver", None)
+        driver = getattr(self.embedding_system, "driver", None) or self._kg_driver
         session_factory = getattr(driver, "session", None)
         if not callable(session_factory):
             logger.debug(
@@ -526,7 +753,7 @@ class CuriosityEngine:
 
         Neo4j's async driver exposes several shapes depending on how results are
         consumed (``result.data()``, ``result.records()`` or async iteration).
-        Tests also exercise lightweight stubs that mimic a subset of that
+        Tests also exercise lightweight fakes that mimic a subset of that
         interface. To keep the engine decoupled from a specific driver, this
         helper attempts the common access patterns in order and coerces each row
         into a mapping.
@@ -724,43 +951,122 @@ class CuriosityEngine:
         return " ".join(normalised)
 
     async def _perform_research(self, query: str) -> str:
-        """Fetch additional context from the document service or Iris."""
+        """Fetch fresh context, verify it, and return annotated summaries."""
 
+        return await self._research_workflow.run(
+            query,
+            lang=getattr(settings, "curiosity_research_lang", "en"),
+        )
+
+    def _summarise_documents(self, documents: Sequence[Mapping[str, Any]]) -> str:
+        """Expose document summarisation for backwards compatibility in tests."""
+
+        return self._research_workflow._summarise_documents(documents)
+
+
+class ResearchWorkflow:
+    """Encapsulate the external research workflow for the curiosity engine."""
+
+    _DEFAULT_FALLBACK = "Aucun contexte supplémentaire trouvé."
+
+    def __init__(
+        self,
+        *,
+        search_orchestrator: SearchOrchestrator,
+        verifier: Verifier,
+        iris: Iris,
+        http_client_factory: AsyncClientFactory,
+        research_cache: TTLCache[str, str],
+        research_cache_lock: asyncio.Lock,
+    ) -> None:
+        self._search_orchestrator = search_orchestrator
+        self._verifier = verifier
+        self._iris = iris
+        self._http_client_factory = http_client_factory
+        self._research_cache = research_cache
+        self._research_cache_lock = research_cache_lock
+
+    async def run(self, query: str, *, lang: str) -> str:
         normalised_query = query.strip()
         if not normalised_query:
-            return "Aucun contexte supplémentaire trouvé."
+            return self._DEFAULT_FALLBACK
 
-        cached_response = await self._get_cached_research(normalised_query)
+        cached_response = await self._get_cached(normalised_query)
         if cached_response is not None:
             _research_cache_counter.add(1, {"event": "hit"})
             return cached_response
 
         _research_cache_counter.add(1, {"event": "miss"})
-        _external_research_counter.add(1, {"channel": "document_service"})
 
-        document_summary = await self._fetch_document_summary(normalised_query)
-        if document_summary:
-            enriched = f"Contexte supplémentaire: {document_summary}"
-            await self._set_cached_research(normalised_query, enriched)
-            return enriched
-
-        logger.info(
-            "curiosity.iris_fallback",
+        logger.debug(
+            "curiosity.research.search_start",
             extra={"query_len": len(normalised_query)},
         )
-        _external_research_counter.add(1, {"channel": "iris"})
-        result = await self.iris.search(normalised_query)
-        if result:
-            enriched = f"Contexte supplémentaire: {result}"
-            await self._set_cached_research(normalised_query, enriched)
-            return enriched
-        fallback = "Aucun contexte supplémentaire trouvé."
-        await self._set_cached_research(normalised_query, fallback)
-        return fallback
+
+        search_results = await self._search_orchestrator.search(
+            normalised_query,
+            lang=lang,
+        )
+        verification_bundle = self._verifier.cross_check(
+            normalised_query, search_results
+        )
+
+        top_hit = verification_bundle.hits[0] if verification_bundle.hits else None
+        iris_summary_task = asyncio.create_task(self._resolve_primary_summary(top_hit))
+        document_summary_task = asyncio.create_task(
+            self._fetch_document_summary(normalised_query)
+        )
+
+        iris_summary, document_summary = await asyncio.gather(
+            iris_summary_task, document_summary_task
+        )
+
+        iris_search_snippet = ""
+        if not document_summary:
+            iris_search_snippet = await self._safe_iris_search(normalised_query)
+
+        combined_summary = self._combine_summaries(
+            document_summary,
+            iris_summary,
+            iris_search_snippet,
+            fallback=top_hit.snippet if top_hit else "",
+        )
+
+        if not combined_summary:
+            logger.info(
+                "curiosity.research.no_summary",
+                extra={"query_len": len(normalised_query)},
+            )
+            if not iris_search_snippet:
+                iris_search_snippet = await self._safe_iris_search(normalised_query)
+            combined_summary = iris_search_snippet or self._DEFAULT_FALLBACK
+
+        enriched = self._render_research_response(
+            combined_summary,
+            verification_bundle,
+        )
+        await self._set_cached(normalised_query, enriched)
+        return enriched
+
+    async def _safe_iris_search(self, query: str) -> str:
+        try:
+            _external_research_counter.add(1, {"channel": "iris"})
+            result = await self._iris.search(query)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - network dependent
+            logger.debug(
+                "curiosity.iris_search.error",
+                exc_info=True,
+                extra={"query_len": len(query)},
+            )
+            return ""
+        return result or ""
 
     async def _fetch_document_summary(self, query: str) -> str:
         """Return a concatenated summary from the document retrieval service."""
 
+        _external_research_counter.add(1, {"channel": "document_service"})
         try:
             async with self._http_client_factory() as client:
                 response = await client.post(
@@ -785,21 +1091,15 @@ class CuriosityEngine:
 
         return self._summarise_documents(documents)
 
-    async def _get_cached_research(self, query: str) -> str | None:
-        """Return a cached research result for ``query`` if available."""
-
+    async def _get_cached(self, query: str) -> str | None:
         async with self._research_cache_lock:
             return self._research_cache.get(query)
 
-    async def _set_cached_research(self, query: str, value: str) -> None:
-        """Store ``value`` in the research cache for ``query``."""
-
+    async def _set_cached(self, query: str, value: str) -> None:
         async with self._research_cache_lock:
             self._research_cache[query] = value
 
     def _summarise_documents(self, documents: Sequence[Mapping[str, Any]]) -> str:
-        """Combine document summaries into a compact string."""
-
         cleaned_summaries: list[str] = []
         for document in documents:
             if not isinstance(document, Mapping):
@@ -808,3 +1108,76 @@ class CuriosityEngine:
             if isinstance(summary, str) and (stripped := summary.strip()):
                 cleaned_summaries.append(stripped)
         return " ".join(cleaned_summaries)
+
+    async def _resolve_primary_summary(self, hit: NormalizedHit | None) -> str:
+        if hit is None:
+            return ""
+        if hit.snippet and (stripped := hit.snippet.strip()):
+            return stripped
+
+        document = None
+        try:
+            document = await asyncio.wait_for(
+                self._iris.fetch_document(hit.url),
+                timeout=10,
+            )
+        except asyncio.TimeoutError:
+            logger.debug(
+                "curiosity.iris_document_fetch_timeout",
+                extra={"url": hit.url},
+                exc_info=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - network dependent
+            logger.debug(
+                "curiosity.iris_document_fetch_error",
+                extra={"url": hit.url},
+                exc_info=True,
+            )
+        if document:
+            for candidate in (document.summary, document.text):
+                if isinstance(candidate, str) and (stripped := candidate.strip()):
+                    return stripped
+        return ""
+
+    def _combine_summaries(
+        self,
+        *summaries: str,
+        fallback: str = "",
+    ) -> str:
+        components: list[str] = []
+        for value in summaries:
+            if value and (stripped := value.strip()):
+                components.append(stripped)
+        if not components and fallback and (stripped := fallback.strip()):
+            components.append(stripped)
+        deduped = list(dict.fromkeys(components))
+        return " ".join(deduped)
+
+    def _render_research_response(self, summary: str, bundle: VerifiedBundle) -> str:
+        lines: list[str] = []
+        if summary:
+            lines.append(f"Contexte supplémentaire: {summary}")
+        else:
+            lines.append(self._DEFAULT_FALLBACK)
+
+        if bundle.agreed_facts:
+            facts = "; ".join(
+                f"{key}: {value}" for key, value in bundle.agreed_facts.items()
+            )
+            lines.append(f"Points confirmés: {facts}")
+
+        if disagreement_snippets := [
+            f"{key}: {values[0]}"
+            for key, values in bundle.disagreements.items()
+            if values
+        ]:
+            lines.append("Divergences relevées: " + "; ".join(disagreement_snippets))
+
+        if bundle.citations:
+            citations = ", ".join(bundle.citations[:6])
+            lines.append(f"Sources: {citations}")
+
+        lines.append(f"Confiance: {bundle.confidence:.2f}")
+        return "\n".join(lines)

@@ -263,9 +263,9 @@ class TrainKnobs:
             f"--gradient_accumulation_steps={self.gradient_accumulation_steps}",
             f"--per_device_eval_batch_size={self.per_device_eval_batch_size}",
             f"--max_seq_length={self.max_seq_length}",
-            f"--evaluation_strategy=steps",
-            f"--save_strategy=steps",
-            f"--logging_strategy=steps",
+            "--evaluation_strategy=steps",
+            "--save_strategy=steps",
+            "--logging_strategy=steps",
             f"--gradient_checkpointing={'true' if self.gradient_checkpointing else 'false'}",
             f"--torch_dtype={self.torch_dtype}",
         ]
@@ -373,6 +373,21 @@ def run_training_once(
     print(f"🚀 Launching training with overrides:\n    {final_cmd}\n")
     result = sh(final_cmd, check=False, env=env)
     return result.returncode, result.stdout, result.stderr
+
+
+def looks_like_oom(stdout: str, stderr: str) -> bool:
+    """Return ``True`` when logs indicate an out-of-memory condition."""
+
+    signals = (
+        "cuda out of memory",
+        "cublas error: CUBLAS_STATUS_ALLOC_FAILED",
+        "cudnn error: CUDNN_STATUS_ALLOC_FAILED",
+        "illegal memory access",
+        "memoryerror",
+        "rccl failure 12",
+    )
+    haystack = "\n".join([stdout, stderr]).lower()
+    return any(signal in haystack for signal in signals)
 
 
 def autotrain(

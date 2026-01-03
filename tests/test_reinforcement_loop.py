@@ -33,7 +33,7 @@ class _RecordingSpan:
     def __enter__(self) -> "_RecordingSpan":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover - interface stub
+    def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover - interface shim
         return None
 
     def add_event(self, name: str, attributes: dict[str, Any] | None = None) -> None:

@@ -1,9 +1,11 @@
+import hashlib
+import io
 import json
 
 import pytest
 
 from monGARS.config import get_settings
-from monGARS.core import model_manager
+from monGARS.core import adapter_provisioner, model_manager
 from monGARS.core.model_manager import LLMModelManager
 
 
@@ -74,6 +76,35 @@ def test_model_definition_string_entries_preserve_role(tmp_path):
     assert definition.name == "ollama/summarise"
 
 
+def test_model_definition_parses_local_path_string(tmp_path):
+    local_file = tmp_path / "models" / "offline" / "custom.gguf"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_bytes(b"weights")
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "offline": f"path:{local_file.relative_to(tmp_path)}",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+
+    manager = LLMModelManager(settings)
+
+    definition = manager.get_model_definition("offline")
+    assert definition.provider == "local_path"
+    assert definition.auto_download is False
+    assert definition.parameters["path"].endswith("custom.gguf")
+    assert definition.parameters["local"] is True
+    # original relative preserved
+    assert definition.parameters.get("source_path") == str(
+        local_file.relative_to(tmp_path)
+    )
+
+
 @pytest.mark.asyncio
 async def test_model_manager_installs_missing_model(monkeypatch, tmp_path):
     config_data = {
@@ -109,6 +140,259 @@ async def test_model_manager_installs_missing_model(monkeypatch, tmp_path):
     status = report.statuses[0]
     assert status.action == "installed"
     assert fake.pulled == ["custom/general"]
+
+
+@pytest.mark.asyncio
+async def test_local_model_provision_reports_existing_path(tmp_path):
+    local_file = tmp_path / "offline.gguf"
+    local_file.write_bytes(b"weights")
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "offline": f"path:{local_file}",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+    manager = LLMModelManager(settings)
+
+    report = await manager.ensure_models_installed(["offline"])
+
+    assert report.statuses
+    status = report.statuses[0]
+    assert status.provider == "local_path"
+    assert status.action == "exists"
+    assert status.detail == local_file.name
+
+    # Second call should be skipped due to caching
+    report2 = await manager.ensure_models_installed(["offline"])
+    assert report2.statuses
+    status2 = report2.statuses[0]
+    assert status2.action == "skipped"
+    assert status2.detail == "already_ensured"
+
+
+@pytest.mark.asyncio
+async def test_local_model_provision_reports_missing_path(tmp_path):
+    missing_file = tmp_path / "missing.gguf"
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "offline": f"path:{missing_file}",
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(llm_models_config_path=config_path)
+    manager = LLMModelManager(settings)
+
+    report = await manager.ensure_models_installed(["offline"])
+
+    assert report.statuses
+    status = report.statuses[0]
+    assert status.provider == "local_path"
+    assert status.action == "missing"
+    assert status.detail == missing_file.name
+
+    # Still missing on subsequent call; should not be skipped
+    report2 = await manager.ensure_models_installed(["offline"])
+    status2 = report2.statuses[0]
+    assert status2.action == "missing"
+
+
+def test_default_profile_exposes_reasoning_role(tmp_path):
+    settings = _build_settings(
+        llm_adapter_registry_path=tmp_path / "registry",
+    )
+    manager = LLMModelManager(settings)
+
+    reasoning = manager.get_model_definition("reasoning")
+    assert reasoning.name == "dolphin-x1"
+    assert reasoning.adapters
+    assert len(reasoning.adapters) >= 1, "Expected at least one adapter"
+    assert reasoning.adapters[0].target == "dolphin-x1/reasoning/baseline"
+
+
+@pytest.mark.asyncio
+async def test_adapter_artifacts_copied_into_registry(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts" / "adapter"
+    source_dir.mkdir(parents=True)
+    (source_dir / "adapter_model.safetensors").write_bytes(b"sample")
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(source_dir),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def __init__(self) -> None:
+            self.models: set[str] = set()
+
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:
+            self.models.add(name)
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "installed"
+    installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == b"sample", "File content should match source"
+
+
+@pytest.mark.asyncio
+async def test_adapter_downloads_remote_payload(monkeypatch, tmp_path):
+    remote_url = "https://example.com/adapter_model.safetensors"
+    remote_payload = b"remote-adapter"
+
+    class FakeResponse(io.BytesIO):
+        def __enter__(self):  # pragma: no cover - context protocol
+            self.seek(0)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # pragma: no cover - context protocol
+            self.close()
+
+    def fake_urlopen(url, *, timeout=None):
+        assert url == remote_url
+        assert timeout == 30
+        return FakeResponse(remote_payload)
+
+    monkeypatch.setattr(adapter_provisioner, "urlopen", fake_urlopen)
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "remote-adapter",
+                                "source": remote_url,
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "installed"
+    installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == remote_payload
+
+
+@pytest.mark.asyncio
+async def test_local_adapter_installs_when_downloads_disabled(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts" / "adapter"
+    source_dir.mkdir(parents=True)
+    (source_dir / "adapter_model.safetensors").write_bytes(b"offline")
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "offline-adapter",
+                                "source": str(source_dir),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+        llm_models_auto_download=False,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "installed"
+
+    installed_file = registry_path / "custom" / "general" / "adapter_model.safetensors"
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == b"offline"
 
 
 @pytest.mark.asyncio
@@ -151,3 +435,222 @@ async def test_model_manager_skips_download_when_auto_disabled(monkeypatch, tmp_
     assert status.action == "skipped"
     assert status.detail == "auto_download_disabled"
     assert fake.pull_called is False
+
+
+@pytest.mark.asyncio
+async def test_adapter_provision_missing_source(monkeypatch, tmp_path):
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(tmp_path / "missing" / "adapter.bin"),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "error"
+    assert adapter_status.detail == "source_missing"
+
+
+@pytest.mark.asyncio
+async def test_adapter_provision_checksum_mismatch(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts"
+    source_dir.mkdir(parents=True)
+    adapter_path = source_dir / "adapter_model.safetensors"
+    adapter_path.write_bytes(b"valid")
+    bad_checksum = hashlib.sha256(b"invalid").hexdigest()
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(adapter_path),
+                                "checksum": bad_checksum,
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "error"
+    assert adapter_status.detail == "checksum_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_adapter_provision_extraction_failure(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts"
+    source_dir.mkdir(parents=True)
+    adapter_path = source_dir / "adapter_model.safetensors"
+    adapter_path.write_bytes(b"valid")
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(adapter_path),
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    registry_path = tmp_path / "registry"
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    def fail_install(_self, _source_path, _target_path):
+        raise RuntimeError("Extraction failed")
+
+    monkeypatch.setattr(
+        adapter_provisioner.AdapterProvisioner,
+        "_install_from_filesystem",
+        fail_install,
+    )
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "error"
+    assert adapter_status.detail == "adapter_install_failed"
+
+
+@pytest.mark.asyncio
+async def test_force_does_not_delete_frozen_adapter(monkeypatch, tmp_path):
+    source_dir = tmp_path / "artifacts" / "adapter"
+    source_dir.mkdir(parents=True)
+    (source_dir / "adapter_model.safetensors").write_bytes(b"frozen")
+    registry_path = tmp_path / "registry"
+    installed_path = registry_path / "custom" / "general"
+    installed_path.mkdir(parents=True, exist_ok=True)
+    installed_file = installed_path / "adapter_model.safetensors"
+    installed_file.write_bytes(b"frozen")
+
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "custom/general",
+                        "adapters": [
+                            {
+                                "name": "custom-adapter",
+                                "source": str(source_dir),
+                                "target": "custom/general",
+                                "auto_update": False,
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_adapter_registry_path=registry_path,
+    )
+    manager = LLMModelManager(settings)
+
+    class FakeOllama:
+        def list(self) -> dict[str, object]:
+            return {"models": []}
+
+        def pull(self, name: str) -> None:  # pragma: no cover - defensive shim
+            pass
+
+    monkeypatch.setattr(model_manager, "ollama", FakeOllama())
+
+    report = await manager.ensure_models_installed(["general"], force=True)
+    adapter_status = next(
+        (status for status in report.statuses if status.provider == "adapter"),
+        None,
+    )
+    assert adapter_status is not None, "Expected adapter status in report"
+    assert adapter_status.action == "exists"
+    assert installed_file.exists()
+    assert installed_file.read_bytes() == b"frozen"

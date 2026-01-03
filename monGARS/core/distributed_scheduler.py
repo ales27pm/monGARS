@@ -206,6 +206,7 @@ class DistributedScheduler:
                         extra={
                             "scheduler_id": self.instance_id,
                             "worker_id": worker_id,
+                            "error": str(exc),
                         },
                         exc_info=True,
                     )

@@ -7,18 +7,34 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Final
 
 from sqlalchemy.engine import URL
 
-from init_db import (
-    DEFAULT_DB_STARTUP_RETRY_INTERVAL,
-    DEFAULT_DB_STARTUP_TIMEOUT,
-    build_sync_url,
-    coerce_positive_float,
-    render_url,
-    wait_for_database,
-)
+try:
+    from init_db import (
+        DEFAULT_DB_STARTUP_RETRY_INTERVAL,
+        DEFAULT_DB_STARTUP_TIMEOUT,
+        build_sync_url,
+        coerce_positive_float,
+        render_url,
+        wait_for_database,
+    )
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - script executed without package installed
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from init_db import (
+        DEFAULT_DB_STARTUP_RETRY_INTERVAL,
+        DEFAULT_DB_STARTUP_TIMEOUT,
+        build_sync_url,
+        coerce_positive_float,
+        render_url,
+        wait_for_database,
+    )
 
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

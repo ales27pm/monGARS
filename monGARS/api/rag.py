@@ -67,12 +67,15 @@ async def fetch_rag_context(
             repositories=request.repositories,
             max_results=request.max_results,
         )
-    except RagDisabledError:
+    except RagDisabledError as exc:
         logger.info(
             "api.review.rag_context.disabled",
             extra={"user_id": user_id},
         )
-        return RagContextResponse(enabled=False)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="RAG disabled",
+        ) from exc
     except RagServiceError as exc:
         logger.warning(
             "api.review.rag_context.service_unavailable",
@@ -88,7 +91,7 @@ async def fetch_rag_context(
             extra={"error": str(exc), "user_id": user_id},
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
 

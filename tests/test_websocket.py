@@ -1,11 +1,6 @@
-import os
-
-os.environ.setdefault("SECRET_KEY", "test")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -13,10 +8,12 @@ from fastapi.testclient import TestClient
 
 import monGARS.api.ws_manager as ws_module
 from monGARS.api.dependencies import hippocampus
-from monGARS.api.web_api import app, ws_manager
+from monGARS.api.web_api import app, reset_chat_rate_limiter_async, ws_manager
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule
 from monGARS.core.ui_events import make_event
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 
@@ -25,6 +22,7 @@ pytestmark = pytest.mark.usefixtures("ensure_test_users")
 async def client(monkeypatch):
     hippocampus._memory.clear()
     hippocampus._locks.clear()
+    await reset_chat_rate_limiter_async()
     await ws_manager.reset()
 
     async def fake_generate_response(
@@ -54,6 +52,7 @@ async def client(monkeypatch):
         yield client
     hippocampus._memory.clear()
     hippocampus._locks.clear()
+    await reset_chat_rate_limiter_async()
     await ws_manager.reset()
 
 

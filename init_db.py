@@ -14,7 +14,8 @@ from typing import Final
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import URL
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.utils.database import apply_database_url_overrides

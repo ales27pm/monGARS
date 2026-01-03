@@ -76,13 +76,12 @@ class PeerCommunicator:
                 return success
             except httpx.HTTPError as exc:
                 logger.error(
-                    "peer.message_send_failed", extra={"peer": url, "error": str(exc)}
-                )
-                return False
-            except Exception as exc:  # pragma: no cover - unexpected errors
-                logger.error(
-                    "peer.message_send_unexpected_error",
-                    extra={"peer": url, "error": str(exc)},
+                    "peer.message_send_failed",
+                    extra={
+                        "peer": url,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 return False
 
@@ -182,13 +181,11 @@ class PeerCommunicator:
             except httpx.HTTPError as exc:
                 logger.warning(
                     "peer.telemetry_broadcast_failed",
-                    extra={"peer": peer_url.split("?", 1)[0], "error": str(exc)},
-                )
-                return False
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "peer.telemetry_broadcast_unexpected_error",
-                    extra={"peer": peer_url.split("?", 1)[0], "error": str(exc)},
+                    extra={
+                        "peer": peer_url.split("?", 1)[0],
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 return False
             finally:
@@ -279,7 +276,7 @@ class PeerCommunicator:
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "peer.load_provider_failed",
-                extra={"error": str(exc)},
+                extra={"error": str(exc), "error_type": type(exc).__name__},
                 exc_info=True,
             )
             return self._default_load_snapshot()
@@ -304,13 +301,11 @@ class PeerCommunicator:
             except httpx.HTTPError as exc:
                 logger.warning(
                     "peer.load_fetch_failed",
-                    extra={"peer": peer_url.split("?", 1)[0], "error": str(exc)},
-                )
-                return None
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "peer.load_fetch_unexpected_error",
-                    extra={"peer": peer_url.split("?", 1)[0], "error": str(exc)},
+                    extra={
+                        "peer": peer_url.split("?", 1)[0],
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 return None
             try:
@@ -456,7 +451,10 @@ class PeerCommunicator:
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning(
                         "peer.auth_settings_unavailable",
-                        extra={"error": str(exc)},
+                        extra={
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        },
                         exc_info=True,
                     )
                     return None
@@ -467,7 +465,10 @@ class PeerCommunicator:
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.warning(
                         "peer.auth_manager_init_failed",
-                        extra={"error": str(exc)},
+                        extra={
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        },
                         exc_info=True,
                     )
                     return None
@@ -482,7 +483,10 @@ class PeerCommunicator:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "peer.auth_token_issue_failed",
-                    extra={"error": str(exc)},
+                    extra={
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
                     exc_info=True,
                 )
                 return None

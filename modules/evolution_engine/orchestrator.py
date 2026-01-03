@@ -6,51 +6,58 @@ import json
 import logging
 import os
 import random
+from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 from uuid import uuid4
 
 import psutil
 
-try:  # pragma: no cover - optional dependency in lightweight environments
-    import torch
-except ModuleNotFoundError:  # pragma: no cover - torch may be absent in CI
-    torch = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - Prefect is optional but preferred for orchestration
-    from prefect import flow as prefect_flow
-    from prefect.deployments import Deployment
-    from prefect.server.schemas.schedules import IntervalSchedule
-except Exception:  # pragma: no cover - gracefully degrade when Prefect missing
-    prefect_flow = None  # type: ignore[assignment]
-    Deployment = None  # type: ignore[assignment]
-    IntervalSchedule = None  # type: ignore[assignment]
-
 from modules.evolution_engine.energy import EnergyTracker, EnergyUsageReport
 from modules.evolution_engine.self_training import collect_curated_data
+from modules.evolution_engine.sustainability import CarbonAwarePolicy
 from modules.neurons.registry import update_manifest
-from modules.neurons.training import (
-    PreferenceAlignmentLoop,
-    PreferenceDatasetCurator,
-    ReinforcementLoop,
-)
+from modules.neurons.training import ReinforcementLoop
 from modules.neurons.training.mntp_trainer import MNTPTrainer, TrainingStatus
 from modules.ray_service import update_ray_deployment
 from monGARS.config import get_settings
-from monGARS.core.cortex.curiosity_engine import CuriosityEngine
-from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.model_slot_manager import ModelSlotManager
-from monGARS.core.operator_approvals import (
-    ApprovalPolicy,
-    OperatorApprovalRegistry,
-)
+from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
+
+torch: Any | None
+try:  # pragma: no cover - optional dependency in lightweight environments
+    import torch as _torch
+except ModuleNotFoundError:  # pragma: no cover - torch may be absent in CI
+    torch = None
+else:
+    torch = cast(Any, _torch)
+
+prefect_flow: Callable[..., Any] | None
+Deployment: type[Any] | None
+IntervalSchedule: type[Any] | None
+
+try:  # pragma: no cover - Prefect is optional but preferred for orchestration
+    from prefect import flow as _prefect_flow
+    from prefect.deployments import Deployment as _PrefectDeployment
+    from prefect.server.schemas.schedules import (
+        IntervalSchedule as _PrefectIntervalSchedule,
+    )
+except Exception:  # pragma: no cover - gracefully degrade when Prefect missing
+    prefect_flow = None
+    Deployment = None
+    IntervalSchedule = None
+else:
+    prefect_flow = cast(Callable[..., Any], _prefect_flow)
+    Deployment = cast(type[Any], _PrefectDeployment)
+    IntervalSchedule = cast(type[Any], _PrefectIntervalSchedule)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+DEFAULT_MODEL_ID = "dphn/Dolphin-X1-8B"
 DEFAULT_REGISTRY_PATH = Path("models/encoders")
 DEFAULT_CONFIG_PATH = Path("configs/training/mntp_dolphin_config.json")
 TRAINING_SUMMARY_FILENAME = "training_summary.json"
@@ -95,7 +102,21 @@ class InlineWorkflowBackend:
     def ensure_schedule(
         self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]
     ) -> None:
-        self.last_schedule = {"flow": flow, "parameters": dict(parameters)}
+        """Record the most recent schedule registration for observability."""
+
+        if not callable(flow):  # pragma: no cover - defensive guard
+            raise TypeError("flow must be callable")
+        if not isinstance(parameters, Mapping):  # pragma: no cover - defensive guard
+            raise TypeError("parameters must be a mapping")
+
+        parameters_copy = dict(parameters)
+        flow_name = getattr(flow, "__name__", flow.__class__.__name__)
+        self.last_schedule = {
+            "flow": flow,
+            "flow_name": flow_name,
+            "parameters": parameters_copy,
+            "registered_at": datetime.now(timezone.utc),
+        }
 
     def run(self, flow: Callable[..., Any], *, parameters: Mapping[str, Any]) -> Any:
         return flow(**parameters)
@@ -166,10 +187,6 @@ class EvolutionOrchestrator:
         model_id: str = DEFAULT_MODEL_ID,
         trainer_cls: type[MNTPTrainer] = MNTPTrainer,
         slot_manager_cls: type[ModelSlotManager] | None = ModelSlotManager,
-        alignment_loop: PreferenceAlignmentLoop | None = None,
-        preference_curator: PreferenceDatasetCurator | None = None,
-        curiosity_engine: CuriosityEngine | None = None,
-        hippocampus: Hippocampus | None = None,
         data_collector: Callable[[], CuratedDataset] = collect_curated_data,
         workflow_backend: WorkflowBackend | None = None,
         schedule_interval_minutes: int = 20,
@@ -179,6 +196,7 @@ class EvolutionOrchestrator:
         energy_tracker_factory: EnergyTrackerFactory | None = None,
         approval_registry: OperatorApprovalRegistry | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        sustainability_policy: CarbonAwarePolicy | None = None,
     ) -> None:
         self.registry_path = Path(model_registry_path)
         self.registry_path.mkdir(parents=True, exist_ok=True)
@@ -186,22 +204,20 @@ class EvolutionOrchestrator:
         self.model_id = model_id
         self._trainer_cls = trainer_cls
         self._slot_manager_cls = slot_manager_cls
-        self._alignment_loop = alignment_loop
-        self._preference_curator = preference_curator
-        self._curiosity_engine = curiosity_engine
-        self._hippocampus = hippocampus
         self._data_collector = data_collector
         self._energy_tracker_factory = energy_tracker_factory
         self._schedule_interval_minutes = int(schedule_interval_minutes)
         self._schedule_jitter_seconds = max(0.0, float(schedule_jitter_seconds))
         self._flow_name = flow_name
         self._deployment_name = deployment_name
-        self._reinforcement_limit = 128
         self._reasoning_loop: ReinforcementLoop | None = None
         self._approval_registry = approval_registry or OperatorApprovalRegistry(
             self.registry_path / "operator_approvals.json"
         )
         self._reasoning_approval_policy = approval_policy
+        self._sustainability_policy = (
+            sustainability_policy or self._default_carbon_policy()
+        )
 
         self._workflow_backend = (
             workflow_backend
@@ -291,6 +307,44 @@ class EvolutionOrchestrator:
         except Exception:
             logger.exception("Failed to register evolution workflow schedule")
 
+    def _carbon_policy_allows_rollout(self) -> bool:
+        if self._sustainability_policy is None:
+            return True
+
+        try:
+            decision = self._sustainability_policy.evaluate(
+                scope="reinforcement.longhaul"
+            )
+        except Exception:
+            logger.exception("carbon_policy.evaluation_failed")
+            return True
+
+        if decision.should_proceed:
+            logger.info(
+                "carbon_policy.approved",
+                extra=decision.as_logging_context(),
+            )
+            return True
+
+        logger.info(
+            "carbon_policy.deferred",
+            extra=decision.as_logging_context(),
+        )
+        return False
+
+    def _default_carbon_policy(self) -> CarbonAwarePolicy | None:
+        try:
+            return CarbonAwarePolicy(
+                self.registry_path / "sustainability_dashboard.json"
+            )
+        except Exception:
+            logger.debug(
+                "carbon_policy.init_failed",
+                extra={"registry_path": str(self.registry_path)},
+                exc_info=True,
+            )
+            return None
+
     def _run_flow(self, *, force: bool = False) -> str | None:
         run_dir = self._execute_training_cycle(force=force)
         return str(run_dir) if run_dir is not None else None
@@ -298,6 +352,9 @@ class EvolutionOrchestrator:
     def _execute_training_cycle(self, *, force: bool) -> Path | None:
         if not force and not self._system_is_idle():
             logger.info("Skipping training cycle because the host is busy")
+            return None
+
+        if not force and not self._carbon_policy_allows_rollout():
             return None
 
         dataset = self._collect_dataset()
@@ -312,115 +369,52 @@ class EvolutionOrchestrator:
         )
         energy_report: EnergyUsageReport | None = None
 
-        try:
-            with self._acquire_model_slot():
+        with self._acquire_model_slot():
+            try:
                 if tracker is not None:
                     with tracker.track():
                         summary = trainer.fit(dataset)
                     energy_report = tracker.last_report
                 else:
                     summary = trainer.fit(dataset)
-        except Exception:
-            logger.exception("Evolution training cycle failed during MNTP fitting")
-            raise
+            except Exception:
+                logger.exception("Evolution training cycle failed during MNTP fitting")
+                raise
 
-        status = str(summary.get("status") or "").lower()
-        if status != TrainingStatus.SUCCESS.value:
-            raise RuntimeError(
-                f"MNTP trainer reported unsuccessful status: {summary.get('status')!r}"
-            )
+            status = str(summary.get("status") or "").lower()
+            if status != TrainingStatus.SUCCESS.value:
+                raise RuntimeError(
+                    f"MNTP trainer reported unsuccessful status: {summary.get('status')!r}"
+                )
 
-        summary.setdefault("version", summary.get("version") or uuid4().hex)
-        summary.setdefault("completed_at", datetime.now(timezone.utc).isoformat())
+            summary.setdefault("version", summary.get("version") or uuid4().hex)
+            summary.setdefault("completed_at", datetime.now(timezone.utc).isoformat())
 
-        self._persist_run_artifacts(run_dir, summary, energy_report)
-        self._update_manifest(summary)
-        try:
-            self.rollout_adapter(summary)
-        except Exception:  # pragma: no cover - rollout failures must not crash
-            logger.exception("Adapter rollout failed")
+            try:
+                reasoning_summary = self._run_reasoning_alignment()
+            except Exception:  # pragma: no cover - unexpected reinforcement issues
+                logger.exception("Reasoning alignment pipeline failed")
+                reasoning_summary = None
+            else:
+                if reasoning_summary is not None:
+                    summary["reasoning_alignment"] = reasoning_summary
 
-        try:
-            self._run_reinforcement_alignment(dataset)
-        except Exception:  # pragma: no cover - reinforcement must not block
-            logger.exception("Reinforcement alignment loop failed")
-
-        try:
-            self._run_reasoning_alignment()
-        except Exception:  # pragma: no cover - reasoning loop must not block
-            logger.exception("Reasoning GRPO loop failed")
+            self._persist_run_artifacts(run_dir, summary, energy_report)
+            self._update_manifest(summary)
+            try:
+                self.rollout_adapter(summary)
+            except Exception:  # pragma: no cover - rollout failures must not crash
+                logger.exception("Adapter rollout failed")
 
         return run_dir
 
-    def _ensure_alignment_components(
-        self,
-    ) -> tuple[PreferenceDatasetCurator, PreferenceAlignmentLoop] | None:
-        if self._slot_manager_cls is None:
-            logger.info(
-                "reinforcement.alignment.slot_unavailable",
-                extra={"model_id": self.model_id},
-            )
-            return None
-
-        if self._alignment_loop is None:
-            self._alignment_loop = PreferenceAlignmentLoop(
-                slot_manager_cls=self._slot_manager_cls,
-                slot_name=TRAINING_SLOT_NAME,
-                model_id=self.model_id,
-            )
-        else:
-            if hasattr(self._alignment_loop, "_slot_name"):
-                self._alignment_loop._slot_name = TRAINING_SLOT_NAME
-            if hasattr(self._alignment_loop, "_model_id"):
-                self._alignment_loop._model_id = self.model_id
-
-        if self._preference_curator is None:
-            curiosity = self._curiosity_engine or CuriosityEngine()
-            hippocampus = self._hippocampus or Hippocampus()
-            self._preference_curator = PreferenceDatasetCurator(
-                curiosity_engine=curiosity,
-                hippocampus=hippocampus,
-            )
-            self._curiosity_engine = curiosity
-            self._hippocampus = hippocampus
-
-        return self._preference_curator, self._alignment_loop
-
-    def _run_reinforcement_alignment(self, dataset: CuratedDataset) -> None:
-        if dataset is None:
-            logger.info("reinforcement.alignment.no_dataset")
-            return
-
-        components = self._ensure_alignment_components()
-        if components is None:
-            return
-        curator, aligner = components
-
-        try:
-            preference_samples = curator.build(dataset, limit=self._reinforcement_limit)
-        except RuntimeError:
-            logger.exception("reinforcement.alignment.curator_event_loop")
-            return
-        except Exception:
-            logger.exception("reinforcement.alignment.curator_failed")
-            return
-
-        if not preference_samples:
-            logger.info("reinforcement.alignment.no_samples")
-            return
-
-        try:
-            aligner.reinforcement_loop(preference_samples)
-        except Exception:
-            logger.exception("reinforcement.alignment.execution_failed")
-
-    def _run_reasoning_alignment(self) -> None:
+    def _run_reasoning_alignment(self) -> dict[str, Any] | None:
         if self._slot_manager_cls is None:
             logger.info(
                 "reinforcement.reasoning.slot_unavailable",
                 extra={"model_id": self.model_id},
             )
-            return
+            return None
 
         if self._reasoning_loop is None:
             self._reasoning_loop = ReinforcementLoop(
@@ -442,17 +436,46 @@ class EvolutionOrchestrator:
                 "reinforcement.reasoning.skipped",
                 extra={"reason": str(exc)},
             )
+            return None
         except Exception:
             logger.exception("reinforcement.reasoning.unexpected_error")
-        else:
-            logger.info(
-                "reinforcement.reasoning.completed",
-                extra={
-                    "accuracy": summary.accuracy,
-                    "steps": summary.steps,
-                    "eval_samples": summary.eval_samples,
-                },
-            )
+            return None
+
+        payload = self._serialize_reasoning_summary(summary)
+        logger.info(
+            "reinforcement.reasoning.completed",
+            extra={
+                "accuracy": payload.get("accuracy"),
+                "steps": payload.get("steps"),
+                "eval_samples": payload.get("eval_samples"),
+            },
+        )
+        return payload
+
+    def _serialize_reasoning_summary(self, summary: Any) -> dict[str, Any]:
+        if summary is None:
+            return {}
+
+        if isinstance(summary, Mapping):
+            return dict(summary)
+
+        if hasattr(summary, "to_dict"):
+            try:
+                payload = summary.to_dict()
+            except Exception:
+                logger.debug("reasoning.summary.to_dict_failed", exc_info=True)
+            else:
+                if isinstance(payload, Mapping):
+                    return dict(payload)
+
+        if hasattr(summary, "__dict__"):
+            return {
+                key: value
+                for key, value in vars(summary).items()
+                if not key.startswith("_")
+            }
+
+        return {"result": summary}
 
     def _persist_run_artifacts(
         self,
@@ -521,7 +544,12 @@ class EvolutionOrchestrator:
         path.write_text(json.dumps(summary, indent=2, sort_keys=True))
 
     def _write_energy_report(self, run_dir: Path, report: EnergyUsageReport) -> None:
-        payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+        if hasattr(report, "to_dict"):
+            payload = cast(Any, report).to_dict()
+        elif isinstance(report, MappingABC):
+            payload = dict(report)
+        else:  # pragma: no cover - defensive guard
+            raise TypeError("Energy usage report must be serialisable")
         path = run_dir / ENERGY_REPORT_FILENAME
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -544,7 +572,12 @@ class EvolutionOrchestrator:
 
     def _system_is_idle(self) -> bool:
         try:
-            cpu_percent = float(psutil.cpu_percent(interval=1))
+            cpu_percent_raw = psutil.cpu_percent(interval=1)
+            cpu_percent = (
+                float(cpu_percent_raw[0])
+                if isinstance(cpu_percent_raw, SequenceABC)
+                else float(cpu_percent_raw)
+            )
         except Exception as exc:
             logger.warning("Failed to measure CPU utilisation", exc_info=exc)
             return False

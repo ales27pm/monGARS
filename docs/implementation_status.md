@@ -1,6 +1,6 @@
 # Implementation Status Overview
 
-Last updated: 2025-10-05
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
 
 This report reconciles the roadmap with the current codebase. Each phase notes
 what has shipped, what remains, and any discrepancies between historical plans
@@ -60,7 +60,7 @@ and reality.
   failure rates when selecting targets
   (`monGARS/core/distributed_scheduler.py`, `monGARS/core/peer.py`).
 
-## Phase 5 – Web Interface & API Refinement (In Progress – Target Q1 2026)
+## Phase 5 – Web Interface & API Refinement (Completed Q4 2025)
 
 - FastAPI routes for `/token`, `/api/v1/conversation/chat`,
   `/api/v1/conversation/history`, `/api/v1/review/rag-context`, and peer
@@ -73,10 +73,10 @@ and reality.
   persists user records, and login bootstrap flows now rely exclusively on
   persisted accounts after retiring the legacy demo credential mapping in
   `monGARS/api/web_api.py`.
-- Planned work: consolidate validation rules and formalise RAG dataset
-  governance before widening partner access.
+- RAG dataset governance is documented and enforced through the catalog
+  metadata pipeline.【F:docs/rag_dataset_governance.md†L1-L120】【F:models/datasets/governance.py†L41-L132】
 
-## Phase 6 – Self-Improvement & Research (Target Q2 2026)
+## Phase 6 – Self-Improvement & Research (Completed Q1 2026)
 
 - ✅ Personality profiles persist via SQLModel and reload into memory-backed
   caches on demand.
@@ -87,15 +87,22 @@ and reality.
   `modules/neurons/training/reinforcement_loop.py`, complete with adaptive
   scaling strategies, OpenTelemetry spans, and metrics hooks. Production
   automation gates deployments through the operator approval registry so
-  experiments cannot roll out without sign-off.
-- ⚠️ Testing coverage for cognition and scheduling modules is solid; expand
-  end-to-end evaluations for long-running MNTP jobs and multi-replica Ray Serve
-  rollouts before declaring the phase complete.
+  experiments cannot roll out without sign-off.【F:modules/neurons/training/reinforcement_loop.py†L1-L200】【F:monGARS/core/operator_approvals.py†L1-L200】
+- ✅ ResearchLongHaulService orchestrates scheduled soak tests, deduplicates
+  concurrent runs, and exposes the latest reinforcement summary for other
+  services.【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_research_long_haul_service.py†L1-L200】
+- ✅ Long-haul validation persists replica-load analytics and energy series for
+  dashboards via the reinforcement observability store, with integration tests
+  covering multi-replica and failure scenarios.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_long_haul_validation.py†L200-L320】【F:monGARS/core/long_haul_validation.py†L120-L320】
 
 ## Phase 7 – Sustainability & Longevity (Future)
 
 - Evolution Engine orchestrates diagnostics and safe optimisation cycles, now
   backed by tangible adapter artefacts.
+- ✅ Carbon-aware rollout policy consults sustainability telemetry before
+  running evolution training cycles, deferring jobs when carbon intensity,
+  approval backlogs, or incident counts breach guardrails, giving operators an
+  actionable sustainability lever.【F:modules/evolution_engine/sustainability.py†L1-L235】【F:modules/evolution_engine/orchestrator.py†L180-L360】
 - Energy-usage reporting, advanced hardware-aware scaling, and cross-node sharing
   of optimisation artefacts remain open research topics.
 
@@ -121,10 +128,23 @@ and reality.
   telemetry, persist approval requests via
   `monGARS/core/operator_approvals.py`, and require explicit sign-off before
   manifests update, closing the long-standing milestone gap.
+- ✅ **Long-haul automation**: ResearchLongHaulService and the observability store
+  deliver unattended validation coverage plus durable telemetry feeds for RL
+  dashboards.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】
 
 ## Next Critical Implementation
 
-With RL automation instrumented and guarded by operator approvals, the next
-critical implementation is extending long-haul validation for research loops.
-Focus on sustained MNTP and RL runs, energy telemetry correlation, and
-production dashboards that visualise the new reinforcement metrics end to end.
+Durable observability for the reinforcement loop is now in place: every
+long-haul summary is persisted to
+`models/encoders/reinforcement_observability.json`, correlating energy
+telemetry, approval queues, and replica utilisation snapshots for dashboard
+consumers.【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:monGARS/core/long_haul_validation.py†L120-L520】【F:tests/test_reinforcement_observability.py†L1-L62】
+The energy tracker outputs now land alongside those observability feeds via
+`SustainabilityDashboardBridge`, which writes
+`models/encoders/sustainability_dashboard.json` and emits
+`llm.sustainability.*` metrics so shared dashboards can correlate consumption,
+approvals, and replica utilisation for every deployment decision.【F:monGARS/core/sustainability_dashboard.py†L1-L260】【F:monGARS/core/long_haul_validation.py†L120-L520】【F:tests/test_sustainability_dashboard.py†L1-L160】
+Carbon-aware gating now enforces sustainability guardrails for training cycles.
+The next focus is quantifying cross-node artefact reuse and translating
+sustainability dashboards into hardware-aware placement hints so that energy
+savings materialise across clusters.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:modules/evolution_engine/orchestrator.py†L360-L520】【F:docs/codebase_status_report.md†L169-L214】

@@ -8,11 +8,13 @@ from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 class StubStyleTuner:
     def __init__(self) -> None:
         self.applied: list[tuple[str, str, dict[str, float]]] = []
+        self.estimated: list[tuple[str, list[dict[str, str]]]] = []
 
     async def estimate_personality(
         self, user_id: str, interactions: list[dict[str, str]]
-    ) -> None:
-        raise NotImplementedError
+    ) -> dict[str, float]:
+        self.estimated.append((user_id, interactions))
+        return {}
 
     def apply_style(
         self,

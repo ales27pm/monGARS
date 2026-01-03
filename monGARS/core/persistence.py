@@ -28,11 +28,8 @@ from ..init_db import (
     UserPreferences,
     async_session_factory,
 )
-from .embeddings import (
-    EmbeddingBackendError,
-    LLM2VecEmbedder,
-    get_llm2vec_embedder,
-)
+from .embeddings import EmbeddingBackendError, LLM2VecEmbedder, get_llm2vec_embedder
+from .inference_utils import render_chat_prompt_from_text
 
 try:  # pragma: no cover - optional dependency
     from transformers import AutoTokenizer  # type: ignore
@@ -134,7 +131,15 @@ class PersistenceRepository:
             segments.append(f"User: {query.strip()}")
         if response:
             segments.append(f"Assistant: {response.strip()}")
-        return "\n".join(segments)
+        combined = "\n".join(segments)
+        if not combined.strip():
+            return ""
+        system_prompt = getattr(self._settings, "llm2vec_instruction", None)
+        return render_chat_prompt_from_text(
+            combined,
+            system_prompt=system_prompt,
+            include_assistant_stub=False,
+        ).chatml
 
     async def _history_embedding_vector(
         self, query: str | None, response: str | None
@@ -368,6 +373,24 @@ class PersistenceRepository:
             operation, operation_name="get_user_by_username"
         )
 
+    async def update_user_password(self, username: str, password_hash: str) -> bool:
+        async def operation(session) -> bool:
+            async with session.begin():
+                result = await session.execute(
+                    select(UserAccount)
+                    .where(UserAccount.username == username)
+                    .with_for_update()
+                )
+                user = result.scalar_one_or_none()
+                if user is None:
+                    return False
+                user.password_hash = password_hash
+                return True
+
+        return await self._execute_with_retry(
+            operation, operation_name="update_user_password"
+        )
+
     async def has_admin_user(self) -> bool:
         """Return ``True`` when at least one admin account exists."""
 
@@ -383,6 +406,21 @@ class PersistenceRepository:
         return await self._execute_with_retry(
             operation,
             operation_name="has_admin_user",
+        )
+
+    async def list_usernames(self) -> list[str]:
+        """Return all registered usernames sorted alphabetically."""
+
+        async def operation(session) -> list[str]:
+            result = await session.execute(
+                select(UserAccount.username).order_by(UserAccount.username)
+            )
+            rows = result.scalars().all()
+            return [username for username in rows if isinstance(username, str)]
+
+        return await self._execute_with_retry(
+            operation,
+            operation_name="list_usernames",
         )
 
     async def get_user_preferences(self, user_id: str) -> UserPreferences | None:
@@ -505,6 +543,15 @@ class PersistenceManager:
         return torch
 
     @staticmethod
+    def _ensure_subpath(base_path: Path, child_path: Path, what: str) -> Path:
+        resolved_child = child_path.resolve(strict=True)
+        if not resolved_child.is_relative_to(base_path):
+            raise ValueError(
+                f"{what} path escapes snapshot directory (symlinks are rejected)"
+            )
+        return resolved_child
+
+    @staticmethod
     def snapshot_model(
         model: Any,
         tokenizer: Any,
@@ -583,7 +630,16 @@ class PersistenceManager:
             raise FileNotFoundError(model_path)
 
         torch = PersistenceManager._import_torch()
-        state_dict = torch.load(model_path, map_location=map_location)
+        resolved_snapshot_path = snapshot_path.resolve(strict=True)
+        resolved_model_path = PersistenceManager._ensure_subpath(
+            resolved_snapshot_path, model_path, "model"
+        )
+
+        state_dict = torch.load(
+            resolved_model_path,
+            map_location=map_location,
+            weights_only=True,
+        )
 
         tokenizer_obj: Any | None = None
         metadata: dict[str, Any] | None = None
@@ -597,9 +653,28 @@ class PersistenceManager:
             tokenizer_dir = snapshot_path / "tokenizer"
             fallback_path = tokenizer_dir / "tokenizer.pkl"
             if fallback_path.exists():
-                with fallback_path.open("rb") as handle:
+                resolved_fallback = PersistenceManager._ensure_subpath(
+                    resolved_snapshot_path, fallback_path, "tokenizer"
+                )
+                with resolved_fallback.open("rb") as handle:
                     tokenizer_obj = pickle.load(handle)
             elif tokenizer_dir.exists():
+                resolved_tokenizer_dir = PersistenceManager._ensure_subpath(
+                    resolved_snapshot_path, tokenizer_dir, "tokenizer"
+                )
+                tokenizer_dir = resolved_tokenizer_dir
+                critical_tokenizer_files = [
+                    tokenizer_dir / "tokenizer.json",
+                    tokenizer_dir / "config.json",
+                    tokenizer_dir / "special_tokens_map.json",
+                    tokenizer_dir / "vocab.json",
+                    tokenizer_dir / "merges.txt",
+                ]
+                for critical_path in critical_tokenizer_files:
+                    if critical_path.exists():
+                        PersistenceManager._ensure_subpath(
+                            resolved_snapshot_path, critical_path, "tokenizer"
+                        )
                 if AutoTokenizer is None:
                     logger.warning(
                         "persistence.snapshot.tokenizer_unavailable",

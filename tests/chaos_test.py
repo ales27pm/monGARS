@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import os
 import sys
 import types
@@ -20,7 +21,9 @@ sys.modules["opentelemetry.exporter.otlp.proto.http.metric_exporter"] = metric_m
 module = types.ModuleType("ollama")
 sys.modules.setdefault("ollama", module)
 
-from monGARS.core.llm_integration import CircuitBreaker, CircuitBreakerOpenError
+llm_module = importlib.import_module("monGARS.core.llm_integration")
+CircuitBreaker = llm_module.CircuitBreaker
+CircuitBreakerOpenError = llm_module.CircuitBreakerOpenError
 
 
 @pytest.mark.asyncio

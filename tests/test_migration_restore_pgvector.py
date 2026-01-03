@@ -13,12 +13,12 @@ import pytest
 
 alembic_module = sys.modules.get("alembic")
 if alembic_module is None or not hasattr(alembic_module, "op"):
-    stub = types.ModuleType("alembic")
-    stub.__path__ = []  # type: ignore[attr-defined]
-    op_stub = types.ModuleType("alembic.op")
-    stub.op = op_stub
-    sys.modules["alembic"] = stub
-    sys.modules["alembic.op"] = op_stub
+    fake_alembic = types.ModuleType("alembic")
+    fake_alembic.__path__ = []  # type: ignore[attr-defined]
+    fake_op_module = types.ModuleType("alembic.op")
+    fake_alembic.op = fake_op_module
+    sys.modules["alembic"] = fake_alembic
+    sys.modules["alembic.op"] = fake_op_module
 
 spec = importlib.util.spec_from_file_location(
     "restore_pgvector_migration",

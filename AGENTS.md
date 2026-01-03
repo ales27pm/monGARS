@@ -4,15 +4,14 @@
 
 ## Scope
 
-Applies to every repository change. Nested AGENTS.md files add stricter rules; this root charter
-highlights the non-negotiable guardrails and shared context.
+Applies to every repository change. Nested AGENTS.md files add stricter rules; this root charter highlights the non-
+negotiable guardrails and shared context.
 
 ## Automation
 
-- Generated via `python scripts/manage_agents.py refresh`. Edit the JSON profile instead of the
-    Markdown when updating scope or requirements.
-- Run `python scripts/manage_agents.py create <directory>` to scaffold a scoped AGENTS.md when a new
-    subsystem lands.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
+- Run `python scripts/manage_agents.py create <directory>` to scaffold a scoped AGENTS.md when a new subsystem lands.
 
 ## Roadmap Alignment
 
@@ -20,39 +19,49 @@ highlights the non-negotiable guardrails and shared context.
   - ✅ Align JWT algorithm with deployed secrets (HS256 enforced until managed key storage is available).
   - ✅ Store runtime secrets in Vault/Sealed Secrets instead of raw `k8s/secrets.yaml`.
   - ✅ Update Dockerfiles to run as non-root and add a `.dockerignore` to exclude secrets and build artefacts.
-  - 🔄 Replace demo users in `web_api.py` with the database-backed authentication flow and migrations (default accounts still load at runtime and must be removed).
-- **Phase 3 – Hardware & Performance**
-  - ✅ Worker auto-tuning for Pi/Jetson (`recommended_worker_count`).
-  - ✅ Multi-architecture build scripts and cache metrics.
-  - ✅ Hardened RBAC manifests.
-  - ✅ Ray Serve HTTP integration with circuit breaking plus MNTP trainer support for LoRA and curated adapters.
-  - ✅ Extend Alembic migrations for the newest SQLModel tables, including legacy tables created outside the current ORM layer.
-  - ✅ Expose Ray Serve success/failure counters via OpenTelemetry (`llm.ray.*` metrics emitted by `LLMIntegration`).
-- **Phase 5 – Web/API Refinement**
+  - ✅ Replace demo users in `web_api.py` with the database-backed authentication flow and migrations; bootstrap now persists accounts without shipping in-memory defaults.【F:monGARS/api/authentication.py†L17-L120】【F:monGARS/api/web_api.py†L41-L120】
+- **Web/API Refinement**
   - ✅ FastAPI chat/history/token endpoints with validation.
   - ✅ Django chat UI with progressive enhancement.
   - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
-  - 🔄 Replaced hard-coded credential stores with database-backed auth flows (the `DEFAULT_USERS` bootstrap in `monGARS/api/web_api.py` still provisions demo accounts until the cleanup lands).
-  - 🚧 Publish polished SDKs and reference clients.
+  - ✅ Replaced hard-coded credential stores with database-backed auth flows; FastAPI no longer seeds demo credentials at startup.【F:monGARS/api/web_api.py†L41-L120】
+  - ✅ Publish polished SDKs and reference clients with documented release flows.【F:docs/sdk-release-guide.md†L1-L160】【F:docs/sdk-overview.md†L1-L120】
+- **Self-Improvement & Research**
+  - ✅ Personality profiles persisted via SQLModel with live adapter updates.
+  - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - ✅ ResearchLongHaulService now schedules multi-replica soak runs and persists observability snapshots for dashboards, ensuring reinforcement pipelines stay healthy without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_research_long_haul_service.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】
+- **Sustainability & Longevity**
+  - 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.
+  - 🚧 Automate energy usage reporting and advanced hardware-aware scaling using the energy tracker pipeline and reinforcement observability feeds as the baseline data source.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
+  - 🚧 Share optimisation artefacts between nodes for faster convergence.
 
 ## Workflow Guardrails
 
-- Target **Python 3.11** across tooling and CI.
-- Format with `black` and `isort` using the repository `pyproject.toml` configuration.
-- Run `pytest -q` before raising a pull request; record skipped suites and why.
-- Document architecture, configuration, and operator workflows in `docs/` or the README when behaviour
-    changes.
+- Target **Python 3.11** for backend tooling and **Node.js 18+** for frontend builds.
+- Format Python with `black` and `isort` (configured via `pyproject.toml`) and lint TypeScript/JavaScript assets with `npm
+    run lint` before committing.
+- Run `pytest` (631 tests, ~110s) and record skips; execute `npm run test` when web assets or SDKs change.
+- Document architecture, configuration, and operator workflow changes in `docs/` or the README before shipping.
+- Regenerate these instructions with `python scripts/manage_agents.py refresh` after editing
+    `configs/agents/agents_config.json`.
 
 ## Observability & Security
 
-- Load configuration through `monGARS.config.get_settings()` so cached settings stay coherent across
-    services.
-- Redact secrets in logs and surface metrics via OpenTelemetry when you introduce background workers
-    or retries.
-- Keep Dockerfiles, build scripts, and Kubernetes manifests aligned—when you touch one, review the
-    others.
+- Load configuration through `monGARS.config.get_settings()` so cached settings stay coherent across services.
+- Redact secrets in logs and wire new background tasks into `monGARS.telemetry` counters and OpenTelemetry toggles
+    (`otel_prometheus_enabled`, `otel_traces_enabled`).
+- Keep Dockerfiles, Compose stacks, and Kubernetes manifests aligned; review Vault/ExternalSecret usage whenever
+    credentials change.
+
+## Documentation & Runbooks
+
+- Update runbooks, diagrams, and `monGARS_structure.txt` whenever module layout or workflows shift.
+- Cross-link roadmap entries, docs, and code so operators can trace feature readiness and configuration changes.
+- Capture multi-stage training/export updates in `docs/mongars_multistage_pipeline.md` whenever the CLI or orchestration
+    flow changes.
 
 ## Roadmap Integration
 
-Use the focus list below to link workstreams with the active roadmap. The script keeps this section
-current when the roadmap evolves.
+Use the focus list below to link workstreams with the active roadmap. The script keeps this section current when the
+roadmap evolves.

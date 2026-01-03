@@ -23,7 +23,7 @@ from models.datasets import (
     sanitize_record,
     scrub_text,
 )
-from monGARS.core.neurones import EmbeddingSystem
+from monGARS.core.llm_integration import LLMIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,14 @@ class SelfTrainingEngine:
         self.training_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=1000)
         self.model_versions: Dict[str, Dict[str, Any]] = {}
         self.last_retrain_time: float = 0.0
-        self._embedding_model = EmbeddingSystem()
+        self._llm: LLMIntegration | None
+        try:
+            self._llm = LLMIntegration.instance()
+        except Exception as exc:  # pragma: no cover - optional dependency
+            logger.warning(
+                "self_training.embedding_unavailable", extra={"error": repr(exc)}
+            )
+            self._llm = None
         self.lock = asyncio.Lock()
         self._shutdown_event = asyncio.Event()
         if trainer_cls is None:
@@ -172,6 +179,10 @@ class SelfTrainingEngine:
         curated: list[dict[str, Any]] = []
         fallback_count = 0
 
+        if self._llm is None:
+            logger.warning("self_training.embedding_runtime_missing")
+            return curated, fallback_count
+
         for record, confidence in batch:
             text = self._extract_training_text(record)
             if not text:
@@ -180,16 +191,14 @@ class SelfTrainingEngine:
 
             sanitized_text = scrub_text(text)
 
-            try:
-                embedding, used_fallback = await self._embedding_model.encode(
-                    sanitized_text
+            vectors = await self._embed_texts([sanitized_text])
+            if not vectors:
+                logger.warning(
+                    "Embedding failed for curated record: %s", sanitized_text[:40]
                 )
-            except Exception as exc:  # pragma: no cover - unexpected embedding error
-                logger.warning("Embedding failed for curated record: %s", exc)
                 continue
 
-            fallback_count += 1 if used_fallback else 0
-            trimmed_embedding = self._trim_embedding(embedding)
+            trimmed_embedding = self._trim_embedding(vectors[0])
             if not trimmed_embedding:
                 logger.debug("Trimmed embedding empty; skipping record")
                 continue
@@ -205,7 +214,7 @@ class SelfTrainingEngine:
                     "confidence": confidence,
                     "source_id": source_id,
                     "text_preview": sanitized_text[:200],
-                    "used_fallback_embedding": used_fallback,
+                    "used_fallback_embedding": False,
                 }
             )
 
@@ -238,6 +247,19 @@ class SelfTrainingEngine:
             except (TypeError, ValueError):
                 continue
         return trimmed
+
+    async def _embed_texts(self, texts: Sequence[str]) -> list[list[float]] | None:
+        if not texts:
+            return None
+        if self._llm is None:
+            return None
+        try:
+            return await asyncio.to_thread(self._llm.embed_batch, list(texts))
+        except Exception as exc:  # pragma: no cover - runtime failure
+            logger.warning(
+                "self_training.embedding_runtime_error", extra={"error": repr(exc)}
+            )
+            return None
 
     def _persist_curated_dataset(
         self, curated_batch: Sequence[dict[str, Any]]
@@ -318,7 +340,7 @@ class SelfTrainingEngine:
         external_limit = max(0, num_samples - internal_limit)
 
         try:  # pragma: no cover - heavy dependency gated at runtime
-            from datasets import Dataset, concatenate_datasets, load_dataset
+            from datasets import Dataset, concatenate_datasets
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dep
             raise RuntimeError(
                 "The 'datasets' package is required for reasoning dataset curation"

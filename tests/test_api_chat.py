@@ -1,18 +1,19 @@
-import os
+import asyncio
 import sys
 import types
-from datetime import UTC, datetime
-
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-os.environ.setdefault("SECRET_KEY", "test")
+from datetime import datetime, timezone
 
 import pytest
+import pytest_asyncio
+from fastapi import status
 from fastapi.testclient import TestClient
 
 from monGARS.api.dependencies import hippocampus
-from monGARS.api.web_api import app
-from monGARS.core.conversation import ConversationalModule
+from monGARS.api.web_api import app, reset_chat_rate_limiter_async
+from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.security import SecurityManager
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 pytestmark = pytest.mark.usefixtures("ensure_test_users")
 
@@ -30,10 +31,11 @@ def _speech_turn_payload(text: str) -> dict:
     }
 
 
-@pytest.fixture
-def client(monkeypatch):
+@pytest_asyncio.fixture
+async def client(monkeypatch):
     hippocampus._memory.clear()
     hippocampus._locks.clear()
+    await reset_chat_rate_limiter_async()
 
     monkeypatch.setitem(
         sys.modules, "spacy", types.SimpleNamespace(load=lambda n: object())
@@ -132,6 +134,35 @@ async def test_chat_message_too_long_returns_422(client: TestClient):
 
 
 @pytest.mark.asyncio
+async def test_chat_prompt_too_large_returns_413(
+    client: TestClient, monkeypatch
+) -> None:
+    async def _raise_prompt_limit(
+        self,
+        user_id: str,
+        query: str,
+        session_id: str | None = None,
+        image_data: bytes | None = None,
+    ) -> None:
+        raise PromptTooLargeError(prompt_tokens=5000, limit=4096)
+
+    monkeypatch.setattr(ConversationalModule, "generate_response", _raise_prompt_limit)
+
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    resp = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == status.HTTP_413_CONTENT_TOO_LARGE
+    assert resp.json()["detail"].startswith(
+        "Prompt exceeds the maximum supported token limit"
+    )
+
+
+@pytest.mark.asyncio
 async def test_chat_session_id_too_long_returns_422(client: TestClient):
     token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
         "access_token"
@@ -163,3 +194,57 @@ async def test_chat_missing_sub_in_token_returns_401(client: TestClient):
     )
     assert resp.status_code == 401
     assert resp.json()["detail"] == "Invalid token: missing subject"
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_returns_429(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    first = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hi"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello again"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert (
+        second.json()["detail"]
+        == "Too many requests: please wait before sending another message."
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_recovers_after_cooldown(client: TestClient):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+
+    first = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hi"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello again"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+    await asyncio.sleep(1.1)
+
+    third = client.post(
+        "/api/v1/conversation/chat",
+        json={"message": "hello after cooldown"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert third.status_code == 200

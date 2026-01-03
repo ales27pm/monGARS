@@ -33,13 +33,22 @@ operator can review it from the Django console or offline tooling.
 
 from __future__ import annotations
 
+import hmac
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 from uuid import uuid4
+
+from monGARS.core.security import generate_approval_token
+
+if TYPE_CHECKING:
+    from .pii_detection import PIIEntity
+
+logger = logging.getLogger(__name__)
 
 ApprovalPolicy = Callable[[Mapping[str, Any]], bool]
 
@@ -222,6 +231,24 @@ class OperatorApprovalRegistry:
             self._persist()
             return request
 
+    def get(self, request_id: str) -> ApprovalRequest | None:
+        """Return the request associated with ``request_id`` if it exists."""
+
+        with self._lock:
+            return self._requests.get(request_id)
+
+    def find_by_token(self, approval_token: str) -> ApprovalRequest | None:
+        """Locate a request matching ``approval_token`` if present."""
+
+        if not approval_token:
+            return None
+        with self._lock:
+            for request in self._requests.values():
+                stored_token = str(request.payload.get("approval_token") or "")
+                if stored_token and hmac.compare_digest(stored_token, approval_token):
+                    return request
+        return None
+
     def _mark_approved(
         self,
         request: ApprovalRequest,
@@ -243,8 +270,124 @@ class OperatorApprovalRegistry:
             yield request
 
 
+_AUDIT_SOURCE = "security.guardrail"
+_DEFAULT_APPROVALS_PATH = Path("models/encoders/operator_approvals.json")
+_GLOBAL_REGISTRY: OperatorApprovalRegistry | None = None
+_GLOBAL_REGISTRY_LOCK = threading.Lock()
+
+
+def _default_registry() -> OperatorApprovalRegistry:
+    global _GLOBAL_REGISTRY
+    with _GLOBAL_REGISTRY_LOCK:
+        if _GLOBAL_REGISTRY is None:
+            _GLOBAL_REGISTRY = OperatorApprovalRegistry(_DEFAULT_APPROVALS_PATH)
+        return _GLOBAL_REGISTRY
+
+
+def get_operator_approval_registry() -> OperatorApprovalRegistry:
+    """Expose the singleton registry for external callers."""
+
+    return _default_registry()
+
+
+def log_blocked_attempt(
+    *,
+    user_id: str,
+    prompt_hash: str,
+    pii_entities: Sequence["PIIEntity"],
+    required_action: str,
+    context: Mapping[str, Any] | None = None,
+    registry: OperatorApprovalRegistry | None = None,
+) -> tuple[str, str]:
+    """Persist details about a blocked security guardrail decision."""
+
+    if not user_id:
+        user_id = "anonymous"
+    if not prompt_hash:
+        raise ValueError("prompt_hash must not be empty")
+    if not required_action:
+        raise ValueError("required_action must not be empty")
+
+    serialized_entities = [
+        {
+            "type": entity.type,
+            "value_preview": entity.value[:64],
+            "start": entity.start,
+            "end": entity.end,
+        }
+        for entity in pii_entities
+    ]
+
+    payload = {
+        "user_id": user_id,
+        "prompt_hash": prompt_hash,
+        "required_action": required_action,
+        "pii_entities": serialized_entities,
+        "context_snapshot": _normalise_payload(context or {}),
+        "blocked_at": _utcnow_isoformat(),
+    }
+
+    approval_registry = registry or _default_registry()
+    request = approval_registry.submit(source=_AUDIT_SOURCE, payload=payload)
+
+    existing_token = str(request.payload.get("approval_token") or "")
+    if existing_token:
+        approval_token = existing_token
+        token_assigned = False
+    else:
+        approval_token = generate_approval_token(user_id, request.request_id)
+        request.payload["approval_token"] = approval_token
+        token_assigned = True
+
+    if token_assigned:
+        approval_registry._persist()
+
+    logger.info(
+        "operator_approvals.blocked_request_logged",
+        extra={
+            "source": _AUDIT_SOURCE,
+            "request_id": request.request_id,
+            "user_id": user_id,
+            "prompt_hash": prompt_hash,
+            "blocked_entity_types": sorted({e["type"] for e in serialized_entities}),
+        },
+    )
+
+    return request.request_id, approval_token
+
+
+def verify_approval_token(
+    *,
+    user_id: str,
+    token_ref: str,
+    approval_token: str,
+    prompt_hash: str | None = None,
+    registry: OperatorApprovalRegistry | None = None,
+) -> bool:
+    """Return ``True`` if ``approval_token`` is valid for ``token_ref``."""
+
+    if not token_ref or not approval_token:
+        return False
+    approval_registry = registry or _default_registry()
+    request = approval_registry.get(token_ref)
+    if request is None or not request.is_approved:
+        return False
+    stored_token = str(request.payload.get("approval_token") or "")
+    if not stored_token or not hmac.compare_digest(stored_token, approval_token):
+        return False
+    if prompt_hash:
+        recorded = str(request.payload.get("prompt_hash", ""))
+        if recorded != prompt_hash:
+            return False
+    return True
+
+
 __all__ = [
     "ApprovalRequest",
     "OperatorApprovalRegistry",
     "ApprovalPolicy",
+    "log_blocked_attempt",
+    "generate_approval_token",
+    "verify_approval_token",
+    "get_operator_approval_registry",
 ]

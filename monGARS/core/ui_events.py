@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -16,8 +17,10 @@ from monGARS.config import get_settings
 
 try:  # pragma: no cover - optional dependency
     import redis.asyncio as aioredis  # type: ignore
+    from redis.exceptions import RedisError
 except Exception:  # pragma: no cover - redis is optional in many deployments
     aioredis = None
+    RedisError = Exception  # type: ignore[misc,assignment]
 
 
 settings = get_settings()
@@ -77,6 +80,10 @@ class MemoryEventBackend(EventBackend):
         return iterator()
 
 
+class BackendUnavailable(RuntimeError):
+    """Raised when the configured backend cannot service requests."""
+
+
 class RedisEventBackend(EventBackend):
     """Publish events via Redis pub/sub."""
 
@@ -89,12 +96,26 @@ class RedisEventBackend(EventBackend):
         self._channel = channel
 
     async def publish(self, ev: Event) -> None:
-        await self._redis.publish(self._channel, ev.to_json())
+        try:
+            await self._redis.publish(self._channel, ev.to_json())
+        except asyncio.CancelledError:  # pragma: no cover - cancellation passthrough
+            raise
+        except (RedisError, OSError) as exc:
+            raise BackendUnavailable("redis publish failed") from exc
 
     def subscribe(self) -> AsyncIterator[Event]:
         async def iterator() -> AsyncIterator[Event]:
             pubsub = self._redis.pubsub()
-            await pubsub.subscribe(self._channel)
+            try:
+                await pubsub.subscribe(self._channel)
+            except (
+                asyncio.CancelledError
+            ):  # pragma: no cover - cancellation passthrough
+                raise
+            except (RedisError, OSError) as exc:
+                await pubsub.close()
+                raise BackendUnavailable("redis subscribe failed") from exc
+
             try:
                 async for message in pubsub.listen():
                     if message.get("type") != "message":
@@ -127,9 +148,16 @@ class RedisEventBackend(EventBackend):
                             extra={"payload_keys": sorted(payload.keys())},
                         )
                         continue
+            except (
+                asyncio.CancelledError
+            ):  # pragma: no cover - cancellation passthrough
+                raise
+            except (RedisError, OSError) as exc:
+                raise BackendUnavailable("redis listen failed") from exc
             finally:
-                await pubsub.unsubscribe(self._channel)
-                await pubsub.close()
+                with contextlib.suppress(Exception):
+                    await pubsub.unsubscribe(self._channel)
+                    await pubsub.close()
 
         return iterator()
 
@@ -138,24 +166,70 @@ class EventBus:
     """Pluggable pub/sub. Starts in-memory, auto-upgrades to Redis if configured."""
 
     def __init__(self) -> None:
-        if settings.REDIS_URL and aioredis:
-            self._backend: EventBackend = RedisEventBackend(
-                redis_url=str(settings.REDIS_URL),
-                channel="mongars:events",
-            )
-        else:
-            maxsize = getattr(settings, "EVENTBUS_MEMORY_QUEUE_MAXSIZE", 1000)
-            self._backend = MemoryEventBackend(max_queue_size=maxsize)
+        maxsize = getattr(settings, "EVENTBUS_MEMORY_QUEUE_MAXSIZE", 1000)
+        self._memory_backend = MemoryEventBackend(max_queue_size=maxsize)
+        self._backend: EventBackend = self._select_backend()
+
+    def _select_backend(self) -> EventBackend:
+        if settings.EVENTBUS_USE_REDIS and settings.REDIS_URL and aioredis:
+            try:
+                return RedisEventBackend(
+                    redis_url=str(settings.REDIS_URL),
+                    channel="mongars:events",
+                )
+            except RuntimeError as exc:  # pragma: no cover - defensive guard
+                log.warning(
+                    "event_bus.redis_initialisation_failed",
+                    extra={"reason": str(exc)},
+                )
+        return self._memory_backend
+
+    def _fallback_to_memory(self, exc: Exception | None = None) -> None:
+        if isinstance(self._backend, MemoryEventBackend):
+            return
+        reason = str(exc) if exc else "unavailable"
+        log.warning(
+            "event_bus.falling_back_to_memory",
+            extra={"reason": reason},
+        )
+        self._backend = self._memory_backend
+
+    def _wrap_iterator(self, iterator: AsyncIterator[Event]) -> AsyncIterator[Event]:
+        async def generator() -> AsyncIterator[Event]:
+            nonlocal iterator
+            while True:
+                try:
+                    yield await iterator.__anext__()
+                except BackendUnavailable as exc:
+                    self._fallback_to_memory(exc)
+                    with contextlib.suppress(Exception):
+                        await iterator.aclose()  # type: ignore[attr-defined]
+                    iterator = self._backend.subscribe()
+                except asyncio.CancelledError:
+                    raise
+                except StopAsyncIteration:
+                    return
+
+        return generator()
 
     async def publish(self, ev: Event) -> None:
         """Publish an event to subscribers."""
 
-        await self._backend.publish(ev)
+        try:
+            await self._backend.publish(ev)
+        except BackendUnavailable as exc:
+            self._fallback_to_memory(exc)
+            await self._backend.publish(ev)
 
     def subscribe(self) -> AsyncIterator[Event]:
         """Yield events as they are received."""
 
-        return self._backend.subscribe()
+        try:
+            iterator = self._backend.subscribe()
+        except BackendUnavailable as exc:
+            self._fallback_to_memory(exc)
+            iterator = self._backend.subscribe()
+        return self._wrap_iterator(iterator)
 
 
 _event_bus: Optional[EventBus] = None

@@ -27,6 +27,25 @@ def test_chat_request_rejects_blank_message() -> None:
         ChatRequest(message="   ", session_id=None)
 
 
+def test_chat_request_normalises_optional_fields() -> None:
+    payload = ChatRequest(
+        message="hello",
+        session_id="  session-01  ",
+        allowed_actions=[" personal_data_access ", "personal_data_access"],
+        approval_token="  tok  ",
+        token_ref=" ref ",
+    )
+    assert payload.session_id == "session-01"
+    assert payload.allowed_actions == ["personal_data_access"]
+    assert payload.approval_token == "tok"
+    assert payload.token_ref == "ref"
+
+
+def test_chat_request_rejects_empty_allowed_actions() -> None:
+    with pytest.raises(ValidationError):
+        ChatRequest(message="hello", allowed_actions=["   "])
+
+
 def test_peer_registration_normalises_url() -> None:
     reg = PeerRegistration(url="https://example.com/api/")
     assert reg.url == "https://example.com/api"

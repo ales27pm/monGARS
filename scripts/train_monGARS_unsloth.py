@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Fine-tune Dolphin (Llama3.1-8B) with Unsloth on the multi-module dataset."""
+"""Fine-tune Dolphin-X1-8B with Unsloth on the multi-module dataset."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
     DataCollatorForLanguageModeling,
@@ -15,7 +14,9 @@ from transformers import (
 )
 from unsloth import FastLanguageModel
 
-BASE_MODEL = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+from datasets import load_dataset
+
+BASE_MODEL = "dphn/Dolphin-X1-8B"
 SYSTEM_PROMPT = (
     "You are monGARS internal assistant. Follow the module contract indicated by "
     "tags like [MOD=...]."

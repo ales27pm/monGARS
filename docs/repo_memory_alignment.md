@@ -1,5 +1,7 @@
 # Repository ↔ Memory Alignment
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 Use this mapping to translate long-term project memory references into concrete
 code locations inside the monGARS repository. Update the table whenever
 architecture or naming conventions change.
@@ -19,6 +21,7 @@ architecture or naming conventions change.
 | Cortex + Bouche orchestration | `monGARS/core/conversation.py` | ConversationalModule coordinating memory, curiosity, LLM, mimicry. |
 | Hippocampus | `monGARS/core/hippocampus.py` | In-memory, lock-guarded conversation history. |
 | Evolution Engine / Sommeil Paradoxal | `monGARS/core/evolution_engine.py`, `monGARS/core/sommeil.py` | Diagnostics, safe optimisation, idle-time triggers. |
+| Carbon-aware rollout policy | `modules/evolution_engine/sustainability.py`, `modules/evolution_engine/orchestrator.py` | Defers evolution training when sustainability telemetry breaches guardrails. |
 | Mémoire Autobiographique | `monGARS/core/monitor.py`, `monGARS/core/ui_events.py` | Structured logging hooks plus the typed event bus powering UI streams. |
 | Tronc (neuro-symbolic reasoning) | `monGARS/core/neuro_symbolic/advanced_reasoner.py` | Heuristic reasoning hints for the LLM pipeline. |
 | Self-training loop | `monGARS/core/self_training.py`, `modules/neurons/training/mntp_trainer.py` | Curated dataset batching plus MNTP/LoRA training with fallbacks. |

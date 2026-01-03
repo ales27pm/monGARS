@@ -2,6 +2,10 @@ import pytest
 
 from monGARS.core.style_finetuning import StyleFineTuner, StyleFineTuningConfig
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:AutoAWQ is officially deprecated.*:DeprecationWarning"
+)
+
 
 @pytest.mark.asyncio
 async def test_style_finetuner_trains_and_generates(tmp_path) -> None:

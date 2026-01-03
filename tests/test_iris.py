@@ -1,10 +1,13 @@
+import asyncio
 import json
 import sys
 import types
+from datetime import datetime, timezone
 
 import httpx
 import pytest
 import trafilatura
+from trafilatura import metadata as trafilatura_metadata
 
 
 def make_response(
@@ -35,18 +38,14 @@ class ClientFactory:
     ) -> None:
         self._responses = list(responses or [])
         self._error_factory = error_factory
+        self.requests: list[tuple[str, str]] = []
 
     def __call__(self, *args, **kwargs):  # pragma: no cover - helper behaviour
         factory = self
 
         class _DummyAsyncClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
             async def request(self, method, url, **request_kwargs):
+                factory.requests.append((method, url))
                 if factory._error_factory is not None:
                     raise factory._error_factory(method, url)
                 if not factory._responses:
@@ -54,6 +53,9 @@ class ClientFactory:
                 if len(factory._responses) == 1:
                     return factory._responses[0]
                 return factory._responses.pop(0)
+
+            async def aclose(self):
+                return None
 
         return _DummyAsyncClient()
 
@@ -88,13 +90,27 @@ def patch_dependencies(monkeypatch):
                 curiosity_kg_cache_max_entries=512,
                 curiosity_research_cache_ttl=900,
                 curiosity_research_cache_max_entries=256,
+                search_searx_enabled=False,
+                search_searx_base_url=None,
+                search_searx_api_key=None,
+                search_searx_categories=[],
+                search_searx_safesearch=None,
+                search_searx_default_language="en",
+                search_searx_result_cap=10,
+                search_searx_timeout_seconds=6.0,
+                search_searx_engines=[],
+                search_searx_time_range=None,
+                search_searx_sitelimit=None,
+                search_searx_page_size=None,
+                search_searx_max_pages=1,
+                search_searx_language_strict=False,
             )
         ),
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "monGARS.core.neurones",
-        types.SimpleNamespace(EmbeddingSystem=lambda *a, **k: None),
+    monkeypatch.setattr(
+        trafilatura_metadata,
+        "extract_metadata",
+        lambda *args, **kwargs: types.SimpleNamespace(as_dict=lambda: {}),
     )
     yield
 
@@ -103,17 +119,15 @@ def patch_dependencies(monkeypatch):
 async def test_fetch_text_success(monkeypatch):
     from monGARS.core.iris import Iris
 
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        ClientFactory(responses=[make_response("http://example.com", "<p>hello</p>")]),
+    factory = ClientFactory(
+        responses=[make_response("http://example.com", "<p>hello</p>")]
     )
     monkeypatch.setattr(
         trafilatura,
         "extract",
         lambda html, **_: json.dumps({"text": "hello world"}),
     )
-    iris = Iris()
+    iris = Iris(client_factory=factory)
     result = await iris.fetch_text("http://example.com")
     assert result == "hello world"
 
@@ -123,8 +137,8 @@ async def test_fetch_text_http_error(monkeypatch):
     from monGARS.core.iris import Iris
 
     response = make_response("http://bad.com", "", status_code=500)
-    monkeypatch.setattr(httpx, "AsyncClient", ClientFactory(responses=[response]))
-    iris = Iris(max_retries=0)
+    factory = ClientFactory(responses=[response])
+    iris = Iris(max_retries=0, client_factory=factory)
     assert await iris.fetch_text("http://bad.com") is None
 
 
@@ -132,16 +146,12 @@ async def test_fetch_text_http_error(monkeypatch):
 async def test_fetch_text_timeout(monkeypatch):
     from monGARS.core.iris import Iris
 
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        ClientFactory(
-            error_factory=lambda method, url: httpx.TimeoutException(
-                "slow", request=httpx.Request(method, url)
-            )
-        ),
+    factory = ClientFactory(
+        error_factory=lambda method, url: httpx.TimeoutException(
+            "slow", request=httpx.Request(method, url)
+        )
     )
-    iris = Iris(max_retries=0)
+    iris = Iris(max_retries=0, client_factory=factory)
     assert await iris.fetch_text("http://slow.com") is None
 
 
@@ -163,8 +173,8 @@ async def test_fetch_text_rejects_binary_payload(monkeypatch):
         text="binary",
         headers={"Content-Type": "image/png"},
     )
-    monkeypatch.setattr(httpx, "AsyncClient", ClientFactory(responses=[response]))
-    iris = Iris()
+    factory = ClientFactory(responses=[response])
+    iris = Iris(client_factory=factory)
     result = await iris.fetch_text("http://example.com/image")
     assert result is None
 
@@ -174,14 +184,154 @@ async def test_fetch_text_honours_max_content_length(monkeypatch):
     from monGARS.core.iris import Iris
 
     response = make_response("http://example.com/long", "<p>too long</p>")
-    monkeypatch.setattr(httpx, "AsyncClient", ClientFactory(responses=[response]))
+    factory = ClientFactory(responses=[response])
     monkeypatch.setattr(
         trafilatura,
         "extract",
         lambda html, **_: json.dumps({"text": "too long"}),
     )
-    iris = Iris(max_content_length=5)
+    iris = Iris(max_content_length=5, client_factory=factory)
     assert await iris.fetch_text("http://example.com/long") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_populates_metadata(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    metadata_result = {
+        "title": "Metadata Title",
+        "author": "Alice; Bob",
+        "description": "Metadata summary",
+        "text": "Metadata text body",
+        "language": "en",
+        "date": "2024-03-01",
+        "filedate": "2024-03-02",
+        "sitename": "Example Publisher",
+        "hostname": "example.com",
+        "url": "https://example.com/canonical",
+        "tags": ["Science", "Space"],
+        "categories": "Research; Space",
+        "pagetype": "article",
+        "image": "https://example.com/cover.png",
+        "fingerprint": "abc123",
+        "comments": "Insightful analysis",
+    }
+
+    class _Metadata:
+        def __init__(self, data):
+            self._data = data
+
+        def as_dict(self):
+            return self._data
+
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda html, **_: json.dumps({"text": None, "summary": None, "title": None}),
+    )
+    monkeypatch.setattr(
+        trafilatura_metadata,
+        "extract_metadata",
+        lambda *args, **kwargs: _Metadata(metadata_result),
+    )
+
+    factory = ClientFactory(
+        responses=[
+            make_response(
+                "https://example.com/original",
+                "<html><body><p>fallback</p></body></html>",
+            )
+        ]
+    )
+    iris = Iris(client_factory=factory)
+    document = await iris.fetch_document("https://example.com/original")
+
+    assert document is not None
+    assert document.title == "Metadata Title"
+    assert document.summary == "Metadata summary"
+    assert document.text == "Metadata text body"
+    assert document.language == "en"
+    assert document.publisher == "Example Publisher"
+    assert document.organization == "example.com"
+    assert document.url == "https://example.com/canonical"
+    assert document.authors == ["Alice", "Bob"]
+    assert document.published_at == datetime(2024, 3, 1, tzinfo=timezone.utc)
+    assert document.modified_at == datetime(2024, 3, 2, tzinfo=timezone.utc)
+    assert document.tags == ["Science", "Space"]
+    assert document.categories == ["Research", "Space"]
+    assert document.page_type == "article"
+    assert document.image_url == "https://example.com/cover.png"
+    assert document.fingerprint == "abc123"
+    assert document.comments == "Insightful analysis"
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_enriches_from_trafilatura_json(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    trafilatura_payload = {
+        "title": "Trafilatura Title",
+        "text": "  JSON text body  ",
+        "excerpt": " JSON summary snippet ",
+        "language": "en",
+        "source": "https://example.com/canonical",
+        "source-hostname": "Example Publisher",
+        "hostname": "example.com",
+        "date": "2024-04-01",
+        "filedate": "2024-04-02",
+        "author": ["Alice", "Bob"],
+        "tags": "Topic1; Topic2",
+        "categories": ["News", "World"],
+        "image": "https://example.com/feature.png",
+        "pagetype": "article",
+        "fingerprint": "fingerprint-456",
+        "comments": "First comment\nSecond comment",
+    }
+
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda html, **_: json.dumps(trafilatura_payload),
+    )
+
+    class _Metadata:
+        def as_dict(self):
+            return {}
+
+    monkeypatch.setattr(
+        trafilatura_metadata,
+        "extract_metadata",
+        lambda *args, **kwargs: _Metadata(),
+    )
+
+    factory = ClientFactory(
+        responses=[
+            make_response(
+                "https://example.com/original",
+                "<html><body><p>fallback</p></body></html>",
+            )
+        ]
+    )
+    iris = Iris(client_factory=factory)
+    document = await iris.fetch_document("https://example.com/original")
+
+    assert document is not None
+    assert document.url == "https://example.com/canonical"
+    assert document.title == "Trafilatura Title"
+    assert document.summary == "JSON summary snippet"
+    assert document.text == "JSON text body"
+    assert document.language == "en"
+    assert document.publisher == "Example Publisher"
+    assert document.organization == "example.com"
+    assert document.authors == ["Alice", "Bob"]
+    assert document.tags == ["Topic1", "Topic2"]
+    assert document.categories == ["News", "World"]
+    assert document.image_url == "https://example.com/feature.png"
+    assert document.page_type == "article"
+    assert document.fingerprint == "fingerprint-456"
+    assert document.comments == "First comment Second comment"
+    assert document.published_at == datetime(2024, 4, 1, tzinfo=timezone.utc)
+    assert document.modified_at == datetime(2024, 4, 2, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -207,17 +357,13 @@ async def test_search_returns_snippet(monkeypatch):
     )
     search_response = make_response("https://duckduckgo.com/html/?q=test", html)
     document_response = make_response("https://example.com/", "<p>Doc</p>")
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        ClientFactory(responses=[search_response, document_response]),
-    )
+    factory = ClientFactory(responses=[search_response, document_response])
     monkeypatch.setattr(
         trafilatura,
         "extract",
         lambda html, **_: json.dumps({"summary": "Doc summary", "text": "Doc text"}),
     )
-    iris = Iris()
+    iris = Iris(client_factory=factory)
     result = await iris.search("test")
     assert result == "Doc summary"
 
@@ -241,8 +387,8 @@ async def test_search_falls_back_to_snippet(monkeypatch):
     async def fake_fetch_document(url):
         return None
 
-    monkeypatch.setattr(httpx, "AsyncClient", ClientFactory(responses=[response]))
-    iris = Iris()
+    factory = ClientFactory(responses=[response])
+    iris = Iris(client_factory=factory)
     monkeypatch.setattr(iris, "fetch_document", fake_fetch_document)
     result = await iris.search("test")
     assert result == "Example snippet"
@@ -264,13 +410,13 @@ async def test_search_caches_snippets(monkeypatch):
     """
     search_response = make_response("https://duckduckgo.com/html/?q=test", html)
 
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        ClientFactory(responses=[search_response]),
-    )
+    factory = ClientFactory(responses=[search_response])
 
-    iris = Iris(search_cache_ttl=60.0, search_cache_size=4)
+    iris = Iris(
+        search_cache_ttl=60.0,
+        search_cache_size=4,
+        client_factory=factory,
+    )
 
     fetch_calls = 0
 
@@ -284,10 +430,12 @@ async def test_search_caches_snippets(monkeypatch):
     result = await iris.search("Test Query")
     assert result == "Doc summary"
     assert fetch_calls == 1
+    assert len(factory.requests) == 1
 
     result_cached = await iris.search("Test Query")
     assert result_cached == "Doc summary"
     assert fetch_calls == 1
+    assert len(factory.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -309,11 +457,7 @@ async def test_search_cache_expires(monkeypatch):
         make_response("https://duckduckgo.com/html/?q=test", html_second),
     ]
 
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        ClientFactory(responses=responses),
-    )
+    factory = ClientFactory(responses=responses)
 
     class FakeMonotonic:
         def __init__(self):
@@ -328,7 +472,11 @@ async def test_search_cache_expires(monkeypatch):
     fake_monotonic = FakeMonotonic()
     monkeypatch.setattr("monGARS.core.iris.monotonic", fake_monotonic)
 
-    iris = Iris(search_cache_ttl=1.0, search_cache_size=2)
+    iris = Iris(
+        search_cache_ttl=1.0,
+        search_cache_size=2,
+        client_factory=factory,
+    )
 
     first = await iris.search("Cache Example")
     assert first == "Snippet 1"
@@ -337,6 +485,99 @@ async def test_search_cache_expires(monkeypatch):
 
     second = await iris.search("Cache Example")
     assert second == "Snippet 2"
+    assert len(factory.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_uses_orchestrator_when_available(monkeypatch):
+    from monGARS.core.iris import Iris
+    from monGARS.core.search import NormalizedHit
+
+    class DummyOrchestrator:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        async def search(self, query: str, *, lang: str, max_results: int):
+            self.calls.append((query, lang, max_results))
+            return [
+                NormalizedHit(
+                    provider="searxng",
+                    title="Example",
+                    url="https://example.com/article",
+                    snippet="Example snippet from orchestrator.",
+                    published_at=None,
+                    event_date=None,
+                    source_domain="example.com",
+                    lang=lang,
+                    raw={},
+                )
+            ]
+
+    orchestrator = DummyOrchestrator()
+    iris = Iris(client_factory=ClientFactory(responses=[]))
+    iris.attach_search_orchestrator(orchestrator)
+
+    async def fail_fallback(_query: str, _cache_key: str):
+        pytest.fail("Fallback should not run when orchestrator returns a snippet")
+
+    monkeypatch.setattr(iris, "_search_with_duckduckgo", fail_fallback)
+
+    result = await iris.search("Example query")
+    assert result == "Example snippet from orchestrator."
+    assert orchestrator.calls == [("Example query", "en", 5)]
+
+    cached = await iris.search("Example query")
+    assert cached == result
+    assert orchestrator.calls == [("Example query", "en", 5)]
+
+
+@pytest.mark.asyncio
+async def test_search_orchestrator_falls_back_to_document(monkeypatch):
+    from monGARS.core.iris import Iris, IrisDocument
+    from monGARS.core.search import NormalizedHit
+
+    class DummyOrchestrator:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        async def search(self, query: str, *, lang: str, max_results: int):
+            self.calls.append((query, lang, max_results))
+            return [
+                NormalizedHit(
+                    provider="searxng",
+                    title="Example",
+                    url="https://example.com/full",
+                    snippet="",
+                    published_at=None,
+                    event_date=None,
+                    source_domain="example.com",
+                    lang=lang,
+                    raw={},
+                )
+            ]
+
+    orchestrator = DummyOrchestrator()
+    iris = Iris(client_factory=ClientFactory(responses=[]))
+    iris.attach_search_orchestrator(orchestrator)
+
+    fetch_calls = 0
+
+    async def fake_fetch_document(url: str) -> IrisDocument | None:
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return IrisDocument(url=url, summary="Document summary", text="Document text")
+
+    monkeypatch.setattr(iris, "fetch_document", fake_fetch_document)
+
+    async def fail_fallback(_query: str, _cache_key: str):
+        pytest.fail("Fallback should not run when orchestrator resolves the snippet")
+
+    monkeypatch.setattr(iris, "_search_with_duckduckgo", fail_fallback)
+
+    result = await iris.search("Need context")
+    assert result == "Document summary"
+    assert fetch_calls == 1
+    assert orchestrator.calls == [("Need context", "en", 5)]
 
 
 @pytest.mark.asyncio
@@ -344,7 +585,7 @@ async def test_fetch_document_returns_structured_payload(monkeypatch):
     from monGARS.core.iris import Iris
 
     response = make_response("http://example.com", "<p>hello</p>")
-    monkeypatch.setattr(httpx, "AsyncClient", ClientFactory(responses=[response]))
+    factory = ClientFactory(responses=[response])
     monkeypatch.setattr(
         trafilatura,
         "extract",
@@ -357,7 +598,7 @@ async def test_fetch_document_returns_structured_payload(monkeypatch):
             }
         ),
     )
-    iris = Iris()
+    iris = Iris(client_factory=factory)
     document = await iris.fetch_document("http://example.com")
     assert document is not None
     assert document.text == "hello world"
@@ -373,16 +614,83 @@ async def test_fetch_document_fallbacks_to_html_text(monkeypatch):
     response = make_response(
         "http://example.com", "<p>hello <strong>world</strong></p>"
     )
-    monkeypatch.setattr(httpx, "AsyncClient", ClientFactory(responses=[response]))
+    factory = ClientFactory(responses=[response])
 
     def raise_extract(*args, **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(trafilatura, "extract", raise_extract)
-    iris = Iris()
+    iris = Iris(client_factory=factory)
     document = await iris.fetch_document("http://example.com")
     assert document is not None
     assert document.text == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_caches_responses(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    response = make_response("http://example.com", "<p>cached</p>")
+    factory = ClientFactory(responses=[response])
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda html, **_: json.dumps({"text": "cached body"}),
+    )
+    iris = Iris(
+        document_cache_ttl=60.0,
+        document_cache_size=4,
+        client_factory=factory,
+    )
+
+    first = await iris.fetch_document("http://example.com")
+    second = await iris.fetch_document("http://example.com")
+
+    assert first is not None
+    assert first is second
+    assert len(factory.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_document_coalesces_concurrent_requests(monkeypatch):
+    from monGARS.core.iris import Iris
+
+    response = make_response("http://example.com", "<p>coalesce</p>")
+    release_event = asyncio.Event()
+    request_started = asyncio.Event()
+
+    class BlockingClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def request(self, method, url, **kwargs):
+            self.calls += 1
+            request_started.set()
+            await release_event.wait()
+            return response
+
+        async def aclose(self):
+            return None
+
+    client = BlockingClient()
+    monkeypatch.setattr(
+        trafilatura,
+        "extract",
+        lambda html, **_: json.dumps({"text": "coalesced"}),
+    )
+    iris = Iris(client_factory=lambda **_: client)
+
+    task_one = asyncio.create_task(iris.fetch_document("http://example.com"))
+    task_two = asyncio.create_task(iris.fetch_document("http://example.com"))
+
+    await asyncio.wait_for(request_started.wait(), timeout=1.0)
+    assert client.calls == 1
+
+    release_event.set()
+    first, second = await asyncio.gather(task_one, task_two)
+
+    assert first is second
+    assert client.calls == 1
 
 
 @pytest.mark.asyncio

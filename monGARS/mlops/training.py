@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+# isort: off
+from ._unsloth_bootstrap import UNSLOTH_AVAILABLE
+
+# isort: on
+import inspect
 import json
 import logging
 import os
@@ -17,9 +22,22 @@ try:  # pragma: no cover - optional dependency under tests
 except Exception:  # pragma: no cover - tests patch this path
     LoraConfig = get_peft_model = None  # type: ignore
 
-from monGARS.mlops.model import move_to_cpu
+from monGARS.mlops.model import ensure_explicit_device_map, move_to_cpu
 
 logger = logging.getLogger(__name__)
+
+if not UNSLOTH_AVAILABLE:
+    logger.debug(
+        "Unsloth kernels not pre-imported; trainer falling back to vanilla Transformers"
+    )
+
+
+try:  # pragma: no cover - signature inspection is deterministic
+    _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU = (
+        "use_cpu" in inspect.signature(TrainingArguments.__init__).parameters
+    )
+except (TypeError, ValueError):  # pragma: no cover - defensive guard
+    _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU = False
 
 
 OVR_ENV_MAP = {
@@ -277,14 +295,17 @@ def _build_training_arguments(
 
     if not use_cuda:
         base.pop("no_cuda", None)
-        dtype_args["use_cpu"] = base.pop("use_cpu", True)
-        dtype_args["no_cuda"] = True
+        requested_use_cpu = bool(base.pop("use_cpu", True))
+        if _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU:
+            dtype_args["use_cpu"] = requested_use_cpu
+        else:  # pragma: no cover - compatibility branch for older transformers
+            dtype_args["no_cuda"] = True
     else:
         base.pop("use_cpu", None)
 
     gradient_checkpointing = bool(base.pop("gradient_checkpointing", True))
 
-    return TrainingArguments(
+    args = TrainingArguments(
         output_dir=str(cfg.output_dir),
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
@@ -295,6 +316,12 @@ def _build_training_arguments(
         **dtype_args,
         **base,
     )
+    if not use_cuda and _TRAINING_ARGUMENTS_SUPPORTS_USE_CPU:
+        # Maintain backwards compatibility for callers expecting ``no_cuda``
+        # to reflect CPU-only execution even when Transformers prefers the
+        # newer ``use_cpu`` flag.
+        setattr(args, "no_cuda", True)
+    return args
 
 
 def _coerce_oom_hooks(raw_hooks: Any) -> tuple[OOMEventHook, ...]:
@@ -422,6 +449,101 @@ def _disable_model_cache(model: Any) -> None:
         logger.debug("Disabled model cache for training")
 
 
+def _parse_int_env(key: str, default: int = 0) -> int:
+    """Best-effort integer conversion for environment variables."""
+
+    value = os.environ.get(key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):  # pragma: no cover - defensive guard
+        return default
+
+
+def _visible_cuda_device_count() -> int:
+    """Return the number of CUDA devices visible to the current process."""
+
+    if not torch.cuda.is_available():
+        return 0
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is None or visible.strip() == "":
+        try:
+            return int(torch.cuda.device_count())
+        except Exception:  # pragma: no cover - defensive guard
+            return 0
+
+    identifiers = [entry.strip() for entry in visible.split(",") if entry.strip()]
+    return len(identifiers)
+
+
+def _is_distributed_context() -> bool:
+    """Detect whether the process is running in a distributed environment."""
+
+    if _parse_int_env("LOCAL_RANK", -1) >= 0:
+        return True
+
+    distributed_env_keys = (
+        "WORLD_SIZE",
+        "ACCELERATE_NUM_PROCESSES",
+        "SLURM_NTASKS",
+        "PMI_SIZE",
+        "OMPI_COMM_WORLD_SIZE",
+        "MV2_COMM_WORLD_SIZE",
+    )
+    for key in distributed_env_keys:
+        if _parse_int_env(key, 1) > 1:
+            return True
+
+    try:  # pragma: no cover - torch.distributed optional during tests
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            return torch.distributed.get_world_size() > 1
+    except Exception:  # pragma: no cover - defensive guard
+        return False
+    return False
+
+
+def _model_uses_multi_device_map(model: Any) -> bool:
+    """Return ``True`` when the model or any submodule tracks a multi-device map."""
+
+    mapping = getattr(model, "hf_device_map", None)
+    if mapping and len(mapping) > 1:
+        return True
+
+    modules = getattr(model, "modules", None)
+    if not callable(modules):
+        return False
+    for submodule in modules():
+        mapping = getattr(submodule, "hf_device_map", None)
+        if mapping and len(mapping) > 1:
+            return True
+    return False
+
+
+def _maybe_enable_accelerate_device_map_bypass(model: Any) -> None:
+    """Enable Accelerate's device-map bypass when multi-device training is unavoidable."""
+
+    if os.environ.get("ACCELERATE_BYPASS_DEVICE_MAP", "").lower() == "true":
+        return
+
+    if not _model_uses_multi_device_map(model):
+        return
+
+    multi_gpu_context = _visible_cuda_device_count() > 1
+    if not (multi_gpu_context or _is_distributed_context()):
+        return
+
+    os.environ["ACCELERATE_BYPASS_DEVICE_MAP"] = "true"
+    logger.info(
+        "Enabled ACCELERATE_BYPASS_DEVICE_MAP to allow quantized training across multiple devices",
+        extra={
+            "multi_gpu": multi_gpu_context,
+            "distributed_env": _is_distributed_context(),
+        },
+    )
+
+
 def train_qlora(
     model: Any,
     dataset: Any,
@@ -527,11 +649,15 @@ def train_qlora(
     batch_size = max(1, per_device_train_batch_size)
     grad_accum = max(1, grad_accum_override)
     attempt = 0
+    gpu_ooms = 0
     use_cuda = prefer_cuda
 
     _disable_model_cache(model)
+    ensure_explicit_device_map(model)
+    _maybe_enable_accelerate_device_map_bypass(model)
 
     while True:
+        attempt += 1
         args = _build_training_arguments(
             config, base_args, batch_size, grad_accum, bf16_ok, use_cuda
         )
@@ -545,7 +671,7 @@ def train_qlora(
         logger.info(
             "Starting QLoRA fine-tuning",
             extra={
-                "attempt": attempt + 1,
+                "attempt": attempt,
                 "batch_size": batch_size,
                 "grad_accum": grad_accum,
             },
@@ -555,52 +681,66 @@ def train_qlora(
             trainer.train()
         except Exception as exc:  # pragma: no cover - covered via unit tests
             if not _is_cuda_oom(exc):
+                del trainer
                 raise
 
             should_retry, next_batch, next_grad = _handle_cuda_oom(
                 trainer=trainer,
                 exc=exc,
-                attempt=attempt,
+                attempt=gpu_ooms,
                 max_retries=oom_retries,
                 batch_size=batch_size,
                 grad_accum=grad_accum,
                 backoff_factor=backoff_factor,
                 hooks=oom_hooks,
             )
+            gpu_ooms += 1
 
-            if not should_retry:
-                if use_cuda and allow_cpu_fallback and torch.cuda.is_available():
-                    logger.warning(
-                        "CUDA OOM persisted after applying backoff; falling back to CPU training",
-                        extra={
-                            "attempt": attempt + 1,
-                            "batch_size": batch_size,
-                            "grad_accum": grad_accum,
-                        },
+            can_retry_gpu = should_retry and gpu_ooms <= oom_retries
+
+            if can_retry_gpu:
+                batch_size = next_batch
+                grad_accum = next_grad
+                del trainer
+                continue
+
+            can_fallback_to_cpu = (
+                use_cuda
+                and allow_cpu_fallback
+                and torch.cuda.is_available()
+                and oom_retries > 0
+            )
+
+            if can_fallback_to_cpu:
+                logger.warning(
+                    "CUDA OOM persisted after applying backoff; falling back to CPU training",
+                    extra={
+                        "attempt": attempt,
+                        "batch_size": batch_size,
+                        "grad_accum": grad_accum,
+                    },
+                )
+                base_args.setdefault("optim", "adamw_torch")
+                base_args["optim"] = "adamw_torch"
+                base_args.pop("no_cuda", None)
+                base_args["use_cpu"] = True
+                base_args["no_cuda"] = True
+                base_args["bf16"] = False
+                base_args["fp16"] = False
+                use_cuda = False
+                bf16_ok = False
+                move_to_cpu(model)
+                if _ensure_floating_point_dtype(model, torch.float32):
+                    logger.info(
+                        "Normalised model tensors to float32 for CPU training fallback"
                     )
-                    base_args.setdefault("optim", "adamw_torch")
-                    base_args["optim"] = "adamw_torch"
-                    base_args.pop("no_cuda", None)
-                    base_args["use_cpu"] = True
-                    base_args["no_cuda"] = True
-                    base_args["bf16"] = False
-                    base_args["fp16"] = False
-                    use_cuda = False
-                    bf16_ok = False
-                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-                    move_to_cpu(model)
-                    _maybe_empty_cuda_cache()
-                    _reset_cuda_peak_memory_stats()
-                    attempt += 1
-                    del trainer
-                    continue
-                raise
+                _maybe_empty_cuda_cache()
+                _reset_cuda_peak_memory_stats()
+                del trainer
+                continue
 
-            batch_size = next_batch
-            grad_accum = next_grad
-            attempt += 1
             del trainer
-            continue
+            raise
 
         logger.info("Training completed")
         return trainer
@@ -641,3 +781,31 @@ def run_embedding_smoke_test(
     if isinstance(shape, (tuple, list)) and len(shape) == 2:
         return int(shape[0]), int(shape[1])
     return None
+
+
+def _ensure_floating_point_dtype(module: Any, dtype: torch.dtype) -> bool:
+    """Cast floating-point parameters and buffers on ``module`` to ``dtype``."""
+
+    changed = False
+
+    parameters = getattr(module, "parameters", None)
+    buffers = getattr(module, "buffers", None)
+
+    with torch.no_grad():
+        if callable(parameters):
+            for param in parameters():
+                if not isinstance(param, torch.Tensor):
+                    continue
+                if param.is_floating_point() and param.dtype is not dtype:
+                    param.data = param.data.to(dtype)
+                    changed = True
+
+        if callable(buffers):
+            for buffer in buffers():
+                if not isinstance(buffer, torch.Tensor):
+                    continue
+                if buffer.is_floating_point() and buffer.dtype is not dtype:
+                    buffer.data = buffer.data.to(dtype)
+                    changed = True
+
+    return changed

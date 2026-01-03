@@ -26,7 +26,7 @@
 #       make_sliced_trainer           # optional: Trainer that computes CE on a small slice
 #   )
 #
-#   model, tok = load_4bit_causal_lm("cognitivecomputations/Dolphin3.0-Llama3.1-8B",
+#   model, tok = load_4bit_causal_lm("dphn/Dolphin-X1-8B",
 #                                    vram_budget_mb=7100, offload_dir="./offload")
 #   model     = prepare_lora_model_light(model, r=16, alpha=16, dropout=0.0)
 #
@@ -43,23 +43,25 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 import torch
-from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
-    AutoTokenizer,
     BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
     default_data_collator,
+)
+
+from datasets import load_dataset
+from monGARS.mlops.chat_templates import (
+    ensure_dolphin_chat_template,
+    load_tokenizer_with_dolphin_chat_template,
 )
 
 # ---- Public API --------------------------------------------------------------
@@ -117,16 +119,14 @@ def load_4bit_causal_lm(
         quantization_config=bnb_cfg,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
-        torch_dtype=compute_dtype,
+        dtype=compute_dtype,
     )
     # Required for HF quantizer validator when any module is on CPU in 8/4-bit
     if cpu_offload:
         kwargs["llm_int8_enable_fp32_cpu_offload"] = True
 
     model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
-    tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-    if tok.pad_token_id is None and tok.eos_token_id is not None:
-        tok.pad_token = tok.eos_token
+    tok = load_tokenizer_with_dolphin_chat_template(model_id)
 
     # Memory-friendly defaults for Turing (RTX 20xx)
     model.config.use_cache = False
@@ -267,6 +267,8 @@ def build_sft_dataset(
         return {"prompt": prompt, "completion": out}
 
     ds = ds.map(to_pc, remove_columns=ds.column_names)
+
+    ensure_dolphin_chat_template(tokenizer)
 
     def build(ex):
         if hasattr(tokenizer, "apply_chat_template"):

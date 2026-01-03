@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless training pipeline for Dolphin 3.0 Llama 3.1-8B using Unsloth.
+"""Headless training pipeline for Dolphin-X1-8B using Unsloth.
 
 This script automates end-to-end supervised fine-tuning (SFT) with features that
 make it suitable for unattended, headless servers:
@@ -63,9 +63,10 @@ except Exception as exc:  # pragma: no cover - optional dependency guard
     ) from exc
 
 import torch
-from datasets import Dataset, DatasetDict, load_dataset
 from huggingface_hub import login
-from transformers import AutoTokenizer, Trainer, TrainingArguments, set_seed
+from transformers import Trainer, TrainingArguments, set_seed
+
+from datasets import Dataset, DatasetDict, load_dataset
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -75,12 +76,30 @@ SAMPLE_DATA_DIR = ROOT_DIR / "scripts" / "data"
 SAMPLE_TRAIN_FILE = SAMPLE_DATA_DIR / "dolphin_sft_sample_train.jsonl"
 SAMPLE_VALIDATION_FILE = SAMPLE_DATA_DIR / "dolphin_sft_sample_validation.jsonl"
 
-from modules.neurons.registry import update_manifest
-from monGARS.mlops.artifacts import (
-    WrapperConfig,
-    build_adapter_summary,
-    write_wrapper_bundle,
-)
+try:
+    from modules.neurons.registry import update_manifest
+    from monGARS.mlops.artifacts import (
+        WrapperConfig,
+        build_adapter_summary,
+        write_wrapper_bundle,
+    )
+    from monGARS.mlops.chat_templates import (
+        ensure_dolphin_chat_template,
+        load_tokenizer_with_dolphin_chat_template,
+    )
+except ModuleNotFoundError:  # pragma: no cover - script execution direct from repo root
+    if str(ROOT_DIR) not in sys.path:
+        sys.path.insert(0, str(ROOT_DIR))
+    from modules.neurons.registry import update_manifest
+    from monGARS.mlops.artifacts import (
+        WrapperConfig,
+        build_adapter_summary,
+        write_wrapper_bundle,
+    )
+    from monGARS.mlops.chat_templates import (
+        ensure_dolphin_chat_template,
+        load_tokenizer_with_dolphin_chat_template,
+    )
 
 try:  # pragma: no cover - optional dependency
     from llm2vec import LLM2VecModel
@@ -385,6 +404,7 @@ def format_conversation(
     tokenizer,
     args: "TrainingConfig",
 ) -> str:
+    ensure_dolphin_chat_template(tokenizer)
     if args.text_column in example and example[args.text_column]:
         text_value = example[args.text_column]
         if isinstance(text_value, str) and text_value.strip():
@@ -816,7 +836,7 @@ def convert_to_llm2vec(output_dir: Path, tokenizer_dir: Path) -> None:
     encoder = LLM2VecModel.from_pretrained(str(output_dir))
     target_dir = output_dir / "llm2vec_encoder"
     encoder.save_pretrained(str(target_dir))
-    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
+    tokenizer = load_tokenizer_with_dolphin_chat_template(str(tokenizer_dir))
     tokenizer.save_pretrained(str(target_dir))
 
 
@@ -824,13 +844,13 @@ def parse_arguments(
     argv: Optional[list[str]] = None,
 ) -> tuple[argparse.Namespace, TrainingConfig]:
     parser = argparse.ArgumentParser(
-        description="Automated Dolphin 3.0 fine-tuning pipeline"
+        description="Automated Dolphin-X1 fine-tuning pipeline"
     )
     parser.add_argument("--hf-token", type=str, help="Hugging Face access token")
     parser.add_argument(
         "--base-model-id",
         type=str,
-        default="cognitivecomputations/Dolphin3.0-Llama3.1-8B",
+        default="dphn/Dolphin-X1-8B",
         help="Base Hugging Face model identifier to fine-tune.",
     )
     parser.add_argument(
@@ -980,7 +1000,7 @@ def parse_arguments(
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("dolphin3_finetuned"),
+        default=Path("dolphin_x1_finetuned"),
         help="Directory where the fine-tuned checkpoint will be written.",
     )
     parser.add_argument(
@@ -1237,7 +1257,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     if free_mb == 0 or total_mb == 0:
         LOGGER.warning("No compatible GPU detected; defaulting to CPU mode.")
         config.per_device_train_batch_size = 1
-        device = "cpu"
     else:
         config.per_device_train_batch_size = recommend_batch_size(free_mb)
 

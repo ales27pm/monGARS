@@ -1,3 +1,4 @@
+import json
 import os
 import socket
 from ipaddress import ip_address, ip_network
@@ -169,10 +170,29 @@ if _explicit_allowed_hosts:
 else:
     ALLOWED_HOSTS = list(_DEFAULT_ALLOWED_HOSTS)
 
+# Ensure Docker/compose health checks using the 0.0.0.0 host do not trip
+# Django's `DisallowedHost` safeguard when explicit hosts are provided via the
+# environment. Docker compose defaults omit 0.0.0.0, so normalise here to keep
+# developer ergonomics while still respecting custom host lists.
+if "0.0.0.0" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("0.0.0.0")
+
 if DEBUG:
     for debug_host in _iter_debug_hosts():
         if debug_host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(debug_host)
+    if "0.0.0.0" not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append("0.0.0.0")
+
+_compose_env_hosts = [
+    *_parse_host_csv(os.environ.get("WEBAPP_HOST")),
+    *_parse_host_csv(os.environ.get("HOST")),
+]
+for compose_host in _compose_env_hosts:
+    if compose_host and compose_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(compose_host)
+if _compose_env_hosts and "0.0.0.0" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("0.0.0.0")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -260,28 +280,36 @@ def _database_config_from_url(url: str) -> dict[str, Any]:
     else:
         raise RuntimeError(f"Unsupported database scheme: {parsed.scheme!r}")
 
-    name = unquote(parsed.path.lstrip("/")) or os.environ.get("DB_NAME") or ""
-    host = parsed.hostname or os.environ.get("DB_HOST", "")
-    port = str(parsed.port or os.environ.get("DB_PORT", ""))
-    user = (
-        unquote(parsed.username) if parsed.username else os.environ.get("DB_USER", "")
-    )
-    password = (
-        unquote(parsed.password)
-        if parsed.password
-        else os.environ.get("DB_PASSWORD", "")
-    )
+    def _override_env(*keys: str) -> str | None:
+        for key in keys:
+            value = os.environ.get(key)
+            if value and value.strip():
+                return value
+        return None
+
+    defaults = {
+        "NAME": unquote(parsed.path.lstrip("/")) or "",
+        "HOST": parsed.hostname or "",
+        "PORT": str(parsed.port) if parsed.port is not None else "",
+        "USER": unquote(parsed.username) if parsed.username else "",
+        "PASSWORD": unquote(parsed.password) if parsed.password else "",
+    }
+    env_map = {
+        "NAME": ("POSTGRES_DB", "DB_NAME"),
+        "HOST": ("POSTGRES_HOST", "DB_HOST"),
+        "PORT": ("POSTGRES_PORT", "DB_PORT"),
+        "USER": ("POSTGRES_USER", "DB_USER"),
+        "PASSWORD": ("POSTGRES_PASSWORD", "DB_PASSWORD"),
+    }
+
+    overrides = {key: _override_env(*env_map[key]) or defaults[key] for key in defaults}
     options = {
         key: value for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     }
 
     config: dict[str, Any] = {
         "ENGINE": engine,
-        "NAME": name,
-        "USER": user,
-        "PASSWORD": password,
-        "HOST": host,
-        "PORT": port,
+        **overrides,
     }
 
     conn_max_age = _database_conn_max_age(engine)
@@ -360,6 +388,41 @@ def _default_postgres_settings() -> dict[str, Any]:
     conn_max_age = _database_conn_max_age(config["ENGINE"])
     if conn_max_age:
         config["CONN_MAX_AGE"] = conn_max_age
+
+    options: dict[str, Any] = {}
+
+    sslmode = (
+        os.environ.get("DATABASE_SSLMODE")
+        or os.environ.get("DB_SSLMODE")
+        or os.environ.get("POSTGRES_SSLMODE")
+    )
+    if sslmode:
+        options["sslmode"] = sslmode
+
+    target_session_attrs = (
+        os.environ.get("DATABASE_TARGET_SESSION_ATTRS")
+        or os.environ.get("DB_TARGET_SESSION_ATTRS")
+        or os.environ.get("POSTGRES_TARGET_SESSION_ATTRS")
+    )
+    if target_session_attrs:
+        options["target_session_attrs"] = target_session_attrs
+
+    raw_options = (
+        os.environ.get("DATABASE_OPTIONS_JSON")
+        or os.environ.get("DB_OPTIONS_JSON")
+        or os.environ.get("POSTGRES_OPTIONS_JSON")
+    )
+    if raw_options:
+        try:
+            parsed_options = json.loads(raw_options)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("DATABASE_OPTIONS_JSON must be valid JSON") from exc
+        if not isinstance(parsed_options, dict):
+            raise RuntimeError("DATABASE_OPTIONS_JSON must decode to an object")
+        options.update({str(key): value for key, value in parsed_options.items()})
+
+    if options:
+        config["OPTIONS"] = options
 
     return config
 

@@ -1,25 +1,306 @@
-name: Generate iOS CSR
+name: Generate signing CSR
 
 on:
   workflow_dispatch:
+    inputs:
+      common_name:
+        description: "Common Name (CN) for the certificate subject"
+        required: true
+        type: string
+      email:
+        description: "Email address for the subject"
+        required: false
+        type: string
+        default: ""
+      subject_overrides:
+        description: "Additional subject attributes as KEY=VALUE lines (e.g. O=Example Corp)."
+        required: false
+        type: string
+        default: |
+          C=US
+      subject_alt_names:
+        description: "Comma-separated SAN entries (e.g. DNS:api.example.com, URI:https://example.com)"
+        required: false
+        type: string
+        default: ""
+      key_profile:
+        description: "Key algorithm and parameters"
+        required: false
+        type: choice
+        options:
+          - rsa-2048
+          - rsa-3072
+          - rsa-4096
+          - ec-prime256v1
+          - ec-secp384r1
+        default: rsa-2048
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   generate-csr:
     runs-on: macos-latest
     steps:
-      - name: Checkout (optional)
-        uses: actions/checkout@v4
-
-      - name: Generate CSR and Private Key
+      - name: Prepare workspace
         run: |
-          mkdir certs
-          openssl req -new -newkey rsa:2048 -nodes \
-            -keyout certs/ios_dev.key \
-            -out certs/ios_dev.csr \
-            -subj "/emailAddress=ales27pm@hotmail.com, CN=Alexis Boulet, C=CA"
+          set -euo pipefail
+          mkdir -p certs
+
+      - name: Render subject and OpenSSL configuration
+        env:
+          COMMON_NAME: ${{ inputs.common_name }}
+          EMAIL: ${{ inputs.email }}
+          SUBJECT_OVERRIDES: ${{ inputs.subject_overrides }}
+          SUBJECT_ALT_NAMES: ${{ inputs.subject_alt_names }}
+        run: |
+          set -euo pipefail
+          python <<'PY'
+import os
+import pathlib
+from typing import Iterable
+
+
+def _escape_subject_value(raw: str) -> str:
+    """Escape OpenSSL subject special characters."""
+
+    replacements = {
+        "\\": "\\\\",
+        "/": "\\/",
+        ",": "\\,",
+        "+": "\\+",
+        "=": "\\=",
+        '"': '\\"',
+        "<": "\\<",
+        ">": "\\>",
+        "#": "\\#",
+        ";": "\\;",
+    }
+    return "".join(replacements.get(char, char) for char in raw)
+
+
+def _parse_overrides(raw: str) -> list[tuple[str, str]]:
+    """Parse KEY=VALUE override lines allowing comments and blanks."""
+
+    parsed: list[tuple[str, str]] = []
+    if not raw:
+        return parsed
+
+    for index, line in enumerate(raw.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            raise SystemExit(
+                f"Invalid subject override on line {index}: '{line}'. Expected KEY=VALUE format."
+            )
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise SystemExit(
+                f"Invalid subject override on line {index}: missing key before '='."
+            )
+        if not value:
+            raise SystemExit(
+                f"Invalid subject override on line {index}: missing value after '='."
+            )
+        parsed.append((key, value))
+
+    return parsed
+
+
+def _merge_subject_fields(
+    base: Iterable[tuple[str, str]],
+    overrides: Iterable[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    merged: dict[str, str] = {}
+    for key, value in base:
+        merged[key] = value
+    for key, value in overrides:
+        merged[key] = value
+    return list(merged.items())
+
+
+root = pathlib.Path("certs")
+root.mkdir(parents=True, exist_ok=True)
+
+subject_fields = [("CN", os.environ["COMMON_NAME"].strip())]
+email = os.environ.get("EMAIL", "").strip()
+if email:
+    subject_fields.append(("emailAddress", email))
+
+overrides = _parse_overrides(os.environ.get("SUBJECT_OVERRIDES", ""))
+if overrides:
+    subject_fields = _merge_subject_fields(subject_fields, overrides)
+
+subject_value = "/" + "/".join(
+    f"{field}={_escape_subject_value(value)}" for field, value in subject_fields
+)
+(root / "subject.txt").write_text(subject_value + "\n", encoding="utf-8")
+
+san_raw = os.environ.get("SUBJECT_ALT_NAMES", "")
+san_entries: list[str] = []
+san_config_entries: list[str] = []
+for index, item in enumerate(san_raw.split(","), start=1):
+    clean = item.strip()
+    if not clean:
+        continue
+    if ":" in clean:
+        kind, value = clean.split(":", 1)
+        san_entries.append(f"{kind.strip()}:{value.strip()}")
+        san_config_entries.append(f"{kind.strip()}.{index} = {value.strip()}")
+    else:
+        san_entries.append(f"DNS:{clean}")
+        san_config_entries.append(f"DNS.{index} = {clean}")
+
+config_lines = [
+    "[req]",
+    "distinguished_name = req_distinguished_name",
+    "prompt = no",
+    "default_md = sha256",
+]
+if san_config_entries:
+    config_lines.append("req_extensions = req_ext")
+config_lines.extend(["", "[req_distinguished_name]"])
+config_lines.extend(f"{field} = {value}" for field, value in subject_fields)
+if san_config_entries:
+    config_lines.extend(["", "[req_ext]", "subjectAltName = @req_san", "", "[req_san]"])
+    config_lines.extend(san_config_entries)
+
+(root / "openssl.cnf").write_text("\n".join(config_lines) + "\n", encoding="utf-8")
+san_blob = "\n".join(san_entries)
+(root / "san_entries.txt").write_text((san_blob + "\n") if san_blob else "", encoding="utf-8")
+PY
+
+      - name: Determine key parameters
+        id: key_params
+        env:
+          KEY_PROFILE: ${{ inputs.key_profile }}
+        run: |
+          set -euo pipefail
+          case "$KEY_PROFILE" in
+            rsa-2048)
+              key_type="rsa"
+              key_bits="2048"
+              ec_curve=""
+              ;;
+            rsa-3072)
+              key_type="rsa"
+              key_bits="3072"
+              ec_curve=""
+              ;;
+            rsa-4096)
+              key_type="rsa"
+              key_bits="4096"
+              ec_curve=""
+              ;;
+            ec-prime256v1)
+              key_type="ec"
+              key_bits=""
+              ec_curve="prime256v1"
+              ;;
+            ec-secp384r1)
+              key_type="ec"
+              key_bits=""
+              ec_curve="secp384r1"
+              ;;
+            *)
+              echo "Unsupported key profile: $KEY_PROFILE" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "key_type=$key_type"
+            echo "key_bits=$key_bits"
+            echo "ec_curve=$ec_curve"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate private key and CSR
+        env:
+          KEY_TYPE: ${{ steps.key_params.outputs.key_type }}
+          KEY_BITS: ${{ steps.key_params.outputs.key_bits }}
+          EC_CURVE: ${{ steps.key_params.outputs.ec_curve }}
+        run: |
+          set -euo pipefail
+          subject=$(cat certs/subject.txt)
+          if [ "$KEY_TYPE" = "ec" ]; then
+            openssl ecparam -name "$EC_CURVE" -genkey -noout -out certs/signing.key
+          else
+            openssl genrsa -out certs/signing.key "$KEY_BITS"
+          fi
+          chmod 600 certs/signing.key
+
+          if [ -s certs/san_entries.txt ]; then
+            extensions_args=(-extensions req_ext)
+          else
+            extensions_args=()
+          fi
+
+          openssl req -new \
+            -key certs/signing.key \
+            -subj "$subject" \
+            -config certs/openssl.cnf \
+            "${extensions_args[@]}" \
+            -out certs/signing.csr
+
+      - name: Produce verification metadata
+        run: |
+          set -euo pipefail
+          openssl req -in certs/signing.csr -noout -text > certs/signing.csr.txt
+          shasum -a 256 certs/signing.key > certs/signing.key.sha256
+          shasum -a 256 certs/signing.csr > certs/signing.csr.sha256
+
+      - name: Publish summary
+        env:
+          KEY_TYPE: ${{ steps.key_params.outputs.key_type }}
+          KEY_BITS: ${{ steps.key_params.outputs.key_bits }}
+          EC_CURVE: ${{ steps.key_params.outputs.ec_curve }}
+          SUBJECT_ALT_NAMES: ${{ inputs.subject_alt_names }}
+        run: |
+          set -euo pipefail
+          python <<-'PY'
+          	import os
+          	import pathlib
+          
+          	san_path = pathlib.Path("certs") / "san_summary.md"
+          	entries = []
+          	for raw in os.environ.get("SUBJECT_ALT_NAMES", "").split(","):
+          	    item = raw.strip()
+          	    if item:
+          	        entries.append(f"- {item}")
+          	san_path.write_text("\n".join(entries) + ("\n" if entries else ""), encoding="utf-8")
+          PY
+          subject=$(openssl req -in certs/signing.csr -noout -subject | sed 's/^subject= //')
+          fingerprint=$(openssl req -in certs/signing.csr -noout -pubkey | openssl pkey -pubin -outform DER | openssl dgst -sha256 | sed 's/^.*= //')
+          {
+            echo "### Signing CSR generated"
+            echo
+            echo "- **Subject:** \`$subject\`"
+            echo "- **Key algorithm:** ${KEY_TYPE^^}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$KEY_TYPE" = "rsa" ]; then
+            echo "- **Key size:** ${KEY_BITS} bits" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **Elliptic curve:** ${EC_CURVE}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -s certs/san_summary.md ]; then
+            echo "- **Subject Alternative Names:**" >> "$GITHUB_STEP_SUMMARY"
+            cat certs/san_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- **Public key SHA-256:** \`$fingerprint\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload CSR and Private Key as artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ios-csr-artifacts
-          path: certs/
+          name: signing-csr-bundle
+          path: |
+            certs/signing.csr
+            certs/signing.key
+            certs/signing.csr.txt
+            certs/signing.csr.sha256
+            certs/signing.key.sha256
+            certs/openssl.cnf
+          retention-days: 3

@@ -1,5 +1,7 @@
 # Ray Serve Deployment Guide
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This guide outlines how to provision Ray Serve for monGARS, configure the
 application, and understand fallback behaviour when the cluster is unavailable.
 It assumes Ray 2.x, Python 3.11, and optional Docker/Kubernetes familiarity.
@@ -18,6 +20,29 @@ It assumes Ray 2.x, Python 3.11, and optional Docker/Kubernetes familiarity.
    ray start --address='<HEAD_NODE_IP>:6379'
    ```
 4. Verify cluster health with `ray status`.
+
+### Docker Compose (local)
+
+When running the stack with Docker Compose, the default configuration now uses
+the CPU-only Ray image so environments without NVIDIA drivers can launch the
+head node successfully. Set `COMPOSE_PROFILES=ray` before invoking `docker
+compose up` to include the Ray services. If you _do_ have GPUs available,
+override the image by exporting `RAY_HEAD_IMAGE=rayproject/ray:2.9.3-py311-cu121`
+or by using `docker-compose.gpu.yml`, which reintroduces the GPU device
+reservations and swaps the build to the CUDA-enabled Dockerfiles. The GPU
+overlay now produces separate images (`MONGARS_GPU_IMAGE`, `RAY_HEAD_IMAGE_GPU`,
+`RAY_SERVE_GPU_IMAGE`, and `RAY_IMAGE_GPU`) so CPU and GPU builds no longer
+clobber each other. Override
+`PYTORCH_IMAGE_GPU`, `TORCH_VERSION_GPU`, or related build arguments to pin
+specific CUDA stacks. Without those overrides Docker will surface `could not
+select device driver "" with capabilities: [[gpu]]` errors because the default
+engine cannot satisfy the GPU reservation that Ray previously required.
+
+> **Note:** Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+> and ensure the host driver matches the CUDA minor version you select. Without
+> the toolkit or compatible drivers Docker cannot attach GPU devices and will
+> emit the same `could not select device driver` error even when the compose
+> overlay is configured correctly.
 
 For Kubernetes deployments, reuse the manifests/Helm chart produced from
 `modules/ray_service.py` so replica configuration matches the application.

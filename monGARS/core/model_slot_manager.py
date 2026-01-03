@@ -1,6 +1,6 @@
 """Model slot manager maintaining persistent VRAM allocations.
 
-The manager keeps a cache of Unsloth-backed Dolphin 3.0 language models mapped
+The manager keeps a cache of Unsloth-backed Dolphin-X1 language models mapped
 to logical "slots". Each slot can be acquired via a context manager which
 guarantees that models are lazily instantiated, re-used across callers, and
 safely offloaded when GPU memory pressure exceeds the configured threshold.
@@ -8,7 +8,6 @@ safely offloaded when GPU memory pressure exceeds the configured threshold.
 
 from __future__ import annotations
 
-import builtins
 import logging
 import threading
 from collections.abc import Iterable
@@ -16,7 +15,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-_NotImplError = getattr(builtins, "NotImplemented" + "Error")
+from .persistence import PersistenceManager
+
+# Import Unsloth before torch/transformer ecosystems to activate its patches.
+_UNSLOTH_IMPORT_ERROR: Exception | None = None
+
+try:  # pragma: no cover - optional dependency at runtime
+    import unsloth  # type: ignore
+except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover
+    unsloth = None  # type: ignore[assignment]
+    _UNSLOTH_IMPORT_ERROR = exc
+except Exception as exc:  # pragma: no cover - defensive guardrail
+    unsloth = None  # type: ignore[assignment]
+    _UNSLOTH_IMPORT_ERROR = exc
+else:
+    _UNSLOTH_IMPORT_ERROR = None
+
+FastLanguageModel = (
+    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
+    if "unsloth" in globals() and unsloth is not None
+    else None
+)
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
@@ -26,27 +45,14 @@ except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
 else:
     _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 
-try:  # pragma: no cover - optional dependency at runtime
-    from unsloth import FastLanguageModel  # type: ignore
-except (ModuleNotFoundError, _NotImplError) as exc:  # pragma: no cover
-    FastLanguageModel = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR: Exception | None = exc
-except Exception as exc:  # pragma: no cover - defensive guardrail
-    FastLanguageModel = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR = exc
-else:
-    _UNSLOTH_IMPORT_ERROR = None
-
 try:  # pragma: no cover - optional helper for GPU diagnostics
     import GPUtil  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     GPUtil = None  # type: ignore[assignment]
 
-from .persistence import PersistenceManager
-
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL_ID = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+_DEFAULT_MODEL_ID = "dphn/Dolphin-X1-8B"
 _TARGET_MODULES: tuple[str, ...] = (
     "q_proj",
     "k_proj",

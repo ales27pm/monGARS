@@ -9,7 +9,8 @@ from pathlib import Path
 
 from alembic import context
 from sqlalchemy import pool
-from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.engine import Connection
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -8,13 +8,13 @@ from typing import Any, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.config import get_settings
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.security import SecurityManager
 from monGARS.init_db import UserAccount
 
-settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -61,7 +61,10 @@ async def _user_exists(repo: PersistenceRepository, username: str) -> bool:
 
     try:
         return await repo.get_user_by_username(username) is not None
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except (
+        RuntimeError,
+        SQLAlchemyError,
+    ) as exc:  # pragma: no cover - defensive logging
         logger.warning(
             "auth.bootstrap.lookup_failed",
             extra={"username": username},
@@ -125,7 +128,13 @@ async def _create_user_safely(
             "auth.bootstrap.user_exists_or_race",
             extra={"username": username},
         )
-    except Exception as exc:  # pragma: no cover - unexpected failure
+    except SQLAlchemyError as exc:  # pragma: no cover - unexpected failure
+        logger.warning(
+            "auth.bootstrap.create_failed",
+            extra={"username": username},
+            exc_info=exc,
+        )
+    except RuntimeError as exc:  # pragma: no cover - unexpected failure
         logger.warning(
             "auth.bootstrap.create_failed",
             extra={"username": username},
@@ -134,12 +143,14 @@ async def _create_user_safely(
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
-    sec = SecurityManager(
-        secret_key=settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM
-    )
+    resolved_settings = get_settings()
+    sec = SecurityManager(settings=resolved_settings)
     try:
         payload = sec.verify_token(token)
-    except Exception as exc:  # pragma: no cover - FastAPI handles response
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:  # pragma: no cover - FastAPI handles response
         missing_subject = False
         try:
             claims = jwt.get_unverified_claims(token)
@@ -182,3 +193,26 @@ def get_current_admin_user(current_user: dict = Depends(get_current_user)) -> di
             status_code=status.HTTP_403_FORBIDDEN, detail="Admin required"
         )
     return current_user
+
+
+def get_current_operator_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Require the caller to carry either the operator role or admin privileges."""
+
+    if current_user.get("admin"):
+        return current_user
+
+    role = current_user.get("role")
+    roles = current_user.get("roles")
+    if role == "operator":
+        return current_user
+    if isinstance(roles, (list, tuple, set)):
+        for entry in roles:
+            if isinstance(entry, str) and entry == "operator":
+                return current_user
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Operator role required",
+    )

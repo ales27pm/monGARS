@@ -2,28 +2,66 @@ import { createEmitter } from "../utils/emitter.js";
 import { htmlToText, extractBubbleText, escapeHTML } from "../utils/dom.js";
 import { renderMarkdown } from "../services/markdown.js";
 import { formatTimestamp, nowISO } from "../utils/time.js";
+import { computeErrorBubbleText } from "../utils/errorUtils.js";
 
 export function createChatUi({ elements, timelineStore }) {
   const emitter = createEmitter();
 
+  const sendLabelElement =
+    elements.send?.querySelector("[data-role='send-label']") || null;
+  const sendSpinnerElement =
+    elements.send?.querySelector("[data-role='send-spinner']") || null;
   const sendIdleMarkup = elements.send ? elements.send.innerHTML : "";
   const sendIdleLabel =
     (elements.send && elements.send.getAttribute("data-idle-label")) ||
+    (sendLabelElement && sendLabelElement.textContent.trim()) ||
     (elements.send ? elements.send.textContent.trim() : "Envoyer");
+  const sendBusyLabel =
+    (elements.send && elements.send.getAttribute("data-busy-label")) ||
+    "Envoi…";
+  const sendBusyAriaLabel =
+    (elements.send && elements.send.getAttribute("data-busy-aria-label")) ||
+    sendBusyLabel;
   const sendBusyMarkup =
     '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Envoi…';
+  const SUPPORTED_TONES = ["muted", "info", "success", "danger", "warning"];
   const composerStatusDefault =
     (elements.composerStatus && elements.composerStatus.textContent.trim()) ||
     "Appuyez sur Ctrl+Entrée pour envoyer rapidement.";
   const filterHintDefault =
     (elements.filterHint && elements.filterHint.textContent.trim()) ||
     "Utilisez le filtre pour limiter l'historique. Appuyez sur Échap pour effacer.";
+  const voiceStatusDefault =
+    (elements.voiceStatus && elements.voiceStatus.textContent.trim()) ||
+    "Vérification des capacités vocales…";
   const promptMax = Number(elements.prompt?.getAttribute("maxlength")) || null;
   const prefersReducedMotion =
     window.matchMedia &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const SCROLL_THRESHOLD = 140;
   const PROMPT_MAX_HEIGHT = 320;
+  const composerStatusEmbedding =
+    (elements.composerStatus &&
+      elements.composerStatus.getAttribute("data-embed-label")) ||
+    "Mode Embedding : générez des vecteurs pour vos textes.";
+  const promptPlaceholderDefault =
+    (elements.prompt && elements.prompt.getAttribute("placeholder")) || "";
+  const promptPlaceholderEmbedding =
+    (elements.prompt &&
+      elements.prompt.getAttribute("data-embed-placeholder")) ||
+    "Entrez le texte à encoder…";
+  const promptAriaDefault =
+    (elements.prompt && elements.prompt.getAttribute("aria-label")) || "";
+  const promptAriaEmbedding =
+    (elements.prompt &&
+      elements.prompt.getAttribute("data-embed-aria-label")) ||
+    "Texte à encoder";
+  const sendAriaDefault =
+    (elements.send && elements.send.getAttribute("aria-label")) ||
+    sendIdleLabel;
+  const sendAriaEmbedding =
+    (elements.send && elements.send.getAttribute("data-embed-aria-label")) ||
+    "Générer un embedding";
 
   const diagnostics = {
     connectedAt: null,
@@ -34,6 +72,8 @@ export function createChatUi({ elements, timelineStore }) {
   const state = {
     resetStatusTimer: null,
     hideScrollTimer: null,
+    voiceStatusTimer: null,
+    mode: "chat",
     activeFilter: "",
     historyBootstrapped: elements.transcript.childElementCount > 0,
     bootstrapping: false,
@@ -57,54 +97,316 @@ export function createChatUi({ elements, timelineStore }) {
     emitter.emit(event, payload);
   }
 
+  function normaliseMode(mode) {
+    return mode === "embed" ? "embed" : "chat";
+  }
+
   function setBusy(busy) {
     elements.transcript.setAttribute("aria-busy", busy ? "true" : "false");
-    if (elements.send) {
-      elements.send.disabled = Boolean(busy);
-      elements.send.setAttribute("aria-busy", busy ? "true" : "false");
+    if (!elements.send) {
+      return;
+    }
+
+    elements.send.disabled = Boolean(busy);
+    elements.send.setAttribute("aria-busy", busy ? "true" : "false");
+    elements.send.classList.toggle("is-loading", Boolean(busy));
+
+    if (sendSpinnerElement) {
       if (busy) {
-        elements.send.innerHTML = sendBusyMarkup;
-      } else if (sendIdleMarkup) {
-        elements.send.innerHTML = sendIdleMarkup;
+        sendSpinnerElement.classList.remove("d-none");
+        sendSpinnerElement.setAttribute("aria-hidden", "false");
       } else {
-        elements.send.textContent = sendIdleLabel;
+        sendSpinnerElement.classList.add("d-none");
+        sendSpinnerElement.setAttribute("aria-hidden", "true");
+      }
+    }
+
+    if (sendLabelElement) {
+      sendLabelElement.textContent = busy ? sendBusyLabel : sendIdleLabel;
+    } else if (busy) {
+      elements.send.innerHTML = sendBusyMarkup;
+    } else if (sendIdleMarkup) {
+      elements.send.innerHTML = sendIdleMarkup;
+    } else {
+      elements.send.textContent = sendIdleLabel;
+    }
+
+    if (busy) {
+      if (sendBusyAriaLabel) {
+        elements.send.setAttribute("aria-label", sendBusyAriaLabel);
+      }
+    } else {
+      const ariaLabel = state.mode === "embed" ? sendAriaEmbedding : sendAriaDefault;
+      if (ariaLabel) {
+        elements.send.setAttribute("aria-label", ariaLabel);
+      } else {
+        elements.send.removeAttribute("aria-label");
       }
     }
   }
 
-  function hideError() {
+  const hideError = () => {
     if (!elements.errorAlert) return;
     elements.errorAlert.classList.add("d-none");
     if (elements.errorMessage) {
       elements.errorMessage.textContent = "";
     }
-  }
+  };
 
-  function showError(message) {
-    if (!elements.errorAlert || !elements.errorMessage) return;
-    elements.errorMessage.textContent = message;
-    elements.errorAlert.classList.remove("d-none");
-  }
+  const appendErrorBubble = (error, options = {}) => {
+    const {
+      metadata = {},
+      timestamp = nowISO(),
+      role = "system",
+      prefix,
+      register,
+      messageId,
+      resolvedText,
+    } = options;
+    const { text, bubbleText } = computeErrorBubbleText(
+      typeof resolvedText === "string" ? resolvedText : error,
+      { prefix },
+    );
+    return appendMessage(role, bubbleText, {
+      variant: "error",
+      allowMarkdown: false,
+      timestamp,
+      metadata: { ...metadata, error: text },
+      register,
+      messageId,
+    });
+  };
 
-  function setComposerStatus(message, tone = "muted") {
+  const showError = (error, options = {}) => {
+    const { text } = computeErrorBubbleText(error, options);
+    if (elements.errorAlert && elements.errorMessage) {
+      elements.errorMessage.textContent = text;
+      elements.errorAlert.classList.remove("d-none");
+    }
+    if (options.bubble === false) {
+      return null;
+    }
+    const { bubble, ...bubbleOptions } = options;
+    return appendErrorBubble(error, { ...bubbleOptions, resolvedText: text });
+  };
+
+  const setComposerStatus = (message, tone = "muted") => {
     if (!elements.composerStatus) return;
-    const tones = ["muted", "info", "success", "danger", "warning"];
     elements.composerStatus.textContent = message;
-    tones.forEach((t) => elements.composerStatus.classList.remove(`text-${t}`));
+    SUPPORTED_TONES.forEach((t) =>
+      elements.composerStatus.classList.remove(`text-${t}`),
+    );
     elements.composerStatus.classList.add(`text-${tone}`);
-  }
+  };
 
-  function setComposerStatusIdle() {
-    setComposerStatus(composerStatusDefault, "muted");
-  }
+  const setComposerStatusIdle = () => {
+    const message =
+      state.mode === "embed" ? composerStatusEmbedding : composerStatusDefault;
+    setComposerStatus(message, "muted");
+  };
 
-  function scheduleComposerIdle(delay = 3500) {
+  const scheduleComposerIdle = (delay = 3500) => {
     if (state.resetStatusTimer) {
       clearTimeout(state.resetStatusTimer);
     }
     state.resetStatusTimer = window.setTimeout(() => {
       setComposerStatusIdle();
     }, delay);
+  };
+
+  const setVoiceStatus = (message, tone = "muted") => {
+    if (!elements.voiceStatus) return;
+    if (state.voiceStatusTimer) {
+      clearTimeout(state.voiceStatusTimer);
+      state.voiceStatusTimer = null;
+    }
+    elements.voiceStatus.textContent = message;
+    SUPPORTED_TONES.forEach((t) =>
+      elements.voiceStatus.classList.remove(`text-${t}`),
+    );
+    elements.voiceStatus.classList.add(`text-${tone}`);
+  };
+
+  const scheduleVoiceStatusIdle = (delay = 4000) => {
+    if (!elements.voiceStatus) return;
+    if (state.voiceStatusTimer) {
+      clearTimeout(state.voiceStatusTimer);
+    }
+    state.voiceStatusTimer = window.setTimeout(() => {
+      setVoiceStatus(voiceStatusDefault, "muted");
+      state.voiceStatusTimer = null;
+    }, delay);
+  };
+
+  const setVoiceAvailability = ({
+    recognition = false,
+    synthesis = false,
+  } = {}) => {
+    if (elements.voiceControls) {
+      elements.voiceControls.classList.toggle(
+        "d-none",
+        !recognition && !synthesis,
+      );
+    }
+    if (elements.voiceRecognitionGroup) {
+      elements.voiceRecognitionGroup.classList.toggle("d-none", !recognition);
+    }
+    if (elements.voiceToggle) {
+      elements.voiceToggle.disabled = !recognition;
+      elements.voiceToggle.setAttribute(
+        "title",
+        recognition
+          ? "Activer ou désactiver la dictée vocale."
+          : "Dictée vocale indisponible dans ce navigateur.",
+      );
+      elements.voiceToggle.setAttribute("aria-pressed", "false");
+      elements.voiceToggle.classList.remove("btn-danger");
+      elements.voiceToggle.classList.add("btn-outline-secondary");
+      elements.voiceToggle.textContent = "🎙️ Activer la dictée";
+    }
+    if (elements.voiceAutoSend) {
+      elements.voiceAutoSend.disabled = !recognition;
+    }
+    if (!recognition) {
+      setVoiceTranscript("", { state: "idle" });
+    }
+    if (elements.voiceSynthesisGroup) {
+      elements.voiceSynthesisGroup.classList.toggle("d-none", !synthesis);
+    }
+    if (elements.voicePlayback) {
+      elements.voicePlayback.disabled = !synthesis;
+    }
+    if (elements.voiceStopPlayback) {
+      elements.voiceStopPlayback.disabled = !synthesis;
+    }
+    if (elements.voiceVoiceSelect) {
+      elements.voiceVoiceSelect.disabled = !synthesis;
+      if (!synthesis) {
+        elements.voiceVoiceSelect.innerHTML = "";
+      }
+    }
+  };
+
+  function setVoiceListening(listening) {
+    if (!elements.voiceToggle) return;
+    elements.voiceToggle.setAttribute(
+      "aria-pressed",
+      listening ? "true" : "false",
+    );
+    elements.voiceToggle.classList.toggle("btn-danger", listening);
+    elements.voiceToggle.classList.toggle("btn-outline-secondary", !listening);
+    elements.voiceToggle.textContent = listening
+      ? "🛑 Arrêter l'écoute"
+      : "🎙️ Activer la dictée";
+  }
+
+  function setVoiceTranscript(text, options = {}) {
+    if (!elements.voiceTranscript) return;
+    const value = text || "";
+    const stateValue = options.state || (value ? "final" : "idle");
+    elements.voiceTranscript.textContent = value;
+    elements.voiceTranscript.dataset.state = stateValue;
+    if (!value && options.placeholder) {
+      elements.voiceTranscript.textContent = options.placeholder;
+    }
+  }
+
+  function setVoicePreferences(prefs = {}) {
+    if (elements.voiceAutoSend) {
+      elements.voiceAutoSend.checked = Boolean(prefs.autoSend);
+    }
+    if (elements.voicePlayback) {
+      elements.voicePlayback.checked = Boolean(prefs.playback);
+    }
+  }
+
+  function setVoiceSpeaking(active) {
+    if (elements.voiceSpeakingIndicator) {
+      elements.voiceSpeakingIndicator.classList.toggle("d-none", !active);
+    }
+    if (elements.voiceStopPlayback) {
+      elements.voiceStopPlayback.disabled = !active;
+    }
+  }
+
+  function setVoiceVoiceOptions(voices = [], selectedUri = null) {
+    if (!elements.voiceVoiceSelect) return;
+    const select = elements.voiceVoiceSelect;
+    const frag = document.createDocumentFragment();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = voices.length
+      ? "Voix par défaut du système"
+      : "Aucune voix disponible";
+    frag.appendChild(placeholder);
+    voices.forEach((voice) => {
+      const option = document.createElement("option");
+      option.value = voice.voiceURI || voice.name || "";
+      const bits = [voice.name || voice.voiceURI || "Voix"];
+      if (voice.lang) {
+        bits.push(`(${voice.lang})`);
+      }
+      if (voice.default) {
+        bits.push("• défaut");
+      }
+      option.textContent = bits.join(" ");
+      frag.appendChild(option);
+    });
+    select.innerHTML = "";
+    select.appendChild(frag);
+    if (selectedUri) {
+      let matched = false;
+      Array.from(select.options).forEach((option) => {
+        if (!matched && option.value === selectedUri) {
+          matched = true;
+        }
+      });
+      select.value = matched ? selectedUri : "";
+    } else {
+      select.value = "";
+    }
+  }
+
+  function setMode(mode, options = {}) {
+    const next = normaliseMode(mode);
+    const previous = state.mode;
+    state.mode = next;
+    if (elements.modeSelect && elements.modeSelect.value !== next) {
+      elements.modeSelect.value = next;
+    }
+    if (elements.composer) {
+      elements.composer.dataset.mode = next;
+    }
+    if (elements.prompt) {
+      const placeholder =
+        next === "embed"
+          ? promptPlaceholderEmbedding
+          : promptPlaceholderDefault;
+      if (placeholder) {
+        elements.prompt.setAttribute("placeholder", placeholder);
+      } else {
+        elements.prompt.removeAttribute("placeholder");
+      }
+      const ariaLabel =
+        next === "embed" ? promptAriaEmbedding : promptAriaDefault;
+      if (ariaLabel) {
+        elements.prompt.setAttribute("aria-label", ariaLabel);
+      } else {
+        elements.prompt.removeAttribute("aria-label");
+      }
+    }
+    if (elements.send) {
+      const ariaLabel = next === "embed" ? sendAriaEmbedding : sendAriaDefault;
+      if (ariaLabel) {
+        elements.send.setAttribute("aria-label", ariaLabel);
+      } else {
+        elements.send.removeAttribute("aria-label");
+      }
+    }
+    if (!options.skipStatus && (previous !== next || options.forceStatus)) {
+      setComposerStatusIdle();
+    }
+    return next;
   }
 
   function updatePromptMetrics() {
@@ -298,6 +600,324 @@ export function createChatUi({ elements, timelineStore }) {
     return `<div class="${classes.join(" ")}">${content}${metaHtml}</div>`;
   }
 
+  function normaliseNumeric(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function formatNumeric(value) {
+    if (!Number.isFinite(value)) {
+      return "—";
+    }
+    if (value === 0) {
+      return "0";
+    }
+    const abs = Math.abs(value);
+    if (abs >= 1000 || abs < 0.001) {
+      return value.toExponential(4);
+    }
+    const fixed = value.toFixed(6);
+    return fixed.replace(/\.0+$/, "").replace(/0+$/, "");
+  }
+
+  function summariseVector(vector, index) {
+    if (!Array.isArray(vector)) {
+      return null;
+    }
+    const preview = [];
+    let count = 0;
+    let sum = 0;
+    let squares = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < vector.length; i += 1) {
+      const value = normaliseNumeric(vector[i]);
+      if (value === null) {
+        continue;
+      }
+      if (preview.length < 8) {
+        preview.push(value);
+      }
+      count += 1;
+      sum += value;
+      squares += value * value;
+      if (value < min) {
+        min = value;
+      }
+      if (value > max) {
+        max = value;
+      }
+    }
+    const magnitude = count > 0 ? Math.sqrt(squares) : null;
+    const mean = count > 0 ? sum / count : null;
+    return {
+      index,
+      count,
+      sum,
+      squares,
+      magnitude,
+      mean,
+      min: count > 0 ? min : null,
+      max: count > 0 ? max : null,
+      preview,
+    };
+  }
+
+  function createVectorStatsTable(stats) {
+    const table = document.createElement("table");
+    table.className =
+      "table table-sm table-striped embedding-details-table mb-0";
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    [
+      "Vecteur",
+      "Composantes",
+      "Magnitude",
+      "Moyenne",
+      "Min",
+      "Max",
+      "Aperçu",
+    ].forEach((label) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = label;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    stats.forEach((stat) => {
+      const row = document.createElement("tr");
+      const cells = [
+        stat.index + 1,
+        stat.count,
+        formatNumeric(stat.magnitude),
+        formatNumeric(stat.mean),
+        formatNumeric(stat.min),
+        formatNumeric(stat.max),
+        stat.preview.length
+          ? stat.preview.map((value) => formatNumeric(value)).join(", ")
+          : "—",
+      ];
+      cells.forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = String(value);
+        row.appendChild(td);
+      });
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function attachEmbeddingDetails(row, embeddingData = {}, metadata = {}) {
+    if (!row) {
+      return;
+    }
+    const bubble = row.querySelector(".chat-bubble");
+    if (!bubble) {
+      return;
+    }
+    bubble
+      .querySelectorAll(".embedding-details")
+      .forEach((node) => node.remove());
+
+    const vectors = Array.isArray(embeddingData.vectors)
+      ? embeddingData.vectors.filter((vector) => Array.isArray(vector))
+      : [];
+    if (vectors.length === 0) {
+      return;
+    }
+
+    const stats = vectors
+      .map((vector, index) => summariseVector(vector, index))
+      .filter((entry) => entry && entry.count >= 0);
+    if (stats.length === 0) {
+      return;
+    }
+
+    const details = document.createElement("div");
+    details.className = "embedding-details card mt-3";
+
+    const cardBody = document.createElement("div");
+    cardBody.className = "card-body p-3";
+    details.appendChild(cardBody);
+
+    const header = document.createElement("div");
+    header.className = "d-flex flex-wrap align-items-center gap-2 mb-3";
+
+    const title = document.createElement("h5");
+    title.className = "card-title mb-0";
+    title.textContent = "Analyse des embeddings";
+    header.appendChild(title);
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.type = "button";
+    downloadBtn.className = "btn btn-sm btn-outline-primary ms-auto";
+    downloadBtn.textContent = "Télécharger le JSON";
+    downloadBtn.addEventListener("click", () => {
+      try {
+        const payload =
+          typeof embeddingData.raw === "object" && embeddingData.raw !== null
+            ? embeddingData.raw
+            : {
+                backend: embeddingData.backend ?? metadata.backend ?? null,
+                model: embeddingData.model ?? metadata.model ?? null,
+                dims:
+                  embeddingData.dims ??
+                  metadata.dims ??
+                  stats[0]?.count ??
+                  null,
+                normalised:
+                  typeof embeddingData.normalised !== "undefined"
+                    ? Boolean(embeddingData.normalised)
+                    : Boolean(metadata.normalised),
+                count: vectors.length,
+                vectors,
+              };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], {
+          type: "application/json",
+        });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const slugSource = (
+          embeddingData.model ||
+          metadata.model ||
+          "embedding"
+        )
+          .toString()
+          .toLowerCase();
+        const slug = slugSource
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60);
+        link.href = url;
+        link.download = `embedding-${slug || "result"}-${Date.now()}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.setTimeout(() => {
+          window.URL.revokeObjectURL(url);
+        }, 1000);
+      } catch (err) {
+        console.warn("Unable to download embedding payload", err);
+        announceConnection(
+          "Impossible de télécharger le résultat d'embedding.",
+          "danger",
+        );
+      }
+    });
+    header.appendChild(downloadBtn);
+    cardBody.appendChild(header);
+
+    const dimsCandidate = Number(embeddingData.dims ?? metadata.dims);
+    const dims = Number.isFinite(dimsCandidate)
+      ? Number(dimsCandidate)
+      : Array.isArray(vectors[0])
+        ? vectors[0].length
+        : null;
+    const validMagnitudeStats = stats.filter(
+      (stat) =>
+        typeof stat.magnitude === "number" && !Number.isNaN(stat.magnitude),
+    );
+    const totalMagnitude = validMagnitudeStats.reduce(
+      (acc, stat) => acc + stat.magnitude,
+      0,
+    );
+    const avgMagnitude =
+      validMagnitudeStats.length > 0
+        ? totalMagnitude / validMagnitudeStats.length
+        : null;
+
+    let componentCount = 0;
+    let componentSum = 0;
+    let componentSquares = 0;
+    let globalMin = null;
+    let globalMax = null;
+    stats.forEach((stat) => {
+      componentCount += stat.count;
+      componentSum += stat.sum;
+      componentSquares += stat.squares;
+      if (stat.count > 0) {
+        globalMin =
+          globalMin === null ? stat.min : Math.min(globalMin, stat.min);
+        globalMax =
+          globalMax === null ? stat.max : Math.max(globalMax, stat.max);
+      }
+    });
+    const aggregateMagnitude =
+      componentCount > 0 ? Math.sqrt(componentSquares) : null;
+    const aggregateMean =
+      componentCount > 0 ? componentSum / componentCount : null;
+
+    const metaList = document.createElement("dl");
+    metaList.className = "row g-2 mb-0";
+
+    const pushMeta = (label, value) => {
+      const dt = document.createElement("dt");
+      dt.className = "col-sm-4";
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.className = "col-sm-8";
+      dd.textContent = value;
+      metaList.appendChild(dt);
+      metaList.appendChild(dd);
+    };
+
+    if (embeddingData.backend || metadata.backend) {
+      pushMeta("Backend", String(embeddingData.backend || metadata.backend));
+    }
+    if (embeddingData.model || metadata.model) {
+      pushMeta("Modèle", String(embeddingData.model || metadata.model));
+    }
+    if (dims) {
+      pushMeta("Dimensions", String(dims));
+    }
+    pushMeta("Vecteurs", `${vectors.length}`);
+    if (componentCount) {
+      pushMeta("Composantes", `${componentCount}`);
+    }
+    pushMeta(
+      "Normalisation",
+      Boolean(
+        typeof embeddingData.normalised !== "undefined"
+          ? embeddingData.normalised
+          : metadata.normalised,
+      )
+        ? "Oui"
+        : "Non",
+    );
+    pushMeta("Magnitude moyenne", formatNumeric(avgMagnitude));
+    pushMeta("Magnitude agrégée", formatNumeric(aggregateMagnitude));
+    pushMeta("Moyenne globale", formatNumeric(aggregateMean));
+    pushMeta("Minimum global", formatNumeric(globalMin));
+    pushMeta("Maximum global", formatNumeric(globalMax));
+
+    cardBody.appendChild(metaList);
+
+    const table = createVectorStatsTable(stats);
+    table.classList.add("mt-3");
+    cardBody.appendChild(table);
+
+    const detailsWrapper = document.createElement("details");
+    detailsWrapper.className = "mt-3";
+    const summary = document.createElement("summary");
+    summary.textContent = "Afficher le JSON brut";
+    detailsWrapper.appendChild(summary);
+    const pre = document.createElement("pre");
+    pre.className = "mt-2 mb-0 overflow-auto";
+    pre.style.maxHeight = "240px";
+    pre.textContent = JSON.stringify(vectors, null, 2);
+    detailsWrapper.appendChild(pre);
+    cardBody.appendChild(detailsWrapper);
+
+    bubble.appendChild(details);
+  }
+
   function appendMessage(role, text, options = {}) {
     const {
       timestamp,
@@ -307,6 +927,7 @@ export function createChatUi({ elements, timelineStore }) {
       messageId,
       register = true,
       metadata,
+      embeddingData,
     } = options;
     const bubble = buildBubble({
       text,
@@ -322,6 +943,9 @@ export function createChatUi({ elements, timelineStore }) {
       register,
       metadata,
     });
+    if (role === "assistant" && embeddingData) {
+      attachEmbeddingDetails(row, embeddingData, metadata || {});
+    }
     setDiagnostics({ lastMessageAt: timestamp || nowISO() });
     return row;
   }
@@ -542,20 +1166,20 @@ export function createChatUi({ elements, timelineStore }) {
           (row.classList.contains("chat-user")
             ? "user"
             : row.classList.contains("chat-assistant")
-            ? "assistant"
-            : "system");
+              ? "assistant"
+              : "system");
         const text =
           row.dataset.rawText && row.dataset.rawText.length > 0
             ? row.dataset.rawText
             : bubble
-            ? extractBubbleText(bubble)
-            : row.textContent.trim();
+              ? extractBubbleText(bubble)
+              : row.textContent.trim();
         const timestamp =
           row.dataset.timestamp && row.dataset.timestamp.length > 0
             ? row.dataset.timestamp
             : meta
-            ? meta.textContent.trim()
-            : nowISO();
+              ? meta.textContent.trim()
+              : nowISO();
         const messageId = timelineStore.register({
           id: existingId,
           role,
@@ -740,6 +1364,15 @@ export function createChatUi({ elements, timelineStore }) {
       });
     }
 
+    if (elements.modeSelect) {
+      elements.modeSelect.addEventListener("change", (event) => {
+        const value = event.target.value || "";
+        const nextMode = normaliseMode(value);
+        setMode(nextMode);
+        emit("mode-change", { mode: nextMode });
+      });
+    }
+
     if (elements.quickActions) {
       elements.quickActions.addEventListener("click", (event) => {
         const target = event.target;
@@ -881,13 +1514,45 @@ export function createChatUi({ elements, timelineStore }) {
         }
       });
     }
+
+    if (elements.voiceToggle) {
+      elements.voiceToggle.addEventListener("click", () => {
+        emit("voice-toggle");
+      });
+    }
+
+    if (elements.voiceAutoSend) {
+      elements.voiceAutoSend.addEventListener("change", (event) => {
+        emit("voice-autosend-change", { enabled: event.target.checked });
+      });
+    }
+
+    if (elements.voicePlayback) {
+      elements.voicePlayback.addEventListener("change", (event) => {
+        emit("voice-playback-change", { enabled: event.target.checked });
+      });
+    }
+
+    if (elements.voiceStopPlayback) {
+      elements.voiceStopPlayback.addEventListener("click", () => {
+        emit("voice-stop-playback");
+      });
+    }
+
+    if (elements.voiceVoiceSelect) {
+      elements.voiceVoiceSelect.addEventListener("change", (event) => {
+        emit("voice-voice-change", { voiceURI: event.target.value || null });
+      });
+    }
   }
 
   function initialise() {
+    setMode(state.mode, { skipStatus: true });
     setDiagnostics({ connectedAt: null, lastMessageAt: null, latencyMs: null });
     updatePromptMetrics();
     autosizePrompt();
     setComposerStatusIdle();
+    setVoiceTranscript("", { state: "idle", placeholder: "" });
     attachEvents();
   }
 
@@ -919,16 +1584,34 @@ export function createChatUi({ elements, timelineStore }) {
     setWsStatus,
     updateNetworkStatus,
     scrollToBottom,
+    setVoiceStatus,
+    scheduleVoiceStatusIdle,
+    setVoiceAvailability,
+    setVoiceListening,
+    setVoiceTranscript,
+    setVoicePreferences,
+    setVoiceSpeaking,
+    setVoiceVoiceOptions,
+    setMode,
+    renderEmbeddingDetails(row, embeddingData, metadata = {}) {
+      attachEmbeddingDetails(row, embeddingData, metadata);
+    },
     set diagnostics(value) {
       Object.assign(diagnostics, value);
     },
     get diagnostics() {
       return { ...diagnostics };
     },
+    get mode() {
+      return state.mode;
+    },
     formatTimestamp,
     nowISO,
     formatPerf,
     isStreaming,
     hasStreamBuffer,
+    get voiceStatusDefault() {
+      return voiceStatusDefault;
+    },
   };
 }

@@ -1,0 +1,342 @@
+name: Unsloth Fine-Tune + LLM2Vec Export
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_id:
+        description: "Base model to fine-tune (Hugging Face repo id)"
+        type: string
+        default: "dphn/Dolphin3.0-Llama3.1-8B"
+      dataset_path:
+        description: "Path to training dataset JSONL (relative to repo or absolute)"
+        type: string
+        default: "datasets/monGARS_llm/monGARS_llm_train.jsonl"
+      eval_dataset_path:
+        description: "Optional validation dataset JSONL"
+        type: string
+        default: "datasets/monGARS_llm/monGARS_llm_val.jsonl"
+      dataset_id:
+        description: "Optional dataset repo id (used when dataset_path is empty)"
+        type: string
+        default: ""
+      output_dir:
+        description: "Directory for training outputs"
+        type: string
+        default: "outputs/unsloth_run"
+      registry_path:
+        description: "Directory for adapter manifest updates"
+        type: string
+        default: "outputs/unsloth_registry"
+      hf_token:
+        description: "Override Hugging Face token (falls back to secrets)"
+        type: string
+        default: ""
+      pipeline_overrides:
+        description: "JSON or key=value pairs overriding defaults (e.g. {\"max_seq_len\": 4096})"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.11"
+  HF_HOME: "${{ github.workspace }}/.cache/huggingface"
+  TRANSFORMERS_CACHE: "${{ github.workspace }}/.cache/huggingface"
+  PIP_CACHE_DIR: "${{ github.workspace }}/.cache/pip"
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  UV_PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+
+concurrency:
+  group: unsloth-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  finetune:
+    name: Run Unsloth pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Hugging Face token
+        id: resolve-hf
+        env:
+          INPUT_TOKEN: ${{ inputs.hf_token }}
+          SECRET_HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SECRET_ALT_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          set -euo pipefail
+          token="${INPUT_TOKEN:-}"
+          source="inputs.hf_token"
+          if [ -z "$token" ] && [ -n "${SECRET_HF_TOKEN}" ]; then
+            token="${SECRET_HF_TOKEN}"
+            source="secrets.HF_TOKEN"
+          fi
+          if [ -z "$token" ] && [ -n "${SECRET_ALT_TOKEN}" ]; then
+            token="${SECRET_ALT_TOKEN}"
+            source="secrets.HUGGINGFACE_TOKEN"
+          fi
+          if [ -n "$token" ]; then
+            echo "::add-mask::$token"
+            echo "token=$token" >> "$GITHUB_OUTPUT"
+            echo "source=$source" >> "$GITHUB_OUTPUT"
+          else
+            echo "token=" >> "$GITHUB_OUTPUT"
+            echo "source=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python with uv tooling
+        uses: ./.github/actions/python-uv-setup
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Prepare caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PIP_CACHE_DIR }}
+            ${{ env.HF_HOME }}
+          key: "unsloth-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}"
+
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          uv pip install --system -r requirements.txt
+
+      - name: Install OS dependencies
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git-lfs
+          fi
+          if command -v git >/dev/null 2>&1; then
+            git lfs install --local || true
+          fi
+
+      - name: Inspect accelerator availability
+        id: accelerator
+        run: |
+          set -euo pipefail
+          python scripts/inspect_accelerator.py
+
+      - name: Resolve training paths
+        id: paths
+        env:
+          INPUT_DATASET_PATH: ${{ inputs.dataset_path }}
+          INPUT_EVAL_DATASET_PATH: ${{ inputs.eval_dataset_path }}
+          INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+          INPUT_REGISTRY_PATH: ${{ inputs.registry_path }}
+          INPUT_DATASET_ID: ${{ inputs.dataset_id }}
+        run: |
+          set -euo pipefail
+          to_abs() {
+            local value="$1"
+            if [ -z "$value" ]; then
+              echo ""
+              return
+            fi
+            if [[ "$value" = /* ]]; then
+              echo "$value"
+            else
+              echo "${GITHUB_WORKSPACE}/$value"
+            fi
+          }
+
+          dataset_path="$(to_abs "${INPUT_DATASET_PATH}")"
+          eval_dataset_path="$(to_abs "${INPUT_EVAL_DATASET_PATH}")"
+          output_dir="$(to_abs "${INPUT_OUTPUT_DIR:-outputs/unsloth_run}")"
+          registry_path_raw="${INPUT_REGISTRY_PATH}"
+          if [ -z "$registry_path_raw" ]; then
+            registry_path="$output_dir"
+          else
+            registry_path="$(to_abs "$registry_path_raw")"
+          fi
+
+          mkdir -p "$output_dir"
+          mkdir -p "$registry_path"
+
+          if [ -z "$dataset_path" ] && [ -z "${INPUT_DATASET_ID}" ]; then
+            echo "::error::dataset_path or dataset_id must be provided" >&2
+            exit 1
+          fi
+
+          if [ -n "$dataset_path" ] && [ ! -f "$dataset_path" ]; then
+            echo "::error::Dataset not found at $dataset_path" >&2
+            exit 1
+          fi
+          if [ -n "$eval_dataset_path" ] && [ ! -f "$eval_dataset_path" ]; then
+            echo "::error::Eval dataset not found at $eval_dataset_path" >&2
+            exit 1
+          fi
+
+          {
+            echo "dataset_path=$dataset_path"
+            echo "eval_dataset_path=$eval_dataset_path"
+            echo "output_dir=$output_dir"
+            echo "registry_path=$registry_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve pipeline overrides
+        id: overrides
+        env:
+          RAW_OVERRIDES: ${{ inputs.pipeline_overrides }}
+        run: |
+          set -euo pipefail
+          python scripts/resolve_pipeline_overrides.py
+
+      - name: Run Unsloth fine-tuning pipeline
+        env:
+          MODEL_ID: ${{ inputs.model_id }}
+          DATASET_ID: ${{ inputs.dataset_id }}
+          DATASET_PATH: ${{ steps.paths.outputs.dataset_path }}
+          EVAL_DATASET_PATH: ${{ steps.paths.outputs.eval_dataset_path }}
+          OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
+          REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
+          MAX_SEQ_LEN: ${{ steps.overrides.outputs.max_seq_len }}
+          VRAM_BUDGET_MB: ${{ steps.overrides.outputs.vram_budget_mb }}
+          ACTIVATION_BUFFER_MB: ${{ steps.overrides.outputs.activation_buffer_mb }}
+          BATCH_SIZE: ${{ steps.overrides.outputs.batch_size }}
+          GRAD_ACCUM: ${{ steps.overrides.outputs.grad_accum }}
+          LEARNING_RATE: ${{ steps.overrides.outputs.learning_rate }}
+          EPOCHS: ${{ steps.overrides.outputs.epochs }}
+          MAX_STEPS: ${{ steps.overrides.outputs.max_steps }}
+          LORA_RANK: ${{ steps.overrides.outputs.lora_rank }}
+          LORA_ALPHA: ${{ steps.overrides.outputs.lora_alpha }}
+          LORA_DROPOUT: ${{ steps.overrides.outputs.lora_dropout }}
+          TRAIN_FRACTION: ${{ steps.overrides.outputs.train_fraction }}
+          EVAL_BATCH_SIZE: ${{ steps.overrides.outputs.eval_batch_size }}
+          HF_TOKEN: ${{ steps.resolve-hf.outputs.token }}
+          HUGGINGFACE_TOKEN: ${{ steps.resolve-hf.outputs.token }}
+          WANDB_MODE: offline
+          HF_HOME: ${{ env.HF_HOME }}
+          TRANSFORMERS_CACHE: ${{ env.TRANSFORMERS_CACHE }}
+          SKIP_SMOKE_TESTS: ${{ steps.overrides.outputs.skip_smoke_tests }}
+          SKIP_METADATA: ${{ steps.overrides.outputs.skip_metadata }}
+          SKIP_MERGE: ${{ steps.overrides.outputs.skip_merge }}
+          ACCELERATOR: ${{ steps.accelerator.outputs.accelerator }}
+        run: |
+          set -euxo pipefail
+          extra_args=()
+          if [ "$ACCELERATOR" = "cpu" ]; then
+            export CUDA_VISIBLE_DEVICES=""
+            echo "::warning::GPU unavailable; running fine-tuning on CPU fallback"
+          fi
+          if [ -n "$DATASET_ID" ]; then
+            extra_args+=("--dataset-id" "$DATASET_ID")
+          fi
+          if [ -n "$DATASET_PATH" ]; then
+            extra_args+=("--dataset-path" "$DATASET_PATH")
+          fi
+          if [ -n "$EVAL_DATASET_PATH" ]; then
+            extra_args+=("--eval-dataset-path" "$EVAL_DATASET_PATH")
+          fi
+          if [ -n "$TRAIN_FRACTION" ]; then
+            extra_args+=("--train-fraction" "$TRAIN_FRACTION")
+          fi
+          if [ -n "$EVAL_BATCH_SIZE" ]; then
+            extra_args+=("--eval-batch-size" "$EVAL_BATCH_SIZE")
+          fi
+          if [ "$SKIP_SMOKE_TESTS" = "true" ]; then
+            extra_args+=("--skip-smoke-tests")
+          fi
+          if [ "$SKIP_METADATA" = "true" ]; then
+            extra_args+=("--skip-metadata")
+          fi
+          if [ "$SKIP_MERGE" = "true" ]; then
+            extra_args+=("--skip-merge")
+          fi
+
+          python scripts/run_mongars_llm_pipeline.py finetune \
+            --model-id "$MODEL_ID" \
+            --output-dir "$OUTPUT_DIR" \
+            --registry-path "$REGISTRY_PATH" \
+            --max-seq-len "$MAX_SEQ_LEN" \
+            --vram-budget-mb "$VRAM_BUDGET_MB" \
+            --activation-buffer-mb "$ACTIVATION_BUFFER_MB" \
+            --batch-size "$BATCH_SIZE" \
+            --grad-accum "$GRAD_ACCUM" \
+            --learning-rate "$LEARNING_RATE" \
+            --epochs "$EPOCHS" \
+            --max-steps "$MAX_STEPS" \
+            --lora-rank "$LORA_RANK" \
+            --lora-alpha "$LORA_ALPHA" \
+            --lora-dropout "$LORA_DROPOUT" \
+            "${extra_args[@]}"
+
+      - name: List generated artifacts
+        env:
+          OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
+        run: |
+          set -euo pipefail
+          find "$OUTPUT_DIR" -maxdepth 2 -type f | sort || true
+
+      - name: Collect artifact paths
+        id: artifact-paths
+        env:
+          OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
+          REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
+        run: |
+          set -euo pipefail
+          add_if_exists() {
+            local candidate="$1"
+            if [ -e "$candidate" ]; then
+              echo "$candidate"
+            fi
+          }
+
+          collect_paths() {
+            add_if_exists "$OUTPUT_DIR/chat_lora"
+            add_if_exists "$OUTPUT_DIR/wrapper"
+            add_if_exists "$OUTPUT_DIR/run_metadata.json"
+            add_if_exists "$OUTPUT_DIR/merged_fp16"
+            add_if_exists "$REGISTRY_PATH/adapter_manifest.json"
+          }
+
+          if mapfile -t cleaned < <(collect_paths | sed '/^$/d'); then
+            :
+          else
+            cleaned=()
+          fi
+
+          if [ "${#cleaned[@]}" -eq 0 ]; then
+            {
+              echo "has_files=false"
+              echo "paths="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "has_files=true"
+            echo "paths<<EOF"
+            printf '%s\n' "${cleaned[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload training outputs
+        if: steps.artifact-paths.outputs.has_files == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsloth-llm2vec-artifacts
+          path: ${{ steps.artifact-paths.outputs.paths }}
+          if-no-files-found: warn
+          retention-days: ${{ steps.overrides.outputs.retention_days }}
+
+      - name: Publish summary
+        env:
+          OUTPUT_DIR: ${{ steps.paths.outputs.output_dir }}
+          REGISTRY_PATH: ${{ steps.paths.outputs.registry_path }}
+          SUMMARY_PATH: ${{ github.step_summary }}
+          HF_TOKEN_SOURCE: ${{ steps.resolve-hf.outputs.source }}
+        run: |
+          set -euo pipefail
+          python scripts/publish_unsloth_summary.py

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from models.datasets.governance import DatasetGovernance
 from monGARS.config import Settings
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 
 def _build_settings(**overrides: object) -> Settings:

@@ -36,7 +36,41 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Protocol, Sequence
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Protocol,
+    Sequence,
+)
+
+from modules.neurons.registry import update_manifest
+from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import get_tracer
+from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
+from monGARS.core.self_training import SelfTrainingEngine
+from monGARS.mlops.chat_templates import ensure_dolphin_chat_template
+
+# Import Unsloth as early as possible to guarantee its patches execute before
+# transformer-based helpers from TRL are loaded.
+try:  # pragma: no cover - optional dependency for reasoning loop
+    import unsloth  # type: ignore
+except (
+    ModuleNotFoundError,
+    ImportError,
+):  # pragma: no cover - optional dependency branch
+    unsloth = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive guard
+    unsloth = None  # type: ignore[assignment]
+
+FastLanguageModel = (
+    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
+    if "unsloth" in globals() and unsloth is not None
+    else None
+)
 
 try:  # pragma: no cover - optional dependency at runtime
     from trl import DPOConfig, DPOTrainer  # type: ignore
@@ -55,26 +89,10 @@ try:  # pragma: no cover - optional dependency for reasoning loop
 except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
     torch = None  # type: ignore[assignment]
 
-try:  # pragma: no cover - optional dependency for reasoning loop
-    from unsloth import FastLanguageModel  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - optional dependency branch
-    FastLanguageModel = None  # type: ignore[assignment]
-except Exception:  # pragma: no cover - defensive guard
-    FastLanguageModel = None  # type: ignore[assignment]
-
 try:  # pragma: no cover - optional dependency at runtime
     from datasets import Dataset  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - datasets optional
     Dataset = None  # type: ignore[assignment]
-
-from modules.neurons.registry import update_manifest
-from monGARS.core.model_slot_manager import ModelSlotManager
-from monGARS.core.monitor import get_tracer
-from monGARS.core.operator_approvals import (
-    ApprovalPolicy,
-    OperatorApprovalRegistry,
-)
-from monGARS.core.self_training import SelfTrainingEngine
 
 logger = logging.getLogger(__name__)
 
@@ -1281,13 +1299,6 @@ class ReasoningRunSummary:
 
 
 class ReinforcementLoop:
-    """Execute Unsloth-backed GRPO cycles focused on Dolphin 3.0 reasoning prompts."""
-
-
-from typing import ClassVar
-
-
-class ReinforcementLoop:
     """Execute Unsloth-backed GRPO cycles focused on reasoning prompts."""
 
     _GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
@@ -1309,7 +1320,7 @@ class ReinforcementLoop:
     def __init__(
         self,
         *,
-        model_id: str = "cognitivecomputations/Dolphin3.0-Llama3.1-8B",
+        model_id: str = "dphn/Dolphin-X1-8B",
         slot_name: str = "reasoning-grpo",
         max_seq_length: int = 2048,
         output_dir: str | os.PathLike[str] = "artifacts/reasoning_grpo",
@@ -1533,6 +1544,7 @@ class ReinforcementLoop:
         correct = 0
         total = 0
         device = getattr(model, "device", "cpu")
+        ensure_dolphin_chat_template(tokenizer)
         for record in dataset:
             prompt_text = tokenizer.apply_chat_template(
                 record["prompt"], tokenize=False, add_generation_prompt=True

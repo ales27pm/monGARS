@@ -10,10 +10,33 @@ import types
 from pathlib import Path
 
 import pytest
-from sqlalchemy.engine import make_url
 
-os.environ.setdefault("SECRET_KEY", "unit-test-secret")
-from monGARS import init_db
+try:
+    from sqlalchemy.engine.url import make_url
+
+    from monGARS import init_db
+except ModuleNotFoundError:
+    missing_dependencies = [
+        name
+        for name in (
+            "sqlalchemy",
+            "hvac",
+            "dotenv",
+            "opentelemetry",
+            "pydantic",
+            "pydantic_settings",
+        )
+        if importlib.util.find_spec(name) is None
+    ]
+
+    pytest.skip(
+        (
+            "Skipping init_db tests because required dependencies are missing: "
+            f"{', '.join(sorted(missing_dependencies))}. "
+            "Install monGARS[test] or the full requirements to run these tests."
+        ),
+        allow_module_level=True,
+    )
 
 
 def _load_init_db_script(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:

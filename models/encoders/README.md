@@ -1,11 +1,13 @@
 # Encoder Artefact Registry
 
+> **Last updated:** 2025-11-15 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This directory stores trained LLM2Vec adapter weights and metadata consumed by
 `monGARS.core.llm_integration` and the evolution engine.
 
 ## Layout
 - `*/` – adapter directories named after the model family and version, e.g.
-  `dolphin3.0-llama3.1-8b-v1/`.
+  `dolphin-x1-8b-v1/`.
 - `adapter_manifest.json` – optional manifest produced by the evolution engine to
   advertise the latest adapter revision and checksum to inference services.
 - `README.md` – this document.

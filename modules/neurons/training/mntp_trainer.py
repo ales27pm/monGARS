@@ -13,15 +13,42 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from monGARS.core.model_slot_manager import ModelSlotManager
+from monGARS.core.monitor import (
+    TRAINING_CYCLE_COUNTER,
+    TRAINING_FAILURE_COUNTER,
+    TRAINING_TOKEN_COUNTER,
+)
+from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
+
+# Import Unsloth as early as possible to ensure its patches activate before
+# transformers/peft modules are loaded.
+try:  # pragma: no cover - optional dependency
+    import unsloth  # type: ignore
+except (
+    ModuleNotFoundError,
+    ImportError,
+):  # pragma: no cover - fallback when unsloth missing
+    unsloth = None  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive guardrail around import time
+    unsloth = None  # type: ignore[assignment]
+
+FastLanguageModel = (
+    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
+    if "unsloth" in globals() and unsloth is not None
+    else None
+)
+
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed
     import torch
-    from datasets import load_dataset
     from peft import LoraConfig, TaskType, get_peft_model
     from torch.nn.utils import clip_grad_norm_
     from torch.utils.data import DataLoader
     from transformers import AutoModelForCausalLM, AutoTokenizer, default_data_collator
     from transformers.optimization import get_linear_schedule_with_warmup
+
+    from datasets import load_dataset
 except Exception:  # pragma: no cover - fallback if unavailable
     torch = None
     load_dataset = None
@@ -36,23 +63,10 @@ except Exception:  # pragma: no cover - fallback if unavailable
     default_data_collator = None
 
 try:  # pragma: no cover - optional dependency
-    from unsloth import FastLanguageModel
-except Exception:  # pragma: no cover - fallback when unsloth missing
-    FastLanguageModel = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - optional dependency
     from trl import SFTConfig, SFTTrainer
 except Exception:  # pragma: no cover - fallback when TRL missing
     SFTConfig = None  # type: ignore[assignment]
     SFTTrainer = None  # type: ignore[assignment]
-
-from monGARS.core.model_slot_manager import ModelSlotManager
-from monGARS.core.monitor import (
-    TRAINING_CYCLE_COUNTER,
-    TRAINING_FAILURE_COUNTER,
-    TRAINING_TOKEN_COUNTER,
-)
-from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -574,7 +588,7 @@ class MNTPTrainer:
             "dataset_split": "train[:1%]",
             "model_name_or_path": "sshleifer/tiny-gpt2",
             "lora_r": 8,
-            "torch_dtype": "float32",
+            "dtype": "float32",
             "attn_implementation": None,
             "per_device_train_batch_size": 1,
             "gradient_accumulation_steps": 16,
@@ -1170,9 +1184,11 @@ class MNTPTrainer:
     def _resolve_model_name(self) -> str:
         model_name = self.config["model_name_or_path"].strip()
         lower_name = model_name.lower()
-        if lower_name.startswith(
-            "cognitivecomputations/dolphin3.0"
-        ) or lower_name.startswith("dphn/dolphin3.0"):
+        if (
+            lower_name.startswith("cognitivecomputations/dolphin3.0")
+            or lower_name.startswith("dphn/dolphin3.0")
+            or lower_name.startswith("dphn/dolphin-x1")
+        ):
             logger.warning(
                 "Large model specified; defaulting to lightweight reference model",
                 extra={"requested_model": model_name},
@@ -1270,7 +1286,7 @@ class MNTPTrainer:
         layers = self._ordered_transformer_layers(model)
         if not layers:
             return
-        keep = set(layers[-max(1, keep_last_layers) :])
+        keep = set(layers[slice(-max(1, keep_last_layers), None)])
         for name, parameter in model.named_parameters():
             if not hasattr(parameter, "requires_grad"):
                 continue
@@ -1303,7 +1319,9 @@ class MNTPTrainer:
         if AutoModelForCausalLM is None or get_peft_model is None:
             raise RuntimeError("transformers/peft unavailable for training")
 
-        dtype_name = str(self.config.get("torch_dtype", "float32"))
+        dtype_name = str(
+            self.config.get("dtype", self.config.get("torch_dtype", "float32"))
+        )
         torch_dtype = getattr(torch, dtype_name, None) if torch else None
         if torch_dtype is None and torch is not None:
             logger.warning(
@@ -1324,7 +1342,7 @@ class MNTPTrainer:
 
         load_kwargs: dict[str, Any] = {}
         if torch_dtype is not None:
-            load_kwargs["torch_dtype"] = torch_dtype
+            load_kwargs["dtype"] = torch_dtype
         attn_impl = self.config.get("attn_implementation")
         if attn_impl:
             load_kwargs["attn_implementation"] = attn_impl

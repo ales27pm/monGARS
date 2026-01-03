@@ -7,7 +7,7 @@ import pytest
 from build_and_wrap import evaluate_oom_headroom
 
 
-class _CudaStub:
+class _CudaShim:
     def __init__(self, available: bool = True, device_count: int = 1) -> None:
         self._available = available
         self._device_count = device_count
@@ -19,9 +19,9 @@ class _CudaStub:
         return self._device_count
 
 
-class _TorchStub:
+class _TorchShim:
     def __init__(self, *, available: bool = True, device_count: int = 1) -> None:
-        self.cuda = _CudaStub(available=available, device_count=device_count)
+        self.cuda = _CudaShim(available=available, device_count=device_count)
 
 
 def test_evaluate_oom_headroom_handles_cuda_unavailable() -> None:
@@ -35,7 +35,7 @@ def test_evaluate_oom_headroom_handles_cuda_unavailable() -> None:
         return {"status": "unknown", "reason": skip_reason, "thresholds": {}}
 
     analysis = evaluate_oom_headroom(
-        torch_module=_TorchStub(available=False),
+        torch_module=_TorchShim(available=False),
         gather_metrics=lambda module: {"devices": []},
         analyse_state=fake_analyse,
         fail_on_critical=False,
@@ -72,7 +72,7 @@ def test_evaluate_oom_headroom_handles_torch_missing(
 
 
 def test_evaluate_oom_headroom_handles_cuda_interface_missing() -> None:
-    class TorchNoCudaStub:
+    class TorchMissingCuda:
         pass
 
     captured = {}
@@ -85,7 +85,7 @@ def test_evaluate_oom_headroom_handles_cuda_interface_missing() -> None:
         return {"status": "unknown", "reason": skip_reason, "thresholds": {}}
 
     analysis = evaluate_oom_headroom(
-        torch_module=TorchNoCudaStub(),
+        torch_module=TorchMissingCuda(),
         gather_metrics=lambda module: {"devices": []},
         analyse_state=fake_analyse,
         fail_on_critical=False,
@@ -97,9 +97,9 @@ def test_evaluate_oom_headroom_handles_cuda_interface_missing() -> None:
 
 
 def test_evaluate_oom_headroom_raises_on_critical() -> None:
-    torch_stub = _TorchStub()
+    torch_shim = _TorchShim()
 
-    def fake_gather(module: _TorchStub) -> dict[str, object]:
+    def fake_gather(module: _TorchShim) -> dict[str, object]:
         return {
             "devices": [
                 {
@@ -137,7 +137,7 @@ def test_evaluate_oom_headroom_raises_on_critical() -> None:
 
     with pytest.raises(RuntimeError) as excinfo:
         evaluate_oom_headroom(
-            torch_module=torch_stub,
+            torch_module=torch_shim,
             gather_metrics=fake_gather,
             analyse_state=fake_analyse,
             fail_on_critical=True,

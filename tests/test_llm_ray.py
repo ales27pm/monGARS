@@ -33,7 +33,11 @@ async def test_llm_integration_uses_ray(monkeypatch):
     result = await llm.generate_response("hello")
 
     assert called["url"] == "http://ray/generate"
-    assert called["json"]["prompt"] == "hello"
+    ray_prompt = called["json"]["prompt"]
+    assert ray_prompt.startswith("<|begin_of_text|>")
+    assert "<|system|>" in ray_prompt
+    assert "<|user|>" in ray_prompt
+    assert "<|assistant|>" in ray_prompt
     assert result["text"] == "ray"
 
 

@@ -1,6 +1,12 @@
+# syntax=docker/dockerfile:1.6
+
+ARG PYTORCH_IMAGE=pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+
 # --- Build Stage ---
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime AS builder
-ENV PATH="/opt/conda/bin:${PATH}"
+FROM ${PYTORCH_IMAGE} AS builder
+# Guard against the pip 25 backtracking cap even if the pin is lifted.
+ENV PATH="/opt/conda/bin:${PATH}" \
+    PIP_RESOLVER_BACKTRACKING_LIMIT=1000
 ARG JOBS=1
 ENV MAKEFLAGS="-j${JOBS}"
 
@@ -14,33 +20,47 @@ RUN apt-get update \
         ffmpeg \
         git \
         git-lfs \
-        python3-venv \
         libffi-dev \
+        # OpenMP runtime required by CPU-only PyTorch wheels when using the python:3.11-slim base image
+        libgomp1 \
         libgl1 \
         libjpeg-dev \
         libpq-dev \
+        libstdc++6 \
         libssl-dev \
         libxml2-dev \
         libxslt1-dev \
         pkg-config \
+        python3-venv \
         unzip \
         wget \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git lfs install --system
 
 WORKDIR /app
 COPY requirements.txt .
+COPY package.json package-lock.json ./
 COPY vendor/llm2vec_monGARS ./vendor/llm2vec_monGARS
+# pip 24 introduced a resolver depth cap that breaks our broad dependency ranges; stick to pip 23.3.x to keep
+# Docker builds reliable until the requirements are tightened.
 RUN python -m venv /opt/venv \
     && . /opt/venv/bin/activate \
-    && pip install --upgrade pip \
+    && pip install --no-cache-dir --upgrade "pip==23.3.2" \
     && pip install --no-cache-dir -r requirements.txt \
     && python -m spacy download fr_core_news_sm
+RUN npm ci
 COPY . /app
+RUN NODE_ENV=production npm run build \
+    && mkdir -p /app/static \
+    && cp -R webapp/static/. /app/static/ \
+    && rm -rf node_modules
 
 # --- Final Stage ---
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime AS runtime
+ARG PYTORCH_IMAGE
+FROM ${PYTORCH_IMAGE} AS runtime
 ENV PATH="/opt/conda/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -54,14 +74,17 @@ RUN apt-get update \
         ffmpeg \
         git \
         git-lfs \
-        python3-venv \
-        libffi7 \
+        libffi-dev \
+        # OpenMP runtime required by CPU-only PyTorch wheels when using the python:3.11-slim base image
+        libgomp1 \
         libgl1 \
-        libjpeg-turbo8 \
+        libjpeg-dev \
         libpq5 \
-        libssl1.1 \
+        libstdc++6 \
+        libssl-dev \
         libxml2 \
         libxslt1.1 \
+        python3-venv \
         unzip \
         wget \
     && rm -rf /var/lib/apt/lists/*

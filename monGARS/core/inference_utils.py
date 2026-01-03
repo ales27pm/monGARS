@@ -1,0 +1,297 @@
+"""Shared helpers for text preprocessing across chat and embedding flows."""
+
+from __future__ import annotations
+
+import math
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+CHATML_BEGIN_OF_TEXT = "<|begin_of_text|>"
+CHATML_START_HEADER = "<|start_header_id|>"
+CHATML_END_HEADER = "<|end_header_id|>"
+CHATML_END_OF_TURN = "<|eot_id|>"
+
+_ROLE_ALTERNATIVES: dict[str, tuple[str, ...]] = {
+    "system": ("<system>", "[system]"),
+    "user": ("<human>", "<user>", "<|prompter|>", "[user]"),
+    "assistant": ("<assistant>", "<bot>", "<|assistant|>", "[assistant]"),
+}
+
+_TOKEN_PATTERN = re.compile(r"\S+")
+
+
+@dataclass(slots=True)
+class ChatPrompt:
+    """Container bundling human readable and ChatML-formatted prompts."""
+
+    text: str
+    chatml: str
+
+
+def _normalise_text(value: str) -> str:
+    return value.strip() if value else ""
+
+
+def _coerce_text(value: object | None) -> str:
+    """Return a normalised string representation for ``value``."""
+
+    if value is None:
+        return ""
+
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        value = bytes(value).decode("utf-8", errors="replace")
+    elif not isinstance(value, str):
+        value = str(value)
+
+    return value.strip()
+
+
+def _coerce_history_pairs(
+    pairs: Sequence[tuple[object, object]] | None,
+) -> list[tuple[str, str]]:
+    """Return conversation history pairs with normalised string values."""
+
+    if not pairs:
+        return []
+    return [(_coerce_text(query), _coerce_text(response)) for query, response in pairs]
+
+
+def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -> str:
+    normalized_role = role.strip().lower() or "user"
+    normalized_content = _normalise_text(content)
+    segment = (
+        f"{CHATML_START_HEADER}{normalized_role}{CHATML_END_HEADER}\n\n"
+        f"{normalized_content}"
+    )
+    if terminate:
+        segment += CHATML_END_OF_TURN
+    return segment
+
+
+def _has_role_prefix(normalised_role: str, content: str) -> bool:
+    role = normalised_role.lower()
+    base_prefix = f"{role.capitalize()}:"
+    alternatives = _ROLE_ALTERNATIVES.get(role, ())
+    prefixes = (base_prefix.lower(), *(marker.lower() for marker in alternatives))
+    lower_content = content.lower()
+    return any(lower_content.startswith(prefix) for prefix in prefixes)
+
+
+def _format_role_message(role: str, content: str) -> str:
+    """Ensure ``content`` is prefixed with a normalised ``role`` token."""
+
+    normalised_role = role.strip().lower() or "user"
+    label = normalised_role.capitalize()
+    base_prefix = f"{label}:"
+
+    if not (stripped_content := _normalise_text(content)):
+        return base_prefix
+    if _has_role_prefix(normalised_role, stripped_content):
+        return stripped_content
+    joiner = "\n" if "\n" in stripped_content else " "
+    return f"{base_prefix}{joiner}{stripped_content}"
+
+
+def estimate_token_count(value: str) -> int:
+    """Return a conservative token estimate for ``value``.
+
+    The helper favours over-estimating tokens so prompt guards err on the side
+    of safety when provider-specific tokenisers are unavailable.
+    """
+
+    if not value:
+        return 0
+
+    stripped = value.strip()
+    if not stripped:
+        return 0
+
+    encoded_length = len(stripped.encode("utf-8"))
+    approx_by_chars = math.ceil(encoded_length / 4) if encoded_length else 0
+    approx_by_segments = len(_TOKEN_PATTERN.findall(stripped))
+
+    estimate = max(approx_by_chars, approx_by_segments)
+    if estimate == 0 and stripped:
+        return 1
+    return estimate
+
+
+def render_chat_prompt_from_text(
+    user_text: str,
+    *,
+    system_prompt: str | None = None,
+    include_assistant_stub: bool = True,
+) -> ChatPrompt:
+    """Return a :class:`ChatPrompt` wrapping ``user_text`` in ChatML markers."""
+
+    segments: list[str] = [CHATML_BEGIN_OF_TEXT]
+    text_segments: list[str] = []
+    if system_prompt and system_prompt.strip():
+        cleaned_system = _normalise_text(system_prompt)
+        segments.append(_render_chatml_segment("system", cleaned_system))
+        text_segments.append(_format_role_message("System", cleaned_system))
+    normalized_user = _normalise_text(user_text)
+    segments.append(_render_chatml_segment("user", normalized_user))
+    text_segments.append(_format_role_message("User", normalized_user))
+    if include_assistant_stub:
+        segments.append(_render_chatml_segment("assistant", "", terminate=False))
+        text_segments.append(_format_role_message("Assistant", ""))
+    chatml = "".join(segments)
+    text = "\n\n".join(segment for segment in text_segments if segment)
+    return ChatPrompt(text=text, chatml=chatml)
+
+
+def _move_to_device(value: Any, device: Any | None) -> Any:
+    """Move ``value`` to ``device`` when supported."""
+
+    if device is None:
+        return value
+
+    to_callable = getattr(value, "to", None)
+    if callable(to_callable):
+        try:
+            return to_callable(device)
+        except TypeError:
+            # Some tokenizers expose tensors that expect keyword arguments.
+            return to_callable(device=device)
+    return value
+
+
+def prepare_tokenizer_inputs(
+    tokenizer: Any,
+    texts: Sequence[str] | str,
+    *,
+    max_length: int | None = None,
+    device: Any | None = None,
+    padding: bool | str = True,
+    truncation: bool = True,
+    return_tensors: str = "pt",
+) -> tuple[dict[str, Any], bool]:
+    """Normalise ``texts`` and run the tokenizer with consistent settings."""
+
+    if isinstance(texts, (str, bytes)):
+        payload: list[str] = [str(texts)]
+        batched = False
+    else:
+        payload = [str(text) for text in texts]
+        batched = True
+
+    tokenizer_kwargs: dict[str, Any] = {
+        "return_tensors": return_tensors,
+        "padding": padding,
+        "truncation": truncation,
+    }
+    if max_length is not None:
+        tokenizer_kwargs["max_length"] = max_length
+
+    tokenized = tokenizer(payload, **tokenizer_kwargs)
+
+    if hasattr(tokenized, "to") and device is not None:
+        tokenized = tokenized.to(device)
+
+    if isinstance(tokenized, Mapping):
+        iterator = tokenized.items()
+    else:
+        try:
+            iterator = dict(tokenized).items()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            raise TypeError(
+                "tokenizer must return a mapping-compatible object"
+            ) from exc
+
+    prepared: dict[str, Any] = {}
+    for name, tensor in iterator:
+        prepared[name] = _move_to_device(tensor, device)
+
+    return prepared, batched
+
+
+def build_context_prompt(
+    refined_prompt: str,
+    *,
+    history_pairs: Sequence[tuple[object, object]] | None = None,
+    semantic_context: Sequence[Mapping[str, object]] | None = None,
+    instruction_template: str | None = None,
+) -> str:
+    """Render a prompt combining chat history, semantic recall, and instructions."""
+
+    sections: list[str] = []
+    pairs = _coerce_history_pairs(history_pairs)
+    archive = semantic_context or ()
+
+    if pairs:
+        history_lines: list[str] = []
+        for idx, (user_line, assistant_line) in enumerate(pairs, start=1):
+            history_lines.append(
+                f"[{idx}] User: {user_line}\n    Assistant: {assistant_line}"
+            )
+        sections.append(
+            "Recent conversation turns (most recent first):\n"
+            + "\n".join(history_lines)
+        )
+
+    if archive:
+        semantic_lines: list[str] = []
+        for idx, entry in enumerate(archive, start=1):
+            similarity = entry.get("similarity")
+            similarity_text = (
+                f" (similarity {similarity:.3f})"
+                if isinstance(similarity, float)
+                else ""
+            )
+            query_text = _coerce_text(entry.get("query"))
+            response_text = _coerce_text(entry.get("response"))
+            semantic_lines.append(
+                f"[{idx}]{similarity_text} User: {query_text}\n    Assistant: {response_text}"
+            )
+        sections.append(
+            "Archived interactions retrieved via semantic search:\n"
+            + "\n".join(semantic_lines)
+        )
+
+    template = instruction_template or (
+        "Leverage the provided context to craft an accurate and concise reply. "
+        "If the context is unrelated, continue with your best effort response. "
+        "Current user request:\n{prompt}"
+    )
+    sections.append(template.format(prompt=refined_prompt))
+
+    return "\n\n".join(section for section in sections if section.strip())
+
+
+def build_converged_chat_prompt(
+    refined_prompt: str,
+    *,
+    history_pairs: Sequence[tuple[object, object]] | None = None,
+    semantic_context: Sequence[Mapping[str, object]] | None = None,
+    instruction_template: str | None = None,
+    system_prompt: str | None = None,
+    include_assistant_stub: bool = True,
+) -> ChatPrompt:
+    """Return a :class:`ChatPrompt` that mirrors chat preprocessing for embeddings."""
+
+    coerced_history = _coerce_history_pairs(history_pairs)
+    context_text = build_context_prompt(
+        refined_prompt,
+        history_pairs=coerced_history,
+        semantic_context=semantic_context,
+        instruction_template=instruction_template,
+    )
+    normalized_context = _normalise_text(context_text)
+    normalized_system = _normalise_text(system_prompt) if system_prompt else ""
+    prompt = render_chat_prompt_from_text(
+        normalized_context,
+        system_prompt=normalized_system or None,
+        include_assistant_stub=include_assistant_stub,
+    )
+
+    text_segments: list[str] = []
+    if normalized_system:
+        text_segments.append(_format_role_message("System", normalized_system))
+    text_segments.append(_format_role_message("User", normalized_context))
+    if include_assistant_stub:
+        text_segments.append(_format_role_message("Assistant", ""))
+
+    return ChatPrompt(text="\n\n".join(text_segments), chatml=prompt.chatml)

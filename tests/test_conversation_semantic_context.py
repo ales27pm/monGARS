@@ -1,0 +1,521 @@
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+
+from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
+from monGARS.core.inference_utils import (
+    CHATML_BEGIN_OF_TEXT,
+    CHATML_END_HEADER,
+    CHATML_START_HEADER,
+)
+from monGARS.core.persistence import VectorMatch
+
+
+class _FakeLLMIntegration:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+        self.calls: list[dict[str, object]] = []
+        self.prompt_limit: int | None = 4096
+        self.generation_tokens: int | None = 512
+
+    async def generate_response(
+        self,
+        prompt: str,
+        task_type: str = "general",
+        *,
+        response_hints=None,
+        formatted_prompt: str | None = None,
+    ):  # type: ignore[override]
+        used_prompt = formatted_prompt if formatted_prompt is not None else prompt
+        self.prompts.append(used_prompt)
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "task_type": task_type,
+                "response_hints": response_hints,
+                "formatted_prompt": formatted_prompt,
+                "used_prompt": used_prompt,
+            }
+        )
+        return {
+            "text": "sample-response",
+            "confidence": 0.73,
+            "source": "sample",
+            "adapter_version": "baseline",
+        }
+
+    def infer_task_type(self, prompt: str, default: str = "general") -> str:
+        lowered = prompt.lower()
+        if "```" in prompt or "function" in lowered or "class" in lowered:
+            return "coding"
+        return default
+
+    def prompt_token_limit(self, task_type: str = "general") -> int | None:
+        return self.prompt_limit
+
+    def generation_token_target(self, task_type: str = "general") -> int | None:
+        return self.generation_tokens
+
+
+class _FakeCuriosityEngine:
+    async def detect_gaps(self, context):  # type: ignore[override]
+        return {"status": "sufficient_knowledge"}
+
+
+class _FakeReasoner:
+    async def reason(self, query: str, user_id: str):  # type: ignore[override]
+        return {"result": ""}
+
+
+class _ReasoningStub:
+    async def reason(self, query: str, user_id: str):  # type: ignore[override]
+        return {"result": "Analyse en profondeur."}
+
+
+class _FakeDynamic:
+    async def get_personality_traits(self, user_id: str, interactions):  # type: ignore[override]
+        return {"tone": "neutral"}
+
+    def generate_adaptive_response(self, text: str, personality, user_id: str):  # type: ignore[override]
+        return f"{text}::{user_id}"
+
+
+class _FakeMimicry:
+    async def update_profile(self, user_id: str, payload):  # type: ignore[override]
+        return None
+
+    async def adapt_response_style(self, text: str, user_id: str):  # type: ignore[override]
+        return f"{text}::styled"
+
+
+class _FakePersonalityEngine:
+    async def profile(self, user_id: str):  # pragma: no cover - unused hook
+        return {}
+
+
+class _FakeCaptioner:
+    async def generate_caption(
+        self, image_data: bytes
+    ):  # pragma: no cover - unused in tests
+        return "caption"
+
+
+class _FakeSpeechTurn:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def to_payload(self) -> dict[str, str]:
+        return {"text": self.text}
+
+
+class _FakeSpeakerService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def speak(self, text: str, *, session_id: str | None = None):  # type: ignore[override]
+        self.calls.append((text, session_id))
+        return _FakeSpeechTurn(text)
+
+
+@pytest.mark.asyncio
+async def test_fake_llm_integration_prefers_formatted_prompt() -> None:
+    llm = _FakeLLMIntegration()
+
+    await llm.generate_response(
+        "plain", formatted_prompt="formatted", task_type="general"
+    )
+    await llm.generate_response("plain", formatted_prompt=None, task_type="general")
+
+    assert llm.prompts == ["formatted", "plain"]
+    assert llm.calls[0]["used_prompt"] == "formatted"
+    assert llm.calls[0]["prompt"] == "plain"
+    assert llm.calls[0]["formatted_prompt"] == "formatted"
+    assert llm.calls[1]["used_prompt"] == "plain"
+    assert llm.calls[1]["formatted_prompt"] is None
+
+
+class _FakeMemoryService:
+    def __init__(self) -> None:
+        self.store_calls: list[tuple[str, str, str]] = []
+        base_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        self._history = [
+            SimpleNamespace(
+                query="recent-one", response="recent-resp-one", timestamp=base_time
+            ),
+            SimpleNamespace(
+                query="recent-two", response="recent-resp-two", timestamp=base_time
+            ),
+        ]
+
+    async def history(self, user_id: str, limit: int = 10):  # type: ignore[override]
+        return self._history[:limit]
+
+    async def store(self, user_id: str, query: str, response: str):  # type: ignore[override]
+        self.store_calls.append((user_id, query, response))
+        return SimpleNamespace(
+            user_id=user_id,
+            query=query,
+            response=response,
+            timestamp=datetime.now(timezone.utc),
+            expires_at=None,
+        )
+
+
+class _FakeEvolutionEngine:
+    def __init__(self) -> None:
+        self.samples: list[dict[str, object]] = []
+
+    async def record_memory_sample(self, **payload):  # type: ignore[override]
+        self.samples.append(payload)
+
+
+class _FakePersistenceRepository:
+    def __init__(self, matches: list[VectorMatch]) -> None:
+        self._matches = matches
+        self.vector_queries: list[dict[str, object]] = []
+        self.saved: list[tuple[object, str | None, str | None]] = []
+
+    async def vector_search_history(self, user_id: str, query: str, *, limit: int, max_distance: float | None = None):  # type: ignore[override]
+        self.vector_queries.append(
+            {
+                "user_id": user_id,
+                "query": query,
+                "limit": limit,
+                "max_distance": max_distance,
+            }
+        )
+        return self._matches
+
+    async def save_interaction(self, interaction, *, history_query=None, history_response=None):  # type: ignore[override]
+        self.saved.append((interaction, history_query, history_response))
+
+
+def _build_conversational_module(
+    matches: list[VectorMatch],
+    *,
+    reasoner: object | None = None,
+    llm: _FakeLLMIntegration | None = None,
+) -> tuple[ConversationalModule, _FakeLLMIntegration, _FakePersistenceRepository]:
+    llm_instance = llm or _FakeLLMIntegration()
+    persistence = _FakePersistenceRepository(matches)
+    module = ConversationalModule(
+        llm=llm_instance,
+        reasoner=reasoner or _FakeReasoner(),
+        curiosity=_FakeCuriosityEngine(),
+        dynamic=_FakeDynamic(),
+        mimicry=_FakeMimicry(),
+        personality=_FakePersonalityEngine(),
+        captioner=_FakeCaptioner(),
+        memory=_FakeMemoryService(),
+        speaker=_FakeSpeakerService(),
+        persistence=persistence,
+    )
+    module.evolution_engine = _FakeEvolutionEngine()
+    return module, llm_instance, persistence
+
+
+@pytest.mark.asyncio
+async def test_generate_response_injects_semantic_context(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 2, raising=False
+    )
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_max_distance", 0.6, raising=False
+    )
+
+    system_prompt = getattr(
+        conversation_module.settings,
+        "llm_system_prompt",
+        "You are Dolphin, a helpful assistant.",
+    )
+
+    record = SimpleNamespace(
+        id=101,
+        query="semantic-question",
+        response="semantic-answer",
+        timestamp=datetime(2024, 2, 2, tzinfo=timezone.utc),
+    )
+    matches = [VectorMatch(record=record, distance=0.25)]
+    module, llm, persistence = _build_conversational_module(matches)
+
+    response = await module.generate_response("user-1", "What is the project status?")
+
+    assert response["text"].endswith("::styled")
+    assert len(llm.prompts) == 1
+    prompt = llm.prompts[0]
+    assert "Archived interactions retrieved via semantic search" in prompt
+    assert "semantic-question" in prompt
+    assert persistence.vector_queries == [
+        {
+            "user_id": "user-1",
+            "query": "What is the project status?",
+            "limit": 2,
+            "max_distance": 0.6,
+        }
+    ]
+    assert persistence.saved, "interaction should be persisted"
+    saved_interaction = persistence.saved[0][0]
+    assert saved_interaction.input_data[
+        "semantic_context"
+    ], "semantic context should be recorded"
+    assert (
+        saved_interaction.input_data["semantic_context"][0]["query"]
+        == "semantic-question"
+    )
+    assert saved_interaction.input_data["semantic_prompt"] == llm.calls[0]["prompt"]
+    chatml_prompt = saved_interaction.input_data["chatml_prompt"]
+    assert llm.calls[0]["formatted_prompt"] == chatml_prompt
+    assert chatml_prompt.startswith(CHATML_BEGIN_OF_TEXT)
+    assert chatml_prompt.endswith(
+        f"{CHATML_START_HEADER}assistant{CHATML_END_HEADER}\n\n"
+    )
+    assert system_prompt in chatml_prompt
+    assert prompt in chatml_prompt
+    assert saved_interaction.context["semantic_matches"]
+    assert llm.calls[0]["task_type"] == "general"
+    assert llm.calls[0]["response_hints"] is None
+    assert saved_interaction.input_data["llm_task_type"] == "general"
+    assert saved_interaction.output_data["llm_source"] == "sample"
+
+
+@pytest.mark.asyncio
+async def test_generate_response_skips_semantic_context_when_disabled(
+    monkeypatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+
+    await module.generate_response("user-42", "Summarise recent updates")
+
+    assert len(llm.prompts) == 1
+    assert "Archived interactions retrieved via semantic search" not in llm.prompts[0]
+    assert not persistence.vector_queries
+    assert llm.calls[0]["task_type"] == "general"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_double_returns_unexpected_type(monkeypatch):
+    from monGARS.core import conversation as conversation_module
+
+    class BadStubMimicry:
+        async def __call__(self, *args, **kwargs):
+            return 42  # Unexpected type
+
+    llm = conversation_module._FakeLLM()
+    persistence = conversation_module._FakePersistence()
+    prompt = "Test prompt"
+    try:
+        await conversation_module.generate_response(
+            prompt=prompt,
+            llm=llm,
+            persistence=persistence,
+            mimicry=BadStubMimicry(),
+        )
+    except Exception as e:
+        assert isinstance(e, TypeError) or isinstance(e, ValueError)
+
+
+@pytest.mark.asyncio
+async def test_llm_integration_raises_exception(monkeypatch):
+    from monGARS.core import conversation as conversation_module
+
+    class FailingLLM(conversation_module._FakeLLM):
+        async def __call__(self, *args, **kwargs):
+            raise RuntimeError("LLM failure")
+
+    llm = FailingLLM()
+    persistence = conversation_module._FakePersistence()
+    prompt = "Test prompt"
+    try:
+        await conversation_module.generate_response(
+            prompt=prompt,
+            llm=llm,
+            persistence=persistence,
+            mimicry=conversation_module._FakeMimicry(),
+        )
+    except Exception as e:
+        assert isinstance(e, RuntimeError)
+        assert "LLM failure" in str(e)
+
+
+@pytest.mark.asyncio
+async def test_generate_response_routes_coding_queries(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    module, llm, _ = _build_conversational_module(matches=[])
+
+    await module.generate_response("dev", "```python\nprint('hello')\n```")
+
+    assert llm.calls[0]["task_type"] == "coding"
+
+
+@pytest.mark.asyncio
+async def test_generate_response_sets_reasoning_hint(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    module, llm, persistence = _build_conversational_module(
+        matches=[], reasoner=_ReasoningStub()
+    )
+
+    await module.generate_response("user-9", "Explain why systems fail")
+
+    assert llm.calls[0]["response_hints"] == {"reasoning": True}
+    saved_interaction = persistence.saved[0][0]
+    assert saved_interaction.input_data["llm_response_hints"] == {"reasoning": True}
+
+
+@pytest.mark.asyncio
+async def test_generate_response_trims_prompt_to_limit(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+    llm.prompt_limit = 80
+    llm.generation_tokens = 0
+
+    token_estimates = iter([150, 70])
+
+    def _estimate(_: str) -> int:
+        return next(token_estimates)
+
+    monkeypatch.setattr(conversation_module, "estimate_token_count", _estimate)
+
+    response = await module.generate_response(
+        "user-trim", "Provide a comprehensive overview of quarterly metrics"
+    )
+
+    assert response["text"].endswith("::styled")
+    saved_interaction = persistence.saved[0][0]
+    history_entries = saved_interaction.context["history"]
+    assert len(history_entries) < 2, "history should be trimmed to satisfy limit"
+    assert saved_interaction.input_data["prompt_tokens"] == 70
+    assert saved_interaction.input_data["prompt_token_limit"] == 80
+    assert saved_interaction.input_data["prompt_token_budget"] == 80
+    assert saved_interaction.input_data["prompt_token_reservation"] == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_response_reserves_generation_tokens(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+    llm.prompt_limit = 120
+    llm.generation_tokens = 40
+
+    token_estimates = iter([110, 70])
+
+    def _estimate(_: str) -> int:
+        return next(token_estimates)
+
+    monkeypatch.setattr(conversation_module, "estimate_token_count", _estimate)
+
+    response = await module.generate_response(
+        "user-reserve", "Summarise the overall platform architecture"
+    )
+
+    assert response["text"].endswith("::styled")
+    saved_interaction = persistence.saved[0][0]
+    history_entries = saved_interaction.context["history"]
+    assert len(history_entries) < 2, "history should be trimmed due to reservation"
+    assert saved_interaction.input_data["prompt_tokens"] == 70
+    assert saved_interaction.input_data["prompt_token_limit"] == 120
+    assert saved_interaction.input_data["prompt_token_budget"] == 80
+    assert saved_interaction.input_data["prompt_token_reservation"] == 40
+
+
+@pytest.mark.asyncio
+async def test_generate_response_raises_when_prompt_remains_too_large(
+    monkeypatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module(matches=[])
+    llm.prompt_limit = 40
+    llm.generation_tokens = 0
+
+    monkeypatch.setattr(conversation_module, "estimate_token_count", lambda _: 200)
+
+    with pytest.raises(PromptTooLargeError) as excinfo:
+        await module.generate_response("user-over", "Describe the entire codebase")
+
+    assert excinfo.value.prompt_tokens == 200
+    assert excinfo.value.limit == 40
+    assert not persistence.saved
+
+
+@pytest.mark.asyncio
+async def test_generate_response_warns_on_unexpected_reasoner_output(
+    monkeypatch, caplog
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    class _BadReasoner:
+        async def reason(self, query: str, user_id: str):  # type: ignore[override]
+            return 42
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    caplog.set_level(logging.WARNING)
+    module, llm, persistence = _build_conversational_module(
+        matches=[], reasoner=_BadReasoner()
+    )
+
+    response = await module.generate_response("user-19", "Summarise the logs")
+
+    assert response["text"].endswith("::styled")
+    assert any(
+        record.message == "conversation.reasoner.invalid_result"
+        for record in caplog.records
+    )
+    saved_interaction = persistence.saved[0][0]
+    assert saved_interaction.input_data["reasoning_metadata"] == {}
+    assert saved_interaction.input_data["llm_response_hints"] is None
+    assert llm.calls[0]["response_hints"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_propagates_llm_failures(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    class _FailingLLM(_FakeLLMIntegration):
+        async def generate_response(  # type: ignore[override]
+            self,
+            prompt: str,
+            task_type: str = "general",
+            *,
+            response_hints=None,
+            formatted_prompt: str | None = None,
+        ):
+            raise RuntimeError("LLM failure")
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    failing_llm = _FailingLLM()
+    module, _, persistence = _build_conversational_module(matches=[], llm=failing_llm)
+
+    with pytest.raises(RuntimeError, match="LLM failure"):
+        await module.generate_response("user-23", "Trigger the failure path")
+
+    assert persistence.saved == []

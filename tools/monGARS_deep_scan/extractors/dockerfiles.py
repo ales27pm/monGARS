@@ -10,6 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover
     DockerfileParser = None  # type: ignore[assignment]
 
 from ..utils.text_clean import normalise_whitespace
+from .types import ExtractionRecord
 
 
 def _fallback_structure(text: str) -> List[dict]:
@@ -30,9 +31,6 @@ def _fallback_structure(text: str) -> List[dict]:
             }
         )
     return structure
-
-
-from .types import ExtractionRecord
 
 
 def extract(path: Path, text: str) -> List[ExtractionRecord]:

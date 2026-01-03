@@ -1,0 +1,17 @@
+services:
+  api:
+    environment:
+      - MONGARS_DB_PASSWORD=${MONGARS_DB_PASSWORD}
+      - DATABASE_URL=postgresql+asyncpg://mongars:${MONGARS_DB_PASSWORD}@postgres:5432/mongars_db
+      # If you keep DJANGO_DATABASE_URL here for any reason, align it too:
+      - DJANGO_DATABASE_URL=postgresql+psycopg://mongars:${MONGARS_DB_PASSWORD}@postgres:5432/mongars_db
+
+  migrations:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://api_user:ApiPass123@postgres:5432/mongars_db
+      DJANGO_DATABASE_URL: postgresql+psycopg://api_user:ApiPass123@postgres:5432/mongars_db
+      MONGARS_ALLOW_REMOTE_DATABASE_BOOTSTRAP: "1"
+
+  webapp:
+    environment:
+      DJANGO_DATABASE_URL: postgresql+psycopg://api_user:ApiPass123@postgres:5432/mongars_db

@@ -1,83 +1,441 @@
 name: CI
 
 on:
-  pull_request:
   push:
     branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "18"
+  MOBILE_NODE_VERSION: "18"
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  UV_PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+  # The upstream PyTorch project does not publish CPU-only images for 2.2.2.
+  # Use the closest available runtime image, which remains compatible with CPU
+  # environments, to keep CI docker builds green.
+  PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime
 
 jobs:
-  build:
+  changes:
+    name: Determine impacted areas
     runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      web: ${{ steps.filter.outputs.web }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      docker: ${{ steps.filter.outputs.docker }}
+      docs: ${{ steps.filter.outputs.docs }}
+      agents: ${{ steps.filter.outputs.agents }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt black isort
-      - name: Check formatting
-        run: |
-          isort --check --diff .
-          black --check .
-      - name: Run tests
-        run: pytest -q
+          fetch-depth: 0
 
-  inventory:
+      - id: filter
+        name: Detect file changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - 'pyproject.toml'
+              - 'requirements.txt'
+              - 'setup.py'
+              - 'setup.cfg'
+              - 'pytest.ini'
+              - 'alembic.ini'
+              - 'tasks.py'
+              - 'scripts/**/*.py'
+            web:
+              - 'package.json'
+              - 'package-lock.json'
+              - 'webapp/**'
+              - 'eslint.config.js'
+              - 'eslint/**'
+            mobile:
+              - 'mobile-app/**'
+            docker:
+              - '.dockerignore'
+              - 'Dockerfile*'
+              - 'docker-compose*.yml'
+              - 'docker-compose*/**'
+            docs:
+              - 'docs/**'
+              - 'README.md'
+              - 'ROADMAP.md'
+            agents:
+              - 'configs/agents/**'
+              - '**/AGENTS.md'
+              - 'scripts/manage_agents.py'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/*.yml'
+              - '.github/*.yaml'
+
+      - name: Summarise scope
+        run: |
+          {
+            echo "### Impacted scopes";
+            echo;
+            echo "- Python: ${{ steps.filter.outputs.python }}";
+            echo "- Web: ${{ steps.filter.outputs.web }}";
+            echo "- Mobile: ${{ steps.filter.outputs.mobile }}";
+            echo "- Docker: ${{ steps.filter.outputs.docker }}";
+            echo "- Docs: ${{ steps.filter.outputs.docs }}";
+            echo "- Agents: ${{ steps.filter.outputs.agents }}";
+            echo "- Workflows: ${{ steps.filter.outputs.workflows }}";
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  docs-metadata:
+    name: Docs metadata guardrail
+    needs: changes
     runs-on: ubuntu-latest
-    needs: build
+    if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.agents == 'true' || github.event_name != 'pull_request'
+    outputs:
+      drifted: ${{ steps.docs-drift.outputs.changed }}
+      files: ${{ steps.docs-drift.outputs.files }}
     steps:
-      - name: Checkout target revision
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          path: pr
           fetch-depth: 0
-      - name: Checkout base revision
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        working-directory: pr
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Sync documentation metadata
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Generate baseline inventory
-        if: github.event_name == 'pull_request'
-        working-directory: base
-        run: python .tools/inventory.py --output ../baseline_inventory.json
-      - name: Generate repository inventory
-        working-directory: pr
-        run: python .tools/inventory.py --output ../current_inventory.json
-      - name: Compare inventory with base
-        if: github.event_name == 'pull_request'
+          set -euo pipefail
+          python scripts/update_docs_metadata.py docs README.md ROADMAP.md .github/ISSUE_TEMPLATE .github/PULL_REQUEST_TEMPLATE.md
+
+      - name: Refresh scoped AGENTS charters
+        if: needs.changes.outputs.agents == 'true'
         run: |
-          set +e
-          diff -u baseline_inventory.json current_inventory.json > inventory.diff
-          status=$?
-          if [ $status -ne 0 ]; then
-            echo 'Inventory differences detected. Showing first 200 diff lines.' >> "$GITHUB_STEP_SUMMARY"
-            echo '```diff' >> "$GITHUB_STEP_SUMMARY"
-            head -n 200 inventory.diff >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'No inventory differences detected.' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          python scripts/manage_agents.py refresh
+
+      - id: docs-drift
+        name: Check docs metadata drift
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "files=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          exit 0
-      - name: Create empty diff placeholder
-        if: github.event_name != 'pull_request'
-        run: touch inventory.diff
-      - name: Upload inventory artifact
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          git diff --name-only >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          git status --short
+          git diff --stat
+          git diff > docs_metadata.patch
+
+      - name: Upload docs metadata patch
+        if: steps.docs-drift.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: inventory
+          name: docs-metadata-fix
+          path: docs_metadata.patch
+
+      - name: Summarise docs metadata maintenance
+        if: always()
+        run: |
+          if [ "${{ steps.docs-drift.outputs.changed }}" = "true" ]; then
+            {
+              echo "### Docs metadata updates";
+              echo;
+              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed. Drift detected—apply docs_metadata.patch locally with 'git apply docs_metadata.patch' to align metadata and charter text.";
+              echo;
+              echo "Impacted files:";
+              echo;
+              echo '${{ steps.docs-drift.outputs.files }}' | sed '/^$/d' | sed 's/^/- /';
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Docs metadata updates";
+              echo;
+              echo "Auto-synced Last updated banners and refreshed scoped AGENTS charters when agent scopes changed, with no drift detected.";
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail on docs metadata drift
+        if: steps.docs-drift.outputs.changed == 'true' && github.event_name == 'pull_request'
+        run: |
+          echo "Docs metadata drift detected. Download the docs-metadata-fix artifact and apply it with 'git apply docs_metadata.patch'." >&2
+          exit 1
+
+  python:
+    name: Backend lint, typecheck & tests
+    needs: changes
+    runs-on: ubuntu-latest
+    if: |
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.web == 'true' ||
+      needs.changes.outputs.mobile == 'true' ||
+      needs.changes.outputs.docker == 'true' ||
+      needs.changes.outputs.docs == 'true' ||
+      needs.changes.outputs.workflows == 'true' ||
+      github.event_name != 'pull_request'
+    env:
+      UV_LINK_MODE: copy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python with uv tooling
+        uses: ./.github/actions/python-uv-setup
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Prepare virtual environment
+        run: |
+          set -euo pipefail
+          uv venv .venv --python "${PYTHON_VERSION}"
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          uv pip install --python .venv/bin/python pip
+          uv pip install --python .venv/bin/python -r requirements.txt
+          uv pip install --python .venv/bin/python black isort flake8 mypy coverage[toml]
+          uv pip check --python .venv/bin/python
+
+      - name: Export virtual environment to PATH
+        run: echo "${{ github.workspace }}/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Run Black
+        run: black --check .
+
+      - name: Run isort
+        run: isort --check-only --diff .
+
+      - name: Run flake8
+        run: flake8 .
+
+      - name: Run mypy
+        run: mypy
+
+      - name: Run pytest with coverage
+        run: |
+          set -euo pipefail
+          coverage run -m pytest
+          coverage report --fail-under=84
+          coverage xml
+          coverage html -d coverage_html
+
+      - name: Publish coverage summary
+        run: |
+          {
+            echo "### Pytest coverage";
+            echo;
+            coverage report;
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-artifacts
           path: |
-            current_inventory.json
-            inventory.diff
+            .coverage
+            coverage.xml
+            coverage_html
+            .pytest_cache
+          if-no-files-found: ignore
+          retention-days: 14
+
+  web:
+    name: Web UI lint, test & build
+    needs: changes
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run ESLint
+        env:
+          CI: "true"
+        run: npm run lint
+
+      - name: Run Jest
+        env:
+          CI: "true"
+        run: npm run jest -- --ci --runInBand --coverage
+
+      - name: Build production bundle
+        env:
+          NODE_ENV: production
+        run: npm run build
+
+      - name: Upload web artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: webapp-artifacts
+          path: |
+            coverage
+            webapp/static/js/chat.js
           if-no-files-found: warn
+          retention-days: 7
+
+  mobile:
+    name: Mobile lint, typecheck & tests
+    needs: changes
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.MOBILE_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: mobile-app
+        run: npm ci --no-audit --no-fund
+
+      - name: Run ESLint
+        env:
+          CI: "true"
+        working-directory: mobile-app
+        run: npm run lint
+
+      - name: Type-check React Native sources
+        env:
+          CI: "true"
+        working-directory: mobile-app
+        run: npm run typecheck
+
+      - name: Run Jest
+        env:
+          CI: "true"
+        working-directory: mobile-app
+        run: npm test -- --ci --runInBand --coverage
+
+      - name: Upload mobile test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-artifacts
+          path: |
+            mobile-app/coverage
+            mobile-app/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  inventory:
+    name: Repository inventory snapshot
+    needs:
+      - changes
+      - python
+      - web
+      - mobile
+    if: |
+      (needs.changes.outputs.python == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workflows == 'true')
+      && success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python with uv tooling
+        uses: ./.github/actions/python-uv-setup
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Prepare virtual environment
+        run: |
+          set -euo pipefail
+          uv venv .venv --python "${PYTHON_VERSION}"
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          uv pip install --python .venv/bin/python pip
+          uv pip install --python .venv/bin/python -r requirements.txt
+
+      - name: Export virtual environment to PATH
+        run: echo "${{ github.workspace }}/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Generate inventory
+        run: |
+          set -euo pipefail
+          python .tools/inventory.py --output inventory.json
+          ls -al inventory.json
+
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-inventory
+          path: inventory.json
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    name: Docker runtime build validation
+    needs:
+      - changes
+      - python
+      - web
+      - mobile
+    if: github.event_name != 'pull_request' && (needs.changes.outputs.docker == 'true' || needs.changes.outputs.python == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.workflows == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build runtime image
+        env:
+          PYTORCH_IMAGE: pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg PYTORCH_IMAGE=$PYTORCH_IMAGE \
+            --target runtime \
+            --tag mongars-ci .
+
+      - name: Smoke test container pytest
+        run: |
+          set -euo pipefail
+          docker run --rm mongars-ci pytest --maxfail=1 --disable-warnings -k "not long or long_haul or longhaul"
+
+      - name: Display resulting image size
+        run: docker images mongars-ci

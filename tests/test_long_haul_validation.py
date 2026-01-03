@@ -9,6 +9,7 @@ import pytest
 from modules.evolution_engine.energy import EnergyUsageReport
 from modules.neurons.training.reinforcement_loop import (
     ReinforcementLearningSummary,
+    WorkerAdjustment,
 )
 from monGARS.core.long_haul_validation import (
     LongHaulCycleReport,
@@ -84,6 +85,48 @@ class _EnergyTracker:
             )
 
 
+class _RecordingObservabilityStore:
+    def __init__(self) -> None:
+        self.records: list[LongHaulValidationSummary] = []
+
+    def record_summary(self, summary: LongHaulValidationSummary) -> None:
+        self.records.append(summary)
+
+
+class _RecordingSustainabilityBridge:
+    def __init__(self) -> None:
+        self.energy_reports: list[dict[str, Any]] = []
+        self.reinforcement_summaries: list[dict[str, Any]] = []
+
+    def record_energy_report(
+        self,
+        report: EnergyUsageReport,
+        *,
+        scope: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "report": report,
+            "scope": scope,
+            "metadata": dict(metadata or {}),
+        }
+        self.energy_reports.append(payload)
+
+    def record_reinforcement_summary(
+        self,
+        summary: LongHaulValidationSummary,
+        *,
+        scope: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "summary": summary,
+            "scope": scope,
+            "metadata": dict(metadata or {}),
+        }
+        self.reinforcement_summaries.append(payload)
+
+
 @pytest.mark.asyncio
 async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
     approvals_path = tmp_path / "approvals.json"
@@ -99,7 +142,10 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
                 episode_results=[],
                 failures=2,
                 wall_clock_seconds=0.4,
-                worker_history=[],
+                worker_history=[
+                    WorkerAdjustment(batch_index=0, worker_count=2, reason="initial"),
+                    WorkerAdjustment(batch_index=1, worker_count=3, reason="scale_up"),
+                ],
             ),
             ReinforcementLearningSummary(
                 total_episodes=12,
@@ -108,7 +154,12 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
                 episode_results=[],
                 failures=1,
                 wall_clock_seconds=0.5,
-                worker_history=[],
+                worker_history=[
+                    WorkerAdjustment(batch_index=0, worker_count=3, reason="initial"),
+                    WorkerAdjustment(
+                        batch_index=1, worker_count=2, reason="scale_down"
+                    ),
+                ],
             ),
         ]
     )
@@ -134,6 +185,10 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
         nonlocal mnpt_calls
         mnpt_calls += 1
 
+    observability_store = _RecordingObservabilityStore()
+
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=loop_factory,
         approval_registry=registry,
@@ -141,6 +196,8 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
         metrics_sink=metrics_sink,
         tracer_factory=lambda _: tracer,
         mnpt_callback=mnpt_callback,
+        observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
     )
 
     summary = await validator.execute(
@@ -161,6 +218,14 @@ async def test_long_haul_validator_collects_cycle_metrics(tmp_path) -> None:
     assert all(isinstance(report, LongHaulCycleReport) for report in summary.cycles)
     assert summary.cycles[0].mnpt_executed is True
     assert summary.cycles[1].energy_wh == pytest.approx(1.6)
+    assert summary.cycles[0].replica_load.peak == 3
+    assert summary.cycles[1].replica_load.low == 2
+    assert summary.cycles[0].replica_load.reasons["scale_up"] == 1
+    assert observability_store.records and observability_store.records[0] is summary
+    assert len(sustainability_bridge.energy_reports) == 2
+    assert sustainability_bridge.energy_reports[0]["metadata"]["cycle_index"] == 0
+    assert sustainability_bridge.reinforcement_summaries
+    assert sustainability_bridge.reinforcement_summaries[0]["summary"] is summary
 
     cycle_metrics = [name for name, _ in metrics if name == "research.longhaul.cycle"]
     assert len(cycle_metrics) == 2
@@ -188,12 +253,18 @@ async def test_long_haul_validator_records_failures(tmp_path) -> None:
     def energy_factory() -> _EnergyTracker:
         return _EnergyTracker(energy_values)
 
+    observability_store = _RecordingObservabilityStore()
+
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
     validator = ResearchLoopLongHaulValidator(
         reinforcement_loop_factory=failing_factory,
         approval_registry=registry,
         energy_tracker_factory=energy_factory,
         metrics_sink=metrics_sink,
         tracer_factory=lambda _: _RecordingTracer(),
+        observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
     )
 
     summary = await validator.execute(
@@ -209,3 +280,149 @@ async def test_long_haul_validator_records_failures(tmp_path) -> None:
     assert summary.incidents
     assert summary.cycles[0].status == "failed"
     assert any(name == "research.longhaul.cycle" for name, _ in metrics)
+    assert len(sustainability_bridge.reinforcement_summaries) == 1
+
+
+@pytest.mark.asyncio
+async def test_long_haul_validator_captures_multi_replica_soak(tmp_path) -> None:
+    approvals_path = tmp_path / "approvals.json"
+    registry = OperatorApprovalRegistry(approvals_path)
+    registry.submit(source="reinforcement.reasoning", payload={"version": 2})
+
+    cycles = deque(
+        [
+            {
+                "episodes": 6,
+                "reward": 3.5,
+                "average": 0.7,
+                "failures": 1,
+                "wall_clock": 0.35,
+                "workers": [
+                    WorkerAdjustment(batch_index=0, worker_count=2, reason="initial"),
+                    WorkerAdjustment(batch_index=1, worker_count=4, reason="scale_up"),
+                    WorkerAdjustment(batch_index=2, worker_count=3, reason="stabilise"),
+                ],
+            },
+            {
+                "episodes": 6,
+                "reward": 4.2,
+                "average": 0.7,
+                "failures": 0,
+                "wall_clock": 0.4,
+                "workers": [
+                    WorkerAdjustment(batch_index=0, worker_count=3, reason="initial"),
+                    WorkerAdjustment(batch_index=1, worker_count=5, reason="scale_up"),
+                    WorkerAdjustment(batch_index=2, worker_count=4, reason="stabilise"),
+                    WorkerAdjustment(batch_index=3, worker_count=5, reason="burst"),
+                ],
+            },
+            {
+                "episodes": 6,
+                "reward": 2.4,
+                "average": 0.6,
+                "failures": 2,
+                "wall_clock": 0.38,
+                "workers": [
+                    WorkerAdjustment(batch_index=0, worker_count=4, reason="initial"),
+                    WorkerAdjustment(
+                        batch_index=1, worker_count=3, reason="scale_down"
+                    ),
+                    WorkerAdjustment(batch_index=2, worker_count=2, reason="stabilise"),
+                ],
+            },
+        ]
+    )
+
+    def loop_factory() -> _StubReinforcementLoop:
+        cycle = cycles.popleft()
+        summary = ReinforcementLearningSummary(
+            total_episodes=cycle["episodes"],
+            total_reward=cycle["reward"],
+            average_reward=cycle["average"],
+            episode_results=[],
+            failures=cycle["failures"],
+            wall_clock_seconds=cycle["wall_clock"],
+            worker_history=list(cycle["workers"]),
+        )
+        return _StubReinforcementLoop(
+            expected_episodes=cycle["episodes"], summary=summary
+        )
+
+    energy_values = deque([0.8, 0.9, 0.7])
+
+    def energy_factory() -> _EnergyTracker:
+        return _EnergyTracker(energy_values)
+
+    metrics: list[tuple[str, dict[str, float | int]]] = []
+
+    def metrics_sink(name: str, payload: dict[str, float | int]) -> None:
+        metrics.append((name, dict(payload)))
+
+    tracer = _RecordingTracer()
+    mnpt_calls = 0
+
+    async def mnpt_callback() -> None:
+        nonlocal mnpt_calls
+        mnpt_calls += 1
+
+    observability_store = _RecordingObservabilityStore()
+
+    sustainability_bridge = _RecordingSustainabilityBridge()
+
+    validator = ResearchLoopLongHaulValidator(
+        reinforcement_loop_factory=loop_factory,
+        approval_registry=registry,
+        energy_tracker_factory=energy_factory,
+        metrics_sink=metrics_sink,
+        tracer_factory=lambda _: tracer,
+        mnpt_callback=mnpt_callback,
+        observability_store=observability_store,
+        sustainability_bridge=sustainability_bridge,
+    )
+
+    summary = await validator.execute(
+        cycles=3, episodes_per_cycle=6, cooldown_seconds=0.0
+    )
+
+    assert summary.total_cycles == 3
+    assert summary.total_episodes == 18
+    assert summary.total_reward == pytest.approx(10.1)
+    assert summary.total_failures == 3
+    assert summary.energy_wh == pytest.approx(2.4)
+    assert summary.mnpt_runs == 3
+    assert summary.incidents == ()
+    assert mnpt_calls == 3
+    assert observability_store.records and observability_store.records[0] is summary
+
+    cycle_metrics = [
+        payload for name, payload in metrics if name == "research.longhaul.cycle"
+    ]
+    assert len(cycle_metrics) == 3
+    assert {payload["cycle"] for payload in cycle_metrics} == {0, 1, 2}
+    assert metrics[-1][0] == "research.longhaul.summary"
+
+    cycle0 = summary.cycles[0]
+    assert cycle0.replica_load.events == 3
+    assert cycle0.replica_load.peak == 4
+    assert cycle0.replica_load.low == 2
+    assert cycle0.replica_load.average == pytest.approx(3.0)
+    assert cycle0.replica_load.reasons["initial"] == 1
+    assert cycle0.replica_load.timeline[1].reason == "scale_up"
+
+    cycle1 = summary.cycles[1]
+    assert cycle1.replica_load.events == 4
+    assert cycle1.replica_load.peak == 5
+    assert cycle1.replica_load.low == 3
+    assert cycle1.replica_load.timeline[-1].reason == "burst"
+    assert cycle1.replica_load.reasons["scale_up"] == 1
+
+    cycle2 = summary.cycles[2]
+    assert cycle2.replica_load.events == 3
+    assert cycle2.replica_load.low == 2
+    assert cycle2.replica_load.reasons["scale_down"] == 1
+    assert cycle2.replica_load.timeline[0].batch_index == 0
+    assert cycle2.replica_load.timeline[-1].worker_count == 2
+
+    event_payloads = [attrs for span in tracer.spans for _, attrs in span.events]
+    assert any(payload.get("mnpt_executed") == 1 for payload in event_payloads)
+    assert len(sustainability_bridge.energy_reports) == 3

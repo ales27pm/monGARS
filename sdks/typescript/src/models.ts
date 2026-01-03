@@ -6,6 +6,9 @@ export interface TokenResponse {
 export interface ChatRequest {
   message: string;
   session_id?: string | null;
+  allowed_actions?: string[] | null;
+  approval_token?: string | null;
+  token_ref?: string | null;
 }
 
 export interface SpeechSegment {

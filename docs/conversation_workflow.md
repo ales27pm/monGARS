@@ -1,5 +1,7 @@
 # Conversation Workflow
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 This guide walks through how a chat request flows from authentication to
 streamed delivery inside monGARS. Use it when debugging the cognition pipeline
 or onboarding new contributors.

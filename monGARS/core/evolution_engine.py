@@ -124,21 +124,6 @@ class EvolutionEngine:
             extra={"user_id": user_id, "expires_at": expires_at},
         )
 
-    async def get_curated_memory(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Return the most recent curated memory samples."""
-
-        if limit <= 0:
-            return []
-        async with self._memory_lock:
-            now = datetime.now(timezone.utc)
-            self._prune_curated_memory_locked(now)
-            snapshot = [
-                sample
-                for sample in self._curated_memory
-                if sample.get("expires_at") is None or sample["expires_at"] > now
-            ][-limit:]
-        return list(reversed(snapshot))
-
     async def diagnose_performance(self) -> list[PerformanceIssue]:
         """Analyze system statistics and return actionable performance issues."""
         issues: list[PerformanceIssue] = []
@@ -439,6 +424,10 @@ class EvolutionEngine:
                 "metrics": training_result.summary.get("metrics", {}),
                 "energy": training_result.energy,
             }
+            if training_result.summary.get("reasoning_alignment"):
+                event_payload["reasoning_alignment"] = training_result.summary[
+                    "reasoning_alignment"
+                ]
             await event_bus().publish(
                 make_event(
                     "evolution_engine.training_complete",
@@ -533,6 +522,8 @@ class EvolutionEngine:
             "hardware": self._hardware_profile.to_snapshot(),
             "user": user_id,
         }
+        if result.summary.get("reasoning_alignment"):
+            telemetry["reasoning_alignment"] = result.summary["reasoning_alignment"]
         if self._peer_communicator:
             self._peer_communicator.update_local_telemetry(telemetry)
             try:
@@ -580,7 +571,8 @@ def _detect_cpu_pressure(samples: list[float]) -> PerformanceIssue | None:
     if not samples:
         return None
 
-    window = samples[-min(len(samples), 3) :]
+    window_count = min(len(samples), 3)
+    window = samples[slice(-window_count, None)] if window_count else []
     if window and min(window) > 85.0:
         severity = "critical" if fmean(window) >= 95.0 else "high"
         return PerformanceIssue(
@@ -609,7 +601,8 @@ def _detect_memory_pressure(samples: list[float]) -> PerformanceIssue | None:
     if not samples:
         return None
 
-    window = samples[-min(len(samples), 3) :]
+    window_count = min(len(samples), 3)
+    window = samples[slice(-window_count, None)] if window_count else []
     latest = samples[-1]
     if window and fmean(window) >= 90.0:
         severity = "critical" if latest >= 95.0 else "high"
@@ -646,7 +639,12 @@ def _detect_memory_leak(samples: list[float]) -> PerformanceIssue | None:
 def _detect_gpu_pressure(
     usage_samples: list[float], gpu_mem_samples: list[float]
 ) -> PerformanceIssue | None:
-    window = usage_samples[-min(len(usage_samples), 3) :] if usage_samples else []
+    window_count = min(len(usage_samples), 3) if usage_samples else 0
+    window = (
+        usage_samples[slice(-window_count, None)]
+        if window_count and usage_samples
+        else []
+    )
     usage_latest = usage_samples[-1] if usage_samples else None
     memory_latest = gpu_mem_samples[-1] if gpu_mem_samples else None
 

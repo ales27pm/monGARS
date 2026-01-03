@@ -88,7 +88,7 @@ def test_build_adapter_summary_collects_optional_sections(tmp_path: Path) -> Non
     adapter_dir = tmp_path / "adapter"
     adapter_dir.mkdir()
     weights_path = adapter_dir / "adapter_model.safetensors"
-    weights_path.write_text("stub")
+    weights_path.write_text("sample")
     wrapper_dir = tmp_path / "wrapper"
     wrapper_dir.mkdir()
 
@@ -131,7 +131,7 @@ def test_build_adapter_summary_ignores_none_values(tmp_path: Path) -> None:
     adapter_dir = tmp_path / "adapter_none"
     adapter_dir.mkdir()
     weights_path = adapter_dir / "adapter_model.safetensors"
-    weights_path.write_text("stub")
+    weights_path.write_text("sample")
 
     summary = build_adapter_summary(
         adapter_dir=adapter_dir,

@@ -1,10 +1,14 @@
 FROM python:3.10-slim AS builder
 ARG JOBS=1
-ENV MAKEFLAGS="-j${JOBS}"
+ENV MAKEFLAGS="-j${JOBS}" \
+    PIP_RESOLVER_BACKTRACKING_LIMIT=1000
 WORKDIR /app
 COPY requirements.txt .
+# Keep pip on 23.3.x to avoid the resolver depth cap introduced in pip 24 when
+# installing our broad dependency ranges inside the builder image.
 RUN python -m venv /opt/venv \
     && . /opt/venv/bin/activate \
+    && pip install --no-cache-dir --upgrade "pip==23.3.2" \
     && pip install --no-cache-dir -r requirements.txt
 COPY . /app
 

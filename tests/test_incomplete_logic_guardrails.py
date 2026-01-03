@@ -4,13 +4,11 @@ import io
 import tokenize
 from pathlib import Path
 
-import pytest
-
 THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[1]
 
 # Only deliberate test doubles are allowed to raise NotImplementedError.
-ALLOWED_NOT_IMPLEMENTED: dict[str, set[int]] = {"tests/test_dynamic_response.py": {15}}
+ALLOWED_NOT_IMPLEMENTED: dict[str, set[int]] = {}
 
 
 def _iter_python_files(root: Path) -> list[Path]:
@@ -26,6 +24,7 @@ def _iter_python_files(root: Path) -> list[Path]:
         "build",
         "dist",
         "node_modules",
+        "unsloth_compiled_cache",
         "venv",
     }
 
@@ -89,7 +88,7 @@ def _collect_marker_violations() -> list[str]:
 
 
 def test_incomplete_logic_markers_absent() -> None:
-    """Ensure TODO/FIXME/XXX markers and unfinished stubs stay out of the repo."""
+    """Ensure TODO/FIXME/XXX markers and unfinished placeholders stay out of the repo."""
 
     violations = _collect_marker_violations()
     assert (

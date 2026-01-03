@@ -1,8 +1,11 @@
 """End-to-end tests for user registration and authentication flows."""
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException, status
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
@@ -105,6 +108,44 @@ async def test_register_admin_when_none_exists(
 
 
 @pytest.mark.asyncio
+async def test_user_list_requires_admin_and_returns_usernames(
+    client: AsyncClient,
+) -> None:
+    first_registration = await client.post(
+        "/api/v1/user/register",
+        json={"username": "firstuser", "password": "firstpassword"},
+    )
+    assert first_registration.status_code == status.HTTP_200_OK
+
+    second_registration = await client.post(
+        "/api/v1/user/register",
+        json={"username": "seconduser", "password": "secondpassword"},
+    )
+    assert second_registration.status_code == status.HTTP_200_OK
+
+    admin_token = await get_token(client, "admin", "secret")
+    user_token = await get_token(client, "user", "passphrase")
+
+    unauthenticated = await client.get("/api/v1/user/list")
+    assert unauthenticated.status_code == status.HTTP_401_UNAUTHORIZED
+
+    forbidden = await client.get(
+        "/api/v1/user/list",
+        headers={"Authorization": f"Bearer {user_token}"},
+    )
+    assert forbidden.status_code == status.HTTP_403_FORBIDDEN
+
+    response = await client.get(
+        "/api/v1/user/list",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["users"]
+    assert {"firstuser", "seconduser"}.issubset(set(body["users"]))
+
+
+@pytest.mark.asyncio
 async def test_register_existing_username_returns_conflict(
     client: AsyncClient,
 ) -> None:
@@ -157,6 +198,69 @@ async def test_login_incorrect_credentials(client: AsyncClient) -> None:
         "/token", data={"username": "nosuchuser", "password": "any"}
     )
     assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_change_password_success(client: AsyncClient) -> None:
+    token = await get_token(client, "user", "passphrase")
+
+    response = await client.post(
+        "/api/v1/user/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "old_password": "passphrase",
+            "new_password": "newpassphrase",
+        },
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"status": "changed"}
+
+    old_login = await client.post(
+        "/token", data={"username": "user", "password": "passphrase"}
+    )
+    assert old_login.status_code == status.HTTP_401_UNAUTHORIZED
+
+    new_login = await client.post(
+        "/token", data={"username": "user", "password": "newpassphrase"}
+    )
+    assert new_login.status_code == status.HTTP_200_OK
+    new_payload = sec_manager.verify_token(new_login.json()["access_token"])
+    assert new_payload["sub"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_change_password_wrong_old_password(client: AsyncClient) -> None:
+    token = await get_token(client, "user", "passphrase")
+
+    response = await client.post(
+        "/api/v1/user/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "old_password": "incorrectpw",
+            "new_password": "replacement",
+        },
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"] == "Incorrect password"
+
+    still_valid = await client.post(
+        "/token", data={"username": "user", "password": "passphrase"}
+    )
+    assert still_valid.status_code == status.HTTP_200_OK
+
+
+def test_login_invalid_credentials_returns_401_detail() -> None:
+    asyncio.run(reset_database())
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/token",
+                data={"username": "wronguser", "password": "wrongpass"},
+            )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.json() == {"detail": "Invalid credentials"}
+    finally:
+        asyncio.run(reset_database())
 
 
 @pytest.mark.asyncio

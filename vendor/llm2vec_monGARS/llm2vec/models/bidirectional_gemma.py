@@ -153,22 +153,31 @@ class GemmaBiModel(GemmaModel):
             causal_mask *= torch.arange(
                 target_length, device=device
             ) > cache_position.reshape(-1, 1)
-            causal_mask = causal_mask[None, None, :, :].expand(
-                input_tensor.shape[0], 1, -1, -1
+            causal_mask = (
+                causal_mask.unsqueeze(0)
+                .unsqueeze(0)
+                .expand(input_tensor.shape[0], 1, -1, -1)
             )
             if attention_mask is not None:
                 causal_mask = (
                     causal_mask.clone()
                 )  # copy to contiguous memory for in-place edit
                 mask_length = attention_mask.shape[-1]
+                mask_slice = slice(0, mask_length)
+                causal_indices = (
+                    slice(None),
+                    slice(None),
+                    slice(None),
+                    mask_slice,
+                )
                 padding_mask = (
-                    causal_mask[:, :, :, :mask_length]
-                    + attention_mask[:, None, None, :]
+                    causal_mask[causal_indices]
+                    + attention_mask[(slice(None), None, None, slice(None))]
                 )
                 padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[
-                    :, :, :, :mask_length
-                ].masked_fill(padding_mask, min_dtype)
+                causal_mask[causal_indices] = causal_mask[causal_indices].masked_fill(
+                    padding_mask, min_dtype
+                )
         if (
             self.config._attn_implementation == "sdpa"
             and attention_mask is not None

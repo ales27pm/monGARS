@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Column,
     DateTime,
     Float,
     Index,
@@ -159,3 +161,15 @@ class UserAccount(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class OperatorApproval(Base):
+    __tablename__ = "operator_approvals"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(64), nullable=False)
+    prompt_hash = Column(String(8), nullable=False)
+    pii_entities = Column(JSON, nullable=False)
+    approval_token = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    approved_by = Column(String(64), nullable=True)

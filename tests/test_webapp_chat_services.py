@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import httpx
 import pytest
 
-os.environ.setdefault("SECRET_KEY", "test")
-os.environ.setdefault("JWT_ALGORITHM", "HS256")
-
 from monGARS.api.dependencies import get_persistence_repository, hippocampus
 from monGARS.api.web_api import app, get_conversational_module
 from monGARS.core.security import SecurityManager
 from webapp.chat import services
+
+UTC = getattr(datetime, "UTC", timezone.utc)
 
 
 class DummyResponse:
@@ -59,7 +57,9 @@ async def test_post_chat_message_success(monkeypatch: pytest.MonkeyPatch) -> Non
         200, {"response": "pong", "confidence": 0.9, "processing_time": 1.2}
     )
 
-    async_client_factory = lambda *args, **kwargs: DummyAsyncClient(response, recorder)
+    def async_client_factory(*args, **kwargs):
+        return DummyAsyncClient(response, recorder)
+
     monkeypatch.setattr(services, "FASTAPI_URL", "http://api")
     monkeypatch.setattr(services.httpx, "AsyncClient", async_client_factory)
 
@@ -78,7 +78,9 @@ async def test_post_chat_message_error(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder: dict[str, object] = {}
     response = DummyResponse(503, {"detail": "maintenance"})
 
-    async_client_factory = lambda *args, **kwargs: DummyAsyncClient(response, recorder)
+    def async_client_factory(*args, **kwargs):
+        return DummyAsyncClient(response, recorder)
+
     monkeypatch.setattr(services, "FASTAPI_URL", "http://api")
     monkeypatch.setattr(services.httpx, "AsyncClient", async_client_factory)
 
@@ -152,17 +154,17 @@ class _StubConversationalModule:
                 "session_id": session_id,
             }
         )
-        await hippocampus.store(user_id, query, "stubbed-response")
+        await hippocampus.store(user_id, query, "sampled-response")
         speech_turn = {
             "turn_id": "turn-1",
-            "text": "stubbed-response",
+            "text": "sampled-response",
             "created_at": datetime.now(UTC).isoformat(),
             "segments": [],
             "average_words_per_second": 2.0,
             "tempo": 1.0,
         }
         return {
-            "text": "stubbed-response",
+            "text": "sampled-response",
             "confidence": 0.75,
             "processing_time": 0.2,
             "speech_turn": speech_turn,
@@ -186,8 +188,14 @@ async def test_services_roundtrip_against_fastapi(
     )
     convo = _StubConversationalModule()
 
-    app.dependency_overrides[get_persistence_repository] = lambda: repo
-    app.dependency_overrides[get_conversational_module] = lambda: convo
+    def provide_repo() -> _InMemoryRepo:
+        return repo
+
+    def provide_conversational_module() -> _StubConversationalModule:
+        return convo
+
+    app.dependency_overrides[get_persistence_repository] = provide_repo
+    app.dependency_overrides[get_conversational_module] = provide_conversational_module
 
     original_async_client = httpx.AsyncClient
 
@@ -208,7 +216,7 @@ async def test_services_roundtrip_against_fastapi(
         result = await services.post_chat_message(
             "u1", token, "hi<script>alert(1)</script>"
         )
-        assert result["response"] == "stubbed-response"
+        assert result["response"] == "sampled-response"
         assert "error" not in result
         assert result["confidence"] == pytest.approx(0.75)
         assert result["processing_time"] == pytest.approx(0.2)
@@ -222,7 +230,7 @@ async def test_services_roundtrip_against_fastapi(
         assert history
         latest = history[0]
         assert latest["query"] == "hialert(1)"
-        assert latest["response"] == "stubbed-response"
+        assert latest["response"] == "sampled-response"
     finally:
         await app.router.shutdown()
         app.dependency_overrides.pop(get_persistence_repository, None)

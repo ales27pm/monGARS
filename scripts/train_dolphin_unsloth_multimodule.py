@@ -2,7 +2,7 @@
 """
 train_dolphin_unsloth_multimodule.py
 
-End-to-end fine-tuning for Dolphin 3.0 (Llama 3.1 8B) using Unsloth + LoRA.
+End-to-end fine-tuning for Dolphin-X1-8B using Unsloth + LoRA.
 - Ingests your uploaded train/val JSONL (supports prompt/response, instruction/input/output, or messages[])
 - Works with module-tagged prompts like: [MOD=Cortex], [MOD=Hippocampus], etc.
 - Trains with 4-bit base + LoRA, with safe fallbacks
@@ -29,12 +29,13 @@ from pathlib import Path
 from typing import Any, Dict
 
 import torch
-from datasets import load_dataset
 from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
+
+from datasets import load_dataset
 
 LOGGER = logging.getLogger("unsloth_multimodule")
 
-BASE_MODEL = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+BASE_MODEL = "dphn/Dolphin-X1-8B"
 
 
 def _setup_logging():
@@ -215,11 +216,11 @@ class LLM2Vec:
             model_dir = f"{self.base_dir}/merged"
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_dir,
-                torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 device_map="auto",
             )
         else:
-            base_model = "cognitivecomputations/Dolphin3.0-Llama3.1-8B"
+            base_model = "dphn/Dolphin-X1-8B"
             self.model = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 load_in_4bit=load_in_4bit,
@@ -272,7 +273,7 @@ def _export_wrapper(out_dir: Path):
         json.dumps(
             {
                 "name": "monGARS-LLM2Vec",
-                "backbone": "Dolphin3.0-Llama3.1-8B",
+                "backbone": "Dolphin-X1-8B",
                 "adapter_dir": "lora_adapter",
                 "supports_merged": True,
                 "embed_strategy": "last_hidden_mean_pool",

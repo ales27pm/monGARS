@@ -9,23 +9,29 @@ from monGARS.core.self_training import SelfTrainingEngine
 
 
 @pytest.fixture(autouse=True)
-def stub_embedding_system(monkeypatch: pytest.MonkeyPatch) -> None:
-    class DummyEmbeddingSystem:
+def fake_llm_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyLLMIntegration:
         def __init__(self) -> None:
-            self.encodes: list[str] = []
+            self.requests: list[list[str]] = []
 
-        async def encode(self, text: str) -> tuple[list[float], bool]:
-            self.encodes.append(text)
-            return [float(len(text))], False
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            cleaned = [str(text) for text in texts]
+            self.requests.append(cleaned)
+            return [[float(len(text))] for text in cleaned]
+
+    dummy = DummyLLMIntegration()
+
+    def fake_instance(cls):  # type: ignore[unused-argument]
+        return dummy
 
     monkeypatch.setattr(
-        "monGARS.core.self_training.EmbeddingSystem",
-        DummyEmbeddingSystem,
+        "monGARS.core.self_training.LLMIntegration.instance",
+        classmethod(fake_instance),
     )
 
 
 @pytest.fixture()
-def trainer_stub() -> type:
+def trainer_double() -> type:
     class DummyTrainer:
         runs: list[list[dict[str, object]]] = []
 
@@ -56,10 +62,10 @@ def trainer_stub() -> type:
 
 @pytest.mark.asyncio
 async def test_run_training_cycle_creates_version(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -74,7 +80,9 @@ async def test_run_training_cycle_creates_version(
     assert version["summary"]["metrics"]["training_examples"] == 1
     dataset_file = version["dataset"]["dataset_file"]
     assert Path(dataset_file).exists()
-    assert trainer_stub.runs and trainer_stub.runs[0][0]["text_preview"] == "trainable"
+    assert (
+        trainer_double.runs and trainer_double.runs[0][0]["text_preview"] == "trainable"
+    )
     assert version["dataset"]["version"] == 1
     assert version["dataset"]["quarantined"] is False
     compliance = version["dataset"]["compliance"]
@@ -84,10 +92,10 @@ async def test_run_training_cycle_creates_version(
 
 @pytest.mark.asyncio
 async def test_run_training_cycle_handles_multiple_records(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -97,16 +105,16 @@ async def test_run_training_cycle_handles_multiple_records(
     )
     await engine._run_training_cycle()
 
-    assert len(trainer_stub.runs) == 1
-    assert len(trainer_stub.runs[0]) == 2
+    assert len(trainer_double.runs) == 1
+    assert len(trainer_double.runs[0]) == 2
     summary = engine.model_versions["v1"]["summary"]
     assert summary["metrics"]["training_examples"] == 2
 
 
 @pytest.mark.asyncio
-async def test_run_training_cycle_no_data(tmp_path: Path, trainer_stub: type) -> None:
+async def test_run_training_cycle_no_data(tmp_path: Path, trainer_double: type) -> None:
     engine = SelfTrainingEngine(
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -116,11 +124,11 @@ async def test_run_training_cycle_no_data(tmp_path: Path, trainer_stub: type) ->
 
 @pytest.mark.asyncio
 async def test_run_training_cycle_skips_low_confidence_only(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
         training_threshold=0.9,
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -132,11 +140,11 @@ async def test_run_training_cycle_skips_low_confidence_only(
 
 @pytest.mark.asyncio
 async def test_run_training_cycle_handles_non_numeric_confidence(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
         training_threshold=0.5,
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -148,11 +156,11 @@ async def test_run_training_cycle_handles_non_numeric_confidence(
 
 @pytest.mark.asyncio
 async def test_run_training_cycle_skips_missing_confidence(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
         training_threshold=0.5,
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -160,17 +168,17 @@ async def test_run_training_cycle_skips_missing_confidence(
     await engine.training_queue.put({"text": "no-confidence"})
     await engine._run_training_cycle()
 
-    assert len(trainer_stub.runs) == 1
-    assert len(trainer_stub.runs[0]) == 1
-    assert trainer_stub.runs[0][0]["text_preview"] == "valid"
+    assert len(trainer_double.runs) == 1
+    assert len(trainer_double.runs[0]) == 1
+    assert trainer_double.runs[0][0]["text_preview"] == "valid"
 
 
 @pytest.mark.asyncio
 async def test_run_training_cycle_skips_missing_text_fields(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -178,17 +186,17 @@ async def test_run_training_cycle_skips_missing_text_fields(
     await engine.training_queue.put({"response": "train", "confidence": 0.9})
     await engine._run_training_cycle()
 
-    assert len(trainer_stub.runs) == 1
-    assert len(trainer_stub.runs[0]) == 1
-    assert trainer_stub.runs[0][0]["text_preview"] == "train"
+    assert len(trainer_double.runs) == 1
+    assert len(trainer_double.runs[0]) == 1
+    assert trainer_double.runs[0][0]["text_preview"] == "train"
 
 
 @pytest.mark.asyncio
 async def test_dataset_catalog_and_pii_scrubbing(
-    tmp_path: Path, trainer_stub: type
+    tmp_path: Path, trainer_double: type
 ) -> None:
     engine = SelfTrainingEngine(
-        trainer_cls=trainer_stub,
+        trainer_cls=trainer_double,
         dataset_root=str(tmp_path / "datasets"),
         model_registry_path=str(tmp_path / "models"),
     )
@@ -210,7 +218,7 @@ async def test_dataset_catalog_and_pii_scrubbing(
         rows = [json.loads(line) for line in handle]
 
     assert rows and "[REDACTED_EMAIL]" in rows[0]["text_preview"]
-    assert trainer_stub.runs[0][0]["text_preview"].endswith("[REDACTED_EMAIL]")
+    assert trainer_double.runs[0][0]["text_preview"].endswith("[REDACTED_EMAIL]")
     assert dataset_meta["version"] == 1
     assert dataset_meta["compliance"]["status"] == "approved"
     assert dataset_meta["governance"]["run_id"] == dataset_meta["run_id"]

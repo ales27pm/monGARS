@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+from typing import Any, Callable
+
+class AsyncIOScheduler:
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+    def add_job(
+        self, func: Callable[..., Any], trigger: str, *args: Any, **kwargs: Any
+    ) -> Any: ...
+    def start(self) -> None: ...
+    def shutdown(self, wait: bool = ...) -> None: ...
+
+__all__ = ["AsyncIOScheduler"]

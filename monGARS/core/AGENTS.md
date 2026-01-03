@@ -8,7 +8,8 @@ Guides orchestrators, schedulers, and memory abstractions under `monGARS/core/`.
 
 ## Automation
 
-- Sourced from the central JSON profile; run the refresh command after substantial engine work.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -22,24 +23,31 @@ Guides orchestrators, schedulers, and memory abstractions under `monGARS/core/`.
 - **Self-Improvement**
   - ✅ Personality profiles persisted via SQLModel with live adapter updates.
   - ✅ Self-training cycles produce real adapter artefacts via `modules.neurons.training.mntp_trainer.MNTPTrainer` with deterministic fallbacks.
-  - 🔄 Reinforcement-learning research loops ship under `modules/neurons/training/reinforcement_loop.py`; integrate telemetry, rollout, and operator controls before calling the milestone complete.
-  - 🔄 Expand tests for long-running MNTP jobs, multi-replica Ray Serve rollouts, and distributed workflows.
+  - ✅ Reinforcement-learning research loops run through the evolution orchestrator, operator approvals, and long-haul validator with telemetry and manifest updates.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/long_haul_validation.py†L1-L220】
+  - ✅ ResearchLongHaulService now schedules multi-replica soak runs and persists observability snapshots for dashboards, ensuring reinforcement pipelines stay healthy without manual triggers.【F:monGARS/core/research_validation.py†L1-L200】【F:monGARS/core/reinforcement_observability.py†L1-L168】【F:tests/test_research_long_haul_service.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】
+- **Sustainability**
+  - 🚧 Fully integrate evolution engine outputs into routine optimisation cycles.
+  - 🚧 Automate energy usage reporting and advanced hardware-aware scaling using the energy tracker pipeline and reinforcement observability feeds as the baseline data source.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/reinforcement_observability.py†L1-L168】
+  - 🚧 Share optimisation artefacts between nodes for faster convergence.
 
 ## Architectural Principles
 
-- Keep orchestrators thin and asynchronous; inject collaborators and avoid module-level singletons.
-- Prefer existing services (`Hippocampus`, `PersistenceRepository`, `DistributedScheduler`,
-    `PeerCommunicator`) before inventing new state machines.
-- Document new behaviours and heuristics in module docstrings.
+- Keep orchestrators asynchronous, inject collaborators explicitly, and favour existing services
+    (`AdaptiveResponseGenerator`, `ConversationalModule`, `PeerCommunicator`, `LongHaulValidation`) over ad-hoc state
+    machines.
+- Route UI events through `ui_events.event_bus`, persist approvals via `operator_approvals`, and coordinate sustainability
+    metrics with `sustainability_dashboard` when adding new workflows.
 
 ## Operational Discipline
 
-- Wrap blocking work with `asyncio.to_thread` or queue it on executors.
-- Publish counters/metrics for long-running loops and redact sensitive identifiers in logs.
-- Handle optional ML dependencies defensively with explicit fallbacks.
+- Offload blocking work with `asyncio.to_thread` or executors and avoid sharing mutable globals across tasks.
+- Emit metrics through `monGARS.telemetry`/OpenTelemetry where available and prefer timezone-aware timestamps
+    (`datetime.now(datetime.UTC)`) in new code.
+- Handle optional ML dependencies defensively with explicit fallbacks and structured warnings.
 
 ## Test Coverage
 
-Expand cognition suites when behaviour shifts—`tests/test_hippocampus.py`,
-`tests/test_personality.py`, `tests/test_mimicry.py`, and scheduler/evolution tests anchor this
-area.
+Expand cognition, reinforcement, and sustainability suites when behaviour
+shifts—`tests/test_conversation_semantic_context.py`, `tests/test_llm_integration.py`,
+`tests/test_peer_communication.py`, `tests/test_reinforcement_loop.py`, `tests/test_long_haul_validation.py`, and
+`tests/test_sustainability_dashboard.py` anchor this area.

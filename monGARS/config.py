@@ -1,18 +1,23 @@
-import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sys
+import time
 from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Iterable, Literal, Optional, TypeAlias, get_args
 
 import hvac
+from dotenv import dotenv_values, set_key
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -23,19 +28,133 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
-    PostgresDsn,
+    PrivateAttr,
     RedisDsn,
     field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
+from monGARS.core.constants import (
+    DEFAULT_EMBEDDING_BACKEND,
+    SUPPORTED_EMBEDDING_BACKENDS,
+)
+from monGARS.core.embedding_backends import normalise_embedding_backend
 from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
 log = logging.getLogger(__name__)
+
+
+EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(sorted(SUPPORTED_EMBEDDING_BACKENDS))
+"""Supported embedding backends exposed to runtime configuration."""
+
+EmbeddingBackend: TypeAlias = Literal[
+    "dolphin-x1-llm2vec",
+    "huggingface",
+    "ollama",
+    "transformers",
+]
+
+
+if set(get_args(EmbeddingBackend)) != set(
+    EMBEDDING_BACKEND_CHOICES
+):  # pragma: no cover - defensive guard
+    raise RuntimeError(
+        "EmbeddingBackend literal choices must match SUPPORTED_EMBEDDING_BACKENDS. "
+        "Update monGARS.config.EmbeddingBackend when the supported backends change."
+    )
+
+
+# --- helpers (top-level) ---
+
+
+def _generate_secret_key() -> str:
+    """Create a high-entropy secret key suitable for symmetric JWT signing."""
+
+    return secrets.token_urlsafe(64)
+
+
+def _vault_configured(s) -> bool:
+    return bool(getattr(s, "VAULT_URL", None)) and bool(getattr(s, "VAULT_TOKEN", None))
+
+
+def _iter_env_files(settings: "Settings") -> Iterable[Path]:
+    """Yield candidate env files configured for the settings model."""
+
+    env_file = settings.model_config.get("env_file")
+    if not env_file:
+        return []
+
+    env_files: Iterable[str | Path] = (
+        (env_file,) if isinstance(env_file, (str, Path)) else env_file
+    )
+
+    resolved: list[Path] = []
+    for entry in env_files:
+        path = Path(entry)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        resolved.append(path)
+    return resolved
+
+
+def _load_secret_from_env_files(settings: "Settings") -> str | None:
+    """Return the last non-empty SECRET_KEY discovered in configured env files."""
+
+    discovered_secret: str | None = None
+    for env_path in _iter_env_files(settings):
+        try:
+            env_values = dotenv_values(env_path, encoding="utf-8") or {}
+        except (OSError, UnicodeDecodeError) as exc:
+            # Reading env files can fail when the path is missing, unreadable, or misencoded.
+            # The caller treats the result as best-effort so we log and skip.
+            log.debug(
+                "Skipping env file %s while resolving SECRET_KEY: %s", env_path, exc
+            )
+            continue
+
+        if candidate := (env_values.get("SECRET_KEY") or "").strip():
+            discovered_secret = candidate
+
+    return discovered_secret
+
+
+@dataclass(frozen=True)
+class _SecretKeyInputs:
+    """Collect the different SECRET_KEY candidates for downstream validation."""
+
+    resolved_value: str | None
+    env_var: str | None
+    env_file: str | None
+    vault_configured: bool
+
+
+def _collect_secret_key_inputs(settings: "Settings") -> _SecretKeyInputs:
+    """Gather SECRET_KEY from config, environment variables, and env files."""
+
+    resolved_value = (getattr(settings, "SECRET_KEY", None) or "").strip() or None
+    env_var = (os.environ.get("SECRET_KEY") or "").strip() or None
+    env_file = _load_secret_from_env_files(settings)
+    return _SecretKeyInputs(
+        resolved_value=resolved_value,
+        env_var=env_var,
+        env_file=env_file,
+        vault_configured=_vault_configured(settings),
+    )
+
+
+SecretKeyOrigin = Literal[
+    "missing",
+    "provided",
+    "vault",
+    "ephemeral",
+    "generated",
+    "persisted",
+    "deferred",
+]
 
 
 def _parse_env_bool(value: Any) -> bool:
@@ -80,6 +199,103 @@ class HardwareHeuristics(BaseModel):
     warm_pool_floor: int = Field(default=1, ge=1)
 
 
+class ModelRuntimeSettings(BaseModel):
+    """Quantization and sampling controls for the unified LLM runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quantize_4bit: bool = Field(
+        default=True,
+        description=(
+            "Enable 4-bit NF4 quantization when CUDA is available to reduce memory usage."
+        ),
+    )
+    bnb_4bit_quant_type: str = Field(
+        default="nf4",
+        description="Quantization scheme applied by bitsandbytes when quantizing in 4-bit mode.",
+    )
+    bnb_4bit_compute_dtype: str = Field(
+        default="bfloat16",
+        description="Torch dtype used for computation when 4-bit quantization is active.",
+    )
+    bnb_4bit_use_double_quant: bool = Field(
+        default=True,
+        description="Enable double quantization for improved accuracy when quantizing to 4-bit.",
+    )
+    max_new_tokens: int = Field(
+        default=512,
+        ge=1,
+        description="Default number of tokens the unified runtime may generate per request.",
+    )
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        description="Sampling temperature applied to unified runtime generations by default.",
+    )
+    top_p: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Top-p nucleus sampling parameter for unified runtime generations.",
+    )
+    top_k: int = Field(
+        default=40,
+        ge=0,
+        description="Top-k sampling parameter for unified runtime generations.",
+    )
+    repetition_penalty: float = Field(
+        default=1.05,
+        ge=0.0,
+        description="Penalty applied to repeated tokens while sampling.",
+    )
+
+
+class LLMPooling(str, Enum):
+    MEAN = "mean"
+    MAX = "max"
+    CLS = "cls"
+
+
+class LLMQuantization(str, Enum):
+    NONE = "none"
+    NF4 = "nf4"
+    GPTQ = "gptq"
+    FP8 = "fp8"
+
+
+class LLMSettings(BaseModel):
+    """LLM-specific runtime configuration."""
+
+    model_config = ConfigDict(
+        extra="forbid", alias_generator=str.upper, populate_by_name=True
+    )
+
+    quantization: LLMQuantization = Field(
+        default=LLMQuantization.NF4,
+        description="BitsAndBytes quantization strategy applied to LLM weights.",
+    )
+    load_in_4bit: bool = Field(
+        default=True,
+        description="Toggle 4-bit quantized loading when CUDA resources are available.",
+    )
+    embedding_pooling: LLMPooling = Field(
+        default=LLMPooling.MEAN,
+        description="Pooling strategy applied to encoder embeddings.",
+    )
+    serve_backend: Literal["local", "ray"] = Field(
+        default="local",
+        description=(
+            "Backend used by the /llm API router. When set to 'ray' the API"
+            " will attempt to route requests through the Ray Serve deployment"
+            " before falling back to the local runtime."
+        ),
+    )
+    use_gpu: bool = Field(
+        default=False,
+        description="Request GPU resources for Ray Serve replicas when available.",
+    )
+
+
 class Settings(BaseSettings):
     """Application configuration."""
 
@@ -106,40 +322,87 @@ class Settings(BaseSettings):
     worker_deployment_name: str = Field(default="mongars-workers")
     worker_deployment_namespace: str = Field(default="default")
 
-    SECRET_KEY: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Application secret used for JWT signing; override in production.",
-    )
+    SECRET_KEY: Optional[str] = None
+    _secret_key_origin: SecretKeyOrigin = PrivateAttr(default="missing")
     JWT_ALGORITHM: str = Field(default="HS256")
     JWT_PRIVATE_KEY: str | None = Field(
         default=None,
         description=(
-            "Deprecated placeholder for RSA support. Ignored while JWT_ALGORITHM is locked to HS256."
+            "PEM-encoded private key used for asymmetric JWT algorithms (e.g. RS256)."
         ),
     )
     JWT_PUBLIC_KEY: str | None = Field(
         default=None,
         description=(
-            "Deprecated placeholder for RSA support. Ignored while JWT_ALGORITHM is locked to HS256."
+            "PEM-encoded public key paired with JWT_PRIVATE_KEY for asymmetric algorithms."
         ),
     )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
 
     @model_validator(mode="after")
-    def validate_jwt_keys(self) -> "Settings":
-        """Ensure the configured JWT algorithm matches the provided key material."""
+    def _derive_secret_key_and_validate(self) -> "Settings":
+        """Generate ephemeral secrets for debug builds and validate JWT configuration."""
 
-        algorithm = self.JWT_ALGORITHM.upper()
-        if algorithm != "HS256":
-            raise ValueError(
-                "JWT_ALGORITHM must be set to HS256 until managed key storage is available."
+        inputs = _collect_secret_key_inputs(self)
+
+        # Secret precedence:
+        #   1. Explicit environment variables override everything.
+        #   2. Env files override config defaults using "last one wins" semantics.
+        #   3. Remaining config or persisted values are treated as provided.
+        secret_value = inputs.resolved_value
+        if inputs.env_var and secret_value == inputs.env_var:
+            secret_source = (
+                "env_var"  # noqa: S105 - provenance label, not a secret value
             )
-        if self.JWT_PRIVATE_KEY or self.JWT_PUBLIC_KEY:
-            raise ValueError(
-                "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported when JWT_ALGORITHM is HS256."
+        elif inputs.env_file and secret_value == inputs.env_file:
+            secret_source = (
+                "env_file"  # noqa: S105 - provenance label, not a secret value
             )
-        object.__setattr__(self, "JWT_ALGORITHM", "HS256")
+        elif secret_value is not None:
+            secret_source = (
+                "config"  # noqa: S105 - provenance label, not a secret value
+            )
+        else:
+            secret_source = None
+
+        if inputs.vault_configured:
+            if secret_value is None or secret_source == "env_file":
+                secret_origin: SecretKeyOrigin = (
+                    "deferred"  # noqa: S105 - provenance label
+                )
+                secret_value = None
+            else:
+                secret_origin = "provided"  # noqa: S105 - provenance label
+        elif secret_value is not None:
+            secret_origin = "provided"  # noqa: S105 - provenance label
+        elif self.debug:
+            secret_origin = "ephemeral"  # noqa: S105 - provenance label
+        else:
+            secret_origin = "missing"  # noqa: S105 - provenance label
+
+        object.__setattr__(self, "SECRET_KEY", secret_value)
+        object.__setattr__(self, "_secret_key_origin", secret_origin)
+
+        algorithm = (self.JWT_ALGORITHM or "").strip().upper()
+        object.__setattr__(self, "JWT_ALGORITHM", algorithm)
+
+        private_key = (self.JWT_PRIVATE_KEY or "").strip() or None
+        public_key = (self.JWT_PUBLIC_KEY or "").strip() or None
+        object.__setattr__(self, "JWT_PRIVATE_KEY", private_key)
+        object.__setattr__(self, "JWT_PUBLIC_KEY", public_key)
+
+        symmetric_match = re.fullmatch(r"HS\d+", algorithm)
+        if symmetric_match:
+            if private_key or public_key:
+                raise ValueError(
+                    "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are not supported with symmetric JWT algorithms."
+                )
+        else:
+            if not (private_key and public_key):
+                raise ValueError(
+                    "Asymmetric JWT algorithms require both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY."
+                )
+
         return self
 
     database_url: AnyUrl = Field(
@@ -239,6 +502,20 @@ class Settings(BaseSettings):
         ge=0,
         description="Duration in days that curated datasets remain exportable post-review.",
     )
+    unified_model_dir: Path = Field(
+        default=Path("models/dolphin_x1_unified_enhanced"),
+        description=(
+            "Path to the unified Dolphin-X1 bundle used by the quantized LLM/LLM2Vec runtime."
+        ),
+    )
+    model: ModelRuntimeSettings = Field(
+        default_factory=ModelRuntimeSettings,
+        description="Runtime quantization and sampling controls for the unified model.",
+    )
+    llm: LLMSettings = Field(
+        default_factory=LLMSettings,
+        description="LLM runtime configuration covering quantization and pooling.",
+    )
     llm_adapter_registry_path: Path = Field(
         default=Path("models/encoders"),
         description="Directory storing adapter artifacts and manifest.",
@@ -263,6 +540,73 @@ class Settings(BaseSettings):
         default=None,
         description="Optional override for the code-focused model.",
     )
+    embedding_backend: EmbeddingBackend = Field(
+        default=DEFAULT_EMBEDDING_BACKEND,
+        description="Embedding backend provider used for semantic vector generation.",
+    )
+    ollama_host: AnyUrl | None = Field(
+        default=None,
+        description=(
+            "Optional base URL for the Ollama runtime when using the Ollama embedding backend."
+        ),
+    )
+    ollama_embedding_model: str = Field(
+        default="nomic-embed-text",
+        min_length=1,
+        description="Model identifier requested from Ollama when embedding_backend='ollama'.",
+    )
+    transformers_embedding_model: str = Field(
+        default="meta-llama/Meta-Llama-3.1-8B-Instruct",
+        description=(
+            "Hugging Face model identifier used when embedding_backend='transformers'."
+        ),
+    )
+    transformers_embedding_max_length: int = Field(
+        default=4096,
+        ge=1,
+        description="Maximum sequence length applied during transformers embedding tokenisation.",
+    )
+    transformers_embedding_batch_size: int = Field(
+        default=2,
+        ge=1,
+        description="Batch size used when pooling transformers embeddings.",
+    )
+    transformers_embedding_device: str | None = Field(
+        default=None,
+        description=(
+            "Optional torch device override (e.g. 'cuda', 'cpu', 'mps') for transformers embeddings."
+        ),
+    )
+    dolphin_x1_llm2vec_service_url: AnyUrl = Field(
+        default="http://127.0.0.1:8080",
+        description=(
+            "Base URL for the Dolphin-X1-LLM2Vec embedding service when "
+            "embedding_backend='dolphin-x1-llm2vec'."
+        ),
+    )
+    dolphin_x1_llm2vec_service_timeout: float = Field(
+        default=30.0,
+        ge=0.1,
+        description=(
+            "Request timeout, in seconds, applied to Dolphin-X1-LLM2Vec service calls."
+        ),
+    )
+    dolphin_x1_llm2vec_service_token: str | None = Field(
+        default=None,
+        description=(
+            "Optional bearer token added to Authorization headers for the Dolphin-X1-LLM2Vec service."
+        ),
+    )
+
+    @field_validator("embedding_backend", mode="before")
+    @classmethod
+    def _normalise_embedding_backend(cls, value: Any) -> str:
+        return normalise_embedding_backend(
+            value,
+            default=DEFAULT_EMBEDDING_BACKEND,
+            strict=True,
+        )
+
     llm2vec_base_model: str = Field(
         default="nomic-ai/llm2vec-large",
         description="Base checkpoint used when instantiating the LLM2Vec encoder.",
@@ -299,6 +643,20 @@ class Settings(BaseSettings):
         default=3072,
         ge=1,
         description="Embedding dimensionality expected from LLM2Vec fallbacks and pgvector schema.",
+    )
+    llm2vec_context_limit: int = Field(
+        default=3,
+        ge=0,
+        le=12,
+        description="Maximum number of semantic recall snippets injected into conversation prompts.",
+    )
+    llm2vec_context_max_distance: float | None = Field(
+        default=0.4,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Optional cosine distance cutoff applied to semantic recall candidates; set to 0 to disable the filter."
+        ),
     )
     llm2vec_fallback_candidate_window: int = Field(
         default=64,
@@ -337,6 +695,138 @@ class Settings(BaseSettings):
         ge=1,
         description="Minimum number of missing entities detected in the knowledge graph before triggering research.",
     )
+    search_searx_enabled: EnvBool = Field(
+        default=True,
+        description=(
+            "Enable the SearxNG search provider so the orchestrator can query a self-hosted instance."
+        ),
+    )
+    search_searx_base_url: AnyUrl | None = Field(
+        default="http://localhost:8082",
+        description="Base URL for the SearxNG deployment, e.g. https://searx.example.com.",
+    )
+    search_searx_api_key: str | None = Field(
+        default=None,
+        description="Optional API key or token expected by the SearxNG instance.",
+    )
+    search_searx_categories: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of SearxNG categories to query (e.g. ['general', 'news']). Leave empty to use server defaults."
+        ),
+    )
+    search_searx_safesearch: int | None = Field(
+        default=None,
+        ge=0,
+        le=2,
+        description=(
+            "Optional SearxNG safesearch level (0=off, 1=moderate, 2=strict). Leave unset to defer to server defaults."
+        ),
+    )
+    search_searx_default_language: str | None = Field(
+        default="en",
+        description=(
+            "Fallback language passed to SearxNG when the orchestrator does not supply an explicit locale."
+        ),
+    )
+    search_searx_result_cap: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description="Upper bound on SearxNG results processed per query before local ranking and truncation.",
+    )
+    search_searx_timeout_seconds: float = Field(
+        default=6.0,
+        ge=1.0,
+        le=60.0,
+        description=(
+            "Per-request timeout when querying SearxNG. Increase for slower upstream engines or reduce to enforce snappier cutoffs."
+        ),
+    )
+    search_searx_engines: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of SearxNG engines to target (e.g. ['google', 'bing']). Leave empty to use the server defaults."
+        ),
+    )
+    search_searx_time_range: str | None = Field(
+        default=None,
+        description=(
+            "Optional time range filter passed to SearxNG (e.g. 'day', 'week', 'month', 'year')."
+        ),
+    )
+    search_searx_sitelimit: str | None = Field(
+        default=None,
+        description="Restrict SearxNG results to a specific domain or hostname (e.g. 'site:example.com').",
+    )
+    search_searx_page_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description=(
+            "Override the per-page result count requested from SearxNG. Leave unset to allow the orchestrator to adapt automatically."
+        ),
+    )
+    search_searx_max_pages: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description=(
+            "Maximum number of result pages to fetch from SearxNG for a single query before ranking locally."
+        ),
+    )
+    search_searx_language_strict: EnvBool = Field(
+        default=True,
+        description=(
+            "Force the Accept-Language header to match the orchestrator locale so SearxNG favours language-specific engines."
+        ),
+    )
+
+    @field_validator("search_searx_page_size", mode="before")
+    @classmethod
+    def _normalize_optional_int(cls, value: Any) -> Any:
+        """Allow empty strings from env vars to fall back to the default."""
+
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return stripped
+        return value
+
+    # --- SearxNG helpers ---
+    @field_validator("search_searx_categories", "search_searx_engines", mode="before")
+    @classmethod
+    def _parse_searx_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return []
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return [item.strip() for item in s.split(",") if item.strip()]
+            if isinstance(parsed, str):
+                return [parsed.strip()] if parsed.strip() else []
+            if isinstance(parsed, Sequence):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            return []
+        if isinstance(value, Sequence):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+    @model_validator(mode="after")
+    def _validate_searx_config(self) -> "Settings":
+        if self.search_searx_enabled and not self.search_searx_base_url:
+            raise ValueError(
+                "search_searx_base_url must be set when search_searx_enabled=True"
+            )
+        return self
+
     MLFLOW_TRACKING_URI: str = Field(default="http://localhost:5000")
     FASTAPI_URL: str = Field(default="http://localhost:8000")
 
@@ -345,6 +835,12 @@ class Settings(BaseSettings):
     otel_collector_url: str = Field(default="http://localhost:4318")
     otel_metrics_enabled: EnvBool = Field(default=True)
     otel_traces_enabled: EnvBool = Field(default=True)
+    otel_prometheus_enabled: EnvBool = Field(
+        default=True,
+        description=(
+            "Expose OpenTelemetry metrics via the in-process Prometheus registry served by the API."
+        ),
+    )
 
     WS_ENABLE_EVENTS: bool = Field(default=True)
     WS_ALLOWED_ORIGINS: list[AnyUrl] = Field(
@@ -375,6 +871,12 @@ class Settings(BaseSettings):
     REDIS_URL: AnyUrl | None = Field(
         default=None,
         description="Optional override for the Redis connection string, e.g. redis://localhost:6379/0.",
+    )
+    EVENTBUS_USE_REDIS: EnvBool = Field(
+        default=False,
+        description=(
+            "Enable the Redis-backed event bus. When false, the in-memory backend is always used."
+        ),
     )
     EVENTBUS_MEMORY_QUEUE_MAXSIZE: int = Field(
         default=1000,
@@ -558,37 +1060,121 @@ def ensure_secret_key(
 ) -> tuple[Settings, bool]:
     """Ensure the settings object contains a SECRET_KEY."""
 
-    if settings.SECRET_KEY:
+    origin: SecretKeyOrigin = getattr(settings, "_secret_key_origin", "missing")
+
+    if settings.SECRET_KEY and origin not in {"ephemeral"}:
         return settings, False
-    if not settings.debug:
+
+    if origin == "deferred":
         raise ValueError("SECRET_KEY must be provided in production")
-    message = (
-        log_message
-        if log_message is not None
-        else "SECRET_KEY not configured; generated ephemeral key for debug use only."
-    )
-    log.warning(message)
-    generated_key = secrets.token_urlsafe(64)
-    return settings.model_copy(update={"SECRET_KEY": generated_key}), True
+
+    if settings.debug or origin == "ephemeral":
+        message = (
+            log_message
+            if log_message is not None
+            else "Generated ephemeral SECRET_KEY for debug mode; do not use in production."
+        )
+        log.warning(message)
+        generated_key = _generate_secret_key()
+        new_settings = settings.model_copy(update={"SECRET_KEY": generated_key})
+        object.__setattr__(new_settings, "_secret_key_origin", "generated")
+        return new_settings, True
+
+    raise ValueError("SECRET_KEY must be provided in production")
+
+
+def _persist_secret_key(settings: Settings) -> Settings:
+    """Persist an auto-generated SECRET_KEY for misconfigured environments.
+
+    When the runtime is configured for production but no SECRET_KEY is defined,
+    containerised deployments can end up crash-looping. To keep the service
+    available we generate a high-entropy key, inject it into the current process,
+    and attempt to update the configured ``.env`` file so subsequent runs reuse
+    the same value. The caller is responsible for logging any warnings.
+    """
+
+    generated_key = _generate_secret_key()
+    os.environ["SECRET_KEY"] = generated_key
+
+    persisted_key: str | None = None
+
+    for env_path in _iter_env_files(settings):
+        try:
+            env_values = dotenv_values(env_path, encoding="utf-8") or {}
+        except OSError as exc:  # pragma: no cover - unlikely but defend anyway
+            log.warning("Unable to read env file %s: %s", env_path, exc)
+            continue
+
+        existing_key = (env_values.get("SECRET_KEY") or "").strip() or None
+        if existing_key:
+            persisted_key = existing_key
+            log.info(
+                "SECRET_KEY already persisted in %s; reusing existing value.", env_path
+            )
+            break
+
+        try:
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            set_key(str(env_path), "SECRET_KEY", generated_key)
+        except OSError as exc:  # pragma: no cover - writing may fail on RO filesystems
+            log.warning("Unable to persist SECRET_KEY to %s: %s", env_path, exc)
+            continue
+
+        log.info("Persisted generated SECRET_KEY to %s", env_path)
+
+        try:
+            updated_values = dotenv_values(env_path, encoding="utf-8") or {}
+        except OSError as exc:  # pragma: no cover - best effort re-read
+            log.warning(
+                "Unable to re-read SECRET_KEY from %s after persistence: %s",
+                env_path,
+                exc,
+            )
+            persisted_key = generated_key
+        else:
+            final_key = (updated_values.get("SECRET_KEY") or "").strip()
+            if final_key:
+                persisted_key = final_key
+                if final_key != generated_key:
+                    log.info(
+                        "Adopting SECRET_KEY written by another process in %s.",
+                        env_path,
+                    )
+        break
+
+    final_key = (persisted_key or generated_key).strip()
+    os.environ["SECRET_KEY"] = final_key
+
+    origin: SecretKeyOrigin = "generated" if final_key == generated_key else "persisted"
+    new_settings = settings.model_copy(update={"SECRET_KEY": final_key})
+    object.__setattr__(new_settings, "_secret_key_origin", origin)
+    return new_settings
 
 
 def validate_jwt_configuration(settings: Settings) -> None:
     """Validate that JWT settings have consistent key material."""
 
     algorithm = settings.JWT_ALGORITHM.upper()
-    if algorithm != "HS256":
+    symmetric_algorithms = {"HS256", "HS384", "HS512"}
+
+    if algorithm in symmetric_algorithms:
+        if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
+            raise ValueError(
+                "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must not be defined when using symmetric JWT algorithms."
+            )
+        if not settings.SECRET_KEY:
+            raise ValueError(
+                "Symmetric JWT algorithms require SECRET_KEY to be configured."
+            )
+        return
+
+    if not (settings.JWT_PRIVATE_KEY and settings.JWT_PUBLIC_KEY):
         raise ValueError(
-            "JWT_ALGORITHM must be HS256 to match the deployed secret management strategy."
+            "Asymmetric JWT algorithms require both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY."
         )
-    if settings.JWT_PRIVATE_KEY or settings.JWT_PUBLIC_KEY:
-        raise ValueError(
-            "JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must not be defined when using HS256."
-        )
-    if not settings.SECRET_KEY:
-        raise ValueError("HS256 requires SECRET_KEY to be configured.")
 
 
-async def fetch_secrets_from_vault(
+def fetch_secrets_from_vault(
     settings: Settings, attempts: int = 3, delay: float = 1.0
 ) -> dict:
     if not settings.VAULT_URL or not settings.VAULT_TOKEN:
@@ -610,7 +1196,7 @@ async def fetch_secrets_from_vault(
                 exc,
             )
             if attempt < attempts:
-                await asyncio.sleep(delay)
+                time.sleep(delay)
 
     log.critical("Failed to fetch secrets from Vault after %s attempts", attempts)
     return {}
@@ -639,6 +1225,12 @@ def configure_telemetry(settings: Settings) -> None:
         except Exception as exc:  # pragma: no cover - optional metrics
             log.warning("Failed to configure metrics: %s", exc)
 
+    if settings.otel_prometheus_enabled:
+        try:
+            metric_readers.append(PrometheusMetricReader())
+        except Exception as exc:  # pragma: no cover - optional metrics
+            log.warning("Failed to configure Prometheus metrics exporter: %s", exc)
+
     meter_provider = MeterProvider(
         resource=resource,
         metric_readers=metric_readers or [],
@@ -649,7 +1241,7 @@ def configure_telemetry(settings: Settings) -> None:
         exporter = (
             ConsoleSpanExporter()
             if settings.otel_debug
-            else OTLPSpanExporter(endpoint=settings.otel_collector_url)
+            else OTLPSpanExporter(endpoint=f"{settings.otel_collector_url}/v1/traces")
         )
         trace_provider.add_span_processor(BatchSpanProcessor(exporter))
 
@@ -659,19 +1251,68 @@ def configure_telemetry(settings: Settings) -> None:
 
 @lru_cache()
 def get_settings() -> Settings:
+    """Load configuration with debug, Vault, and production policies applied."""
+
     settings = Settings()
-    try:
-        loop = asyncio.get_running_loop()
-        vault_secrets = {}
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        vault_secrets = loop.run_until_complete(fetch_secrets_from_vault(settings))
-        loop.close()
-    for key, value in vault_secrets.items():
-        if hasattr(settings, key):
-            setattr(settings, key, value)
-    settings, _ = ensure_secret_key(settings)
+
+    deprecated_model_overrides: list[str] = []
+    for attr in ("llm_general_model", "llm_coding_model"):
+        value = getattr(settings, attr, None)
+        if value:
+            deprecated_model_overrides.append(attr)
+    if deprecated_model_overrides:
+        log.warning(
+            "Legacy llm_* model overrides are deprecated; configure unified_model_dir instead.",
+            extra={"deprecated_fields": deprecated_model_overrides},
+        )
+
+    if settings.debug:
+        debug_secret = _generate_secret_key()
+        debug_settings = settings.model_copy(update={"SECRET_KEY": debug_secret})
+        object.__setattr__(debug_settings, "_secret_key_origin", "generated")
+        validate_jwt_configuration(debug_settings)
+        configure_telemetry(debug_settings)
+        return debug_settings
+
+    if _vault_configured(settings):
+        secrets_map = fetch_secrets_from_vault(settings)
+        if secrets_map:
+            updates = {
+                key: value
+                for key, value in secrets_map.items()
+                if hasattr(settings, key)
+            }
+            if updates:
+                settings = settings.model_copy(update=updates)
+            extra: dict[str, Any] = dict(
+                getattr(settings, "__pydantic_extra__", {}) or {}
+            )
+            for key, value in secrets_map.items():
+                if not hasattr(settings, key):
+                    extra[key] = value
+                    object.__setattr__(settings, key, value)
+            if extra:
+                object.__setattr__(settings, "__pydantic_extra__", extra)
+            if "SECRET_KEY" in updates:
+                object.__setattr__(settings, "_secret_key_origin", "vault")
+        if (
+            re.fullmatch(r"HS\d+", settings.JWT_ALGORITHM.strip().upper())
+            and not settings.SECRET_KEY
+        ):
+            raise ValueError(
+                "Symmetric JWT algorithms require SECRET_KEY to be configured."
+            )
+        validate_jwt_configuration(settings)
+        configure_telemetry(settings)
+        return settings
+
+    if not settings.SECRET_KEY:
+        log.critical(
+            "SECRET_KEY missing while DEBUG is disabled; generating ephemeral key. "
+            "Persist SECRET_KEY in your environment or Vault to avoid token invalidation."
+        )
+        settings = _persist_secret_key(settings)
+
     validate_jwt_configuration(settings)
     configure_telemetry(settings)
     return settings

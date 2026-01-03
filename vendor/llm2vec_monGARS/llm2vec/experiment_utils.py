@@ -58,14 +58,14 @@ def parse_experiment_id(experiment_id):
     regex += "([A-Za-z0-9-_.]+)"
     regex += "_m-([A-Z-a-z0-9-_.]+)"
     regex += "_p-([A-Z-a-z0-9-_.]+)"
-    regex += "_b-(\d+)"
-    regex += "_l-(\d+)"
+    regex += r"_b-(\d+)"
+    regex += r"_l-(\d+)"
     regex += "_bidirectional-([A-Z-a-z0-9-_.]+)"
-    regex += "_e-(\d+)"
-    regex += "_s-(\d+)"
-    regex += "_w-(\d+)"
+    regex += r"_e-(\d+)"
+    regex += r"_s-(\d+)"
+    regex += r"_w-(\d+)"
     regex += "_lr-([A-Z-a-z0-9-_.]+)"
-    regex += "_lora_r-(\d+)"
+    regex += r"_lora_r-(\d+)"
     regex += post_regex
 
     parts = re.match(regex, experiment_id).groups()

@@ -1,10 +1,6 @@
 from pathlib import Path
 
-from modules.neurons.registry import (
-    MANIFEST_FILENAME,
-    load_manifest,
-    update_manifest,
-)
+from modules.neurons.registry import MANIFEST_FILENAME, load_manifest, update_manifest
 
 
 def _create_summary(registry: Path, run_name: str) -> dict[str, object]:

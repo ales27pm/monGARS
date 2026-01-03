@@ -1,0 +1,12 @@
+[run]
+source =
+    monGARS
+    modules
+    tests
+    webapp
+omit =
+    */_remote_module_non_scriptable.py
+
+[report]
+skip_empty = True
+ignore_errors = True

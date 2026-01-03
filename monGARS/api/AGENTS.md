@@ -8,7 +8,8 @@ Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGAR
 
 ## Automation
 
-- Refresh via the agents manager script to pick up roadmap changes or new endpoints.
+- Edit `configs/agents/agents_config.json` then run `python scripts/manage_agents.py refresh` to regenerate charters.
+- CI reruns the refresh and publishes `docs_metadata.patch` on drift—apply it with `git apply docs_metadata.patch`.
 
 ## Roadmap Alignment
 
@@ -16,23 +17,34 @@ Applies to routers, schemas, WebSocket helpers, and auth utilities under `monGAR
   - ✅ FastAPI chat/history/token endpoints with validation.
   - ✅ Django chat UI with progressive enhancement.
   - ✅ FastAPI WebSocket handler with ticket verification, history replay, and streaming guarded by `WS_ENABLE_EVENTS`.
-  - 🔄 Replaced hard-coded credential stores with database-backed auth flows (the `DEFAULT_USERS` bootstrap in `monGARS/api/web_api.py` still provisions demo accounts until the cleanup lands).
-  - 🚧 Publish polished SDKs and reference clients.
+  - ✅ Replaced hard-coded credential stores with database-backed auth flows; FastAPI no longer seeds demo credentials at startup.【F:monGARS/api/web_api.py†L41-L120】
+  - ✅ Publish polished SDKs and reference clients with documented release flows.【F:docs/sdk-release-guide.md†L1-L160】【F:docs/sdk-overview.md†L1-L120】
 
 ## Endpoint Design
 
-- Expose asynchronous routes returning typed Pydantic responses; centralise validation inside
-    `schemas.py`.
-- Register shared dependencies inside `dependencies.py` so tests can inject doubles.
+- Expose asynchronous routes returning typed Pydantic responses; define request/response models in `schemas.py` and reuse
+    dependency helpers from `dependencies.py`.
+- Register routers with explicit prefixes/tags and share singletons (rate limiter, WebSocket manager, ticket signer) via
+    module-level references to avoid reinitialisation races.
 
-## Security & Error Handling
+## Security, Tickets & Rate Limiting
 
-- Flow authentication through `core.security.SecurityManager` and enforce bearer tokens on every route
-    except `/ready` and `/healthz`.
-- Translate domain errors into `HTTPException` codes; log unexpected failures with correlation IDs
-    before bubbling up.
+- Authenticate through `core.security.SecurityManager`/`authenticate_user` and guard chat endpoints with
+    `InMemoryRateLimiter` while logging rejects via `_log_rate_limit`.
+- Issue and verify WebSocket tickets using `ws_ticket.py`/`ticket_signer.py`; ensure `ws_manager` respects queue sizes and
+    token-bucket settings from configuration.
+- Translate domain failures into FastAPI `HTTPException`s and capture upstream errors (`HTTPError`, `SQLAlchemyError`,
+    `CircuitBreakerOpenError`) before re-raising.
+
+## Observability & Static Assets
+
+- Expose `/metrics` via `PROMETHEUS_REGISTRY` and enable OpenTelemetry instrumentation only when `_settings.otel_*`
+    toggles demand it.
+- Serve static assets through `StaticFiles` when the build output exists; log actionable warnings when assets are missing
+    during development builds.
 
 ## Testing Hooks
 
-Keep `tests/test_api_chat.py`, `tests/test_api_history.py`, and WebSocket suites aligned when
-request/response contracts evolve.
+Keep `tests/test_api_chat.py`, `tests/test_api_history.py`, `tests/test_api_model_management.py`,
+`tests/test_api_rag.py`, `tests/test_ticket_signer.py`, `tests/test_websocket.py`, and `tests/test_ws_manager.py`
+aligned when contracts evolve.

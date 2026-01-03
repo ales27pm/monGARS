@@ -1,5 +1,7 @@
 # monGARS
 
+> **Last updated:** 2025-11-25 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 **monGARS** (Modular Neural Guardian for Autonomous Research & Support) is a
 privacy-first AI assistant designed for resilient deployment on workstations,
 edge appliances, and research clusters. The project combines a FastAPI service,
@@ -41,13 +43,15 @@ modules so contributors can experiment end-to-end without bespoke tooling.
 ## Project Health
 - **Phase 5 – Web/API Refinement**: REST, WebSocket, and Django operator flows
   are production-ready, credential bootstrap now relies solely on persisted
-  accounts, and the SDK publishing milestone remains open.【F:monGARS/api/web_api.py†L43-L84】【F:docs/codebase_status_report.md†L76-L108】
+  accounts, and the Python/TypeScript SDKs ship with documented release
+  tooling.【F:monGARS/api/web_api.py†L41-L120】【F:docs/sdk-release-guide.md†L1-L80】【F:docs/sdk-overview.md†L1-L112】
 - **Phase 6 – Self-Improvement & Research**: Automated MNTP self-training and
-  reinforcement-learning loops exist, yet integration with operational rollout
-  controls and long-haul observability keeps the milestone in progress.【F:monGARS/core/self_training.py†L1-L160】【F:modules/neurons/training/reinforcement_loop.py†L320-L520】【F:docs/codebase_status_report.md†L109-L144】
-- **Open Risks**: Prioritise packaging the Python/TypeScript SDKs and defining
-  reinforcement-learning rollout guardrails before closing the remaining
-  roadmap items.【F:docs/codebase_status_report.md†L145-L188】
+  reinforcement-learning loops now operate with scheduled long-haul soak tests,
+  durable observability snapshots, and operator approvals coordinated by the
+  research long-haul service, closing the roadmap milestone.【F:modules/evolution_engine/orchestrator.py†L360-L440】【F:monGARS/core/research_validation.py†L1-L200】【F:tests/test_long_haul_validation.py†L200-L320】【F:tests/test_research_long_haul_service.py†L1-L200】
+- **Open Risks**: Prioritise sustainability—extend the energy tracker feeds and
+  hardware-aware rollouts into shared dashboards before declaring the
+  longevity phase ready for production workloads.【F:modules/evolution_engine/energy.py†L1-L160】【F:docs/codebase_status_report.md†L169-L214】
 
 See [docs/codebase_status_report.md](docs/codebase_status_report.md) for the full
 audit of runtime modules, tests, and deployment assets.【F:docs/codebase_status_report.md†L1-L188】
@@ -123,14 +127,14 @@ slide decks or ops runbooks.
 | Evolution modules | `modules/` | Adapter training, diagnostics, research tooling |
 | Django UI | `webapp/` | Operator-facing chat console and auth proxy |
 | Persistence | `init_db.py`, `monGARS/core/persistence.py` | SQLModel schemas, Hippocampus caching, Redis/disk tiers |
-| Tooling | `tasks.py`, `build_*.sh`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
+| Tooling | `tasks.py`, `build_*.sh`, `docker_menu.py`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
 
 ## Getting Started
 ### Prerequisites
 - Python 3.11+
 - Docker & Docker Compose for container workflows
 - NVIDIA drivers compatible with CUDA 12.1 when running GPU workloads inside the
-  official `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image
+  official `pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime` image
 - Optional: GPU drivers for Ollama or Torch-based adapters
 
 ### Local Development
@@ -143,35 +147,93 @@ python init_db.py      # applies Alembic migrations and prepares persistence tab
 uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+- Quick path: `scripts/install_test_dependencies.sh` installs the runtime and
+  test dependencies defined in `requirements.txt` so `pytest` can start
+  collecting modules without import errors.
+
+### Multi-stage training & export pipeline
+- Use [`mongars_multistage_pipeline.py`](mongars_multistage_pipeline.py) to
+  orchestrate dataset generation, module-level SFT, LLM2Vec adaptation, and
+  export in one CLI. The runbook in
+  [`docs/mongars_multistage_pipeline.md`](docs/mongars_multistage_pipeline.md)
+  lists the stage flags, state/resume behaviour, and troubleshooting tips.
+
 ### Docker Compose Stack
 ```bash
-scripts/deploy_docker.sh up --pull         # build images, generate secrets, start core services
-scripts/deploy_docker.sh up --with-all     # include Ollama and Ray Serve profiles
-scripts/deploy_docker.sh logs api          # follow API logs
-scripts/deploy_docker.sh destroy           # stop stack and drop volumes
+python scripts/docker_menu.py
 ```
 
-The helper script automatically creates `.env` from `.env.example`, rotates
-development secrets, and keeps your Compose project name consistent. Optional
-profiles:
+The interactive orchestrator introduces a terminal menu with options to deploy
+(`up --build -d`), start without rebuilding, stop, restart, inspect status,
+tail logs, rebuild images, pull upstream images, open a shell inside any
+service, and destroy the stack. Additional tooling now:
 
-- `--with-ollama` downloads and runs the Ollama runtime for local LLMs.
-- `--with-ray` provisions a Ray head node and Serve deployment. The Serve HTTP
-  endpoint binds to `${RAY_HTTP_PORT:-8000}`, the dashboard is exposed via
-  `${RAY_DASHBOARD_PORT:-8265}`, and the Ray Client API is forwarded to
-  `${RAY_CLIENT_PORT:-10001}`. Toggle `USE_RAY_SERVE=true` and update
-  `RAY_SERVE_URL` in `.env` if you expose a different port.
-- Base images (now built from the public
-  `pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime` image—no NVIDIA Container
-  Registry login required) ship with Git, Git LFS, FFmpeg, spaCy's
-  `fr_core_news_sm` model, and transformer tooling (`accelerate`, `peft`,
-  `transformers`, `llm2vec`) so
-  containers can pull adapters, process multimedia context, and invoke LLMs out
-  of the box.
+- Creates `.env` from `.env.example` on first run and rotates weak defaults for
+  JWT, Django, Postgres, and Vault secrets.
+- Layers `docker-compose.searxng.yml` automatically when
+  `SEARCH_SEARX_ENABLED=true`, wiring the FastAPI/Django containers to the
+  internal `http://searxng:8080` endpoint while exposing the host-accessible
+  interface on `http://localhost:${SEARXNG_PORT:-8082}`.
+- Scans for port collisions across API, webapp, SearxNG, Postgres, Redis,
+  MLflow, Vault, Ollama, and Ray endpoints. Busy ports are replaced with the
+  next available value, persisted back to `.env`, reflected in
+  `WS_ALLOWED_ORIGINS`, and applied to the SearxNG base URLs so CLI tools keep
+  talking to the correct host without manual edits.
+- Lets you toggle optional profiles before startup. Enable the Ollama profile
+  to launch the local LLM runtime or the Ray profile to expose the Ray head
+  node (`${RAY_DASHBOARD_PORT:-8265}`), Ray Client API
+  (`${RAY_CLIENT_PORT:-10001}`), Serve HTTP gateway (`${RAY_HTTP_PORT:-8005}`),
+  and a dedicated worker port range (`${RAY_MIN_WORKER_PORT:-20000}`-
+  `${RAY_MAX_WORKER_PORT:-20100}`) that avoids collisions with the Ray client
+  endpoint by default.
+- Provides guided diagnostics (`option 12`) that optionally auto-remediate
+  missing `.env` entries, weak secrets, stale ports, and Compose syntax issues
+  before you deploy.
+- Offers an auto-heal routine (`option 13`) that restarts unhealthy services
+  after a successful diagnostic pass so the stack can recover without manual
+  container juggling.
+- Exposes an environment summary (`option 14`) with sensitive values redacted to
+  support incident response without leaking secrets in shared terminals.
+- Captures Compose failures, runs lightweight triage (status snapshots +
+  diagnostics), and suggests remediation such as port regeneration or network
+  rebuilds when commands exit unsuccessfully.
 
-Use `scripts/deploy_docker.sh ps` to inspect container health and
-`scripts/deploy_docker.sh destroy` when you need a clean slate (volumes and
-orphan containers are removed).
+For automated pipelines you can continue to call Docker Compose directly:
+
+```bash
+docker compose -f docker-compose.yml --project-name mongars up -d
+```
+
+#### Docker Compose v1 compatibility
+
+Docker Engine 27+ removes the legacy `ContainerConfig` field that Compose v1
+(`docker-compose` 1.29.x) relied on when reconciling named volumes. If you see
+errors such as `'ContainerConfig'` while recreating services like Postgres,
+Redis, Vault, or MLflow, run the compatibility wrapper included with the
+repository:
+
+```bash
+scripts/compose_up.sh up -d
+```
+
+The script pins `DOCKER_API_VERSION=1.43` so the engine exposes the legacy
+schema, disables BuildKit for parity with Compose v1 expectations, and
+auto-detects whether the modern `docker compose` plugin is available before
+falling back to the classic binary. You can pass any Compose arguments through
+unchanged, for example `scripts/compose_up.sh down --volumes`.
+
+The refreshed Compose topology keeps the same service names but now uses
+anchors to share environment blocks, consistent health checks, and optional
+profiles for inference (`ollama`) and distributed serving (`ray-head`,
+`rayserve`). Application images default to
+`pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime`, but the Dockerfiles accept a
+`PYTORCH_IMAGE` build argument so you can bump CUDA/PyTorch releases without
+editing manifests. The GPU overlay sets `PYTORCH_IMAGE_GPU` to
+`pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` and publishes the build under
+`MONGARS_GPU_IMAGE` to avoid clobbering CPU-only tags. Both variants ship with
+Git, Git LFS, FFmpeg, the `fr_core_news_sm` spaCy model, and transformer tooling
+preinstalled so containers can pull adapters, process multimedia context, and
+invoke LLMs out of the box.
 
 ### Django Operator Console
 ```bash
@@ -190,9 +252,13 @@ user/token.
 | `SECRET_KEY` | Required for JWT signing and Fernet encryption. Never leave empty. |
 | `API_PORT` / `WEBAPP_PORT` | Host ports exposed for the FastAPI service and Django operator console. |
 | `POSTGRES_PORT`, `REDIS_PORT`, `MLFLOW_PORT`, `VAULT_PORT`, `OLLAMA_PORT`, `RAY_HTTP_PORT`, `RAY_DASHBOARD_PORT`, `RAY_CLIENT_PORT` | Host bindings for stateful and optional services managed by Compose. |
+| `RAY_MIN_WORKER_PORT`, `RAY_MAX_WORKER_PORT` | Lower/upper bounds for the Ray head worker port range. Defaults prevent overlaps with `RAY_CLIENT_PORT`. |
 | `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
 | `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8000/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. When `DJANGO_ALLOWED_HOSTS` is unset the console now trusts `localhost`, loopback addresses, `0.0.0.0`, and Compose provided `WEBAPP_HOST`/`HOST` values automatically. `DJANGO_DEBUG_HOSTS` appends comma-separated hostnames/IPs that should be trusted automatically when `DJANGO_DEBUG=true`. |
+| `MONGARS_IMAGE` / `MONGARS_GPU_IMAGE` | Tags applied to the CPU and GPU application builds. Using distinct values prevents rebuilds for one profile from overwriting the other. |
+| `PYTORCH_IMAGE` / `PYTORCH_IMAGE_GPU` | Base images consumed by the Dockerfiles; override to align with local CUDA driver stacks without editing manifests. |
+| `RAY_HEAD_IMAGE`, `RAY_HEAD_IMAGE_GPU`, `RAY_SERVE_IMAGE`, `RAY_SERVE_GPU_IMAGE` | Control the Ray head/Serve container tags for CPU and GPU deployments. Pair with the new build args to align with cluster driver versions. |
 | `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). |
 | `LLM_MODELS_CONFIG_PATH` | Path to the JSON manifest listing model profiles and download preferences. |
 | `LLM_MODELS_PROFILE` | Name of the profile within `LLM_MODELS_CONFIG_PATH` used for inference defaults. |
@@ -224,9 +290,28 @@ can be extended to register additional Ollama models or alternate providers.
   same provisioning workflow from the shell. Pass `--json` to emit machine
   readable output for automation.
 
+### Exporting Ollama Models
+- **Prerequisite** – Install the [Ollama](https://ollama.com/) runtime locally so
+  the `ollama` CLI is available on your `PATH`.
+- **Export workflow** – Run the helper to persist an Ollama-managed model to a
+  portable `.bin` artefact:
+
+  ```python
+  from pathlib import Path
+
+  from monGARS.mlops.exporters import export_to_ollama
+
+  export_path = export_to_ollama("llama3", Path("./exports"))
+  print(f"Model exported to {export_path}")
+  ```
+
+- **Verification** – The command above creates an `.bin` file (for example
+  `exports/llama3.bin`). Use standard filesystem tooling to confirm the file is
+  present before distributing it to air-gapped or offline environments.
+
 ## Operational Workflows
-- **Testing**: `pytest -q` for unit/integration coverage. Run
-  `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage.
+- **Testing**: `pytest -q` (631 tests in ~107 seconds) for unit/integration coverage. Run
+  `pytest -k <pattern>` while iterating and `pytest --maxfail=1` during triage; execute `npm run test` when frontend assets or SDKs change.
 - **Static analysis**: `black . && isort .` before committing. Add type hints when
   editing public APIs.
 - **Provisioning**: `python -m scripts.provision_models --json` ensures Ollama
@@ -265,21 +350,43 @@ can be extended to register additional Ollama models or alternate providers.
   files or sample secrets.
 
 ## Documentation Map
+Start with the curated [docs/index.md](docs/index.md) hub for an audience-focused
+navigation of every runbook. The tables below highlight frequently referenced
+entries for quick access. Keep the documentation set dynamic by running
+`python scripts/update_docs_metadata.py` before opening a PR; the script refreshes
+`Last updated` banners across all Markdown files using Git history.
+
+### Architecture & Core Services
+
+| Topic | Location |
+| --- | --- |
+| System diagrams and component walkthrough | [docs/architecture/module_interactions.md](docs/architecture/module_interactions.md) |
+| Conversation pipeline deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
+| Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
+| Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
+
+### Operations & Delivery
+
+| Topic | Location |
+| --- | --- |
+| Visual deployment orchestrator | [docs/deployment_automation.md](docs/deployment_automation.md) |
+| Ray Serve deployment guide | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
+| Workflow automation reference | [docs/workflow_reference.md](docs/workflow_reference.md) |
+| Codebase status audits | [docs/codebase_status_report.md](docs/codebase_status_report.md) |
+| Documentation maintenance checklist | [docs/documentation_maintenance.md](docs/documentation_maintenance.md) |
+
+### Research & SDKs
+
 | Topic | Location |
 | --- | --- |
 | Implementation status & roadmap alignment | [docs/implementation_status.md](docs/implementation_status.md) |
-| Advanced fine-tuning plan | [docs/advanced_fine_tuning.md](docs/advanced_fine_tuning.md) |
-| Code audit notes | [docs/code_audit_summary.md](docs/code_audit_summary.md) |
-| Codebase status audit | [docs/codebase_status_report.md](docs/codebase_status_report.md) |
-| Ray Serve deployment | [docs/ray_serve_deployment.md](docs/ray_serve_deployment.md) |
-| Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
+| Advanced fine-tuning and distributed inference plan | [docs/advanced_fine_tuning.md](docs/advanced_fine_tuning.md) |
 | RAG context enrichment | [docs/rag_context_enrichment.md](docs/rag_context_enrichment.md) |
-| API specification & clients | [docs/api/](docs/api/README.md) |
-| SDK overview & reference clients | [docs/sdk-overview.md](docs/sdk-overview.md) |
-| SDK release guide | [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |
-| Conversation workflow deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
-| Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
-| Future milestones | [ROADMAP.md](ROADMAP.md) |
+| Dolphin-X1 chat/embedding reuse | [docs/dolphin_x1_chat_embeddings.md](docs/dolphin_x1_chat_embeddings.md) |
+| SDK overview & release workflow | [docs/sdk-overview.md](docs/sdk-overview.md), [docs/sdk-release-guide.md](docs/sdk-release-guide.md) |
+| API specification & client stubs | [docs/api/](docs/api/README.md) |
+
+Future milestones continue to live in [ROADMAP.md](ROADMAP.md).
 
 ## Contributing
 Read the scoped contribution rules in `AGENTS.md` files before changing code.

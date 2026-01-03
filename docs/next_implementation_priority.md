@@ -1,55 +1,62 @@
 # Next Implementation Priority
 
+> **Last updated:** 2025-10-24 _(auto-synced; run `python scripts/update_docs_metadata.py`)_
+
 ## Summary
 
-Instrumentation, rollout safeguards, and operator approvals have now been
-implemented for the reinforcement-learning (RL) research loop. The loop emits
-OpenTelemetry spans, streams metrics, and records approval requests before
-deploying artefacts, closing the operational gap highlighted in the status
-reports.【F:docs/implementation_status.md†L96-L140】【F:modules/neurons/training/reinforcement_loop.py†L520-L760】
+Reinforcement validation is automated and the sustainability dashboards now
+receive energy tracker metrics and observability snapshots via the
+`SustainabilityDashboardBridge`. Carbon-aware gating is live, so the next
+priority is to operationalise the remaining signals—quantify cross-node
+artefact reuse and surface hardware-aware placement guidance so the dashboards
+drive tangible energy savings across deployments.【F:modules/evolution_engine/sustainability.py†L1-L235】【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:docs/implementation_status.md†L130-L200】
 
 ## Supporting Signals
 
-- **Implementation Status Report** – calls out RL automation as the remaining
-  contradiction after the governance milestone.【F:docs/implementation_status.md†L96-L140】
-- **Codebase Status Report** – recommends prioritising telemetry and operational
-  controls before graduating RL into production workflows.【F:docs/codebase_status_report.md†L96-L140】
-- **Evolution Engine Orchestrator** – already integrates curated datasets,
-  making it the natural landing spot once RL artefacts can be generated and
-  approved safely.【F:modules/evolution_engine/orchestrator.py†L1-L320】
+- **Implementation Status Report** – carbon-aware gating has shipped, leaving
+  reuse analytics and placement guidance as the remaining sustainability
+  deliverables.【F:docs/implementation_status.md†L130-L200】
+- **Codebase Status Report** – highlights cross-node reuse and hardware-aware
+  placement as the next evolution now that telemetry is unified.【F:docs/codebase_status_report.md†L169-L214】
+- **Energy Tracker & Sustainability Bridge** – persist per-cycle energy data and
+  reinforcement summaries for dashboards and downstream automation hooks, ready
+  to support reuse analytics.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
 
-## Rationale for Prioritising RL Operationalisation
+## Rationale for Prioritising Sustainability Telemetry
 
-1. **Experiment Velocity** – moving RL into the automated cycle reduces the
-   manual work currently required to evaluate policy improvements.
-2. **Safety & Observability** – explicit telemetry and guardrails prevent
-   regressions when exploring novel reward models.
-3. **Partner Readiness** – RL-backed suggestions unlock new product
-   capabilities, but only once the rollout and rollback story matches the rest
-   of the platform.
+1. **Operational Stewardship** – grounding approvals in consumption data ensures
+   reinforcement experiments align with sustainability goals.
+2. **Capacity Planning** – dashboards that unify reward curves and energy trends
+   let operators schedule GPU-intensive work during favourable energy windows.
+3. **Partner Readiness** – downstream teams need actionable sustainability
+   metrics before enabling reinforcement-driven features in production.
 
 ## Implementation Outline
 
-1. **Runbooks** – publish the RL rollout guide alongside the RAG governance
-   documentation so operators understand how to review approval queues and
-   rollback artefacts if needed.【F:docs/reinforcement_rollout_runbook.md†L1-L160】
-2. **Integration Tests** – schedule long-haul evaluation covering sustained RL
-   runs, ensuring telemetry and approval checkpoints stay healthy under load.
-3. **Metrics Dashboards** – extend observability dashboards to include the new
-   `reinforcement.loop.*` metrics emitted by the telemetry sink.
+1. **Cross-Node Artefact Reuse Metrics** – enrich the sustainability dashboard
+   payload with reuse ratios and amortised energy savings so operators can
+   prioritise adapters that reduce retraining cost.【F:monGARS/core/long_haul_validation.py†L520-L660】【F:monGARS/core/sustainability_dashboard.py†L200-L320】
+2. **Hardware-Aware Placement Guidance** – translate sustainability telemetry
+   into scheduler hints (time windows, replica mixes, GPU affinity) that feed the
+   evolution orchestrator and distributed scheduler.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:monGARS/core/distributed_scheduler.py†L1-L220】
+3. **Operator Playbooks** – extend sustainability runbooks with reuse analytics
+   and placement recommendations so on-call staff can act on the richer
+   telemetry without manual calculations.【F:docs/reinforcement_rollout_runbook.md†L1-L200】【F:docs/codebase_status_report.md†L169-L214】
 
 ## Success Criteria & Validation
 
-- RL training cycles emit metrics and logs that surface in the same dashboards
-  as self-training events.
-- Deployment of RL artefacts requires an explicit approval or automated policy
-  pass, with clear rollback instructions.
-- Updated documentation (including runbooks) enables on-call operators to triage
-  RL incidents without specialist knowledge.
+- Dashboards expose energy savings from artefact reuse, guiding operators toward
+  efficient experimentation pathways.【F:monGARS/core/long_haul_validation.py†L520-L660】【F:docs/codebase_status_report.md†L169-L214】
+- Scheduler hints reflect carbon-aware placement recommendations derived from
+  sustainability telemetry.【F:modules/evolution_engine/orchestrator.py†L260-L360】【F:monGARS/core/distributed_scheduler.py†L1-L220】
+- Updated runbooks walk on-call staff through interpreting reuse metrics,
+  placement hints, and remediation actions without specialist
+  knowledge.【F:docs/reinforcement_rollout_runbook.md†L1-L200】
 
-## Follow-On Work Once RL Is Operational
+## Follow-On Work Once Sustainability Dashboards Ship
 
-- Resume energy-efficiency research outlined for the sustainability phase once
-  RL experiments can run safely in production.
-- Expand partner telemetry to correlate RL-driven responses with engagement and
-  satisfaction metrics.
+- Iterate on energy-efficiency experiments (carbon-aware bin-packing, GPU
+  affinity policies) once reuse metrics surface baseline opportunities.【F:modules/evolution_engine/energy.py†L1-L160】【F:monGARS/core/sustainability_dashboard.py†L1-L260】
+- Expand partner telemetry to correlate reinforcement-driven responses with
+  engagement metrics leveraging the sustainability dashboards and policy
+  outputs.【F:docs/codebase_status_report.md†L169-L214】
