@@ -1,183 +1,411 @@
-import { nowISO } from "../utils/time.js";
+// WebSocket client with sane reconnection semantics.
+//
+// Goals:
+// - Never hammer the server with reconnect loops when auth is missing/invalid.
+// - Exponential backoff with jitter for transient failures.
+// - No overlapping connection attempts (single in-flight connect).
+// - Ability to "wake up" when auth becomes available again.
 
 export function createSocketClient({ config, http, ui, onEvent }) {
-  let ws;
-  let wsHBeat;
-  let reconnectBackoff = 500;
-  const BACKOFF_MAX = 8000;
-  let retryTimer = null;
+  let ws = null;
   let disposed = false;
 
-  function clearHeartbeat() {
-    if (wsHBeat) {
-      clearInterval(wsHBeat);
-      wsHBeat = null;
+  // Connect lifecycle
+  let connectSeq = 0; // increments per open() request; lets us ignore stale async work
+  let inFlight = false;
+  let lastClose = null;
+
+  // Retry state
+  let retryTimer = null;
+  let attempts = 0;
+
+  // Heartbeat
+  let heartbeatTimer = null;
+
+  // Auth gate
+  let waitingForAuth = false;
+  let authStopReason = null;
+
+  // Optional abort for the ticket fetch
+  let ticketAbort = null;
+
+  const BACKOFF_BASE_MS = 500;
+  const BACKOFF_MAX_MS = 15_000;
+  const JITTER_RATIO = 0.25; // +-25%
+
+  function safeCallOnEvent(evt) {
+    try {
+      onEvent?.(evt);
+    } catch (err) {
+      // Avoid throwing inside ws callbacks.
+      console.error("[socket] onEvent handler threw", err);
     }
   }
 
-  function scheduleReconnect(delayBase) {
-    if (disposed) {
-      return 0;
+  function setUiStatus(text, level = "info") {
+    try {
+      ui?.updateConnectionMeta?.(text, level);
+    } catch {
+      // UI is optional
     }
-    const jitter = Math.floor(Math.random() * 250);
-    const delay = Math.min(BACKOFF_MAX, delayBase + jitter);
+  }
+
+  function clearHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  function clearRetry() {
     if (retryTimer) {
       clearTimeout(retryTimer);
-    }
-    retryTimer = window.setTimeout(() => {
       retryTimer = null;
-      reconnectBackoff = Math.min(
-        BACKOFF_MAX,
-        Math.max(500, reconnectBackoff * 2),
-      );
-      void openSocket();
-    }, delay);
-    return delay;
+    }
   }
 
-  function safeSend(obj) {
-    try {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(obj));
+  function abortTicketFetch() {
+    if (ticketAbort) {
+      try {
+        ticketAbort.abort();
+      } catch {
+        // ignore
       }
-    } catch (err) {
-      console.warn("Unable to send over WebSocket", err);
+      ticketAbort = null;
     }
   }
 
-  async function openSocket() {
-    if (disposed) {
-      return;
+  function computeBackoffMs(n) {
+    const exp = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * Math.pow(2, Math.max(0, n - 1)));
+    const jitter = exp * JITTER_RATIO;
+    const min = Math.max(0, exp - jitter);
+    const max = exp + jitter;
+    return Math.floor(min + Math.random() * (max - min));
+  }
+
+  function tokenPresent() {
+    try {
+      const t = http?.getJwt?.();
+      return typeof t === "string" && t.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  function stopForAuth(reason, detail) {
+    waitingForAuth = true;
+    authStopReason = { reason, detail };
+    attempts = 0;
+    clearRetry();
+    clearHeartbeat();
+    abortTicketFetch();
+
+    // Close any current socket.
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      try {
+        ws.close(1000, "auth-required");
+      } catch {
+        // ignore
+      }
     }
 
+    ws = null;
+    setUiStatus(detail ? `Authentification requise: ${detail}` : "Not authenticated", "warn");
+    safeCallOnEvent({
+      type: "auth",
+      state: "required",
+      reason,
+      detail: detail || null,
+    });
+  }
+
+  function shouldReconnectOnClose(evt) {
+    // If the caller asked us to stop, do not reconnect.
+    if (disposed) return false;
+    if (waitingForAuth) return false;
+
+    // Normal close: no reconnect.
+    if (evt && evt.code === 1000) return false;
+
+    // If browser is offline, wait for 'online' event.
+    if (typeof navigator !== "undefined" && navigator && navigator.onLine === false) return false;
+
+    return true;
+  }
+
+  function scheduleReconnect(reason) {
+    if (disposed || waitingForAuth) return;
+    if (retryTimer) return; // already scheduled
+
+    attempts += 1;
+    const delay = computeBackoffMs(attempts);
+    const secs = Math.max(0, Math.round(delay / 100) / 10);
+    setUiStatus(`Déconnecté. Reconnexion dans ${secs}s…`, "warn");
+    safeCallOnEvent({ type: "reconnect", in: delay, attempt: attempts, reason: reason || null });
+
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void open();
+    }, delay);
+  }
+
+  function startHeartbeat() {
+    clearHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      } catch {
+        // If sending fails, onclose will trigger reconnect.
+      }
+    }, 15_000);
+  }
+
+  function handleOpenError(err) {
+    // Abort is not an error we want to surface.
+    if (err && err.name === "AbortError") return true;
+
+    const isAuth = http?.isAuthError?.(err) || err?.name === "AuthError" || (typeof err?.code === "string" && err.code.startsWith("AUTH_"));
+
+    if (isAuth) {
+      const code = err?.code || "AUTH";
+      const detail = err?.detail || err?.message || null;
+
+      // Missing token: don't retry.
+      if (code === "AUTH_MISSING") {
+        stopForAuth("missing_token", detail);
+        return true;
+      }
+
+      // Invalid/expired token: also don't retry.
+      if (code === "AUTH_INVALID") {
+        stopForAuth("invalid_token", detail);
+        return true;
+      }
+
+      stopForAuth("auth_error", detail);
+      return true;
+    }
+
+    // Anything else: let the caller see it and retry.
+    console.error("[socket] open error", err);
+    safeCallOnEvent({ type: "error", stage: "open", error: String(err?.message || err) });
+    return false;
+  }
+
+  async function open() {
+    if (disposed) return;
+
+    // If we're stopped on auth, only resume when a token exists.
+    if (waitingForAuth) {
+      if (!tokenPresent()) return;
+      waitingForAuth = false;
+      authStopReason = null;
+      setUiStatus("Jeton détecté. Connexion…", "info");
+    }
+
+    // If socket is already open/connecting, do nothing.
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    if (inFlight) return;
+
+    inFlight = true;
+    clearRetry();
+    clearHeartbeat();
+    abortTicketFetch();
+
+    const mySeq = ++connectSeq;
+
     try {
-      ui.updateConnectionMeta("Obtention d’un ticket de connexion…", "info");
-      const ticket = await http.fetchTicket();
-      if (disposed) {
+      // Quick auth pre-check to avoid a useless round-trip.
+      if (!tokenPresent()) {
+        stopForAuth("missing_token", "missing or unreadable JWT");
         return;
       }
 
-      const wsUrl = new URL("/ws/chat/", config.baseUrl);
-      wsUrl.protocol = config.baseUrl.protocol === "https:" ? "wss:" : "ws:";
-      wsUrl.searchParams.set("t", ticket);
+      setUiStatus("Obtention d’un ticket…", "info");
+      ticketAbort = new AbortController();
+      const ticket = await http.fetchTicket({ signal: ticketAbort.signal });
 
-      if (ws) {
-        try {
-          ws.close();
-        } catch (err) {
-          console.warn("WebSocket close before reconnect failed", err);
-        }
-        ws = null;
-      }
+      // Stale attempt?
+      if (disposed || mySeq !== connectSeq) return;
 
+      attempts = 0;
+      lastClose = null;
+
+      const wsUrl = new URL(config.baseUrl);
+      wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+      wsUrl.pathname = "/api/v1/ws";
+      wsUrl.searchParams.set("ticket", ticket);
+
+      setUiStatus("Connexion WebSocket…", "info");
       ws = new WebSocket(wsUrl.toString());
-      ui.setWsStatus("connecting");
-      ui.updateConnectionMeta("Connexion au serveur…", "info");
 
       ws.onopen = () => {
         if (disposed) {
+          try {
+            ws.close(1000, "disposed");
+          } catch {
+            // ignore
+          }
           return;
         }
-        if (retryTimer) {
-          clearTimeout(retryTimer);
-          retryTimer = null;
-        }
-        reconnectBackoff = 500;
-        const connectedAt = nowISO();
-        ui.setWsStatus("online");
-        ui.updateConnectionMeta(
-          `Connecté le ${ui.formatTimestamp(connectedAt)}`,
-          "success",
-        );
-        ui.setDiagnostics({ connectedAt, lastMessageAt: connectedAt });
-        ui.hideError();
-        clearHeartbeat();
-        wsHBeat = window.setInterval(() => {
-          safeSend({ type: "client.ping", ts: nowISO() });
-        }, 20000);
-        ui.setComposerStatus("Connecté. Vous pouvez échanger.", "success");
-        ui.scheduleComposerIdle(4000);
+        setUiStatus("Connecté", "success");
+        safeCallOnEvent({ type: "connection", state: "open" });
+        startHeartbeat();
       };
 
-      ws.onmessage = (evt) => {
-        const receivedAt = nowISO();
+      ws.onmessage = (ev) => {
+        let msg = null;
         try {
-          const ev = JSON.parse(evt.data);
-          ui.setDiagnostics({ lastMessageAt: receivedAt });
-          onEvent(ev);
-        } catch (err) {
-          console.error("Bad event payload", err, evt.data);
+          msg = JSON.parse(ev.data);
+        } catch {
+          // Ignore non-JSON messages.
+          return;
         }
+        safeCallOnEvent({ type: "message", message: msg });
       };
 
-      ws.onclose = () => {
+      ws.onerror = () => {
+        // Browser doesn't expose much here; we'll reconnect on close.
+        safeCallOnEvent({ type: "error", stage: "ws" });
+      };
+
+      ws.onclose = (evt) => {
+        lastClose = evt || null;
         clearHeartbeat();
-        ws = null;
-        if (disposed) {
-          return;
-        }
-        ui.setWsStatus("offline");
-        ui.setDiagnostics({ latencyMs: undefined });
-        const delay = scheduleReconnect(reconnectBackoff);
-        const seconds = Math.max(1, Math.round(delay / 1000));
-        ui.updateConnectionMeta(
-          `Déconnecté. Nouvelle tentative dans ${seconds} s…`,
-          "warning",
-        );
-        ui.setComposerStatus(
-          "Connexion perdue. Reconnexion automatique…",
-          "warning",
-        );
-        ui.scheduleComposerIdle(6000);
-      };
 
-      ws.onerror = (err) => {
-        console.error("WebSocket error", err);
-        if (disposed) {
-          return;
+        // If this close belongs to a stale attempt, ignore.
+        if (disposed || mySeq !== connectSeq) return;
+
+        ws = null;
+        inFlight = false;
+
+        const code = evt?.code;
+        const reason = evt?.reason || "";
+        safeCallOnEvent({ type: "connection", state: "closed", code, reason });
+
+        if (shouldReconnectOnClose(evt)) {
+          scheduleReconnect(`close:${code || "?"}`);
+        } else {
+          setUiStatus("Déconnecté", "warn");
         }
-        ui.setWsStatus("error", "Erreur WebSocket");
-        ui.updateConnectionMeta("Erreur WebSocket détectée.", "danger");
-        ui.setComposerStatus("Une erreur réseau est survenue.", "danger");
-        ui.scheduleComposerIdle(6000);
       };
     } catch (err) {
-      console.error(err);
-      if (disposed) {
+      // Stale attempt?
+      if (disposed || mySeq !== connectSeq) {
+        inFlight = false;
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
-      ui.setWsStatus("error", message);
-      ui.updateConnectionMeta(message, "danger");
-      ui.setComposerStatus(
-        "Connexion indisponible. Nouvel essai bientôt.",
-        "danger",
-      );
-      ui.scheduleComposerIdle(6000);
-      scheduleReconnect(reconnectBackoff);
+
+      inFlight = false;
+      clearHeartbeat();
+
+      const handled = handleOpenError(err);
+      if (!handled) scheduleReconnect("open_error");
+    } finally {
+      // Note: we keep `inFlight` true while the ws is connecting; the `onclose`
+      // handler will clear it. However if we return before creating ws, we must clear.
+      if (!ws) inFlight = false;
     }
   }
 
-  function dispose() {
+  function close({ reason = "client_close" } = {}) {
     disposed = true;
-    if (retryTimer) {
-      clearTimeout(retryTimer);
-      retryTimer = null;
-    }
+    waitingForAuth = false;
+    authStopReason = null;
+    clearRetry();
     clearHeartbeat();
+    abortTicketFetch();
+    connectSeq += 1; // invalidate in-flight open()
+
     if (ws) {
       try {
-        ws.close();
-      } catch (err) {
-        console.warn("WebSocket close during dispose failed", err);
+        ws.close(1000, reason);
+      } catch {
+        // ignore
       }
-      ws = null;
+    }
+    ws = null;
+    inFlight = false;
+    setUiStatus("Déconnecté", "info");
+    safeCallOnEvent({ type: "connection", state: "closed", code: 1000, reason });
+  }
+
+  function send(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Public method for callers to notify that auth state changed in *this* tab.
+  // (storage events don't fire in the same document that sets localStorage).
+  function notifyAuthChanged() {
+    if (disposed) return;
+    if (waitingForAuth && tokenPresent()) {
+      waitingForAuth = false;
+      authStopReason = null;
+      void open();
+    }
+  }
+
+  // Wake up on network restore, focus, and cross-tab token updates.
+  function onOnline() {
+    if (disposed) return;
+    if (waitingForAuth) {
+      notifyAuthChanged();
+      return;
+    }
+    if (!ws && !retryTimer) void open();
+  }
+
+  function onFocus() {
+    if (disposed) return;
+    notifyAuthChanged();
+  }
+
+  function onStorage(ev) {
+    // If any auth-relevant localStorage value changes, we can try to resume.
+    if (disposed) return;
+    if (!waitingForAuth) return;
+    if (!ev || !ev.key) return;
+    if (tokenPresent()) notifyAuthChanged();
+  }
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", onOnline);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("storage", onStorage);
+    // Optional custom event: dispatchEvent(new Event("mongars:auth-changed"))
+    window.addEventListener("mongars:auth-changed", onFocus);
+  }
+
+  function dispose() {
+    close({ reason: "dispose" });
+    if (typeof window !== "undefined") {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("mongars:auth-changed", onFocus);
     }
   }
 
   return {
-    open: openSocket,
-    send: safeSend,
+    open,
+    close,
     dispose,
+    send,
+    notifyAuthChanged,
+    getState: () => ({
+      disposed,
+      waitingForAuth,
+      authStopReason,
+      attempts,
+      lastClose,
+      readyState: ws ? ws.readyState : null,
+    }),
   };
 }

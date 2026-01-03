@@ -1,41 +1,43 @@
-# VCS
-.git
-.gitignore
-
-# Environment and secrets
-.env
-.env.*
-*.pem
-*.key
-
-# Python caches
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-
-# Build outputs
-build/
-dist/
-.eggs/
-*.egg-info/
-
-# Node modules
-node_modules/
-webapp/node_modules/
-
-# Virtual environments
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
 .venv/
 venv/
-ENV/
 
-# IDE files
-.vscode/
-.idea/
-*.swp
+# Node
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Logs and temp files
+# Project build artifacts
+build/
+dist/
+artifacts/
 *.log
-.DS_Store
-.tmp/
+
+# HuggingFace / model blobs / caches
+**/.cache/
+**/huggingface/
+**/wandb/
+**/*.safetensors
+**/*.bin
+**/*.pt
+**/*.pth
+**/*.gguf
+**/*.onnx
+**/*.mlmodel
+
+# Your huge culprit
+webapp/unsloth_compiled_cache/
+
+# Datasets / checkpoints
+datasets/
+checkpoints/
+runs/
+mlruns/
+
+# Git
+.git/
