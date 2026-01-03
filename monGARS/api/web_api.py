@@ -21,7 +21,7 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from httpx import HTTPError
@@ -302,6 +302,118 @@ async def frontend() -> FileResponse:
         )
 
     return FileResponse(index_path)
+
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page() -> HTMLResponse:
+    """Minimal login page that stores the JWT in localStorage then redirects.
+
+    This is intentionally dependency-free so the UI works even when the frontend build
+    doesn't include a login flow yet.
+    """
+    html = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>monGARS — Login</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; }
+      .card { max-width: 520px; margin: 0 auto; padding: 18px; border: 1px solid #ddd; border-radius: 12px; }
+      label { display:block; margin-top: 12px; font-weight: 600; }
+      input { width: 100%; padding: 10px; margin-top: 6px; border: 1px solid #ccc; border-radius: 10px; font-size: 16px; }
+      button { margin-top: 14px; padding: 10px 14px; border-radius: 10px; border: 1px solid #333; background: #111; color: #fff; font-size: 16px; cursor: pointer; }
+      button.secondary { background: #fff; color: #111; border-color: #aaa; }
+      .row { display:flex; gap: 12px; flex-wrap: wrap; }
+      .msg { margin-top: 12px; padding: 10px; border-radius: 10px; }
+      .ok { background: #e8fff0; border: 1px solid #b7f5cc; }
+      .err { background: #ffecec; border: 1px solid #ffbaba; }
+      code { background: #f4f4f4; padding: 2px 6px; border-radius: 6px; }
+      small { color: #555; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>monGARS Login</h2>
+      <small>This will store your JWT under <code>localStorage.mongars_jwt</code> and reload the app.</small>
+
+      <label>Username</label>
+      <input id="u" autocomplete="username" placeholder="admin" value="admin" />
+
+      <label>Password</label>
+      <input id="p" type="password" autocomplete="current-password" placeholder="admin" value="admin" />
+
+      <div class="row">
+        <button id="loginBtn">Login</button>
+        <button id="bootstrapBtn" class="secondary">Create default admin (if none)</button>
+      </div>
+
+      <div id="out"></div>
+    </div>
+
+    <script>
+      const out = document.getElementById("out");
+      function show(msg, ok) {
+        out.innerHTML = '<div class="msg ' + (ok ? 'ok' : 'err') + '">' + msg + '</div>';
+      }
+
+      async function doBootstrap() {
+        const username = document.getElementById("u").value || "admin";
+        const password = document.getElementById("p").value || "admin";
+        try {
+          const resp = await fetch("/api/v1/auth/bootstrap-admin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            show("Admin created: <code>" + data.username + "</code>. Now login.", true);
+            return;
+          }
+          const txt = await resp.text();
+          show("Bootstrap failed (" + resp.status + "): " + txt, false);
+        } catch (e) {
+          show("Bootstrap error: " + (e && e.message ? e.message : e), false);
+        }
+      }
+
+      async function doLogin() {
+        const username = document.getElementById("u").value;
+        const password = document.getElementById("p").value;
+        try {
+          const resp = await fetch("/api/v1/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+          });
+          if (!resp.ok) {
+            const txt = await resp.text();
+            show("Login failed (" + resp.status + "): " + txt, false);
+            return;
+          }
+          const data = await resp.json();
+          const token = data && (data.access_token || data.token);
+          if (!token) {
+            show("Login succeeded but no token returned.", false);
+            return;
+          }
+          localStorage.setItem("mongars_jwt", token);
+          show("Token stored. Redirecting…", true);
+          setTimeout(() => { window.location.href = "/"; }, 350);
+        } catch (e) {
+          show("Login error: " + (e && e.message ? e.message : e), false);
+        }
+      }
+
+      document.getElementById("bootstrapBtn").addEventListener("click", (e) => { e.preventDefault(); doBootstrap(); });
+      document.getElementById("loginBtn").addEventListener("click", (e) => { e.preventDefault(); doLogin(); });
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=html)
+
 
 
 def _redact_user_id(user_id: str) -> str:

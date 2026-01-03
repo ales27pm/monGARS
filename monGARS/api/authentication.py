@@ -8,11 +8,13 @@ from typing import Any, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.config import get_settings
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.security import SecurityManager
+from monGARS.api.dependencies import get_persistence_repository
 from monGARS.init_db import UserAccount
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -216,3 +218,120 @@ def get_current_operator_user(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Operator role required",
     )
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    admin: bool = False
+    expires_in: int
+
+
+class BootstrapAdminRequest(BaseModel):
+    # Used only when no admin account exists yet.
+    # Keep defaults intentionally simple for local/dev.
+    username: str = Field(default="admin", min_length=1, max_length=128)
+    password: str = Field(default="admin", min_length=1, max_length=256)
+
+
+class BootstrapAdminResponse(BaseModel):
+    created: bool
+    username: str
+    admin: bool = True
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login_json(
+    payload: LoginRequest,
+    repo: PersistenceRepository = Depends(get_persistence_repository),
+) -> LoginResponse:
+    """Login endpoint returning a JWT.
+
+    The UI (and scripts) can use this to obtain a token without OAuth2 form encoding.
+    """
+    settings = get_settings()
+    sec = SecurityManager(settings=settings)
+    user = await authenticate_user(repo, payload.username, payload.password, sec)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+    token = sec.create_access_token(
+        data={
+            "sub": user.username,
+            "admin": bool(user.is_admin),
+        }
+    )
+    expires_in = int(settings.ACCESS_TOKEN_EXPIRE_MINUTES) * 60
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        admin=bool(user.is_admin),
+        expires_in=expires_in,
+    )
+
+
+@router.post("/bootstrap-admin", response_model=BootstrapAdminResponse)
+async def bootstrap_admin(
+    payload: BootstrapAdminRequest,
+    repo: PersistenceRepository = Depends(get_persistence_repository),
+) -> BootstrapAdminResponse:
+    """Create a default admin account when none exists.
+
+    This endpoint is intentionally *narrow*:
+    - It will refuse if an admin user already exists.
+    - It is meant for initial local setup / first-run onboarding.
+    """
+    sec = SecurityManager(settings=get_settings())
+    try:
+        if await repo.has_admin_user():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Admin already exists",
+            )
+    except HTTPException:
+        raise
+    except (RuntimeError, SQLAlchemyError) as exc:
+        logger.error("auth.bootstrap_admin.state_check_failed", exc_info=exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to verify current admin state",
+        ) from exc
+
+    username = payload.username.strip()
+    password = payload.password
+
+    if not username:
+        raise HTTPException(status_code=422, detail="username is required")
+    if not password:
+        raise HTTPException(status_code=422, detail="password is required")
+
+    try:
+        await repo.create_user_atomic(
+            UserAccount(
+                username=username,
+                password_hash=sec.get_password_hash(password),
+                is_admin=True,
+            )
+        )
+    except HTTPException:
+        raise
+    except (RuntimeError, SQLAlchemyError) as exc:
+        logger.error(
+            "auth.bootstrap_admin.create_failed",
+            extra={"username": username},
+            exc_info=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to create admin user",
+        ) from exc
+
+    return BootstrapAdminResponse(created=True, username=username)

@@ -9,6 +9,14 @@
 const DEFAULT_STORAGE_KEY = "mongars_jwt";
 const LEGACY_STORAGE_KEYS = ["jwt", "access_token"];
 
+const PLACEHOLDER_TOKENS = new Set([
+  "YOUR.JWT.HERE",
+  "REPLACE_ME",
+  "REPLACE_THIS",
+  "INSERT_TOKEN_HERE",
+]);
+
+
 function normaliseJwt(token) {
   if (!token) return undefined;
   if (typeof token !== "string") return undefined;
@@ -25,6 +33,14 @@ function normaliseJwt(token) {
 
   if (!t) return undefined;
   if (t === "null" || t === "undefined") return undefined;
+
+  // Reject obvious placeholders.
+  if (PLACEHOLDER_TOKENS.has(t)) return undefined;
+
+  // Basic JWT shape check: three dot-separated parts.
+  const parts = t.split(".");
+  if (parts.length !== 3) return undefined;
+  if (!parts[0] || !parts[1] || !parts[2]) return undefined;
 
   return t;
 }

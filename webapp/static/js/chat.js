@@ -1667,6 +1667,38 @@
 
   // src/services/auth.js
   var DEFAULT_STORAGE_KEY = "mongars_jwt";
+  var PLACEHOLDER_TOKENS = /* @__PURE__ */ new Set([
+    "YOUR.JWT.HERE",
+    "REPLACE_ME",
+    "REPLACE_THIS",
+    "INSERT_TOKEN_HERE"
+  ]);
+  function isValidJwtToken(t) {
+    if (typeof t !== "string") return false;
+    const s = t.trim();
+    if (!s) return false;
+    if (s === "null" || s === "undefined") return false;
+    if (PLACEHOLDER_TOKENS.has(s)) return false;
+    const parts = s.split(".");
+    return parts.length === 3 && parts[0] && parts[1] && parts[2];
+  }
+  function seedTokenFromUrlOnce(storageKey) {
+    try {
+      if (typeof window === "undefined") return void 0;
+      const u = new URL(window.location.href);
+      const t = u.searchParams.get("jwt") || u.searchParams.get("token");
+      if (!isValidJwtToken(t || "")) return void 0;
+      if (hasLocalStorage()) {
+        window.localStorage.setItem(storageKey, (t || "").trim());
+      }
+      u.searchParams.delete("jwt");
+      u.searchParams.delete("token");
+      window.history.replaceState({}, "", u.toString());
+      return (t || "").trim();
+    } catch (err) {
+      return void 0;
+    }
+  }
   function hasLocalStorage() {
     try {
       return typeof window !== "undefined" && Boolean(window.localStorage);
@@ -1702,7 +1734,7 @@
       }
       try {
         const stored = window.localStorage.getItem(storageKey);
-        return stored || void 0;
+        return isValidJwtToken(stored) ? stored : void 0;
       } catch (err) {
         console.warn("Unable to read JWT from localStorage", err);
         return void 0;
@@ -1723,11 +1755,17 @@
       persistToken(fallbackToken);
     }
     async function getJwt() {
+      const seeded = seedTokenFromUrlOnce(storageKey);
+      if (seeded) {
+        fallbackToken = seeded;
+        return seeded;
+      }
+
       const stored = readStoredToken();
       if (stored) {
         return stored;
       }
-      if (fallbackToken) {
+      if (fallbackToken && isValidJwtToken(fallbackToken)) {
         return fallbackToken;
       }
       throw new Error("Missing JWT for chat authentication.");
