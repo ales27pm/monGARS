@@ -8,13 +8,14 @@ services:
       POSTGRES_USER: ${DB_USER:-mongars}
       POSTGRES_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
       POSTGRES_DB: ${DB_NAME:-mongars_db}
+      PGDATA: ${PGDATA:-/var/lib/postgresql/18/docker}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mongars} -d ${DB_NAME:-mongars_db}"]
       interval: 5s
       timeout: 5s
       retries: 20
     volumes:
-      - postgres-data:/var/lib/postgresql
+      - postgres-data:${PGDATA:-/var/lib/postgresql/18/docker}
     networks:
       - backend
 
@@ -84,53 +85,69 @@ services:
       - backend
 
   migrations:
-    <<: &app-service
-      image: ales27pm/mongars-app:latest
-      build:
-        context: .
-        dockerfile: Dockerfile
-        target: runtime
-      env_file:
-        - .env
-      environment: &app-environment
-        DATABASE_URL: "postgresql+asyncpg://${DB_USER:-mongars}:${DB_PASSWORD?DB_PASSWORD required}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mongars_db}"
-        DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
-        DB_HOST: ${DB_HOST:-postgres}
-        DB_PORT: ${DB_PORT:-5432}
-        DB_USER: ${DB_USER:-mongars}
-        DB_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
-        DB_NAME: ${DB_NAME:-mongars_db}
-        DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
-        DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
-        ENV: ${APP_ENV:-production}
-        HOST: 0.0.0.0
-        PORT: 8000
-        USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
-        RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
-        REDIS_URL: redis://redis:6379/0
-        MLFLOW_TRACKING_URI: http://mlflow:5000
-        OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
-        VAULT_URL: http://vault:8200
-        VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
-        WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
-        SEARCH_SEARX_ENABLED: ${SEARCH_SEARX_ENABLED:-true}
-        SEARCH_SEARX_BASE_URL: ${SEARCH_SEARX_INTERNAL_BASE_URL:-http://searxng:8080}
-      restart: "no"
-      working_dir: /app
-      volumes:
-        - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
-        - ./models/datasets/curated:/app/models/datasets/curated
-        - ./models/encoders:/app/models/encoders
-      init: true
-      networks:
-        - backend
+    image: ales27pm/mongars-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: "no"
+    env_file:
+      - .env
+    environment: &app-environment
+      DATABASE_URL: "postgresql+asyncpg://${DB_USER:-mongars}:${DB_PASSWORD?DB_PASSWORD required}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mongars_db}"
+      DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-mongars}
+      DB_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
+      DB_NAME: ${DB_NAME:-mongars_db}
+      DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
+      DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
+      ENV: ${APP_ENV:-production}
+      HOST: 0.0.0.0
+      PORT: 8000
+      USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
+      RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
+      REDIS_URL: redis://redis:6379/0
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
+      SEARCH_SEARX_ENABLED: ${SEARCH_SEARX_ENABLED:-true}
+      SEARCH_SEARX_BASE_URL: ${SEARCH_SEARX_INTERNAL_BASE_URL:-http://searxng:8080}
+    working_dir: /app
+    volumes:
+      - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+      - ./models/datasets/curated:/app/models/datasets/curated
+      - ./models/encoders:/app/models/encoders
+    init: true
+    networks:
+      - backend
     command: ["python", "init_db.py"]
     depends_on:
       postgres:
         condition: service_healthy
 
   api:
-    <<: *app-service
+    image: ales27pm/mongars-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      <<: *app-environment
+    working_dir: /app
+    volumes:
+      - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+      - ./models/datasets/curated:/app/models/datasets/curated
+      - ./models/encoders:/app/models/encoders
+    init: true
+    networks:
+      - backend
     command: >-
       bash -lc "python scripts/wait_for_database.py && uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000"
     ports:
@@ -143,7 +160,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -153,10 +169,14 @@ services:
         condition: service_healthy
 
   webapp-migrations:
-    <<: *app-service
-    command: >-
-      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py migrate --noinput"
+    image: ales27pm/mongars-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
     restart: "no"
+    env_file:
+      - .env
     environment:
       <<: *app-environment
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-django-insecure-change-me}
@@ -164,6 +184,16 @@ services:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
       FASTAPI_URL: http://api:8000
       PYTHONUNBUFFERED: "1"
+    working_dir: /app
+    volumes:
+      - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+      - ./models/datasets/curated:/app/models/datasets/curated
+      - ./models/encoders:/app/models/encoders
+    init: true
+    networks:
+      - backend
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py migrate --noinput"
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,11 +201,14 @@ services:
         condition: service_completed_successfully
 
   webapp:
-    <<: *app-service
-    command: >-
-      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py runserver 0.0.0.0:8001"
-    ports:
-      - "${WEBAPP_PORT:-8001}:8001"
+    image: ales27pm/mongars-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
       <<: *app-environment
       MONGARS_DB_PASSWORD: ${MONGARS_DB_PASSWORD}
@@ -186,6 +219,18 @@ services:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
       FASTAPI_URL: http://api:8000
       PYTHONUNBUFFERED: "1"
+    working_dir: /app
+    volumes:
+      - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
+      - ./models/datasets/curated:/app/models/datasets/curated
+      - ./models/encoders:/app/models/encoders
+    init: true
+    networks:
+      - backend
+    command: >-
+      bash -lc "python scripts/wait_for_database.py && python webapp/manage.py runserver 0.0.0.0:8001"
+    ports:
+      - "${WEBAPP_PORT:-8001}:8001"
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -194,7 +239,6 @@ services:
       interval: 45s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
     depends_on:
       api:
         condition: service_started
@@ -217,15 +261,26 @@ services:
       - backend
 
   unsloth-trainer:
-    <<: *app-service
+    image: ales27pm/mongars-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
     profiles: [training]
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
       <<: *app-environment
       PYTHONUNBUFFERED: "1"
+    working_dir: /app
     volumes:
       - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro
       - ./models/datasets/curated:/app/models/datasets/curated
       - ./models/encoders:/app/models/encoders
+    init: true
+    networks:
+      - backend
     command: >-
       bash -lc "python scripts/run_mongars_llm_pipeline.py finetune
         --model-id ${UNSLOTH_MODEL_ID:-dphn/Dolphin-X1-8B}
@@ -286,12 +341,11 @@ services:
       - backend
 
   rayserve:
-    <<: *app-service
+    image: ${RAY_SERVE_IMAGE:-mongars-rayserve:local}
     profiles: [ray]
     build:
       context: .
       dockerfile: Dockerfile.rayserve
-    image: ${RAY_SERVE_IMAGE:-mongars-rayserve:local}
     environment:
       <<: *app-environment
       PYTHONUNBUFFERED: "1"
@@ -309,6 +363,8 @@ services:
     depends_on:
       ray-head:
         condition: service_started
+    networks:
+      - backend
 
 networks:
   backend:

@@ -1,187 +1,324 @@
-"""monGARS package initialisation hooks.
-
-This module provides runtime compatibility shims that need to be in place before
-the broader package is imported. The current shim restores the
-``PytorchGELUTanh`` activation that AutoAWQ/PEFT expect from older versions of
-Hugging Face Transformers. The symbol was removed upstream in Transformers >= 4.45,
-which caused AutoAWQ to fail during import and broke our fine-tuning tests.
-
-By defining the module here we ensure the symbol is available as soon as the
-``monGARS`` package loads, keeping the rest of the codebase agnostic of the
-underlying dependency change.
+"""
+Lightweight async database primitives for unit tests, local runs, and containers.
 """
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import inspect
+import asyncio
+import logging
 import os
-import sys
-import warnings
-from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence, cast
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import AsyncIterator
+from weakref import WeakKeyDictionary
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import sessionmaker
+
+try:  # optional dependency
+    import aiosqlite  # noqa: F401
+
+    HAS_AIOSQLITE = True
+except ModuleNotFoundError:
+    HAS_AIOSQLITE = False
+
+from monGARS.config import get_settings
+from monGARS.db import (
+    Base,
+    ConversationHistory,
+    Interaction,
+    MemoryEntry,
+    UserAccount,
+    UserPersonality,
+    UserPreferences,
+)
+
+logger = logging.getLogger(__name__)
+_settings = get_settings()
+
+# ---------------------------------------------------------------------
+# Constants / paths
+# ---------------------------------------------------------------------
+
+DATA_DIR = Path(os.environ.get("MONGARS_DATA_DIR", "/app/data")).resolve()
+SQLITE_FILENAME = "mongars.db"
+SQLITE_PATH = DATA_DIR / SQLITE_FILENAME
+
+_LOCAL_POSTGRES_HOSTS = {"", None, "localhost", "127.0.0.1", "::1"}
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
 
 
-def _is_static_analysis_process(argv: Sequence[str], env: Mapping[str, str]) -> bool:
-    """Best-effort detection for type-checker invocations.
+def _is_truthy(value: str | None) -> bool:
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
 
-    The previous heuristic only inspected the executable name, which missed
-    `python -m mypy` and language-server launches. Those cases pulled optional
-    dependencies (Torch, Unsloth) into type-checker sessions and caused
-    aggressive startup delays. This helper cross-references common environment
-    flags alongside the argument vector so static analyzers never trigger
-    heavy imports.
+
+def _ensure_data_dir() -> None:
     """
-
-    if not argv and not env:
-        return False
-
-    analysis_env_flags = (
-        "MYPY",
-        "MYPY_FORCE_COLOR",
-        "MYPY_FORCE_TERMINAL_WIDTH",
-        "PYRIGHT_VERSION_INFO",
-        "PYTYPE_ANALYZE",
-    )
-    if any(flag in env for flag in analysis_env_flags):
-        return True
-
-    analyzer_tokens = {
-        "dmypy",
-        "mypy",
-        "pyre",
-        "pyright",
-        "stubgen",
-        "stubtest",
-    }
-
-    for arg in argv:
-        if arg == "-m":
-            continue
-        token = os.path.basename(arg) if arg else ""
-        if not token:
-            continue
-        if token in analyzer_tokens:
-            return True
-        if token.endswith((".exe", ".py")):
-            stripped = token.rsplit(".", 1)[0]
-            if stripped in analyzer_tokens:
-                return True
-
-    return False
+    Ensure the SQLite directory exists and is writable.
+    """
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to create database directory {DATA_DIR}"
+        ) from exc
 
 
-_RUNNING_STATIC_ANALYSIS = _is_static_analysis_process(tuple(sys.argv), os.environ)
-
-SimpleFilterAction = Literal[
-    "default", "error", "ignore", "always", "all", "module", "once"
-]
-SimpleFilter = Callable[[SimpleFilterAction, type[Warning], int, bool], None]
-
-_original_simplefilter = cast(SimpleFilter, warnings.simplefilter)
+def _safe_sqlite_url() -> URL:
+    _ensure_data_dir()
+    driver = "sqlite+aiosqlite" if HAS_AIOSQLITE else "sqlite"
+    return make_url(f"{driver}:///{SQLITE_PATH}")
 
 
-def _awq_safe_simplefilter(
-    action: SimpleFilterAction,
-    category: type[Warning] = Warning,
-    lineno: int = 0,
-    append: bool = False,
-) -> None:
-    if action == "default" and category is DeprecationWarning:
-        for frame in inspect.stack():
-            if "awq/__init__.py" in frame.filename:
-                _original_simplefilter("ignore", category, lineno, append)
-                return
-    _original_simplefilter(action, category, lineno, append)
+def _normalise_driver(url: URL) -> URL:
+    driver = url.drivername
+    if driver in {"postgresql", "postgresql+psycopg2", "postgresql+psycopg"}:
+        return url.set(drivername="postgresql+asyncpg")
+    if driver.startswith("sqlite"):
+        if HAS_AIOSQLITE and driver != "sqlite+aiosqlite":
+            return url.set(drivername="sqlite+aiosqlite")
+        if not HAS_AIOSQLITE and driver != "sqlite":
+            return url.set(drivername="sqlite")
+    return url
 
 
-warnings.simplefilter = _awq_safe_simplefilter
+def _validate_database_target(url: URL, *, source: str) -> URL | None:
+    normalised = _normalise_driver(url)
 
-PytorchGELUTanh: type[Any] | None
-ModuleBase: type[Any] | None
-
-torch_module: ModuleType | None
-torch_nn: ModuleType | None
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    import torch
-    from torch import nn as _torch_nn_module
-
-    class _PytorchGELUTanhStub(_torch_nn_module.Module):
-        """Typing stub mirroring the runtime activation shim."""
-
-        def forward(self, input_tensor: "torch.Tensor") -> "torch.Tensor": ...
-
-    PytorchGELUTanh = _PytorchGELUTanhStub
-    torch_module = cast(ModuleType, torch)
-    torch_nn = cast(ModuleType, _torch_nn_module)
-    ModuleBase = cast("type[Any]", _torch_nn_module.Module)
-else:  # pragma: no cover - optional dependency handling
-    torch_module = None
-    torch_nn = None
-    ModuleBase = None
-    PytorchGELUTanh = None
-
-    if not _RUNNING_STATIC_ANALYSIS and importlib.util.find_spec("torch") is not None:
-        try:
-            torch_module = cast(ModuleType, importlib.import_module("torch"))
-            torch_nn = cast(ModuleType, importlib.import_module("torch.nn"))
-        except Exception:
-            torch_module = None
-            torch_nn = None
-
-    if not _RUNNING_STATIC_ANALYSIS:
-        try:  # pragma: no cover - optional dependency
-            importlib.import_module("unsloth")
-        except Exception:  # pragma: no cover - optional dependency missing or failing
-            pass
-
-    if torch_nn is not None:
-        module_candidate = getattr(torch_nn, "Module", None)
-        if isinstance(module_candidate, type):
-            ModuleBase = cast("type[Any]", module_candidate)
-
-    def _load_transformers_activations() -> ModuleType | None:
-        """Safely resolve the Transformers activation registry."""
-
-        try:
-            return cast(ModuleType, importlib.import_module("transformers.activations"))
-        except ModuleNotFoundError:
-            return None
-        except Exception as exc:  # pragma: no cover - defensive guard
-            warnings.warn(
-                f"Failed to import transformers.activations ({exc!r}); "
-                "PytorchGELUTanh shim will not be installed.",
-                RuntimeWarning,
-                stacklevel=2,
+    if normalised.drivername.startswith("postgresql"):
+        host = normalised.host or ""
+        if host not in _LOCAL_POSTGRES_HOSTS and not _is_truthy(
+            os.environ.get("MONGARS_ALLOW_REMOTE_DATABASE_BOOTSTRAP")
+        ):
+            logger.error(
+                "Refusing to bootstrap remote PostgreSQL database from %s (host=%s)",
+                source,
+                host,
             )
             return None
 
-    transformers_activations: ModuleType | None = None
-    if ModuleBase is not None and torch_module is not None:
-        transformers_activations = _load_transformers_activations()
+    return normalised
 
-    if (
-        ModuleBase is not None
-        and torch_module is not None
-        and transformers_activations is not None
-        and not hasattr(transformers_activations, "PytorchGELUTanh")
-    ):
-        activations_module = cast(Any, transformers_activations)
-        torch_api = cast(Any, torch_module)
 
-        class _RuntimePytorchGELUTanh(ModuleBase):
-            """Compatibility shim mirroring the removed Transformers activation."""
+def _resolve_database_url(raw_url: str | None, *, default_url: URL) -> URL:
+    fallback_url = _validate_database_target(default_url, source="settings")
+    if fallback_url is None:
+        logger.warning("Configured database rejected; using SQLite fallback")
+        fallback_url = _safe_sqlite_url()
 
-            def forward(self, input_tensor: "torch.Tensor") -> "torch.Tensor":
-                gelu_fn = getattr(torch_api.nn.functional, "gelu")
-                return gelu_fn(input_tensor, approximate="tanh")
+    if raw_url:
+        try:
+            parsed = make_url(raw_url)
+            validated = _validate_database_target(parsed, source="env")
+            if validated:
+                return validated
+            logger.warning("DATABASE_URL rejected; falling back")
+        except Exception:
+            logger.warning("Invalid DATABASE_URL; falling back")
 
-        PytorchGELUTanh = _RuntimePytorchGELUTanh
-        activations_module.PytorchGELUTanh = _RuntimePytorchGELUTanh
+    return fallback_url
 
-        symbol_list = list(getattr(activations_module, "__all__", ()))
-        if "PytorchGELUTanh" not in symbol_list:
-            symbol_list.append("PytorchGELUTanh")
-            activations_module.__all__ = symbol_list
+
+# ---------------------------------------------------------------------
+# Resolve DB URL
+# ---------------------------------------------------------------------
+
+try:
+    _default_database_url = make_url(str(_settings.database_url))
+except Exception:
+    logger.warning("Invalid settings database URL; using SQLite")
+    _default_database_url = _safe_sqlite_url()
+
+_database_url_obj = _resolve_database_url(
+    os.environ.get("DATABASE_URL"),
+    default_url=_default_database_url,
+)
+
+# ---------------------------------------------------------------------
+# Engines
+# ---------------------------------------------------------------------
+
+_async_engine = None
+_async_session_maker: async_sessionmaker[AsyncSession] | None = None
+_sync_engine = None
+_sync_session_maker: sessionmaker | None = None
+_using_async_engine = False
+
+if _database_url_obj.drivername.startswith("postgresql"):
+    _async_engine = create_async_engine(
+        str(_database_url_obj),
+        future=True,
+        echo=_settings.debug,
+        pool_size=_settings.db_pool_size,
+        max_overflow=_settings.db_max_overflow,
+        pool_timeout=_settings.db_pool_timeout,
+    )
+    _async_session_maker = async_sessionmaker(
+        _async_engine, expire_on_commit=False
+    )
+    _using_async_engine = True
+
+elif _database_url_obj.drivername.startswith("sqlite+aiosqlite") and HAS_AIOSQLITE:
+    _async_engine = create_async_engine(
+        str(_database_url_obj),
+        future=True,
+        echo=False,
+    )
+    _async_session_maker = async_sessionmaker(
+        _async_engine, expire_on_commit=False
+    )
+    _using_async_engine = True
+
+else:
+    sqlite_url = _safe_sqlite_url().set(drivername="sqlite")
+    _sync_engine = create_engine(
+        str(sqlite_url),
+        future=True,
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+    _sync_session_maker = sessionmaker(
+        _sync_engine, expire_on_commit=False
+    )
+
+# ---------------------------------------------------------------------
+# Init / schema
+# ---------------------------------------------------------------------
+
+_init_locks: WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Lock
+] = WeakKeyDictionary()
+_initialized = False
+
+
+def _get_loop_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _init_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _init_locks[loop] = lock
+    return lock
+
+
+class _AsyncSessionProxy:
+    """Async facade for sync SQLAlchemy sessions."""
+
+    def __init__(self, session):
+        self._session = session
+
+    class _AsyncTransactionProxy:
+        def __init__(self, tx):
+            self._tx = tx
+
+        async def __aenter__(self):
+            return await asyncio.to_thread(self._tx.__enter__)
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return await asyncio.to_thread(
+                self._tx.__exit__, exc_type, exc, tb
+            )
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+
+    def add(self, obj):
+        self._session.add(obj)
+
+    def begin(self):
+        return self._AsyncTransactionProxy(self._session.begin())
+
+    async def execute(self, stmt, params=None):
+        return await asyncio.to_thread(
+            self._session.execute, stmt, params
+        )
+
+    async def commit(self):
+        await asyncio.to_thread(self._session.commit)
+
+    async def rollback(self):
+        await asyncio.to_thread(self._session.rollback)
+
+    async def close(self):
+        await asyncio.to_thread(self._session.close)
+
+
+async def _ensure_schema() -> None:
+    global _initialized
+    if _initialized:
+        return
+
+    lock = _get_loop_lock()
+    async with lock:
+        if _initialized:
+            return
+
+        if _using_async_engine:
+            async with _async_engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    try:
+                        await conn.execute(
+                            text("CREATE EXTENSION IF NOT EXISTS vector")
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "pgvector extension unavailable: %s", exc
+                        )
+                await conn.run_sync(Base.metadata.create_all)
+        else:
+            await asyncio.to_thread(
+                Base.metadata.create_all, _sync_engine
+            )
+
+        _initialized = True
+
+
+# ---------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------
+
+@asynccontextmanager
+async def async_session_factory() -> AsyncIterator[AsyncSession]:
+    await _ensure_schema()
+
+    if _using_async_engine:
+        async with _async_session_maker() as session:
+            yield session
+    else:
+        session = _sync_session_maker()
+        proxy = _AsyncSessionProxy(session)
+        try:
+            yield proxy
+        finally:
+            await proxy.close()
+
+
+async def reset_database() -> None:
+    global _initialized
+
+    lock = _get_loop_lock()
+    async with lock:
+        if _using_async_engine:
+            async with _async_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+                await conn.run_sync(Base.metadata.create_all)
+        else:
+            await asyncio.to_thread(
+                Base.metadata.drop_all, _sync_engine
+            )
+            await asyncio.to_thread(
+                Base.metadata.create_all, _sync_engine
+            )
+        _initialized = True
