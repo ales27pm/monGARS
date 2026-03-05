@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import os
 
+import pytest
+
 
 def _reload_settings_module():
     module = importlib.import_module("webapp.webapp.settings")
@@ -100,3 +102,42 @@ def test_database_url_uses_parsed_values_when_no_env(monkeypatch):
     assert config["PASSWORD"] == "oldpw"
     assert config["HOST"] == "legacy-host"
     assert config["PORT"] == "6543"
+
+
+def test_build_database_settings_fails_without_password_in_production(monkeypatch):
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "unit-test-secret")
+    monkeypatch.setenv("DJANGO_DEBUG", "false")
+    monkeypatch.setenv("DB_ENGINE", "postgresql")
+    monkeypatch.setenv("DB_NAME", "mongars_db")
+    monkeypatch.setenv("DB_USER", "mongars")
+    monkeypatch.setenv("DB_HOST", "postgres")
+    monkeypatch.delenv("DB_PASSWORD", raising=False)
+    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DJANGO_DATABASE_URL", raising=False)
+
+    with pytest.raises(RuntimeError, match="missing required credentials"):
+        _reload_settings_module()
+
+
+def test_build_database_settings_allows_explicit_valid_env_in_production(monkeypatch):
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "unit-test-secret")
+    monkeypatch.setenv("DJANGO_DEBUG", "false")
+    monkeypatch.setenv("DB_ENGINE", "postgresql")
+    monkeypatch.setenv("DB_NAME", "mongars_db")
+    monkeypatch.setenv("DB_USER", "mongars")
+    monkeypatch.setenv("DB_PASSWORD", "prod-secret")
+    monkeypatch.setenv("DB_HOST", "postgres")
+    monkeypatch.setenv("DB_PORT", "5432")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DJANGO_DATABASE_URL", raising=False)
+
+    settings = _reload_settings_module()
+    config = settings._build_database_settings()
+
+    assert config["ENGINE"] == "django.db.backends.postgresql"
+    assert config["NAME"] == "mongars_db"
+    assert config["USER"] == "mongars"
+    assert config["PASSWORD"] == "prod-secret"
+    assert config["HOST"] == "postgres"
+    assert config["PORT"] == "5432"

@@ -21,7 +21,7 @@ def _base_expected_options() -> dict[str, Any]:
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "mongars_db",
         "USER": "mongars",
-        "PASSWORD": "changeme",
+        "PASSWORD": "secure-password",
         "HOST": "postgres",
         "PORT": "5432",
     }
@@ -30,6 +30,10 @@ def _base_expected_options() -> dict[str, Any]:
 def test_default_postgres_settings_includes_optional_options(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setenv("DB_NAME", "mongars_db")
+    monkeypatch.setenv("DB_USER", "mongars")
+    monkeypatch.setenv("DB_PASSWORD", "secure-password")
+    monkeypatch.setenv("DB_HOST", "postgres")
     monkeypatch.setenv("DATABASE_SSLMODE", "require")
     monkeypatch.setenv("DATABASE_TARGET_SESSION_ATTRS", "read-write")
     monkeypatch.setenv("DATABASE_OPTIONS_JSON", '{"application_name": "monGARS"}')
@@ -48,6 +52,10 @@ def test_default_postgres_settings_includes_optional_options(
 def test_default_postgres_settings_rejects_invalid_json(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setenv("DB_NAME", "mongars_db")
+    monkeypatch.setenv("DB_USER", "mongars")
+    monkeypatch.setenv("DB_PASSWORD", "secure-password")
+    monkeypatch.setenv("DB_HOST", "postgres")
     monkeypatch.setenv("DATABASE_OPTIONS_JSON", "not-json")
 
     with pytest.raises(RuntimeError):
