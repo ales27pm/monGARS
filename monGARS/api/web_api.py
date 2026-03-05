@@ -304,7 +304,6 @@ async def frontend() -> FileResponse:
     return FileResponse(index_path)
 
 
-
 @app.get("/login", include_in_schema=False)
 async def login_page() -> HTMLResponse:
     """Minimal login page that stores the JWT in localStorage then redirects.
@@ -413,7 +412,6 @@ async def login_page() -> HTMLResponse:
   </body>
 </html>"""
     return HTMLResponse(content=html)
-
 
 
 def _redact_user_id(user_id: str) -> str:
@@ -717,6 +715,12 @@ async def register_admin_user(
     reg: UserRegistration,
     repo: Annotated[PersistenceRepository, Depends(get_persistence_repository)],
 ) -> dict:
+    if not settings.enable_admin_bootstrap:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin bootstrap is disabled",
+        )
+
     try:
         if await repo.has_admin_user():
             raise HTTPException(

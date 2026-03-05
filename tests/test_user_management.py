@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from monGARS.api.authentication import authenticate_user, ensure_bootstrap_users
 from monGARS.api.dependencies import get_peer_communicator, get_persistence_repository
 from monGARS.api.web_api import app, sec_manager
+from monGARS.api.web_api import settings as api_settings
 from monGARS.init_db import reset_database
 
 
@@ -74,9 +75,24 @@ async def test_register_and_login(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_admin_when_none_exists(
+async def test_register_admin_disabled_by_default(
     empty_client: AsyncClient,
 ) -> None:
+    resp = await empty_client.post(
+        "/api/v1/user/register/admin",
+        json={"username": "founder", "password": "founderpw"},
+    )
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert resp.json()["detail"] == "Admin bootstrap is disabled"
+
+
+@pytest.mark.asyncio
+async def test_register_admin_when_none_exists(
+    empty_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_settings, "enable_admin_bootstrap", True)
+
     resp = await empty_client.post(
         "/api/v1/user/register/admin",
         json={"username": "founder", "password": "founderpw"},
