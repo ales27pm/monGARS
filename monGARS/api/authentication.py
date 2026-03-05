@@ -315,11 +315,9 @@ async def bootstrap_admin(
 
     try:
         await repo.create_user_atomic(
-            UserAccount(
-                username=username,
-                password_hash=sec.get_password_hash(password),
-                is_admin=True,
-            )
+            username,
+            sec.get_password_hash(password),
+            is_admin=True,
         )
     except HTTPException:
         raise

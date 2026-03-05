@@ -58,6 +58,7 @@ class FakePersistenceRepository:
         self._users: dict[str, FakeUser] = {}
         self.raise_on_has_admin: Exception | None = None
         self.update_result_override: bool | None = None
+        self.create_user_atomic_calls: list[dict[str, Any]] = []
 
     def seed_user(
         self, username: str, password: str, *, is_admin: bool = False
@@ -71,6 +72,13 @@ class FakePersistenceRepository:
     async def create_user_atomic(
         self, username: str, password_hash: str, *, is_admin: bool = False
     ) -> None:
+        self.create_user_atomic_calls.append(
+            {
+                "username": username,
+                "password_hash": password_hash,
+                "is_admin": is_admin,
+            }
+        )
         if username in self._users:
             raise ValueError("Username already exists")
         self._users[username] = FakeUser(username, password_hash, is_admin=is_admin)
@@ -578,6 +586,60 @@ async def test_list_users_requires_admin(api_context: ApiTestContext) -> None:
     )
     assert response.status_code == status.HTTP_200_OK
     assert set(response.json()["users"]).issuperset({"admin", "member"})
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_creates_first_admin(
+    api_context: ApiTestContext,
+) -> None:
+    response = await api_context.client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"username": "founder", "password": "founderpw"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {
+        "created": True,
+        "username": "founder",
+        "admin": True,
+    }
+
+    user = await api_context.repo.get_user_by_username("founder")
+    assert user is not None
+    assert user.is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_conflicts_when_admin_exists(
+    api_context: ApiTestContext,
+) -> None:
+    api_context.repo.seed_user("existing-admin", "pw", is_admin=True)
+
+    response = await api_context.client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"username": "founder", "password": "founderpw"},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"] == "Admin already exists"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_create_user_atomic_signature_regression(
+    api_context: ApiTestContext,
+) -> None:
+    response = await api_context.client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"username": "shape-check", "password": "shape-check-pass"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert len(api_context.repo.create_user_atomic_calls) == 1
+    call = api_context.repo.create_user_atomic_calls[0]
+    assert call["username"] == "shape-check"
+    assert isinstance(call["password_hash"], str)
+    assert call["password_hash"]
+    assert call["is_admin"] is True
 
 
 @pytest.mark.asyncio
