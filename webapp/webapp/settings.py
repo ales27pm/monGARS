@@ -341,12 +341,10 @@ def _database_config_from_discrete_env() -> dict[str, Any] | None:
     else:
         engine = engine_hint or "django.db.backends.postgresql"
 
-    name = os.environ.get("DB_NAME") or os.environ.get("POSTGRES_DB", "mongars_db")
-    user = os.environ.get("DB_USER") or os.environ.get("POSTGRES_USER", "mongars")
-    password = os.environ.get("DB_PASSWORD") or os.environ.get(
-        "POSTGRES_PASSWORD", "changeme"
-    )
-    host = os.environ.get("DB_HOST") or "postgres"
+    name = os.environ.get("DB_NAME") or os.environ.get("POSTGRES_DB")
+    user = os.environ.get("DB_USER") or os.environ.get("POSTGRES_USER")
+    password = os.environ.get("DB_PASSWORD") or os.environ.get("POSTGRES_PASSWORD")
+    host = os.environ.get("DB_HOST") or os.environ.get("POSTGRES_HOST")
     port = str(os.environ.get("DB_PORT") or os.environ.get("POSTGRES_PORT") or "5432")
 
     config: dict[str, Any] = {
@@ -370,16 +368,10 @@ def _default_postgres_settings() -> dict[str, Any]:
 
     config: dict[str, Any] = {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("DB_NAME")
-        or os.environ.get("POSTGRES_DB")
-        or "mongars_db",
-        "USER": os.environ.get("DB_USER")
-        or os.environ.get("POSTGRES_USER")
-        or "mongars",
-        "PASSWORD": os.environ.get("DB_PASSWORD")
-        or os.environ.get("POSTGRES_PASSWORD")
-        or "changeme",
-        "HOST": os.environ.get("DB_HOST") or "postgres",
+        "NAME": os.environ.get("DB_NAME") or os.environ.get("POSTGRES_DB"),
+        "USER": os.environ.get("DB_USER") or os.environ.get("POSTGRES_USER"),
+        "PASSWORD": os.environ.get("DB_PASSWORD") or os.environ.get("POSTGRES_PASSWORD"),
+        "HOST": os.environ.get("DB_HOST") or os.environ.get("POSTGRES_HOST") or "postgres",
         "PORT": str(
             os.environ.get("DB_PORT") or os.environ.get("POSTGRES_PORT") or "5432"
         ),
@@ -427,6 +419,32 @@ def _default_postgres_settings() -> dict[str, Any]:
     return config
 
 
+def _ensure_required_database_credentials(config: dict[str, Any]) -> None:
+    """Fail fast when non-SQLite production database credentials are missing."""
+
+    if DEBUG:
+        return
+
+    engine = str(config.get("ENGINE") or "")
+    if engine == "django.db.backends.sqlite3":
+        return
+
+    missing_fields = [
+        field
+        for field in ("NAME", "USER", "PASSWORD", "HOST")
+        if not str(config.get(field) or "").strip()
+    ]
+    if missing_fields:
+        missing_joined = ", ".join(missing_fields)
+        raise RuntimeError(
+            "Database configuration error: missing required credentials "
+            f"({missing_joined}) while DJANGO_DEBUG is disabled. "
+            "Set DJANGO_DATABASE_URL/DATABASE_URL with full credentials or provide "
+            "DB_* (or POSTGRES_*) values. For local development, configure "
+            "DJANGO_USE_SQLITE=true or DJANGO_SQLITE_PATH explicitly."
+        )
+
+
 def _build_database_settings() -> dict[str, Any]:
     """Compose the DATABASES['default'] configuration from the environment."""
 
@@ -434,10 +452,13 @@ def _build_database_settings() -> dict[str, Any]:
         "DATABASE_URL"
     )
     if database_url:
-        return _database_config_from_url(database_url)
+        config = _database_config_from_url(database_url)
+        _ensure_required_database_credentials(config)
+        return config
 
     discrete = _database_config_from_discrete_env()
     if discrete:
+        _ensure_required_database_credentials(discrete)
         return discrete
 
     sqlite_requested = os.environ.get("DJANGO_USE_SQLITE", "").lower() in {
@@ -449,7 +470,9 @@ def _build_database_settings() -> dict[str, Any]:
     if sqlite_requested or os.environ.get("DJANGO_SQLITE_PATH"):
         return _sqlite_database_settings()
 
-    return _default_postgres_settings()
+    config = _default_postgres_settings()
+    _ensure_required_database_credentials(config)
+    return config
 
 
 DATABASES = {"default": _build_database_settings()}
