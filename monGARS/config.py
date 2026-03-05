@@ -312,6 +312,13 @@ class Settings(BaseSettings):
     api_version: str = "1.0.0"
 
     debug: EnvBool = Field(default=False)
+    enable_admin_bootstrap: EnvBool | None = Field(
+        default=None,
+        description=(
+            "Enable first-run admin bootstrap endpoints. Defaults to DEBUG when unset,"
+            " which keeps bootstrap disabled in non-debug contexts."
+        ),
+    )
     host: str = Field(default="127.0.0.1")
     port: int = Field(default=8000)
     workers: int = recommended_worker_count()
@@ -390,6 +397,11 @@ class Settings(BaseSettings):
         public_key = (self.JWT_PUBLIC_KEY or "").strip() or None
         object.__setattr__(self, "JWT_PRIVATE_KEY", private_key)
         object.__setattr__(self, "JWT_PUBLIC_KEY", public_key)
+
+        enable_admin_bootstrap = self.enable_admin_bootstrap
+        if enable_admin_bootstrap is None:
+            enable_admin_bootstrap = bool(self.debug)
+        object.__setattr__(self, "enable_admin_bootstrap", enable_admin_bootstrap)
 
         symmetric_match = re.fullmatch(r"HS\d+", algorithm)
         if symmetric_match:

@@ -11,10 +11,10 @@ from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from monGARS.api.dependencies import get_persistence_repository
 from monGARS.config import get_settings
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.security import SecurityManager
-from monGARS.api.dependencies import get_persistence_repository
 from monGARS.init_db import UserAccount
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -289,7 +289,14 @@ async def bootstrap_admin(
     - It will refuse if an admin user already exists.
     - It is meant for initial local setup / first-run onboarding.
     """
-    sec = SecurityManager(settings=get_settings())
+    app_settings = get_settings()
+    if not app_settings.enable_admin_bootstrap:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin bootstrap is disabled",
+        )
+
+    sec = SecurityManager(settings=app_settings)
     try:
         if await repo.has_admin_user():
             raise HTTPException(

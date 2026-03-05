@@ -444,9 +444,23 @@ async def test_register_user_conflict_returns_409(api_context: ApiTestContext) -
 
 
 @pytest.mark.asyncio
-async def test_register_admin_allows_single_creation(
+async def test_register_admin_disabled_by_default(
     api_context: ApiTestContext,
 ) -> None:
+    response = await api_context.client.post(
+        "/api/v1/user/register/admin",
+        json={"username": "founder", "password": "founderpw"},
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"] == "Admin bootstrap is disabled"
+
+
+@pytest.mark.asyncio
+async def test_register_admin_allows_single_creation(
+    api_context: ApiTestContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_settings, "enable_admin_bootstrap", True)
     first = await api_context.client.post(
         "/api/v1/user/register/admin",
         json={"username": "founder", "password": "founderpw"},
@@ -465,7 +479,9 @@ async def test_register_admin_allows_single_creation(
 @pytest.mark.asyncio
 async def test_register_admin_reports_state_failure(
     api_context: ApiTestContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(api_settings, "enable_admin_bootstrap", True)
     api_context.repo.raise_on_has_admin = RuntimeError("database offline")
     response = await api_context.client.post(
         "/api/v1/user/register/admin",
@@ -589,9 +605,25 @@ async def test_list_users_requires_admin(api_context: ApiTestContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_admin_creates_first_admin(
+async def test_bootstrap_admin_disabled_by_default(
     api_context: ApiTestContext,
 ) -> None:
+    response = await api_context.client.post(
+        "/api/v1/auth/bootstrap-admin",
+        json={"username": "founder", "password": "founderpw"},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"] == "Admin bootstrap is disabled"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_creates_first_admin(
+    api_context: ApiTestContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_settings, "enable_admin_bootstrap", True)
+
     response = await api_context.client.post(
         "/api/v1/auth/bootstrap-admin",
         json={"username": "founder", "password": "founderpw"},
@@ -612,7 +644,9 @@ async def test_bootstrap_admin_creates_first_admin(
 @pytest.mark.asyncio
 async def test_bootstrap_admin_conflicts_when_admin_exists(
     api_context: ApiTestContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(api_settings, "enable_admin_bootstrap", True)
     api_context.repo.seed_user("existing-admin", "pw", is_admin=True)
 
     response = await api_context.client.post(
@@ -627,7 +661,10 @@ async def test_bootstrap_admin_conflicts_when_admin_exists(
 @pytest.mark.asyncio
 async def test_bootstrap_admin_create_user_atomic_signature_regression(
     api_context: ApiTestContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(api_settings, "enable_admin_bootstrap", True)
+
     response = await api_context.client.post(
         "/api/v1/auth/bootstrap-admin",
         json={"username": "shape-check", "password": "shape-check-pass"},
