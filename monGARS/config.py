@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any, Iterable, Literal, Optional, TypeAlias, get_args
 
 import hvac
-from dotenv import dotenv_values, set_key
+from dotenv import dotenv_values
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -1095,74 +1095,6 @@ def ensure_secret_key(
     raise ValueError("SECRET_KEY must be provided in production")
 
 
-def _persist_secret_key(settings: Settings) -> Settings:
-    """Persist an auto-generated SECRET_KEY for misconfigured environments.
-
-    When the runtime is configured for production but no SECRET_KEY is defined,
-    containerised deployments can end up crash-looping. To keep the service
-    available we generate a high-entropy key, inject it into the current process,
-    and attempt to update the configured ``.env`` file so subsequent runs reuse
-    the same value. The caller is responsible for logging any warnings.
-    """
-
-    generated_key = _generate_secret_key()
-    os.environ["SECRET_KEY"] = generated_key
-
-    persisted_key: str | None = None
-
-    for env_path in _iter_env_files(settings):
-        try:
-            env_values = dotenv_values(env_path, encoding="utf-8") or {}
-        except OSError as exc:  # pragma: no cover - unlikely but defend anyway
-            log.warning("Unable to read env file %s: %s", env_path, exc)
-            continue
-
-        existing_key = (env_values.get("SECRET_KEY") or "").strip() or None
-        if existing_key:
-            persisted_key = existing_key
-            log.info(
-                "SECRET_KEY already persisted in %s; reusing existing value.", env_path
-            )
-            break
-
-        try:
-            env_path.parent.mkdir(parents=True, exist_ok=True)
-            set_key(str(env_path), "SECRET_KEY", generated_key)
-        except OSError as exc:  # pragma: no cover - writing may fail on RO filesystems
-            log.warning("Unable to persist SECRET_KEY to %s: %s", env_path, exc)
-            continue
-
-        log.info("Persisted generated SECRET_KEY to %s", env_path)
-
-        try:
-            updated_values = dotenv_values(env_path, encoding="utf-8") or {}
-        except OSError as exc:  # pragma: no cover - best effort re-read
-            log.warning(
-                "Unable to re-read SECRET_KEY from %s after persistence: %s",
-                env_path,
-                exc,
-            )
-            persisted_key = generated_key
-        else:
-            final_key = (updated_values.get("SECRET_KEY") or "").strip()
-            if final_key:
-                persisted_key = final_key
-                if final_key != generated_key:
-                    log.info(
-                        "Adopting SECRET_KEY written by another process in %s.",
-                        env_path,
-                    )
-        break
-
-    final_key = (persisted_key or generated_key).strip()
-    os.environ["SECRET_KEY"] = final_key
-
-    origin: SecretKeyOrigin = "generated" if final_key == generated_key else "persisted"
-    new_settings = settings.model_copy(update={"SECRET_KEY": final_key})
-    object.__setattr__(new_settings, "_secret_key_origin", origin)
-    return new_settings
-
-
 def validate_jwt_configuration(settings: Settings) -> None:
     """Validate that JWT settings have consistent key material."""
 
@@ -1279,12 +1211,10 @@ def get_settings() -> Settings:
         )
 
     if settings.debug:
-        debug_secret = _generate_secret_key()
-        debug_settings = settings.model_copy(update={"SECRET_KEY": debug_secret})
-        object.__setattr__(debug_settings, "_secret_key_origin", "generated")
-        validate_jwt_configuration(debug_settings)
-        configure_telemetry(debug_settings)
-        return debug_settings
+        settings, _ = ensure_secret_key(settings)
+        validate_jwt_configuration(settings)
+        configure_telemetry(settings)
+        return settings
 
     if _vault_configured(settings):
         secrets_map = fetch_secrets_from_vault(settings)
@@ -1307,23 +1237,13 @@ def get_settings() -> Settings:
                 object.__setattr__(settings, "__pydantic_extra__", extra)
             if "SECRET_KEY" in updates:
                 object.__setattr__(settings, "_secret_key_origin", "vault")
-        if (
-            re.fullmatch(r"HS\d+", settings.JWT_ALGORITHM.strip().upper())
-            and not settings.SECRET_KEY
-        ):
-            raise ValueError(
-                "Symmetric JWT algorithms require SECRET_KEY to be configured."
-            )
+        if re.fullmatch(r"HS\d+", settings.JWT_ALGORITHM.strip().upper()):
+            settings, _ = ensure_secret_key(settings)
         validate_jwt_configuration(settings)
         configure_telemetry(settings)
         return settings
 
-    if not settings.SECRET_KEY:
-        log.critical(
-            "SECRET_KEY missing while DEBUG is disabled; generating ephemeral key. "
-            "Persist SECRET_KEY in your environment or Vault to avoid token invalidation."
-        )
-        settings = _persist_secret_key(settings)
+    settings, _ = ensure_secret_key(settings)
 
     validate_jwt_configuration(settings)
     configure_telemetry(settings)
