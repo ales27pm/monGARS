@@ -134,6 +134,12 @@ class EnvFileManager:
         self._replace_if_default(
             "DB_PASSWORD", {"changeme", "password"}, replacements["DB_PASSWORD"]
         )
+        db_password = self._read_value("DB_PASSWORD") or replacements["DB_PASSWORD"]
+        self._replace_if_default(
+            "MONGARS_DB_PASSWORD",
+            {"", "changeme", "password"},
+            db_password,
+        )
         self._replace_if_default(
             "SEARXNG_SECRET", {"", "change-me"}, replacements["SEARXNG_SECRET"]
         )
@@ -417,7 +423,12 @@ class VisualDeployer:
             if not path.exists():
                 raise DeploymentError(f"Missing compose file: {path}")
             base_args.extend(["-f", str(path)])
-        self._run_command(base_args + ["pull"], cwd=self.project_root)
+        # Prefer local rebuilds for services that declare a build context so
+        # transient registry/cache issues on a tagged image do not block the
+        # deployer's own source build.
+        self._run_command(
+            base_args + ["pull", "--ignore-buildable"], cwd=self.project_root
+        )
         self._run_command(base_args + ["build"], cwd=self.project_root)
         self._run_command(base_args + ["up", "-d"], cwd=self.project_root)
         return StepStatus.SUCCESS

@@ -52,3 +52,4 @@ dolphin_x1_finetuned/
 models/dolphin_fr_unsloth/
 .venv_datasets_mongars/
 *.zip
+.venv.py39.backup-20260327/
