@@ -1318,6 +1318,22 @@ export function createChatUi({ elements, timelineStore }) {
     state.streamMessageId = null;
   }
 
+  function abortStream() {
+    if (state.streamRow && state.streamRow.isConnected) {
+      state.streamRow.remove();
+    }
+    if (
+      state.streamMessageId &&
+      timelineStore &&
+      typeof timelineStore.remove === "function"
+    ) {
+      timelineStore.remove(state.streamMessageId);
+    }
+    state.streamRow = null;
+    state.streamBuf = "";
+    state.streamMessageId = null;
+  }
+
   function applyQuickActionOrdering(suggestions) {
     if (!elements.quickActions) return;
     if (!Array.isArray(suggestions) || suggestions.length === 0) return;
@@ -1574,6 +1590,7 @@ export function createChatUi({ elements, timelineStore }) {
     startStream,
     appendStream,
     endStream,
+    abortStream,
     announceConnection,
     updateConnectionMeta,
     setDiagnostics,

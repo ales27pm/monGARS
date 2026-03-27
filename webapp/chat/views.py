@@ -12,6 +12,26 @@ from .services import authenticate_user, fetch_history, post_chat_message
 logger = logging.getLogger(__name__)
 
 
+def _public_fastapi_url(request) -> str:
+    override = os.environ.get("PUBLIC_FASTAPI_URL", "").strip()
+    if override:
+        return override
+
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    scheme = forwarded_proto.split(",", 1)[0].strip() or request.scheme
+    forwarded_host = request.headers.get("X-Forwarded-Host", "")
+    host = forwarded_host.split(",", 1)[0].strip() or request.get_host().strip()
+
+    webapp_port = os.environ.get("WEBAPP_PORT", "8001").strip()
+    api_port = os.environ.get("API_PORT", "8000").strip()
+    webapp_suffix = f":{webapp_port}" if webapp_port else ""
+
+    if webapp_suffix and api_port and host.endswith(webapp_suffix):
+        return f"{scheme}://{host.removesuffix(webapp_suffix)}:{api_port}"
+
+    return f"{scheme}://{host}"
+
+
 @require_token
 async def index(request):
     """Render the chat interface for the authenticated operator.
@@ -68,7 +88,7 @@ async def index(request):
     else:
         history_error = "Historique indisponible pour le moment."
 
-    fastapi_url = os.environ.get("FASTAPI_URL", "http://localhost:8000")
+    fastapi_url = _public_fastapi_url(request)
     embed_service_url = os.environ.get("EMBED_SERVICE_URL", "").strip() or None
     return render(
         request,
@@ -89,7 +109,7 @@ async def index(request):
 
 
 async def login_view(request):
-    fastapi_url = os.environ.get("FASTAPI_URL", "http://localhost:8000")
+    fastapi_url = _public_fastapi_url(request)
     debug = os.environ.get("DJANGO_DEBUG", "False").lower() in ("true", "1")
     if (
         not debug

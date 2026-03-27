@@ -173,6 +173,35 @@ def _parse_env_bool(value: Any) -> bool:
     raise ValueError(f"Invalid boolean value: {value!r}")
 
 
+def _default_local_ws_origins() -> list[str]:
+    """Return loopback origins for the common local entrypoints."""
+
+    origins: set[str] = set()
+    for env_name, fallback in (
+        ("API_PORT", "8000"),
+        ("WEBAPP_PORT", "8001"),
+        ("NGINX_PORT", "8080"),
+    ):
+        port = (os.environ.get(env_name) or fallback).strip()
+        if not port:
+            continue
+        origins.add(f"http://localhost:{port}")
+        origins.add(f"http://127.0.0.1:{port}")
+    return sorted(origins)
+
+
+def _augment_ws_allowed_origins(origins: Iterable[Any]) -> list[str]:
+    """Keep configured origins and add loopback variants needed for local deploys."""
+
+    augmented: set[str] = set()
+    for origin in origins:
+        value = str(origin).strip().rstrip("/")
+        if value:
+            augmented.add(value)
+    augmented.update(_default_local_ws_origins())
+    return sorted(augmented)
+
+
 EnvBool = Annotated[bool, BeforeValidator(_parse_env_bool)]
 
 
@@ -1018,6 +1047,11 @@ class Settings(BaseSettings):
                 parsed = [item.strip() for item in cleaned.split(",") if item.strip()]
             return parsed
         return value
+
+    @model_validator(mode="after")
+    def augment_ws_origins(self) -> "Settings":
+        self.WS_ALLOWED_ORIGINS = _augment_ws_allowed_origins(self.WS_ALLOWED_ORIGINS)
+        return self
 
     @field_validator("rag_repo_list", mode="before")
     @classmethod

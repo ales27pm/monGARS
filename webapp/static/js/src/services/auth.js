@@ -108,8 +108,11 @@ function seedTokenFromUrlOnce(primaryKey) {
   }
 }
 
-export function createAuthService({ storageKey = DEFAULT_STORAGE_KEY } = {}) {
-  let currentJwt = undefined;
+export function createAuthService({
+  storageKey = DEFAULT_STORAGE_KEY,
+  token,
+} = {}) {
+  let currentJwt = normaliseJwt(token);
 
   function getJwt() {
     if (currentJwt) return currentJwt;

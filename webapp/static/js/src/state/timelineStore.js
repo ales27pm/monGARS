@@ -70,6 +70,18 @@ export function createTimelineStore() {
     return next;
   }
 
+  function remove(id) {
+    if (!map.has(id)) {
+      return false;
+    }
+    map.delete(id);
+    const index = order.indexOf(id);
+    if (index !== -1) {
+      order.splice(index, 1);
+    }
+    return true;
+  }
+
   function collect() {
     return order
       .map((id) => {
@@ -98,6 +110,7 @@ export function createTimelineStore() {
   return {
     register,
     update,
+    remove,
     collect,
     clear,
     order,

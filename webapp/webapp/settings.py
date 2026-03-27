@@ -145,6 +145,31 @@ def _parse_host_csv(raw_hosts: str | None) -> list[str]:
     return _dedupe_hosts(raw_hosts.split(","))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _is_local_host(host: str) -> bool:
+    trimmed = host.strip().strip("[]")
+    if not trimmed:
+        return False
+    if trimmed in {"localhost", "0.0.0.0", "webapp", "api", "nginx"}:
+        return True
+    return _is_private_ip(trimmed)
+
+
+def _default_secure_cookies(hosts: Iterable[str], *, debug: bool) -> bool:
+    if debug:
+        return False
+    candidates = [host for host in hosts if host and host != "*"]
+    if candidates and all(_is_local_host(host) for host in candidates):
+        return False
+    return True
+
+
 def _default_allowed_hosts_list() -> list[str]:
     """Compose the baseline ALLOWED_HOSTS for container and local setups."""
 
@@ -480,8 +505,11 @@ DATABASES = {"default": _build_database_settings()}
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
-CSRF_COOKIE_SECURE = True
-SESSION_COOKIE_SECURE = True
+_DEFAULT_SECURE_COOKIES = _default_secure_cookies(ALLOWED_HOSTS, debug=DEBUG)
+CSRF_COOKIE_SECURE = _env_bool("DJANGO_SECURE_COOKIES", _DEFAULT_SECURE_COOKIES)
+SESSION_COOKIE_SECURE = _env_bool(
+    "DJANGO_SECURE_COOKIES", _DEFAULT_SECURE_COOKIES
+)
 
 LOGGING = {
     "version": 1,

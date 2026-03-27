@@ -154,7 +154,13 @@ export function createSocketClient({ config, http, ui, onEvent }) {
     heartbeatTimer = setInterval(() => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       try {
-        ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
+        ws.send(
+          JSON.stringify({
+            id: `client-ping-${Date.now()}`,
+            type: "client.ping",
+            t: Date.now(),
+          }),
+        );
       } catch {
         // If sending fails, onclose will trigger reconnect.
       }
@@ -232,10 +238,9 @@ export function createSocketClient({ config, http, ui, onEvent }) {
       attempts = 0;
       lastClose = null;
 
-      const wsUrl = new URL(config.baseUrl);
-      wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-      wsUrl.pathname = "/api/v1/ws";
-      wsUrl.searchParams.set("ticket", ticket);
+      const wsUrl = new URL("/ws/chat/", config.baseUrl);
+      wsUrl.protocol = config.baseUrl.protocol === "https:" ? "wss:" : "ws:";
+      wsUrl.searchParams.set("t", ticket);
 
       setUiStatus("Connexion WebSocket…", "info");
       ws = new WebSocket(wsUrl.toString());
@@ -260,6 +265,10 @@ export function createSocketClient({ config, http, ui, onEvent }) {
           msg = JSON.parse(ev.data);
         } catch {
           // Ignore non-JSON messages.
+          return;
+        }
+        if (msg && msg.type === "ping" && typeof msg.id === "string" && msg.id) {
+          send({ type: "pong", id: msg.id });
           return;
         }
         safeCallOnEvent({ type: "message", message: msg });

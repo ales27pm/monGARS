@@ -227,13 +227,30 @@ export class ChatApp {
           this.ui.setComposerStatus("Vecteur généré.", "success");
           this.ui.scheduleComposerIdle(4000);
         } else {
-          await this.http.postChat(value);
+          this.ui.startStream();
+          const response = await this.http.postChat(value);
           if (this.elements.prompt) {
             this.elements.prompt.focus();
           }
-          this.ui.startStream();
+          if (this.ui.isStreaming()) {
+            if (
+              typeof response?.response === "string" &&
+              !this.ui.hasStreamBuffer()
+            ) {
+              this.ui.appendStream(response.response);
+            }
+            this.ui.endStream({
+              ...response,
+              timestamp: nowISO(),
+            });
+            this.ui.setBusy(false);
+            this.handleVoiceAssistantCompletion();
+          }
         }
       } catch (err) {
+        if (requestMode === "chat") {
+          this.ui.abortStream();
+        }
         this.ui.setBusy(false);
         this.ui.showError(err, {
           metadata: { stage: "submit", mode: requestMode },
@@ -976,6 +993,41 @@ export class ChatApp {
     const type = ev && ev.type ? ev.type : "";
     const data = ev && ev.data ? ev.data : {};
     switch (type) {
+      case "connection": {
+        if (ev && ev.state === "open") {
+          this.ui.setWsStatus("online", "Connexion websocket active.");
+          this.ui.setDiagnostics({ connectedAt: nowISO() });
+        } else {
+          const title =
+            ev && ev.reason
+              ? `Connexion websocket fermée: ${ev.reason}`
+              : "Connexion websocket fermée.";
+          this.ui.setWsStatus("offline", title);
+        }
+        break;
+      }
+      case "reconnect": {
+        const seconds =
+          ev && typeof ev.in === "number"
+            ? Math.max(0, Math.round(ev.in / 100) / 10)
+            : null;
+        this.ui.setWsStatus(
+          "connecting",
+          seconds === null
+            ? "Reconnexion websocket en cours."
+            : `Reconnexion websocket dans ${seconds}s.`,
+        );
+        break;
+      }
+      case "auth": {
+        this.ui.setWsStatus(
+          "error",
+          ev && ev.detail
+            ? `Authentification requise: ${ev.detail}`
+            : "Authentification requise.",
+        );
+        break;
+      }
       case "ws.connected": {
         if (data && data.origin) {
           this.ui.announceConnection(`Connecté via ${data.origin}`);
@@ -1023,7 +1075,7 @@ export class ChatApp {
       }
       case "chat.message": {
         if (!this.ui.isStreaming()) {
-          this.ui.startStream();
+          break;
         }
         if (
           data &&

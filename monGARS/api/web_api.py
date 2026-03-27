@@ -21,6 +21,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
@@ -177,6 +178,14 @@ _RAY_DEPLOYMENT_NAME = "RayLLMDeployment"
 
 _settings = get_settings()
 settings = _settings
+_cors_origins = [str(origin).rstrip("/") for origin in settings.WS_ALLOWED_ORIGINS]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 if _settings.otel_traces_enabled:
     if FastAPIInstrumentor is None:
         logger.warning(

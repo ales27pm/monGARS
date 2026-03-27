@@ -175,7 +175,14 @@ export function createHttpService({ config, auth }) {
         detail,
       });
     }
-    return resp;
+    const payload = await resp.json().catch(() => null);
+    if (!payload || typeof payload.response !== "string") {
+      throw new ApiError("Chat response invalide", {
+        status: resp.status,
+        code: "BAD_RESPONSE",
+      });
+    }
+    return payload;
   }
 
   async function postEmbed(text, options = {}) {
