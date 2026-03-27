@@ -6,6 +6,7 @@ from typing import Any
 from django.shortcuts import redirect, render
 
 from .decorators import require_token
+from .session_access import session_pop, session_set
 from .services import authenticate_user, fetch_history, post_chat_message
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ async def index(request):
         token (str): JWT used by the client-side enhancements.
     """
 
-    flash_message = request.session.pop("chat_flash", None)
+    flash_message = await session_pop(request, "chat_flash", None)
     form_error = None
     prompt_value = ""
 
@@ -52,7 +53,7 @@ async def index(request):
             if error:
                 form_error = error
             else:
-                request.session["chat_flash"] = "Message envoyé avec succès."
+                await session_set(request, "chat_flash", "Message envoyé avec succès.")
                 return redirect("index")
 
     history_raw: Any = await fetch_history(request.user_id, request.token)
@@ -106,16 +107,16 @@ async def login_view(request):
             return render(
                 request, "chat/login.html", {"error": "Nom d'utilisateur invalide"}
             )
-        if len(password) < 8:
+        if not 1 <= len(password) <= 256:
             return render(
-                request, "chat/login.html", {"error": "Mot de passe trop court"}
+                request, "chat/login.html", {"error": "Mot de passe invalide"}
             )
 
         token = await authenticate_user(username, password)
         if token:
             # downstream modules treat user_id as an arbitrary string
-            request.session["token"] = token
-            request.session["user_id"] = username
+            await session_set(request, "token", token)
+            await session_set(request, "user_id", username)
             return redirect("index")
         error = "Connexion impossible. Veuillez réessayer plus tard."
         return render(request, "chat/login.html", {"error": error})

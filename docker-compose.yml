@@ -54,7 +54,7 @@ services:
       test:
         - "CMD-SHELL"
         - |
-          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',5000,timeout=5); conn.request('GET','/api/2.0/mlflow/experiments/list'); sys.exit(0 if conn.getresponse().status == 200 else 1)"
+          python -c "import http.client,sys; conn=http.client.HTTPConnection('127.0.0.1',5000,timeout=5); conn.request('GET','/health'); sys.exit(0 if conn.getresponse().status == 200 else 1)"
       interval: 30s
       timeout: 10s
       retries: 5

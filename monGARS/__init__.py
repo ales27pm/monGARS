@@ -51,7 +51,9 @@ DATA_DIR = Path(os.environ.get("MONGARS_DATA_DIR", "/app/data")).resolve()
 SQLITE_FILENAME = "mongars.db"
 SQLITE_PATH = DATA_DIR / SQLITE_FILENAME
 
-_LOCAL_POSTGRES_HOSTS = {"", None, "localhost", "127.0.0.1", "::1"}
+# Docker Compose uses service-name DNS on the internal network, so treat the
+# local database service alias as a safe bootstrap target alongside loopback.
+_LOCAL_POSTGRES_HOSTS = {"", None, "localhost", "127.0.0.1", "::1", "postgres"}
 
 # ---------------------------------------------------------------------
 # Helpers
@@ -155,8 +157,9 @@ _sync_session_maker: sessionmaker | None = None
 _using_async_engine = False
 
 if _database_url_obj.drivername.startswith("postgresql"):
+    _database_url = _database_url_obj.render_as_string(hide_password=False)
     _async_engine = create_async_engine(
-        str(_database_url_obj),
+        _database_url,
         future=True,
         echo=_settings.debug,
         pool_size=_settings.db_pool_size,
@@ -169,8 +172,9 @@ if _database_url_obj.drivername.startswith("postgresql"):
     _using_async_engine = True
 
 elif _database_url_obj.drivername.startswith("sqlite+aiosqlite") and HAS_AIOSQLITE:
+    _database_url = _database_url_obj.render_as_string(hide_password=False)
     _async_engine = create_async_engine(
-        str(_database_url_obj),
+        _database_url,
         future=True,
         echo=False,
     )
