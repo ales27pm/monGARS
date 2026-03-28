@@ -1,194 +1,179 @@
 import axios from 'axios';
+import { z } from 'zod';
 import { settings } from './config';
-import type { Message } from '../types';
+import type {
+  ChatReply,
+  ConversationHistoryRecord,
+  EmbeddingResponse,
+  QuickAction,
+  SuggestionResponse,
+  UserSession,
+} from '../types';
 
-type StreamHandler = {
-  token: string;
-  content: string;
-  onToken: (chunk: Message) => void;
-};
+const speechSegmentSchema = z.object({
+  text: z.string(),
+  estimated_duration: z.number(),
+  pause_after: z.number(),
+});
 
-type WebSocketCloseEventLike = {
-  code: number;
-  wasClean?: boolean;
-};
+const speechTurnSchema = z.object({
+  turn_id: z.string(),
+  text: z.string(),
+  created_at: z.string(),
+  segments: z.array(speechSegmentSchema),
+  average_words_per_second: z.number(),
+  tempo: z.number(),
+});
 
-export async function fetchChatHistory(token: string) {
-  const response = await axios.get(`${settings.apiUrl}/chat/history`, {
-    headers: { Authorization: `Bearer ${token}` },
-    timeout: 10000,
-  });
-  return response.data;
+const chatReplySchema = z.object({
+  response: z.string(),
+  confidence: z.number(),
+  processing_time: z.number(),
+  speech_turn: speechTurnSchema,
+});
+
+const historyRecordSchema = z.object({
+  query: z.string(),
+  response: z.string(),
+  timestamp: z.string(),
+});
+
+const suggestionSchema = z.object({
+  actions: z.array(z.enum(['code', 'summarize', 'explain'])),
+});
+
+const embeddingSchema = z.object({
+  vectors: z.array(z.array(z.number())),
+  dims: z.number().optional(),
+  count: z.number().optional(),
+  normalised: z.boolean().optional(),
+  backend: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+});
+
+const ticketSchema = z.object({
+  ticket: z.string(),
+  ttl: z.number(),
+});
+
+function authHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+  };
 }
 
-export async function sendChatMessage(
-  token: string,
-  content: string,
-  mode: 'chat' | 'embedding',
-) {
-  const response = await axios.post(
-    `${settings.apiUrl}/chat/${mode}`,
-    { content },
+export async function fetchConversationHistory(
+  session: UserSession,
+): Promise<ConversationHistoryRecord[]> {
+  const response = await axios.get(
+    `${settings.apiBaseUrl}/conversation/history`,
     {
-      headers: { Authorization: `Bearer ${token}` },
+      params: {
+        user_id: session.username,
+        limit: settings.historyLimit,
+      },
+      headers: authHeaders(session.token),
       timeout: 10000,
     },
   );
-  return response.data;
+
+  return z.array(historyRecordSchema).parse(response.data);
 }
 
-export async function streamChatReply({
-  token,
-  content,
-  onToken,
-}: StreamHandler) {
-  const url = new URL(settings.websocketUrl);
-  url.searchParams.set('token', encodeURIComponent(token));
-  const ws = new WebSocket(url.toString());
+export async function postConversationMessage(
+  session: UserSession,
+  message: string,
+): Promise<ChatReply> {
+  const response = await axios.post(
+    `${settings.apiBaseUrl}/conversation/chat`,
+    { message },
+    {
+      headers: {
+        ...authHeaders(session.token),
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    },
+  );
 
-  return new Promise<void>((resolve, reject) => {
-    let currentId: string | null = null;
-    let buffer = '';
-    let settled = false;
-    const connectTimeoutMs = 20000;
-    const idleTimeoutMs = 60000;
-    let connectTimer: ReturnType<typeof setTimeout> | null = null;
-    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const parsed = chatReplySchema.parse(response.data);
+  return {
+    response: parsed.response,
+    confidence: parsed.confidence,
+    processingTime: parsed.processing_time,
+    speechTurn: {
+      turnId: parsed.speech_turn.turn_id,
+      text: parsed.speech_turn.text,
+      createdAt: parsed.speech_turn.created_at,
+      segments: parsed.speech_turn.segments.map((segment) => ({
+        text: segment.text,
+        estimatedDuration: segment.estimated_duration,
+        pauseAfter: segment.pause_after,
+      })),
+      averageWordsPerSecond: parsed.speech_turn.average_words_per_second,
+      tempo: parsed.speech_turn.tempo,
+    },
+  };
+}
 
-    const toDate = (value: unknown) => {
-      if (value instanceof Date && !Number.isNaN(value.getTime())) {
-        return value;
-      }
-      if (typeof value === 'string' || typeof value === 'number') {
-        const parsed = new Date(value);
-        if (!Number.isNaN(parsed.getTime())) {
-          return parsed;
-        }
-      }
-      return new Date();
-    };
+export async function fetchQuickActions(
+  session: UserSession,
+  prompt: string,
+): Promise<SuggestionResponse> {
+  const response = await axios.post(
+    `${settings.apiBaseUrl}/ui/suggestions`,
+    {
+      prompt,
+      actions: ['code', 'summarize', 'explain'],
+    },
+    {
+      headers: {
+        ...authHeaders(session.token),
+        'Content-Type': 'application/json',
+      },
+      timeout: 10000,
+    },
+  );
 
-    const clearTimers = () => {
-      if (connectTimer) {
-        clearTimeout(connectTimer);
-        connectTimer = null;
-      }
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
-      }
-    };
+  const parsed = suggestionSchema.parse(response.data);
+  return {
+    actions: parsed.actions as QuickAction[],
+  };
+}
 
-    const closeWith = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      try {
-        ws.close();
-      } catch (closeError) {
-        console.warn('[chatService] ws close error', closeError);
-      }
-      error ? reject(error) : resolve();
-    };
+export async function requestEmbedding(
+  text: string,
+): Promise<EmbeddingResponse> {
+  if (!settings.embedServiceUrl) {
+    throw new Error("Service d'embedding indisponible.");
+  }
 
-    const bumpIdleTimer = () => {
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-      }
-      idleTimer = setTimeout(() => {
-        closeWith(new Error('WebSocket idle timeout'));
-      }, idleTimeoutMs);
-    };
+  const response = await axios.post(
+    settings.embedServiceUrl,
+    {
+      inputs: [text],
+      normalise: false,
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    },
+  );
 
-    connectTimer = setTimeout(() => {
-      closeWith(new Error('WebSocket connect timeout'));
-    }, connectTimeoutMs);
+  return embeddingSchema.parse(response.data);
+}
 
-    ws.onerror = (event) => {
-      const details =
-        (event as any)?.message ??
-        (event as any)?.reason ??
-        JSON.stringify(event);
-      closeWith(new Error(`WebSocket error: ${details}`));
-    };
+export async function fetchRealtimeTicket(session: UserSession): Promise<string> {
+  const response = await axios.post(
+    `${settings.apiBaseUrl}/auth/ws/ticket`,
+    undefined,
+    {
+      headers: authHeaders(session.token),
+      timeout: 10000,
+    },
+  );
 
-    ws.onopen = () => {
-      if (connectTimer) {
-        clearTimeout(connectTimer);
-        connectTimer = null;
-      }
-      bumpIdleTimer();
-      ws.send(
-        JSON.stringify({
-          type: 'prompt',
-          payload: {
-            content,
-          },
-        }),
-      );
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        bumpIdleTimer();
-        if (message.type === 'ticket') {
-          ws.send(
-            JSON.stringify({
-              type: 'ack',
-              payload: { ticket: message.payload.ticket },
-            }),
-          );
-          return;
-        }
-        if (message.type === 'chunk') {
-          const payload = message.payload ?? {};
-          const chunkId = payload.id ?? currentId ?? `${Date.now()}`;
-          const chunkContent =
-            typeof payload.content === 'string' ? payload.content : '';
-          currentId = chunkId;
-          buffer += chunkContent;
-          onToken({
-            id: chunkId,
-            role: 'assistant',
-            content: buffer,
-            createdAt: toDate(payload.timestamp),
-          });
-        }
-        if (message.type === 'final') {
-          const payload = message.payload ?? {};
-          const finalId = payload.id ?? currentId ?? `${Date.now()}`;
-          const finalContent =
-            typeof payload.content === 'string' && payload.content.length > 0
-              ? payload.content
-              : buffer;
-          onToken({
-            id: finalId,
-            role: 'assistant',
-            content: finalContent,
-            createdAt: toDate(payload.timestamp),
-          });
-          closeWith();
-        }
-        if (message.type === 'error') {
-          closeWith(new Error(message.payload.detail));
-        }
-      } catch (error) {
-        closeWith(error as Error);
-      }
-    };
-
-    ws.onclose = (event) => {
-      const closeEvent = event as WebSocketCloseEventLike;
-      if (!settled) {
-        const err =
-          closeEvent?.wasClean === false
-            ? new Error(`Connection closed: ${closeEvent.code}`)
-            : undefined;
-        closeWith(err);
-      }
-    };
-  });
+  return ticketSchema.parse(response.data).ticket;
 }

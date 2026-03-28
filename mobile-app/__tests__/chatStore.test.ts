@@ -1,23 +1,37 @@
 import { act } from '@testing-library/react-native';
 import { useChatStore } from '../src/store/chatStore';
-import type { Message } from '../src/types';
 
 jest.mock('../src/services/chatService', () => ({
-  fetchChatHistory: jest.fn(),
-  sendChatMessage: jest.fn(),
-  streamChatReply: jest.fn(),
+  fetchConversationHistory: jest.fn(),
+  postConversationMessage: jest.fn(),
+  fetchQuickActions: jest.fn(),
+  requestEmbedding: jest.fn(),
+}));
+
+jest.mock('../src/services/realtimeService', () => ({
+  createRealtimeClient: jest.fn(() => ({
+    open: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn(),
+    reconnect: jest.fn(),
+  })),
 }));
 
 import {
-  fetchChatHistory,
-  sendChatMessage,
-  streamChatReply,
+  fetchConversationHistory,
+  postConversationMessage,
+  requestEmbedding,
 } from '../src/services/chatService';
+import { createRealtimeClient } from '../src/services/realtimeService';
 
 describe('chatStore', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
-    (fetchChatHistory as jest.Mock).mockResolvedValue([]);
+    jest.clearAllMocks();
+    (createRealtimeClient as jest.Mock).mockReturnValue({
+      open: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn(),
+      reconnect: jest.fn(),
+    });
+    (fetchConversationHistory as jest.Mock).mockResolvedValue([]);
     const storage = {
       getItem: jest.fn().mockResolvedValue(null),
       setItem: jest.fn().mockResolvedValue(undefined),
@@ -25,97 +39,129 @@ describe('chatStore', () => {
     };
     useChatStore.persist?.setOptions?.({ storage: storage as any });
     useChatStore.setState({
+      session: null,
       messages: [],
       loading: false,
+      historyLoading: false,
       error: null,
-      token: null,
-      messageCounter: 0,
+      notice: null,
+      mode: 'chat',
+      quickActions: ['code', 'summarize', 'explain'],
+      connection: {
+        status: 'offline',
+        detail: 'Aucune session active',
+        connectedAt: null,
+        lastMessageAt: null,
+        latencyMs: null,
+        reconnectAttempt: 0,
+      },
+      realtimeSuppression: [],
       initialize: useChatStore.getState().initialize,
-      setToken: useChatStore.getState().setToken,
+      setSession: useChatStore.getState().setSession,
       sendMessage: useChatStore.getState().sendMessage,
-      pushMessage: useChatStore.getState().pushMessage,
+      refreshHistory: useChatStore.getState().refreshHistory,
+      requestQuickActions: useChatStore.getState().requestQuickActions,
+      setMode: useChatStore.getState().setMode,
+      retryRealtime: useChatStore.getState().retryRealtime,
       clearError: useChatStore.getState().clearError,
-      generateMessageId: useChatStore.getState().generateMessageId,
+      clearNotice: useChatStore.getState().clearNotice,
+      logout: useChatStore.getState().logout,
     });
     useChatStore.persist?.clearStorage?.();
   });
 
-  it('loads chat history when a token is present', async () => {
-    const history = [
+  it('loads conversation history when a session is present', async () => {
+    (fetchConversationHistory as jest.Mock).mockResolvedValue([
       {
-        id: '1',
-        role: 'assistant',
-        content: 'Bonjour',
+        query: 'Bonjour',
+        response: 'Salut',
         timestamp: new Date().toISOString(),
       },
-    ];
-    (fetchChatHistory as jest.Mock).mockResolvedValue(history);
+    ]);
 
     await act(async () => {
-      useChatStore.getState().setToken('token');
-      await useChatStore.getState().initialize();
+      await useChatStore.getState().setSession({
+        username: 'u1',
+        token: 'token',
+      });
     });
 
     const state = useChatStore.getState();
-    expect(state.messages).toHaveLength(1);
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[0].role).toBe('user');
     expect(state.messages[0].content).toBe('Bonjour');
-    expect(state.loading).toBe(false);
-    expect(fetchChatHistory).toHaveBeenCalledWith('token');
+    expect(state.messages[1].content).toBe('Salut');
+    expect(fetchConversationHistory).toHaveBeenCalledWith({
+      username: 'u1',
+      token: 'token',
+    });
   });
 
-  it('records an error when trying to send without a token', async () => {
+  it('records an error when trying to send without a session', async () => {
     await act(async () => {
       await expect(
         useChatStore.getState().sendMessage('hello', 'chat'),
-      ).rejects.toThrow('Token missing');
+      ).rejects.toThrow('Session absente.');
     });
 
-    expect(useChatStore.getState().error).toBe('Token missing');
-    expect(sendChatMessage).not.toHaveBeenCalled();
-    expect(streamChatReply).not.toHaveBeenCalled();
+    expect(useChatStore.getState().error).toBe('Session absente.');
   });
 
-  it('streams assistant updates during chat mode', async () => {
-    const assistantMessage: Message = {
-      id: 'assistant-1',
-      role: 'assistant',
-      content: 'Salut!',
-      createdAt: new Date(),
-    };
-    (streamChatReply as jest.Mock).mockImplementation(async ({ onToken }) => {
-      onToken(assistantMessage);
+  it('stores a chat reply and suppresses the next realtime echo', async () => {
+    (postConversationMessage as jest.Mock).mockResolvedValue({
+      response: 'Salut!',
+      confidence: 0.9,
+      processingTime: 0.1,
+      speechTurn: {
+        turnId: 'turn-1',
+        text: 'Salut!',
+        createdAt: new Date().toISOString(),
+        segments: [],
+        averageWordsPerSecond: 2.0,
+        tempo: 1,
+      },
     });
 
     await act(async () => {
-      useChatStore.getState().setToken('token');
-      await useChatStore.getState().initialize();
+      await useChatStore.getState().setSession({
+        username: 'u1',
+        token: 'token',
+      });
       await useChatStore.getState().sendMessage('hello', 'chat');
     });
 
-    const { messages, loading } = useChatStore.getState();
+    const { messages, loading, realtimeSuppression } = useChatStore.getState();
     expect(messages.some((message) => message.role === 'user')).toBe(true);
-    expect(messages.some((message) => message.id === assistantMessage.id)).toBe(true);
+    expect(messages.some((message) => message.content === 'Salut!')).toBe(true);
     expect(loading).toBe(false);
-    expect(streamChatReply).toHaveBeenCalled();
+    expect(realtimeSuppression).toContain('hello::Salut!');
+    expect(postConversationMessage).toHaveBeenCalledWith(
+      { username: 'u1', token: 'token' },
+      'hello',
+    );
   });
 
-  it('handles embedding mode by awaiting the REST response', async () => {
-    const response = {
-      id: 'embedding-1',
-      content: 'Vector generated',
-      timestamp: new Date().toISOString(),
-    };
-    (sendChatMessage as jest.Mock).mockResolvedValue(response);
+  it('handles embedding mode by appending an embedding summary', async () => {
+    (requestEmbedding as jest.Mock).mockResolvedValue({
+      vectors: [[0.1, 0.2, 0.3]],
+      dims: 3,
+      count: 1,
+      normalised: false,
+      backend: 'test-backend',
+      model: 'test-model',
+    });
 
     await act(async () => {
-      useChatStore.getState().setToken('token');
-      await useChatStore.getState().initialize();
-      await useChatStore.getState().sendMessage('embed me', 'embedding');
+      await useChatStore.getState().setSession({
+        username: 'u1',
+        token: 'token',
+      });
+      await useChatStore.getState().sendMessage('embed me', 'embed');
     });
 
     const { messages } = useChatStore.getState();
     expect(messages).toHaveLength(2);
-    expect(messages[1].content).toBe('Vector generated');
-    expect(sendChatMessage).toHaveBeenCalledWith('token', 'embed me', 'embedding');
+    expect(messages[1].content).toContain('Vecteurs: 1');
+    expect(requestEmbedding).toHaveBeenCalledWith('embed me');
   });
 });

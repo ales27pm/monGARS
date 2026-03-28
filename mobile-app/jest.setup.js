@@ -8,20 +8,32 @@ jest.mock('react-native-reanimated', () =>
 const ReactNative = require('react-native');
 const { NativeModules } = ReactNative;
 
-if (typeof global.localStorage === 'undefined') {
+let hasSafeLocalStorage = false;
+try {
+  void global.localStorage;
+  hasSafeLocalStorage = true;
+} catch (error) {
+  hasSafeLocalStorage = false;
+}
+
+if (!hasSafeLocalStorage) {
   let store = {};
-  global.localStorage = {
-    getItem: (key) => (key in store ? store[key] : null),
-    setItem: (key, value) => {
-      store[key] = value;
+  Object.defineProperty(global, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: {
+      getItem: (key) => (key in store ? store[key] : null),
+      setItem: (key, value) => {
+        store[key] = value;
+      },
+      removeItem: (key) => {
+        delete store[key];
+      },
+      clear: () => {
+        store = {};
+      },
     },
-    removeItem: (key) => {
-      delete store[key];
-    },
-    clear: () => {
-      store = {};
-    },
-  };
+  });
 }
 
 class MockNativeEventEmitter {
@@ -102,7 +114,8 @@ jest.mock('./src/native/voice', () => ({
 }));
 
 jest.mock('react-native-config', () => ({
+  MONGARS_BASE_URL: 'https://localhost:8443',
   MONGARS_API_URL: 'https://localhost:8443/api/v1',
-  MONGARS_WS_URL: 'wss://localhost:8443/ws/chat',
-  MONGARS_VOICE_LOCALE: 'fr-FR',
+  MONGARS_WS_URL: 'wss://localhost:8443/ws/chat/',
+  MONGARS_VOICE_LOCALE: 'fr-CA',
 }));

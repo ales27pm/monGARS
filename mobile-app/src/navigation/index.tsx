@@ -21,18 +21,18 @@ const RootNavigator = () => {
         component={ChatScreen}
         options={{
           headerLargeTitle: Platform.OS === 'ios',
-          title: 'MonGARS',
+          title: 'monGARS',
         }}
       />
       <Stack.Screen
         name="Diagnostics"
         component={DiagnosticsScreen}
-        options={{ title: 'Network Diagnostics' }}
+        options={{ title: 'Diagnostics' }}
       />
       <Stack.Screen
         name="Settings"
         component={SettingsScreen}
-        options={{ title: 'Settings' }}
+        options={{ title: 'Parametres' }}
       />
     </Stack.Navigator>
   );

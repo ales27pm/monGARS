@@ -7,7 +7,7 @@
     "ios": "RCT_NEW_ARCH_ENABLED=1 arch -x86_64 xcrun simctl list && react-native run-ios --scheme MonGARSMobile",
     "android": "ORG_GRADLE_PROJECT_newArchEnabled=true react-native run-android",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .ts,.tsx src",
-    "test": "jest",
+    "test": "node --localstorage-file=.jest-localstorage ./node_modules/jest/bin/jest.js --runInBand",
     "typecheck": "tsc --noEmit",
     "pod-install": "cd ios && RCT_NEW_ARCH_ENABLED=1 bundle exec pod install"
   },

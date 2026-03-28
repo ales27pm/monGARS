@@ -23,7 +23,15 @@ type VoiceAssistantDeps = {
 
 const defaultDeps: VoiceAssistantDeps = {
   platform: Platform,
-  createEmitter: () => new NativeEventEmitter(NativeModules.VoiceModule),
+  createEmitter: () => {
+    if (typeof NativeEventEmitter !== 'function') {
+      return {
+        addListener: () => ({ remove: () => undefined }),
+        removeAllListeners: () => undefined,
+      } as unknown as NativeEventEmitter;
+    }
+    return new NativeEventEmitter(NativeModules.VoiceModule);
+  },
   voiceControl: VoiceControl,
 };
 
@@ -74,6 +82,9 @@ export const createUseVoiceAssistant = (
     const start = async () => {
       if (!isSupportedPlatform) {
         return;
+      }
+      if (typeof deps.voiceControl.configureAudioSession === 'function') {
+        await deps.voiceControl.configureAudioSession();
       }
       await deps.voiceControl.startListening(settings.voiceLocale);
       setState({ listening: true, transcript: '' });

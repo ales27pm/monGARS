@@ -3,11 +3,11 @@ import { render } from '@testing-library/react-native';
 import App from '../src/App';
 
 describe('App', () => {
-  it('renders the initial login prompt when no token is present', async () => {
+  it('renders the settings call-to-action when no session is present', async () => {
     const { findByText } = render(<App />);
     expect(
       await findByText(
-        'Connectez-vous dans les paramètres pour commencer à discuter.',
+        'Ouvrez les parametres pour recuperer un jeton et demarrer la conversation native.',
       ),
     ).toBeTruthy();
   });
