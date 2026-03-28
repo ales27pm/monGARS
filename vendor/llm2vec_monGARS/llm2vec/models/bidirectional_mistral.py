@@ -9,19 +9,30 @@ from transformers import (
 )
 from transformers.cache_utils import Cache, SlidingWindowCache, StaticCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-from transformers.models.mistral.modeling_mistral import (
-    MistralAttention,
-    MistralDecoderLayer,
-    MistralFlashAttention2,
-    MistralMLP,
-    MistralRMSNorm,
-    MistralSdpaAttention,
-)
+from transformers.models.mistral import modeling_mistral
 from transformers.utils import logging
 
-from .utils import is_transformers_attn_greater_or_equal_4_43_1
+from .utils import (
+    is_transformers_attn_greater_or_equal_4_43_1,
+    resolve_attention_classes,
+)
 
 logger = logging.get_logger(__name__)
+
+MistralDecoderLayer = modeling_mistral.MistralDecoderLayer
+MistralMLP = modeling_mistral.MistralMLP
+MistralRMSNorm = modeling_mistral.MistralRMSNorm
+(
+    MistralAttention,
+    MistralFlashAttention2,
+    MistralSdpaAttention,
+) = resolve_attention_classes(
+    modeling_mistral,
+    attention_name="MistralAttention",
+    flash_attention_name="MistralFlashAttention2",
+    sdpa_attention_name="MistralSdpaAttention",
+    model_label="mistral",
+)
 
 
 class ModifiedMistralAttention(MistralAttention):

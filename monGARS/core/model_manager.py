@@ -751,7 +751,16 @@ class LLMModelManager:
         general_override = (self._settings.llm_general_model or "").strip()
         if general_override:
             base_general = models.get("general", _DEFAULT_MODELS["general"])
-            models["general"] = base_general.with_name(general_override)
+            general_adapters = (
+                ()
+                if general_override != base_general.name and base_general.adapters
+                else base_general.adapters
+            )
+            models["general"] = replace(
+                base_general,
+                name=general_override,
+                adapters=general_adapters,
+            )
         coding_override = (self._settings.llm_coding_model or "").strip()
         if coding_override:
             base_coding = (
@@ -759,7 +768,16 @@ class LLMModelManager:
                 or models.get("general")
                 or _DEFAULT_MODELS.get("coding", _DEFAULT_MODELS["general"])
             )
-            models["coding"] = base_coding.with_name(coding_override)
+            coding_adapters = (
+                ()
+                if coding_override != base_coding.name and base_coding.adapters
+                else base_coding.adapters
+            )
+            models["coding"] = replace(
+                base_coding,
+                name=coding_override,
+                adapters=coding_adapters,
+            )
         return ModelProfile(name=profile.name, models=models)
 
     def _normalise_model_reference(

@@ -9,6 +9,15 @@ import pytest
 MODULE_NAME = "monGARS.mlops._unsloth_bootstrap"
 
 
+def _make_fake_torch(
+    *, cuda_available: bool = False, xpu_available: bool = False
+) -> types.ModuleType:
+    module = types.ModuleType("torch")
+    module.cuda = types.SimpleNamespace(is_available=lambda: cuda_available)
+    module.xpu = types.SimpleNamespace(is_available=lambda: xpu_available)
+    return module
+
+
 def _reload_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -16,6 +25,7 @@ def _reload_bootstrap(
     module: types.ModuleType | None,
     zoo_spec: importlib.machinery.ModuleSpec | None = None,
     import_error: bool = False,
+    torch_module: types.ModuleType | None = None,
 ):
     original_find_spec = importlib.util.find_spec
 
@@ -24,6 +34,8 @@ def _reload_bootstrap(
             return spec
         if name == "unsloth_zoo":
             return zoo_spec
+        if name == "torch" and torch_module is not None:
+            return importlib.machinery.ModuleSpec("torch", loader=None)
         return original_find_spec(name, *args, **kwargs)
 
     monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
@@ -42,6 +54,9 @@ def _reload_bootstrap(
                 "unsloth_zoo", types.ModuleType("unsloth_zoo")
             )
             return zoo_module
+        if name == "torch" and torch_module is not None:
+            sys.modules.setdefault("torch", torch_module)
+            return torch_module
         return original_import_module(name, package)
 
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
@@ -59,6 +74,11 @@ def _reload_bootstrap(
         monkeypatch.delitem(sys.modules, "unsloth_zoo", raising=False)
     else:
         monkeypatch.setitem(sys.modules, "unsloth_zoo", types.ModuleType("unsloth_zoo"))
+
+    if torch_module is None:
+        monkeypatch.delitem(sys.modules, "torch", raising=False)
+    else:
+        monkeypatch.setitem(sys.modules, "torch", torch_module)
 
     module_obj = importlib.import_module(MODULE_NAME)
     return importlib.reload(module_obj)
@@ -79,6 +99,7 @@ def test_bootstrap_imports_unsloth_when_available(
         spec=fake_spec,
         module=fake_module,
         zoo_spec=importlib.machinery.ModuleSpec("unsloth_zoo", loader=None),
+        torch_module=_make_fake_torch(cuda_available=True),
     )
     assert reloaded.UNSLOTH_AVAILABLE is True
     assert sys.modules.get("unsloth") is fake_module
@@ -94,6 +115,7 @@ def test_bootstrap_tolerates_missing_unsloth_zoo(
         spec=fake_spec,
         module=fake_module,
         zoo_spec=None,
+        torch_module=_make_fake_torch(cuda_available=True),
     )
     assert reloaded.UNSLOTH_AVAILABLE is True
     assert sys.modules.get("unsloth") is fake_module
@@ -107,6 +129,21 @@ def test_bootstrap_handles_import_failures(monkeypatch: pytest.MonkeyPatch) -> N
         spec=fake_spec,
         module=fake_module,
         import_error=True,
+        torch_module=_make_fake_torch(cuda_available=True),
     )
     assert reloaded.UNSLOTH_AVAILABLE is False
     assert "unsloth" not in sys.modules
+
+
+def test_bootstrap_skips_unsloth_without_supported_accelerator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_spec = importlib.machinery.ModuleSpec("unsloth", loader=None)
+    reloaded = _reload_bootstrap(
+        monkeypatch,
+        spec=fake_spec,
+        module=None,
+        torch_module=_make_fake_torch(cuda_available=False, xpu_available=False),
+    )
+    assert reloaded.UNSLOTH_AVAILABLE is False
+    assert reloaded.UNSLOTH_DISABLED_REASON == "no_supported_accelerator"

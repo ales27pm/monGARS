@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import inspect
 import json
@@ -12,6 +13,7 @@ import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Mapping, Sequence
 
 import torch
@@ -55,6 +57,9 @@ finally:
 
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_PATTERN = re.compile(r"[0-9A-Za-zÀ-ÿ']+")
+_PLACEHOLDER_STYLE_MODELS = {"hf-internal-testing/tiny-random-gpt2"}
 
 
 warnings.filterwarnings(
@@ -104,6 +109,9 @@ class StyleFineTuningConfig:
     base_model: str = os.getenv(
         "STYLE_BASE_MODEL", "hf-internal-testing/tiny-random-gpt2"
     )
+    allow_placeholder_training: bool = os.getenv(
+        "STYLE_ALLOW_PLACEHOLDER_TRAINING", "False"
+    ).lower() in ("true", "1")
     adapter_repository: Path = Path(
         os.getenv(
             "STYLE_ADAPTER_DIR", os.path.join(tempfile.gettempdir(), "mongars_style")
@@ -562,6 +570,46 @@ class StyleFineTuner:
             self.device,
         )
 
+    @staticmethod
+    def _is_placeholder_model_name(model_name: str) -> bool:
+        lowered = model_name.strip().casefold()
+        return lowered in _PLACEHOLDER_STYLE_MODELS or "tiny-random" in lowered
+
+    @staticmethod
+    def _looks_like_degraded_output(base_text: str, candidate: str) -> bool:
+        base = " ".join(base_text.split())
+        adapted = " ".join(candidate.split())
+        if not adapted:
+            return True
+        if "\ufffd" in adapted:
+            return True
+        if len(adapted) > max(len(base) * 3, len(base) + 160):
+            return True
+
+        if not base or adapted.casefold() == base.casefold():
+            return False
+
+        base_tokens = {
+            token.casefold()
+            for token in _TOKEN_PATTERN.findall(base)
+            if len(token) >= 3
+        }
+        adapted_tokens = {
+            token.casefold()
+            for token in _TOKEN_PATTERN.findall(adapted)
+            if len(token) >= 3
+        }
+        token_overlap = base_tokens & adapted_tokens
+        similarity = difflib.SequenceMatcher(
+            None, base.casefold(), adapted.casefold()
+        ).ratio()
+        return not token_overlap and similarity < 0.35
+
+    def _placeholder_training_disabled(self) -> bool:
+        return self._is_placeholder_model_name(
+            self.config.base_model
+        ) and not self.config.allow_placeholder_training
+
     async def estimate_personality(
         self, user_id: str, interactions: Sequence[dict[str, str]]
     ) -> StyleAnalysis:
@@ -595,6 +643,21 @@ class StyleFineTuner:
                 )
                 self._adapter_cache.set(user_id, state)
                 return StyleAnalysis.default(sample_count=0)
+
+            if self._placeholder_training_disabled():
+                state = StyleAdapterState(
+                    fingerprint=fingerprint,
+                    model=None,
+                    tokenizer=self._tokenizer,
+                    sample_count=len(samples),
+                    updated_at=time.monotonic(),
+                )
+                self._adapter_cache.set(user_id, state)
+                logger.warning(
+                    "style.estimate.disabled_placeholder_model",
+                    extra={"user_id": user_id, "base_model": self.config.base_model},
+                )
+                return StyleAnalysis.default(sample_count=len(samples))
 
             if needs_training and len(samples) >= self.config.min_samples:
                 async with self._training_semaphore:
@@ -631,6 +694,13 @@ class StyleFineTuner:
         base_text: str,
         personality: dict[str, float] | None,
     ) -> str:
+        if self._is_placeholder_model_name(self.config.base_model):
+            logger.warning(
+                "style.apply.disabled_placeholder_model",
+                extra={"user_id": user_id, "base_model": self.config.base_model},
+            )
+            return base_text
+
         state = self._adapter_cache.get(user_id)
         if state is None or state.model is None:
             logger.debug("No trained adapter for %s; returning base text", user_id)
@@ -640,8 +710,23 @@ class StyleFineTuner:
         generated = self._inference.apply_style(state, prompt)
         if generated.startswith(prompt):
             adapted = generated[slice(len(prompt), None)].strip()
-            return adapted or generated.strip()
-        return generated.strip()
+            candidate = adapted or generated.strip()
+        else:
+            candidate = generated.strip()
+
+        if self._looks_like_degraded_output(base_text, candidate):
+            logger.warning(
+                "style.apply.degraded_output",
+                extra={
+                    "user_id": user_id,
+                    "base_model": self.config.base_model,
+                    "base_length": len(base_text),
+                    "candidate_length": len(candidate),
+                },
+            )
+            return base_text
+
+        return candidate
 
     def _build_training_corpus(
         self, interactions: Sequence[dict[str, str]]

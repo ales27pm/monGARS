@@ -157,6 +157,25 @@ pipelines.
   back to CPU or when quantisation is disabled. Review these logs alongside the
   existing `scripts.diagnose_unsloth` output to correlate memory pressure with
   runtime behaviour.
+- The eager Unsloth bootstrap now activates only when a supported accelerator
+  is visible to PyTorch. CPU-only hosts log `Skipping Unsloth bootstrap on this
+  host` and continue on the vanilla Transformers path without import-time
+  tracebacks. Set `MONGARS_FORCE_UNSLOTH=true` only when debugging a false
+  negative hardware probe.
+- `UnifiedLLMRuntime` caches the first deterministic component-load failure and
+  re-raises it for later requests until the process restarts. This avoids
+  spamming repeated `llm.unified.load_failed` stack traces when an
+  `llm2vec/transformers` combination is incompatible; after correcting the
+  environment, restart the API worker to trigger a fresh load attempt.
+- The repository tracks `models/dolphin_x1_unified_enhanced/` as a placeholder
+  scaffold only. Replace it with a real exported bundle and remove
+  `bundle.placeholder.json` before enabling local inference. The exported model
+  root typically includes `chat_lora/`, `merged_fp16/`, and `wrapper/`
+  artefacts.
+- The vendored `llm2vec` models now tolerate leaner `transformers` builds where
+  classes such as `GemmaFlashAttention2` are no longer exported. In that case
+  monGARS falls back to the eager attention implementation for the affected
+  architecture instead of failing the import at startup.
 - When memory pressure persists, reduce the generation target exposed via
   `settings.model.max_new_tokens` or lower the per-role overrides in
   `configs/llm_models.json`. The runtime enforces these bounds uniformly across

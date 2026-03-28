@@ -52,25 +52,10 @@ from monGARS.core.model_slot_manager import ModelSlotManager
 from monGARS.core.monitor import get_tracer
 from monGARS.core.operator_approvals import ApprovalPolicy, OperatorApprovalRegistry
 from monGARS.core.self_training import SelfTrainingEngine
+from monGARS.mlops._unsloth_bootstrap import get_fast_language_model
 from monGARS.mlops.chat_templates import ensure_dolphin_chat_template
 
-# Import Unsloth as early as possible to guarantee its patches execute before
-# transformer-based helpers from TRL are loaded.
-try:  # pragma: no cover - optional dependency for reasoning loop
-    import unsloth  # type: ignore
-except (
-    ModuleNotFoundError,
-    ImportError,
-):  # pragma: no cover - optional dependency branch
-    unsloth = None  # type: ignore[assignment]
-except Exception:  # pragma: no cover - defensive guard
-    unsloth = None  # type: ignore[assignment]
-
-FastLanguageModel = (
-    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
-    if "unsloth" in globals() and unsloth is not None
-    else None
-)
+FastLanguageModel = get_fast_language_model()
 
 try:  # pragma: no cover - optional dependency at runtime
     from trl import DPOConfig, DPOTrainer  # type: ignore

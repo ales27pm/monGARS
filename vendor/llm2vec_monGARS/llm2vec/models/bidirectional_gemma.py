@@ -7,18 +7,28 @@ from torch import nn
 from transformers import GemmaConfig, GemmaForCausalLM, GemmaModel, GemmaPreTrainedModel
 from transformers.cache_utils import Cache, StaticCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-from transformers.models.gemma.modeling_gemma import (
-    GemmaAttention,
-    GemmaDecoderLayer,
-    GemmaFlashAttention2,
-    GemmaMLP,
-    GemmaRMSNorm,
-    GemmaSdpaAttention,
-)
+from transformers.models.gemma import modeling_gemma
 from transformers.utils import logging
 from transformers.utils.import_utils import _is_package_available
 
+from .utils import resolve_attention_classes
+
 logger = logging.get_logger(__name__)
+
+GemmaDecoderLayer = modeling_gemma.GemmaDecoderLayer
+GemmaMLP = modeling_gemma.GemmaMLP
+GemmaRMSNorm = modeling_gemma.GemmaRMSNorm
+(
+    GemmaAttention,
+    GemmaFlashAttention2,
+    GemmaSdpaAttention,
+) = resolve_attention_classes(
+    modeling_gemma,
+    attention_name="GemmaAttention",
+    flash_attention_name="GemmaFlashAttention2",
+    sdpa_attention_name="GemmaSdpaAttention",
+    model_label="gemma",
+)
 
 
 def is_transformers_attn_greater_or_equal_4_41():

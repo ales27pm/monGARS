@@ -19,25 +19,10 @@ from monGARS.core.monitor import (
     TRAINING_FAILURE_COUNTER,
     TRAINING_TOKEN_COUNTER,
 )
+from monGARS.mlops._unsloth_bootstrap import get_fast_language_model
 from monGARS.mlops.artifacts import WrapperConfig, write_wrapper_bundle
 
-# Import Unsloth as early as possible to ensure its patches activate before
-# transformers/peft modules are loaded.
-try:  # pragma: no cover - optional dependency
-    import unsloth  # type: ignore
-except (
-    ModuleNotFoundError,
-    ImportError,
-):  # pragma: no cover - fallback when unsloth missing
-    unsloth = None  # type: ignore[assignment]
-except Exception:  # pragma: no cover - defensive guardrail around import time
-    unsloth = None  # type: ignore[assignment]
-
-FastLanguageModel = (
-    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
-    if "unsloth" in globals() and unsloth is not None
-    else None
-)
+FastLanguageModel = get_fast_language_model()
 
 # Optional heavy ML imports; only load when available
 try:  # pragma: no cover - heavy deps not always installed

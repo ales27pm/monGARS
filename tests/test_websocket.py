@@ -67,11 +67,61 @@ def _issue_ws_ticket(client: TestClient, token: str) -> str:
 
 def _connect_ws(client: TestClient, ticket: str):
     settings = get_settings()
-    origin = str(settings.WS_ALLOWED_ORIGINS[0]) if settings.WS_ALLOWED_ORIGINS else ""
+    origin = (
+        str(settings.WS_ALLOWED_ORIGINS[0]).rstrip("/")
+        if settings.WS_ALLOWED_ORIGINS
+        else ""
+    )
     return client.websocket_connect(
         f"/ws/chat/?t={ticket}",
         headers={"origin": origin},
     )
+
+
+def test_ws_ticket_preflight_returns_cors_headers(client: TestClient) -> None:
+    settings = get_settings()
+    origin = (
+        str(settings.WS_ALLOWED_ORIGINS[0]).rstrip("/")
+        if settings.WS_ALLOWED_ORIGINS
+        else "http://localhost:8000"
+    )
+
+    response = client.options(
+        "/api/v1/auth/ws/ticket",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.headers["access-control-allow-methods"] == "POST, OPTIONS"
+
+
+def test_ws_ticket_post_returns_cors_headers(client: TestClient) -> None:
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    settings = get_settings()
+    origin = (
+        str(settings.WS_ALLOWED_ORIGINS[0]).rstrip("/")
+        if settings.WS_ALLOWED_ORIGINS
+        else "http://localhost:8000"
+    )
+
+    response = client.post(
+        "/api/v1/auth/ws/ticket",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": origin,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.headers["access-control-allow-methods"] == "POST, OPTIONS"
 
 
 @pytest.mark.asyncio

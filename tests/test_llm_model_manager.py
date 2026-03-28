@@ -56,6 +56,38 @@ def test_model_manager_loads_profile_from_config(tmp_path):
     assert coding.auto_download is False
 
 
+def test_legacy_model_override_clears_incompatible_adapters(tmp_path):
+    config_data = {
+        "profiles": {
+            "default": {
+                "models": {
+                    "general": {
+                        "name": "ollama/custom-general",
+                        "adapters": [
+                            {
+                                "name": "general-adapter",
+                                "source": "artifacts/general",
+                                "target": "custom/general",
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    config_path = _write_config(tmp_path / "models.json", config_data)
+    settings = _build_settings(
+        llm_models_config_path=config_path,
+        llm_general_model="override/general",
+    )
+
+    manager = LLMModelManager(settings)
+
+    general = manager.get_model_definition("general")
+    assert general.name == "override/general"
+    assert general.adapters == ()
+
+
 def test_model_definition_string_entries_preserve_role(tmp_path):
     config_data = {
         "profiles": {

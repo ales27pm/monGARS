@@ -222,21 +222,27 @@ class PersistenceRepository:
         history_query: str | None = None,
         history_response: str | None = None,
     ) -> None:
+        resolved_history_query = (
+            interaction.message if history_query is None else history_query
+        )
+        resolved_history_response = (
+            interaction.response if history_response is None else history_response
+        )
         embedding_vector = await self._history_embedding_vector(
-            history_query or interaction.message,
-            history_response or interaction.response,
+            resolved_history_query,
+            resolved_history_response,
         )
         prepared_vector = self._normalise_vector(embedding_vector)
 
         async def operation(session) -> None:
             async with session.begin():
                 await session.merge(interaction)
-                if interaction.user_id and (interaction.message or history_query):
+                if interaction.user_id and resolved_history_query:
                     session.add(
                         ConversationHistory(
                             user_id=interaction.user_id,
-                            query=history_query or interaction.message,
-                            response=history_response or interaction.response,
+                            query=resolved_history_query,
+                            response=resolved_history_response,
                             vector=prepared_vector,
                         )
                     )

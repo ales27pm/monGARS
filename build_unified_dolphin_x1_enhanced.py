@@ -67,6 +67,7 @@ from torch.utils.data import Dataset
 warnings.filterwarnings("ignore", category=UserWarning)
 
 console = Console()
+PLACEHOLDER_MANIFEST = "bundle.placeholder.json"
 
 # ---------------------------------------------------------------------------
 # Core ML imports (fail-fast if missing)
@@ -1331,6 +1332,16 @@ Examples:
             return
 
     # Load unified model + start REPL
+    placeholder_manifest = os.path.join(model_dir, PLACEHOLDER_MANIFEST)
+    if os.path.exists(placeholder_manifest):
+        console.print(
+            "[red]Selected model directory only contains the tracked placeholder scaffold.[/red]"
+        )
+        console.print(
+            "Run with --train or point --model-dir at a real exported bundle, then remove "
+            "bundle.placeholder.json."
+        )
+        return
     try:
         console.print(
             Panel.fit("[bold]Loading Unified Model[/bold]", border_style="blue")

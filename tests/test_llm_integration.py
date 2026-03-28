@@ -58,7 +58,7 @@ def test_initialize_unsloth_patches_torch(monkeypatch: pytest.MonkeyPatch) -> No
     benchmark guarantees enforced elsewhere in the system.
     """
 
-    dummy_unsloth = types.SimpleNamespace()
+    dummy_unsloth = types.ModuleType("unsloth")
     call_counter = {"patch": 0}
 
     def _patch_torch() -> dict[str, bool]:
@@ -397,6 +397,30 @@ def test_model_loading_fails_gracefully(
     assert "Failed to load" in str(exc_info.value)
 
 
+def test_unified_runtime_caches_component_load_failures(
+    mock_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm_integration.UnifiedLLMRuntime.reset_for_tests()
+    runtime = llm_integration.UnifiedLLMRuntime(settings=mock_settings)
+    call_counter = {"count": 0}
+
+    def _fail_load() -> None:
+        call_counter["count"] += 1
+        raise ImportError("boom")
+
+    monkeypatch.setattr(runtime, "_run_blocking", lambda func: func())
+    monkeypatch.setattr(runtime, "_load_components", _fail_load)
+
+    with pytest.raises(llm_integration.LLMRuntimeError):
+        runtime._ensure_components()
+    with pytest.raises(llm_integration.LLMRuntimeError):
+        runtime._ensure_components()
+
+    assert call_counter["count"] == 1
+    llm_integration.UnifiedLLMRuntime.reset_for_tests()
+
+
 class _FailingRuntime:
     def embed(self, texts: list[str]) -> list[list[float]]:
         try:
@@ -502,6 +526,66 @@ async def test_call_local_provider_prefers_ollama_when_available(
     fake_client = fake_llm_integration_with_ollama._test_ollama_client
     assert fake_client.calls[0]["model"] == "general-model"
     assert fake_client.calls[0]["messages"][0]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_call_local_provider_accepts_object_ollama_response(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Object-style Ollama responses should bypass the broken slot fallback."""
+
+    class _Message:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _ChatResponse:
+        def __init__(self, content: str) -> None:
+            self.message = _Message(content)
+
+    class _FakeOllamaClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def chat(self, **kwargs) -> _ChatResponse:
+            self.calls.append(kwargs)
+            return _ChatResponse("ollama-object-text")
+
+    class _PassthroughBreaker:
+        async def call(self, func):
+            return await func()
+
+    async def _unexpected_slot(*_args, **_kwargs):
+        raise AssertionError("slot fallback should not be used")
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    fake_client = _FakeOllamaClient()
+    setattr(fake_llm_integration, "_test_ollama_client", fake_client)
+    monkeypatch.setattr(
+        fake_llm_integration,
+        "_ollama_cb",
+        _PassthroughBreaker(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        fake_llm_integration,
+        "_slot_model_fallback",
+        _unexpected_slot,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        llm_integration.asyncio,
+        "to_thread",
+        _fake_to_thread,
+        raising=False,
+    )
+
+    result = await fake_llm_integration._call_local_provider("hi", "general")
+
+    assert result["message"]["content"] == "ollama-object-text"
+    assert fake_client.calls[0]["model"] == "general-model"
 
 
 @pytest.mark.asyncio

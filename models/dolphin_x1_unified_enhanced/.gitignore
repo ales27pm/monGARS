@@ -1,0 +1,10 @@
+*
+!.gitignore
+!README.md
+!bundle.placeholder.json
+!chat_lora/
+!chat_lora/.gitkeep
+!merged_fp16/
+!merged_fp16/.gitkeep
+!wrapper/
+!wrapper/.gitkeep

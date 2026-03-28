@@ -61,6 +61,34 @@ class _FakeLLMIntegration:
         return self.generation_tokens
 
 
+class _ErrorLLMIntegration(_FakeLLMIntegration):
+    async def generate_response(
+        self,
+        prompt: str,
+        task_type: str = "general",
+        *,
+        response_hints=None,
+        formatted_prompt: str | None = None,
+    ):  # type: ignore[override]
+        used_prompt = formatted_prompt if formatted_prompt is not None else prompt
+        self.prompts.append(used_prompt)
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "task_type": task_type,
+                "response_hints": response_hints,
+                "formatted_prompt": formatted_prompt,
+                "used_prompt": used_prompt,
+            }
+        )
+        return {
+            "text": "Slot fallback unavailable",
+            "confidence": 0.0,
+            "source": "error",
+            "adapter_version": "baseline",
+        }
+
+
 class _FakeCuriosityEngine:
     async def detect_gaps(self, context):  # type: ignore[override]
         return {"status": "sufficient_knowledge"}
@@ -491,6 +519,71 @@ async def test_generate_response_warns_on_unexpected_reasoner_output(
     assert saved_interaction.input_data["reasoning_metadata"] == {}
     assert saved_interaction.input_data["llm_response_hints"] is None
     assert llm.calls[0]["response_hints"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_response_skips_style_adaptation_for_error_payloads(
+    monkeypatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    module, _, persistence = _build_conversational_module(
+        matches=[],
+        llm=_ErrorLLMIntegration(),
+    )
+
+    response = await module.generate_response("user-error", "bonjour")
+
+    assert (
+        response["text"]
+        == "The response service is temporarily unavailable. Please try again in a moment."
+    )
+    assert module.memory.store_calls == []
+    saved_interaction = persistence.saved[0][0]
+    assert (
+        saved_interaction.output_data["raw_llm"]["text"] == "Slot fallback unavailable"
+    )
+    assert saved_interaction.output_data["adapted_text"] == response["text"]
+    assert saved_interaction.personality == {}
+    assert persistence.saved[0][1] == ""
+    assert persistence.saved[0][2] == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_response_filters_error_history_from_prompt(monkeypatch) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+
+    module, llm, _ = _build_conversational_module(matches=[])
+    error_text = (
+        "The response service is temporarily unavailable. Please try again in a moment."
+    )
+    module.memory._history = [
+        SimpleNamespace(
+            query="bonjour",
+            response=error_text,
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+        SimpleNamespace(
+            query="valid-question",
+            response="valid-answer",
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    ]
+
+    await module.generate_response("user-clean", "bonjour")
+
+    prompt = llm.prompts[0]
+    assert error_text not in prompt
+    assert "valid-question" in prompt
+    assert "valid-answer" in prompt
 
 
 @pytest.mark.asyncio

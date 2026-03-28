@@ -5,16 +5,26 @@ from typing import Union
 from peft import PeftModel
 from torch import nn
 from transformers import Qwen2Config, Qwen2ForCausalLM, Qwen2Model, Qwen2PreTrainedModel
-from transformers.models.qwen2.modeling_qwen2 import (
-    Qwen2Attention,
-    Qwen2DecoderLayer,
-    Qwen2FlashAttention2,
-    Qwen2RMSNorm,
-    Qwen2SdpaAttention,
-)
+from transformers.models.qwen2 import modeling_qwen2
 from transformers.utils import logging
 
+from .utils import resolve_attention_classes
+
 logger = logging.get_logger(__name__)
+
+Qwen2DecoderLayer = modeling_qwen2.Qwen2DecoderLayer
+Qwen2RMSNorm = modeling_qwen2.Qwen2RMSNorm
+(
+    Qwen2Attention,
+    Qwen2FlashAttention2,
+    Qwen2SdpaAttention,
+) = resolve_attention_classes(
+    modeling_qwen2,
+    attention_name="Qwen2Attention",
+    flash_attention_name="Qwen2FlashAttention2",
+    sdpa_attention_name="Qwen2SdpaAttention",
+    model_label="qwen2",
+)
 
 
 class ModifiedQwen2Attention(Qwen2Attention):

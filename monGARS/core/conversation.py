@@ -32,6 +32,17 @@ from ..init_db import Interaction
 logger = logging.getLogger(__name__)
 settings = get_settings()
 UTC = timezone.utc
+_ERROR_RESPONSE_TEXT = (
+    "The response service is temporarily unavailable. Please try again in a moment."
+)
+_SERVICE_ERROR_RESPONSES = frozenset(
+    {
+        _ERROR_RESPONSE_TEXT.casefold(),
+        "slot fallback unavailable",
+        "slot fallback returned an unexpected payload",
+        "local provider raised an unexpected error",
+    }
+)
 
 
 class _FakeLLM:
@@ -334,6 +345,27 @@ class ConversationalModule:
         styled = await self.mimicry.adapt_response_style(adaptive, user_id)
         return styled, personality
 
+    @staticmethod
+    def _normalise_error_response(text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return _ERROR_RESPONSE_TEXT
+
+        normalized = stripped.casefold()
+        if normalized in _SERVICE_ERROR_RESPONSES:
+            return _ERROR_RESPONSE_TEXT
+        return stripped
+
+    @staticmethod
+    def _is_service_error_response(text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return False
+        normalized = stripped.casefold()
+        if normalized in _SERVICE_ERROR_RESPONSES:
+            return True
+        return normalized.startswith("primary model is temporarily unavailable.")
+
     async def _semantic_context_matches(
         self,
         *,
@@ -408,6 +440,8 @@ class ConversationalModule:
             response_text = (getattr(record, "response", "") or "").strip()
             if not query_text and not response_text:
                 continue
+            if self._is_service_error_response(response_text):
+                continue
 
             if (query_text, response_text) in history_lookup:
                 continue
@@ -464,7 +498,11 @@ class ConversationalModule:
     ) -> dict:
         start = datetime.now(UTC)
         history_items = await self.memory.history(user_id, limit=5)
-        history_pairs = [(m.query, m.response) for m in history_items]
+        history_pairs = [
+            (m.query, m.response)
+            for m in history_items
+            if not self._is_service_error_response(getattr(m, "response", "") or "")
+        ]
 
         original_query = query
         query_with_image = await self._handle_image(query, image_data)
@@ -601,17 +639,25 @@ class ConversationalModule:
             {"message": query_text, "response": response_text}
             for query_text, response_text in history_pairs
         ]
-        final, personality_traits = await self._adapt_response(
-            llm_out.get("text", ""),
-            user_id,
-            recent_interactions,
-            original_query,
-        )
+        raw_text = llm_out.get("text", "")
+        if llm_out.get("source") == "error":
+            final = self._normalise_error_response(raw_text)
+            personality_traits = {}
+        else:
+            final, personality_traits = await self._adapt_response(
+                raw_text,
+                user_id,
+                recent_interactions,
+                original_query,
+            )
 
         processing_time = (datetime.now(UTC) - start).total_seconds()
 
         speech_session_id = session_id or user_id
         speech_turn = await self.speaker.speak(final, session_id=speech_session_id)
+        should_record_history = not self._is_service_error_response(final)
+        history_query_value = augmented_query if should_record_history else ""
+        history_response_value = final if should_record_history else ""
 
         await self.persistence.save_interaction(
             Interaction(
@@ -651,18 +697,19 @@ class ConversationalModule:
                 confidence=llm_out.get("confidence", 0.0),
                 processing_time=processing_time,
             ),
-            history_query=augmented_query,
-            history_response=final,
+            history_query=history_query_value,
+            history_response=history_response_value,
         )
-        memory_item = await self.memory.store(user_id, augmented_query, final)
-        if memory_item is not None:
-            await self.evolution_engine.record_memory_sample(
-                user_id=memory_item.user_id,
-                query=memory_item.query,
-                response=memory_item.response,
-                timestamp=memory_item.timestamp,
-                expires_at=memory_item.expires_at,
-            )
+        if should_record_history:
+            memory_item = await self.memory.store(user_id, augmented_query, final)
+            if memory_item is not None:
+                await self.evolution_engine.record_memory_sample(
+                    user_id=memory_item.user_id,
+                    query=memory_item.query,
+                    response=memory_item.response,
+                    timestamp=memory_item.timestamp,
+                    expires_at=memory_item.expires_at,
+                )
         return {
             "text": speech_turn.text,
             "confidence": llm_out.get("confidence", 0.0),

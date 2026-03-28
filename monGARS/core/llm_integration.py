@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import hashlib
+import importlib.metadata
 import logging
 import os
 import re
@@ -31,6 +32,11 @@ else:  # pragma: no cover - exercised in integration tests
 
 from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_manifest
 from monGARS.config import LLMQuantization, get_settings
+from monGARS.mlops._unsloth_bootstrap import (
+    UNSLOTH_DISABLED_REASON as _BOOTSTRAP_UNSLOTH_DISABLED_REASON,
+    UNSLOTH_IMPORT_ERROR as _BOOTSTRAP_UNSLOTH_IMPORT_ERROR,
+    get_unsloth_module,
+)
 
 from .inference_utils import (
     CHATML_BEGIN_OF_TEXT,
@@ -61,6 +67,8 @@ else:
     _TORCH_IMPORT_ERROR: ModuleNotFoundError | None = None
 
 logger = logging.getLogger(__name__)
+
+_UNIFIED_MODEL_PLACEHOLDER_FILENAME = "bundle.placeholder.json"
 
 
 class GuardRejectionError(RuntimeError):
@@ -99,11 +107,13 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
             "reference_model": "dolphin-x1-unsloth",
         }
 
-        try:  # pragma: no cover - defensive import guard
-            import unsloth  # type: ignore
-        except Exception as exc:  # pragma: no cover - optional dependency
-            logger.warning("llm.unsloth.unavailable", extra={"reason": str(exc)[:200]})
-            state["error"] = str(exc)
+        unsloth = get_unsloth_module()
+        if unsloth is None:  # pragma: no cover - optional dependency
+            reason = _BOOTSTRAP_UNSLOTH_DISABLED_REASON or "package_not_available"
+            logger.info("llm.unsloth.unavailable", extra={"reason": reason})
+            state["reason"] = reason
+            if _BOOTSTRAP_UNSLOTH_IMPORT_ERROR is not None:
+                state["error"] = str(_BOOTSTRAP_UNSLOTH_IMPORT_ERROR)
             _UNSLOTH_STATE = state
             return state
 
@@ -243,6 +253,7 @@ class UnifiedLLMRuntime:
         self._encoder: Any | None = None
         self._generator: AutoModelForCausalLM | None = None
         self._tokenizer: Any | None = None
+        self._component_load_error: Exception | None = None
         self._generation_defaults = self._build_generation_defaults()
         self._async_loop = asyncio.new_event_loop()
         self._async_thread = threading.Thread(
@@ -307,25 +318,51 @@ class UnifiedLLMRuntime:
     def _ensure_components(self) -> None:
         if self._encoder and self._generator and self._tokenizer:
             return
+        if self._component_load_error is not None:
+            self._raise_component_load_error()
         with self._load_lock:
             if self._encoder and self._generator and self._tokenizer:
                 return
+            if self._component_load_error is not None:
+                self._raise_component_load_error()
             try:
                 self._run_blocking(self._load_components)
             except Exception as exc:  # pragma: no cover - defensive
+                self._component_load_error = exc
                 logger.exception(
                     "llm.unified.load_failed",
                     extra={"path": str(self._model_dir)},
                 )
+                if isinstance(exc, LLMRuntimeError):
+                    raise LLMRuntimeError(str(exc)) from exc
                 raise LLMRuntimeError("Failed to load unified runtime") from exc
 
-    def _load_components(self) -> None:
-        from llm2vec import LLM2Vec
+    def _raise_component_load_error(self) -> None:
+        error = self._component_load_error
+        if error is None:  # pragma: no cover - defensive guard
+            raise LLMRuntimeError("Failed to load unified runtime")
+        if isinstance(error, LLMRuntimeError):
+            raise LLMRuntimeError(str(error)) from error
+        raise LLMRuntimeError("Failed to load unified runtime") from error
 
+    def _ensure_model_dir_ready(self) -> None:
         if not self._model_dir.exists():
             raise LLMRuntimeError(
                 f"Unified model directory '{self._model_dir}' is missing"
             )
+        placeholder_manifest = self._model_dir / _UNIFIED_MODEL_PLACEHOLDER_FILENAME
+        if placeholder_manifest.exists():
+            raise LLMRuntimeError(
+                f"Unified model directory '{self._model_dir}' only contains the "
+                "tracked placeholder scaffold. Replace it with a real exported "
+                "bundle and remove bundle.placeholder.json before enabling local "
+                "inference."
+            )
+
+    def _load_components(self) -> None:
+        self._ensure_model_dir_ready()
+        from llm2vec import LLM2Vec
+
         quantization = self._build_quantization_config()
         logger.info(
             "llm.unified.loading",
@@ -371,6 +408,7 @@ class UnifiedLLMRuntime:
         self._encoder = encoder
         self._generator = generator
         self._tokenizer = tokenizer
+        self._component_load_error = None
         logger.info(
             "llm.unified.ready",
             extra={"event": "llm_runtime_load", "path": str(self._model_dir)},
@@ -413,14 +451,28 @@ class UnifiedLLMRuntime:
         )
         if not quantization_value or quantization_value == LLMQuantization.NONE.value:
             return None
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type=quantization_value,
-            bnb_4bit_use_double_quant=getattr(
-                model_settings, "bnb_4bit_use_double_quant", True
-            ),
-            bnb_4bit_compute_dtype=compute_dtype,
-        )
+        try:
+            return BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type=quantization_value,
+                bnb_4bit_use_double_quant=getattr(
+                    model_settings, "bnb_4bit_use_double_quant", True
+                ),
+                bnb_4bit_compute_dtype=compute_dtype,
+            )
+        except (
+            importlib.metadata.PackageNotFoundError,
+            ImportError,
+            ValueError,
+        ):
+            logger.warning(
+                "llm.quantization.unavailable",
+                extra={
+                    "reason": "bitsandbytes_unavailable",
+                    "requested": quantization_value,
+                },
+            )
+            return None
 
     def generate(self, prompt: str, **kwargs: Any) -> str:
         if not isinstance(prompt, str) or not prompt.strip():
@@ -1511,14 +1563,25 @@ class LLMIntegration:
     ) -> dict[str, Any] | None:
         """Normalise provider payloads to the shared message contract."""
 
-        if not isinstance(payload, Mapping):
-            return None
-        message = payload.get("message")
+        message: Any | None = None
+        content: Any | None = None
+
+        if isinstance(payload, Mapping):
+            message = payload.get("message")
+            content = payload.get("content")
+        else:
+            message = getattr(payload, "message", None)
+            content = getattr(payload, "content", None)
+
         if isinstance(message, Mapping):
-            content = message.get("content")
-            if isinstance(content, str):
-                return {"message": {"content": content}}
-        content = payload.get("content")
+            nested_content = message.get("content")
+            if isinstance(nested_content, str):
+                return {"message": {"content": nested_content}}
+        else:
+            nested_content = getattr(message, "content", None)
+            if isinstance(nested_content, str):
+                return {"message": {"content": nested_content}}
+
         if isinstance(content, str):
             return {"message": {"content": content}}
         return None

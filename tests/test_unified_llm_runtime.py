@@ -1,5 +1,6 @@
 import os
 import sys
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,7 +8,7 @@ import pytest
 import torch
 
 from monGARS.config import LLMPooling, LLMQuantization
-from monGARS.core.llm_integration import UnifiedLLMRuntime
+from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
 
 
 class FakeUnifiedLLMRuntime:
@@ -94,6 +95,43 @@ def test_unsupported_quantization_modes_are_ignored(
     settings = _make_settings(tmp_path)
     settings.llm.quantization = LLMQuantization.GPTQ
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    runtime = UnifiedLLMRuntime.instance(settings)
+    assert runtime._build_quantization_config() is None
+    UnifiedLLMRuntime.reset_for_tests()
+
+
+def test_runtime_rejects_placeholder_model_scaffold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    UnifiedLLMRuntime.reset_for_tests()
+    settings = _make_settings(tmp_path)
+    (tmp_path / "bundle.placeholder.json").write_text("{}")
+    runtime = UnifiedLLMRuntime.instance(settings)
+    monkeypatch.setattr(runtime, "_run_blocking", lambda func: func())
+
+    with pytest.raises(LLMRuntimeError, match="tracked placeholder scaffold"):
+        runtime._ensure_components()
+    with pytest.raises(LLMRuntimeError, match="tracked placeholder scaffold"):
+        runtime._ensure_components()
+
+    UnifiedLLMRuntime.reset_for_tests()
+
+
+def test_missing_bitsandbytes_disables_quantization(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    UnifiedLLMRuntime.reset_for_tests()
+    settings = _make_settings(tmp_path)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    def _raise_missing_package(**_: object) -> object:
+        raise PackageNotFoundError("bitsandbytes")
+
+    monkeypatch.setattr(
+        "monGARS.core.llm_integration.BitsAndBytesConfig",
+        _raise_missing_package,
+    )
+
     runtime = UnifiedLLMRuntime.instance(settings)
     assert runtime._build_quantization_config() is None
     UnifiedLLMRuntime.reset_for_tests()

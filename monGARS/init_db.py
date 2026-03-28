@@ -126,9 +126,8 @@ _using_async_engine = False
 if _database_url_obj.drivername.startswith("postgresql"):
     if not _database_url_obj.drivername.startswith("postgresql+"):
         _database_url_obj = _database_url_obj.set(drivername="postgresql+asyncpg")
-    _database_url = _database_url_obj.render_as_string(hide_password=False)
     _async_engine = create_async_engine(
-        _database_url,
+        _database_url_obj,
         future=True,
         echo=_settings.debug,
         pool_size=_settings.db_pool_size,
@@ -138,8 +137,7 @@ if _database_url_obj.drivername.startswith("postgresql"):
     _async_session_maker = async_sessionmaker(_async_engine, expire_on_commit=False)
     _using_async_engine = True
 elif _database_url_obj.drivername.startswith("sqlite+aiosqlite") and HAS_AIOSQLITE:
-    _database_url = _database_url_obj.render_as_string(hide_password=False)
-    _async_engine = create_async_engine(_database_url, future=True, echo=False)
+    _async_engine = create_async_engine(_database_url_obj, future=True, echo=False)
     _async_session_maker = async_sessionmaker(_async_engine, expire_on_commit=False)
     _using_async_engine = True
 else:

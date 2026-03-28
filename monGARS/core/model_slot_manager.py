@@ -15,27 +15,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from monGARS.mlops._unsloth_bootstrap import (
+    UNSLOTH_DISABLED_REASON as _BOOTSTRAP_UNSLOTH_DISABLED_REASON,
+    UNSLOTH_IMPORT_ERROR as _BOOTSTRAP_UNSLOTH_IMPORT_ERROR,
+    get_fast_language_model,
+)
+
 from .persistence import PersistenceManager
 
-# Import Unsloth before torch/transformer ecosystems to activate its patches.
-_UNSLOTH_IMPORT_ERROR: Exception | None = None
-
-try:  # pragma: no cover - optional dependency at runtime
-    import unsloth  # type: ignore
-except (ModuleNotFoundError, ImportError) as exc:  # pragma: no cover
-    unsloth = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR = exc
-except Exception as exc:  # pragma: no cover - defensive guardrail
-    unsloth = None  # type: ignore[assignment]
-    _UNSLOTH_IMPORT_ERROR = exc
-else:
-    _UNSLOTH_IMPORT_ERROR = None
-
-FastLanguageModel = (
-    getattr(unsloth, "FastLanguageModel", None)  # type: ignore[attr-defined]
-    if "unsloth" in globals() and unsloth is not None
-    else None
-)
+_UNSLOTH_IMPORT_ERROR: Exception | None = _BOOTSTRAP_UNSLOTH_IMPORT_ERROR
+_UNSLOTH_DISABLED_REASON = _BOOTSTRAP_UNSLOTH_DISABLED_REASON
+FastLanguageModel = get_fast_language_model()
 
 try:  # pragma: no cover - optional dependency at runtime
     import torch
@@ -188,8 +178,10 @@ class ModelSlotManager:
                 "ModelSlotManager requires PyTorch. Install torch to enable slot-backed fallback."
             ) from _TORCH_IMPORT_ERROR
         if FastLanguageModel is None:
+            reason = _UNSLOTH_DISABLED_REASON or "package_not_available"
             raise RuntimeError(
-                "Unsloth is not installed. Install the 'unsloth' package to load models."
+                "Unsloth fast-path is unavailable "
+                f"({reason}). Install and enable a supported accelerator to load models."
             ) from _UNSLOTH_IMPORT_ERROR
         logger.info(
             "model.slot.loading",

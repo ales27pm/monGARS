@@ -403,8 +403,9 @@ async def _receiver_loop(state: _ConnectionState) -> None:
 
 @router.websocket("/ws/chat/")
 async def ws_chat(ws: WebSocket, ticket: str = Query(..., alias="t")) -> None:
-    allowed = {str(origin) for origin in settings.WS_ALLOWED_ORIGINS}
-    origin = ws.headers.get("origin", "")
+    raw_origin = ws.headers.get("origin", "")
+    origin = raw_origin.rstrip("/")
+    allowed = {str(origin).rstrip("/") for origin in settings.WS_ALLOWED_ORIGINS}
     if allowed and origin not in allowed:
         await ws.close(code=4403)
         return
@@ -434,7 +435,7 @@ async def ws_chat(ws: WebSocket, ticket: str = Query(..., alias="t")) -> None:
     connected_event = make_event(
         "ws.connected",
         user_id,
-        {"origin": origin},
+        {"origin": raw_origin or origin},
     )
     await ws.send_text(connected_event.to_json())
 

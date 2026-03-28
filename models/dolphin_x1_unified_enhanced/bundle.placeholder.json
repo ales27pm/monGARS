@@ -1,0 +1,10 @@
+{
+  "status": "placeholder",
+  "description": "Tracked scaffold for the default unified model directory. Replace with a real exported bundle before enabling local inference.",
+  "required_removal_before_runtime": true,
+  "expected_artifacts": [
+    "chat_lora/",
+    "merged_fp16/",
+    "wrapper/"
+  ]
+}

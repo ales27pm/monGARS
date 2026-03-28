@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 try:  # prefer patched init_db in tests
     from init_db import UserPersonality, async_session_factory
@@ -100,6 +101,30 @@ class PersonalityEngine:
     def set_style_tuner(self, style_tuner: StyleFineTuner) -> None:
         self._style_tuner = style_tuner
 
+    def _profile_payload(self, profile: PersonalityProfile) -> dict[str, object]:
+        return {
+            "traits": profile.traits,
+            "interaction_style": profile.interaction_style,
+            "context_preferences": profile.context_preferences,
+            "adaptation_rate": profile.adaptation_rate,
+            "confidence": profile.confidence,
+            "last_updated": datetime.now(timezone.utc),
+        }
+
+    async def _write_profile_record(
+        self, session, user_id: str, profile: PersonalityProfile
+    ) -> None:
+        payload = self._profile_payload(profile)
+        result = await session.execute(
+            select(UserPersonality).where(UserPersonality.user_id == user_id)
+        )
+        record = result.scalar_one_or_none()
+        if record is None:
+            session.add(UserPersonality(user_id=user_id, **payload))
+            return
+        for field, value in payload.items():
+            setattr(record, field, value)
+
     async def save_profile(self, user_id: str) -> None:
         async with self._lock:
             if user_id not in self.user_profiles:
@@ -107,18 +132,13 @@ class PersonalityEngine:
             profile = self.user_profiles[user_id]
             try:
                 async with self._session_factory() as session:
-                    await session.merge(
-                        UserPersonality(
-                            user_id=user_id,
-                            traits=profile.traits,
-                            interaction_style=profile.interaction_style,
-                            context_preferences=profile.context_preferences,
-                            adaptation_rate=profile.adaptation_rate,
-                            confidence=profile.confidence,
-                            last_updated=datetime.now(timezone.utc),
-                        )
-                    )
-                    await session.commit()
+                    try:
+                        await self._write_profile_record(session, user_id, profile)
+                        await session.commit()
+                    except IntegrityError:
+                        await session.rollback()
+                        await self._write_profile_record(session, user_id, profile)
+                        await session.commit()
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Failed to save profile for %s: %s", user_id, exc)
 

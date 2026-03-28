@@ -4,20 +4,31 @@ from torch import nn
 from transformers import LlamaConfig, LlamaForCausalLM, LlamaModel, LlamaPreTrainedModel
 from transformers.cache_utils import Cache, StaticCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
-from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
-    LlamaDecoderLayer,
-    LlamaFlashAttention2,
-    LlamaMLP,
-    LlamaRMSNorm,
-    LlamaRotaryEmbedding,
-    LlamaSdpaAttention,
-)
+from transformers.models.llama import modeling_llama
 from transformers.utils import logging
 
-from .utils import is_transformers_attn_greater_or_equal_4_43_1
+from .utils import (
+    is_transformers_attn_greater_or_equal_4_43_1,
+    resolve_attention_classes,
+)
 
 logger = logging.get_logger(__name__)
+
+LlamaDecoderLayer = modeling_llama.LlamaDecoderLayer
+LlamaMLP = modeling_llama.LlamaMLP
+LlamaRMSNorm = modeling_llama.LlamaRMSNorm
+LlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
+(
+    LlamaAttention,
+    LlamaFlashAttention2,
+    LlamaSdpaAttention,
+) = resolve_attention_classes(
+    modeling_llama,
+    attention_name="LlamaAttention",
+    flash_attention_name="LlamaFlashAttention2",
+    sdpa_attention_name="LlamaSdpaAttention",
+    model_label="llama",
+)
 
 
 class ModifiedLlamaAttention(LlamaAttention):

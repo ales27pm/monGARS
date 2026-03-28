@@ -991,6 +991,19 @@ export class ChatApp {
 
   handleSocketEvent(ev) {
     const type = ev && ev.type ? ev.type : "";
+    if (
+      type === "message" &&
+      ev &&
+      ev.message &&
+      typeof ev.message.type === "string" &&
+      ev.message.type
+    ) {
+      this.handleSocketEvent({
+        ...ev.message,
+        data: ev.message.data || {},
+      });
+      return;
+    }
     const data = ev && ev.data ? ev.data : {};
     switch (type) {
       case "connection": {
