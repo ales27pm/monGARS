@@ -1,12 +1,17 @@
 import json
 import os
 import socket
-from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any, Callable, Iterable, TypeVar
 from urllib.parse import parse_qsl, unquote, urlparse
 
 from dotenv import load_dotenv
+
+from .host_validation import (
+    default_allow_private_network_hosts,
+    is_local_host,
+    is_private_ip,
+)
 
 load_dotenv()
 
@@ -87,31 +92,8 @@ def _resolve_private_ips(hostname: str) -> Iterable[str]:
     return resolved
 
 
-_PRIVATE_IPV4_NETWORKS = (
-    ip_network("10.0.0.0/8"),
-    ip_network("172.16.0.0/12"),
-    ip_network("192.168.0.0/16"),
-    ip_network("169.254.0.0/16"),
-    ip_network("127.0.0.0/8"),
-    ip_network("100.64.0.0/10"),
-)
-_PRIVATE_IPV6_NETWORKS = (
-    ip_network("fc00::/7"),
-    ip_network("fe80::/10"),
-    ip_network("::1/128"),
-)
-
-
 def _is_private_ip(value: str) -> bool:
-    try:
-        address = ip_address(value)
-    except ValueError:
-        return False
-
-    if address.version == 4:
-        return any(address in network for network in _PRIVATE_IPV4_NETWORKS)
-
-    return any(address in network for network in _PRIVATE_IPV6_NETWORKS)
+    return is_private_ip(value)
 
 
 T = TypeVar("T")
@@ -153,12 +135,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _is_local_host(host: str) -> bool:
-    trimmed = host.strip().strip("[]")
-    if not trimmed:
-        return False
-    if trimmed in {"localhost", "0.0.0.0", "webapp", "api", "nginx"}:
-        return True
-    return _is_private_ip(trimmed)
+    return is_local_host(host)
 
 
 def _default_secure_cookies(hosts: Iterable[str], *, debug: bool) -> bool:
@@ -219,6 +196,14 @@ for compose_host in _compose_env_hosts:
 if _compose_env_hosts and "0.0.0.0" not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append("0.0.0.0")
 
+HOST_VALIDATION_ALLOWLIST = tuple(ALLOWED_HOSTS)
+ALLOW_PRIVATE_NETWORK_HOSTS = _env_bool(
+    "DJANGO_ALLOW_PRIVATE_NETWORK_HOSTS",
+    default_allow_private_network_hosts(HOST_VALIDATION_ALLOWLIST, debug=DEBUG),
+)
+if ALLOW_PRIVATE_NETWORK_HOSTS and "*" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("*")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -231,6 +216,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "webapp.host_validation.LocalNetworkHostValidationMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

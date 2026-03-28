@@ -5,7 +5,12 @@ from __future__ import annotations
 import importlib
 import socket
 import sys
+from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "webapp"))
 
 
 def test_debug_includes_private_addresses(monkeypatch):
@@ -77,6 +82,42 @@ def test_debug_env_hosts_are_preserved(monkeypatch):
     assert "192.168.99.88" in settings.ALLOWED_HOSTS
 
 
+def test_local_only_allowlist_enables_private_network_hosts(monkeypatch):
+    """Loopback-only deployments should accept LAN IP host headers."""
+
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "dummy")
+    monkeypatch.setenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+    monkeypatch.setenv("DJANGO_DEBUG", "false")
+    monkeypatch.delenv("DJANGO_DEBUG_HOSTS", raising=False)
+    monkeypatch.delenv("WEBAPP_HOST", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
+
+    settings = _reload_settings()
+
+    assert settings.ALLOW_PRIVATE_NETWORK_HOSTS is True
+    assert "*" in settings.ALLOWED_HOSTS
+    assert {"localhost", "127.0.0.1", "0.0.0.0"} <= set(
+        settings.HOST_VALIDATION_ALLOWLIST
+    )
+
+
+def test_public_allowlist_keeps_strict_host_validation(monkeypatch):
+    """Public deployments should not widen ALLOWED_HOSTS automatically."""
+
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "dummy")
+    monkeypatch.setenv("DJANGO_ALLOWED_HOSTS", "app.example.com")
+    monkeypatch.setenv("DJANGO_DEBUG", "false")
+    monkeypatch.delenv("DJANGO_DEBUG_HOSTS", raising=False)
+    monkeypatch.delenv("WEBAPP_HOST", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
+
+    settings = _reload_settings()
+
+    assert settings.ALLOW_PRIVATE_NETWORK_HOSTS is False
+    assert "*" not in settings.ALLOWED_HOSTS
+    assert settings.HOST_VALIDATION_ALLOWLIST == ("app.example.com", "0.0.0.0")
+
+
 def test_compose_defaults_include_container_host(monkeypatch):
     """Docker Compose environments should not require manual host overrides."""
 
@@ -95,5 +136,6 @@ def test_compose_defaults_include_container_host(monkeypatch):
 
 
 def _reload_settings():
+    sys.modules.pop("webapp.settings", None)
     sys.modules.pop("webapp.webapp.settings", None)
-    return importlib.import_module("webapp.webapp.settings")
+    return importlib.import_module("webapp.settings")
