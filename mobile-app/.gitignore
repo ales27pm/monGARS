@@ -1,0 +1,23 @@
+# Xcode
+build/
+DerivedData
+*.xcuserstate
+xcuserdata/
+**/.xcode.env.local
+
+# Android / Gradle
+.gradle/
+android/.gradle/
+android/app/build/
+android/build/
+
+# Ruby / CocoaPods
+.bundle/
+ios/Pods/
+
+# Test artifacts
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-error.log*

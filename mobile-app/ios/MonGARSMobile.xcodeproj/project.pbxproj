@@ -7,17 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A1B2C3D40100000000000001 /* VoiceModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000011 /* VoiceModule.swift */; };
-		A1B2C3D40100000000000002 /* VoiceModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000012 /* VoiceModuleBridge.m */; };
-		A1B2C3D40100000000000003 /* DiagnosticsModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000021 /* DiagnosticsModule.swift */; };
-		A1B2C3D40100000000000004 /* DiagnosticsModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */; };
 		00E356F31AD99517003FC87E /* MonGARSMobileTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 00E356F21AD99517003FC87E /* MonGARSMobileTests.m */; };
 		0C80B921A6F3F58F76C31292 /* libPods-MonGARSMobile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-MonGARSMobile.a */; };
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
+		3DB6B506DCA957B6CFCBC67D /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */; };
+		48D9F814ECF1A3367EB0407E /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 45D86789369CFD7CFCBF354A /* Foundation.framework */; };
 		7699B88040F8A987B510C191 /* libPods-MonGARSMobile-MonGARSMobileTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 19F6CBCC0A4E27FBF8BF4A61 /* libPods-MonGARSMobile-MonGARSMobileTests.a */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		A1B2C3D40100000000000001 /* VoiceModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000011 /* VoiceModule.swift */; };
+		A1B2C3D40100000000000002 /* VoiceModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000012 /* VoiceModuleBridge.m */; };
+		A1B2C3D40100000000000003 /* DiagnosticsModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000021 /* DiagnosticsModule.swift */; };
+		A1B2C3D40100000000000004 /* DiagnosticsModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */; };
+		A35443688A15083D7056EA3E /* PacketCaptureProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47386103F40FDE4896199EDC /* PacketCaptureProvider.swift */; };
+		C46C622534F7B8EFF418A74A /* PacketCapture.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,13 +32,30 @@
 			remoteGlobalIDString = 13B07F861A680F5B00A75B9A;
 			remoteInfo = MonGARSMobile;
 		};
+		A69B119B9F7BAE9FF7A8B5E3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 487596C0885FDA4DE4756105;
+			remoteInfo = PacketCapture;
+		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		64299AFE35582C87F76BE125 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C46C622534F7B8EFF418A74A /* PacketCapture.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		A1B2C3D40100000000000011 /* VoiceModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModule.swift; sourceTree = "<group>"; };
-		A1B2C3D40100000000000012 /* VoiceModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = VoiceModuleBridge.m; sourceTree = "<group>"; };
-		A1B2C3D40100000000000021 /* DiagnosticsModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsModule.swift; sourceTree = "<group>"; };
-		A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DiagnosticsModuleBridge.m; sourceTree = "<group>"; };
 		00E356EE1AD99517003FC87E /* MonGARSMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MonGARSMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		00E356F11AD99517003FC87E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		00E356F21AD99517003FC87E /* MonGARSMobileTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MonGARSMobileTests.m; sourceTree = "<group>"; };
@@ -44,15 +65,26 @@
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = MonGARSMobile/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = MonGARSMobile/Info.plist; sourceTree = "<group>"; };
 		13B07FB71A68108700A75B9A /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = MonGARSMobile/main.m; sourceTree = "<group>"; };
-	    13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = MonGARSMobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = MonGARSMobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		19F6CBCC0A4E27FBF8BF4A61 /* libPods-MonGARSMobile-MonGARSMobileTests.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-MonGARSMobile-MonGARSMobileTests.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B4392A12AC88292D35C810B /* Pods-MonGARSMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-MonGARSMobile.debug.xcconfig"; path = "Target Support Files/Pods-MonGARSMobile/Pods-MonGARSMobile.debug.xcconfig"; sourceTree = "<group>"; };
+		45D86789369CFD7CFCBF354A /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		47386103F40FDE4896199EDC /* PacketCaptureProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PacketCaptureProvider.swift; sourceTree = "<group>"; };
+		514678FFA359A5CD900D3A41 /* PacketCapture.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PacketCapture.entitlements; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-MonGARSMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-MonGARSMobile.release.xcconfig"; path = "Target Support Files/Pods-MonGARSMobile/Pods-MonGARSMobile.release.xcconfig"; sourceTree = "<group>"; };
 		5B7EB9410499542E8C5724F5 /* Pods-MonGARSMobile-MonGARSMobileTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-MonGARSMobile-MonGARSMobileTests.debug.xcconfig"; path = "Target Support Files/Pods-MonGARSMobile-MonGARSMobileTests/Pods-MonGARSMobile-MonGARSMobileTests.debug.xcconfig"; sourceTree = "<group>"; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-MonGARSMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-MonGARSMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = MonGARSMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		89C6BE57DB24E9ADA2F236DE /* Pods-MonGARSMobile-MonGARSMobileTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-MonGARSMobile-MonGARSMobileTests.release.xcconfig"; path = "Target Support Files/Pods-MonGARSMobile-MonGARSMobileTests/Pods-MonGARSMobile-MonGARSMobileTests.release.xcconfig"; sourceTree = "<group>"; };
+		9B8D6B33072F050B8370C376 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D40100000000000011 /* VoiceModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModule.swift; sourceTree = "<group>"; };
+		A1B2C3D40100000000000012 /* VoiceModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = VoiceModuleBridge.m; sourceTree = "<group>"; };
+		A1B2C3D40100000000000021 /* DiagnosticsModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsModule.swift; sourceTree = "<group>"; };
+		A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DiagnosticsModuleBridge.m; sourceTree = "<group>"; };
+		B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PacketCapture.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		CFD9EBF9BEB8D67035698044 /* MonGARSMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = MonGARSMobile.entitlements; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/NetworkExtension.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,27 +104,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C066344CE376F5D332BD6F81 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				48D9F814ECF1A3367EB0407E /* Foundation.framework in Frameworks */,
+				3DB6B506DCA957B6CFCBC67D /* NetworkExtension.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		A1B2C3D40100000000000010 /* Voice */ = {
-			isa = PBXGroup;
-			children = (
-				A1B2C3D40100000000000011 /* VoiceModule.swift */,
-				A1B2C3D40100000000000012 /* VoiceModuleBridge.m */,
-			);
-			path = Voice;
-			sourceTree = "<group>";
-		};
-		A1B2C3D40100000000000020 /* Diagnostics */ = {
-			isa = PBXGroup;
-			children = (
-				A1B2C3D40100000000000021 /* DiagnosticsModule.swift */,
-				A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */,
-			);
-			path = Diagnostics;
-			sourceTree = "<group>";
-		};
 		00E356EF1AD99517003FC87E /* MonGARSMobileTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -119,14 +142,25 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB71A68108700A75B9A /* main.m */,
+				CFD9EBF9BEB8D67035698044 /* MonGARSMobile.entitlements */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
 			);
 			name = MonGARSMobile;
 			sourceTree = "<group>";
 		};
+		1C1602ACA896950E87940DF6 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				45D86789369CFD7CFCBF354A /* Foundation.framework */,
+				EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		2D16E6871FA4F8E400B85C8A /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				1C1602ACA896950E87940DF6 /* iOS */,
 				ED297162215061F000B7C4FE /* JavaScriptCore.framework */,
 				5DCACB8F33CDC322A6C60F78 /* libPods-MonGARSMobile.a */,
 				19F6CBCC0A4E27FBF8BF4A61 /* libPods-MonGARSMobile-MonGARSMobileTests.a */,
@@ -144,14 +178,15 @@
 		83CBB9F61A601CBA00E9B192 = {
 			isa = PBXGroup;
 			children = (
-				13B07FAE1A68108700A75B9A /* MonGARSMobile */,
-				A1B2C3D40100000000000010 /* Voice */,
 				A1B2C3D40100000000000020 /* Diagnostics */,
-				832341AE1AAA6A7D00B99B32 /* Libraries */,
-				00E356EF1AD99517003FC87E /* MonGARSMobileTests */,
-				83CBBA001A601CBA00E9B192 /* Products */,
+				D48EE345861AF114946E6222 /* DiagnosticsExtension */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
+				832341AE1AAA6A7D00B99B32 /* Libraries */,
+				13B07FAE1A68108700A75B9A /* MonGARSMobile */,
+				00E356EF1AD99517003FC87E /* MonGARSMobileTests */,
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
+				83CBBA001A601CBA00E9B192 /* Products */,
+				A1B2C3D40100000000000010 /* Voice */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -163,19 +198,49 @@
 			children = (
 				13B07F961A680F5B00A75B9A /* MonGARSMobile.app */,
 				00E356EE1AD99517003FC87E /* MonGARSMobileTests.xctest */,
+				B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40100000000000010 /* Voice */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40100000000000011 /* VoiceModule.swift */,
+				A1B2C3D40100000000000012 /* VoiceModuleBridge.m */,
+			);
+			path = Voice;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40100000000000020 /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40100000000000021 /* DiagnosticsModule.swift */,
+				A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */,
+			);
+			path = Diagnostics;
 			sourceTree = "<group>";
 		};
 		BBD78D7AC51CEA395F1C20DB /* Pods */ = {
 			isa = PBXGroup;
 			children = (
-				3B4392A12AC88292D35C810B /* Pods-MonGARSMobile.debug.xcconfig */,
-				5709B34CF0A7D63546082F79 /* Pods-MonGARSMobile.release.xcconfig */,
 				5B7EB9410499542E8C5724F5 /* Pods-MonGARSMobile-MonGARSMobileTests.debug.xcconfig */,
 				89C6BE57DB24E9ADA2F236DE /* Pods-MonGARSMobile-MonGARSMobileTests.release.xcconfig */,
+				3B4392A12AC88292D35C810B /* Pods-MonGARSMobile.debug.xcconfig */,
+				5709B34CF0A7D63546082F79 /* Pods-MonGARSMobile.release.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		D48EE345861AF114946E6222 /* DiagnosticsExtension */ = {
+			isa = PBXGroup;
+			children = (
+				9B8D6B33072F050B8370C376 /* Info.plist */,
+				514678FFA359A5CD900D3A41 /* PacketCapture.entitlements */,
+				47386103F40FDE4896199EDC /* PacketCaptureProvider.swift */,
+			);
+			name = DiagnosticsExtension;
+			path = DiagnosticsExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -213,15 +278,34 @@
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
+				64299AFE35582C87F76BE125 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				CF832381C6B6C7507B075E71 /* PBXTargetDependency */,
 			);
 			name = MonGARSMobile;
 			productName = MonGARSMobile;
 			productReference = 13B07F961A680F5B00A75B9A /* MonGARSMobile.app */;
 			productType = "com.apple.product-type.application";
+		};
+		487596C0885FDA4DE4756105 /* PacketCapture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E09E60D4D8DCAAFFFB698156 /* Build configuration list for PBXNativeTarget "PacketCapture" */;
+			buildPhases = (
+				CCED2F03BF9BDB516FF539F2 /* Sources */,
+				C066344CE376F5D332BD6F81 /* Frameworks */,
+				94710CF7FFDD6C033CCB7897 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PacketCapture;
+			productName = PacketCapture;
+			productReference = B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -255,6 +339,7 @@
 			targets = (
 				13B07F861A680F5B00A75B9A /* MonGARSMobile */,
 				00E356ED1AD99517003FC87E /* MonGARSMobileTests */,
+				487596C0885FDA4DE4756105 /* PacketCapture */,
 			);
 		};
 /* End PBXProject section */
@@ -271,8 +356,15 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		94710CF7FFDD6C033CCB7897 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -422,12 +514,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1B2C3D40100000000000001 /* VoiceModule.swift in Sources */,
-				A1B2C3D40100000000000002 /* VoiceModuleBridge.m in Sources */,
+				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
 				A1B2C3D40100000000000003 /* DiagnosticsModule.swift in Sources */,
 				A1B2C3D40100000000000004 /* DiagnosticsModuleBridge.m in Sources */,
-				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
 				13B07FC11A68108700A75B9A /* main.m in Sources */,
+				A1B2C3D40100000000000001 /* VoiceModule.swift in Sources */,
+				A1B2C3D40100000000000002 /* VoiceModuleBridge.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CCED2F03BF9BDB516FF539F2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A35443688A15083D7056EA3E /* PacketCaptureProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -438,6 +538,12 @@
 			isa = PBXTargetDependency;
 			target = 13B07F861A680F5B00A75B9A /* MonGARSMobile */;
 			targetProxy = 00E356F41AD99517003FC87E /* PBXContainerItemProxy */;
+		};
+		CF832381C6B6C7507B075E71 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = PacketCapture;
+			target = 487596C0885FDA4DE4756105 /* PacketCapture */;
+			targetProxy = A69B119B9F7BAE9FF7A8B5E3 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -463,7 +569,7 @@
 					"-lc++",
 					"$(inherited)",
 				);
-					PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MonGARSMobile.app/MonGARSMobile";
 			};
@@ -487,7 +593,7 @@
 					"-lc++",
 					"$(inherited)",
 				);
-					PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MonGARSMobile.app/MonGARSMobile";
 			};
@@ -499,6 +605,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = MonGARSMobile/MonGARSMobile.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = MonGARSMobile/Info.plist;
@@ -512,7 +619,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-					PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile;
 				PRODUCT_NAME = MonGARSMobile;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -526,6 +633,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = MonGARSMobile/MonGARSMobile.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = MonGARSMobile/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -538,9 +646,35 @@
 					"-ObjC",
 					"-lc++",
 				);
-					PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile;
 				PRODUCT_NAME = MonGARSMobile;
 				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		7024CD2AEDDA56DF5D096D1B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = DiagnosticsExtension/PacketCapture.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = DiagnosticsExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.PacketCapture;
+				PRODUCT_NAME = PacketCapture;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;
@@ -684,6 +818,31 @@
 			};
 			name = Release;
 		};
+		F89F627DAC11A5CBF67A7B7E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = DiagnosticsExtension/PacketCapture.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = DiagnosticsExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.PacketCapture;
+				PRODUCT_NAME = PacketCapture;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -710,6 +869,15 @@
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E09E60D4D8DCAAFFFB698156 /* Build configuration list for PBXNativeTarget "PacketCapture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F89F627DAC11A5CBF67A7B7E /* Debug */,
+				7024CD2AEDDA56DF5D096D1B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -13,6 +13,8 @@ private struct CaptureSession {
 
 @objc(DiagnosticsModule)
 class DiagnosticsModule: NSObject, RCTTurboModule {
+  private let appGroupIdentifier = "group.com.mongars.mobile"
+
   static func moduleName() -> String! {
     "DiagnosticsModule"
   }
@@ -228,8 +230,15 @@ class DiagnosticsModule: NSObject, RCTTurboModule {
 
   private func startCapture(on manager: NETunnelProviderManager, interface: String, duration: Double, remoteHost: String?, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     let captureId = UUID().uuidString
-    let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-    let fileURL = directory.appendingPathComponent("capture-\(captureId).pcap")
+    let fileURL: URL
+
+    do {
+      let directory = try sharedCaptureDirectory()
+      fileURL = directory.appendingPathComponent("capture-\(captureId).pcap")
+    } catch {
+      reject("capture_error", error.localizedDescription, error)
+      return
+    }
 
     var options: [String: NSObject] = [
       "interface": interface as NSString,
@@ -253,5 +262,19 @@ class DiagnosticsModule: NSObject, RCTTurboModule {
 
     captureSessions[captureId] = CaptureSession(identifier: captureId, fileURL: fileURL, manager: manager)
     resolve(["captureId": captureId, "path": fileURL.path])
+  }
+
+  private func sharedCaptureDirectory() throws -> URL {
+    guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
+      throw NSError(
+        domain: "Diagnostics",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "Shared diagnostics container unavailable"],
+      )
+    }
+
+    let capturesURL = containerURL.appendingPathComponent("Captures", isDirectory: true)
+    try FileManager.default.createDirectory(at: capturesURL, withIntermediateDirectories: true)
+    return capturesURL
   }
 }

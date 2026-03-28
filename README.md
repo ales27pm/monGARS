@@ -161,11 +161,13 @@ uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 cd mobile-app
 npm install
 npm run doctor:native
+npm run pod-install
 ```
-  `doctor:native` checks whether the repo actually contains the iOS and Android
-  app shells required for store builds. Today it will flag the missing `ios`
-  Xcode project/Podfile and `android/app` module until those native targets are
-  restored.
+  `doctor:native` validates the native shells, optional diagnostics extension,
+  and iOS entitlement files needed for feature parity. `pod-install` now uses a
+  repo-local Bundler/CocoaPods toolchain under `mobile-app/.bundle/`, seeds
+  `ios/.xcode.env.local` automatically, and expects `xcodebuild` to be
+  available on macOS.
 
 ### Multi-stage training & export pipeline
 - Use [`mongars_multistage_pipeline.py`](mongars_multistage_pipeline.py) to

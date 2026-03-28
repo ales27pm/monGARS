@@ -1,7 +1,9 @@
+import Foundation
 import NetworkExtension
 import os.log
 
 class PacketCaptureProvider: NEPacketTunnelProvider {
+  private let appGroupIdentifier = "group.com.mongars.mobile"
   private let logger = Logger(subsystem: "com.mongars.mobile", category: "PacketCapture")
   private var fileHandle: FileHandle?
   private var stopWorkItem: DispatchWorkItem?
@@ -43,11 +45,23 @@ class PacketCaptureProvider: NEPacketTunnelProvider {
   }
 
   private func beginCapture(options: [String: NSObject]?) {
-    let outputPath = options?["output"] as? String ?? (FileManager.default.temporaryDirectory.appendingPathComponent("capture.pcap").path)
-    FileManager.default.createFile(atPath: outputPath, contents: nil, attributes: nil)
+    let outputURL: URL
+    do {
+      outputURL = try resolveOutputURL(options: options)
+      try FileManager.default.createDirectory(
+        at: outputURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true,
+      )
+    } catch {
+      logger.error("Unable to resolve capture output: \(error.localizedDescription, privacy: .public)")
+      cancelTunnelWithError(error)
+      return
+    }
+
+    FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: nil)
 
     do {
-      fileHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: outputPath))
+      fileHandle = try FileHandle(forWritingTo: outputURL)
       writePcapHeader()
     } catch {
       logger.error("Unable to open capture file: \(error.localizedDescription, privacy: .public)")
@@ -80,6 +94,24 @@ class PacketCaptureProvider: NEPacketTunnelProvider {
       let deadline = DispatchTime.now() + .milliseconds(Int(duration * 1000))
       DispatchQueue.global().asyncAfter(deadline: deadline, execute: stopWorkItem)
     }
+  }
+
+  private func resolveOutputURL(options: [String: NSObject]?) throws -> URL {
+    if let outputPath = options?["output"] as? String {
+      return URL(fileURLWithPath: outputPath)
+    }
+
+    guard let containerURL = FileManager.default.containerURL(
+      forSecurityApplicationGroupIdentifier: appGroupIdentifier
+    ) else {
+      throw NSError(
+        domain: "PacketCaptureProvider",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Shared diagnostics container unavailable"],
+      )
+    }
+
+    return containerURL.appendingPathComponent("Captures/capture.pcap")
   }
 
   private func writePcapHeader() {

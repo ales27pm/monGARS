@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,7 @@ const iosProjectPath = path.join(projectRoot, 'ios', 'MonGARSMobile.xcodeproj', 
 const iosProjectText = existsSync(iosProjectPath)
   ? readFileSync(iosProjectPath, 'utf8')
   : '';
+const hostHasXcodebuild = spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
 
 const checks = [
   {
@@ -85,11 +87,17 @@ const checks = [
   },
   {
     label: 'iOS Info.plist',
-    matcher: () =>
-      findFile(path.join(projectRoot, 'ios'), (_, name) => name === 'Info.plist'),
+    path: 'ios/MonGARSMobile/Info.plist',
     required: true,
     advice:
       'Add an Info.plist so microphone, speech recognition, ATS, and app metadata can be declared.',
+  },
+  {
+    label: 'iOS packet tunnel Info.plist',
+    path: 'ios/DiagnosticsExtension/Info.plist',
+    required: false,
+    advice:
+      'The diagnostics extension needs its own Info.plist with the packet-tunnel extension point metadata.',
   },
   {
     label: 'Android app manifest',
@@ -119,6 +127,13 @@ const checks = [
       'Packet capture and tunnel diagnostics are unavailable on iOS until the native module is restored.',
   },
   {
+    label: 'iOS packet tunnel provider',
+    path: 'ios/DiagnosticsExtension/PacketCaptureProvider.swift',
+    required: false,
+    advice:
+      'Packet capture needs a Network Extension provider target to write shared diagnostic captures.',
+  },
+  {
     label: 'iOS project registers VoiceModule',
     custom: () => iosProjectText.includes('VoiceModule.swift'),
     required: false,
@@ -131,6 +146,36 @@ const checks = [
     required: false,
     advice:
       'The Xcode project exists, but DiagnosticsModule.swift is not part of the app target yet.',
+  },
+  {
+    label: 'iOS project registers packet tunnel extension',
+    custom: () =>
+      iosProjectText.includes('PacketCaptureProvider.swift') &&
+      iosProjectText.includes('com.apple.product-type.app-extension'),
+    required: false,
+    advice:
+      'The packet tunnel provider exists on disk, but the Xcode project does not embed a Network Extension target yet.',
+  },
+  {
+    label: 'iOS app entitlements',
+    path: 'ios/MonGARSMobile/MonGARSMobile.entitlements',
+    required: false,
+    advice:
+      'Add app entitlements for packet-tunnel and shared app-group access before enabling diagnostics on-device.',
+  },
+  {
+    label: 'iOS packet tunnel entitlements',
+    path: 'ios/DiagnosticsExtension/PacketCapture.entitlements',
+    required: false,
+    advice:
+      'The packet tunnel extension needs matching entitlements to access the shared capture container.',
+  },
+  {
+    label: 'Host xcodebuild',
+    custom: () => hostHasXcodebuild,
+    required: false,
+    advice:
+      'The repo is wired for iOS now, but pod install and IPA archives still require macOS with Xcode installed.',
   },
   {
     label: 'Android native voice module',
