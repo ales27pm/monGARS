@@ -71,8 +71,11 @@ The system is intentionally modular:
 - **Optional modules (`modules/`)** host the evolution engine, neuron trainers,
   and research tooling. They degrade gracefully when heavy dependencies are
   absent.
-- **Django webapp (`webapp/`)** delivers a token-aware operator console with
-  progressive enhancement for offline/JS-light scenarios.
+- **React Native app (`mobile-app/`)** now carries the primary operator chat
+  experience with native auth, history hydration, ticketed WebSocket sync,
+  diagnostics, export, and voice-entry workflows.
+- **Django webapp (`webapp/`)** remains available as the progressive-enhancement
+  fallback and server-rendered operator surface during the migration.
 - **Persistence & cache layers** span PostgreSQL, Redis, disk snapshots, and an
   adapter manifest that coordinates encoder rollouts across services.
 
@@ -108,11 +111,13 @@ slide decks or ops runbooks.
 
 ### Operator Console Flow
 ![Web application flow](docs/images/webapp-flow.svg)
-- Django templates render a progressive chat interface and bootstrap WebSockets.
-- `chat/services.py` manages token exchange, retries, and history hydration via
-  async `httpx` calls.
-- FastAPI endpoints provide token issuance, chat, history, and streaming updates
-  for the UI.
+- The React Native client under `mobile-app/` authenticates against `/token`,
+  hydrates `/api/v1/conversation/history`, and opens ticketed `/ws/chat/`
+  sessions for realtime sync.
+- Django templates still provide the fallback operator console and mirror the
+  same FastAPI contracts for JS-light environments.
+- FastAPI remains the single source of truth for token issuance, chat, history,
+  WebSocket tickets, and event fanout.
 
 ### Deployment Stack
 ![Deployment stack](docs/images/deployment-stack.svg)
@@ -125,7 +130,8 @@ slide decks or ops runbooks.
 | FastAPI service | `monGARS/api` | Authentication, REST/WebSocket endpoints, dependency wiring |
 | Cognition core | `monGARS/core` | Memory, reasoning, LLM integration, adaptive response generation |
 | Evolution modules | `modules/` | Adapter training, diagnostics, research tooling |
-| Django UI | `webapp/` | Operator-facing chat console and auth proxy |
+| React Native UI | `mobile-app/` | Primary operator client with native chat, diagnostics, and export flows |
+| Django UI | `webapp/` | Progressive fallback operator console and auth proxy |
 | Persistence | `init_db.py`, `monGARS/core/persistence.py` | SQLModel schemas, Hippocampus caching, Redis/disk tiers |
 | Tooling | `tasks.py`, `build_*.sh`, `docker_menu.py`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
 

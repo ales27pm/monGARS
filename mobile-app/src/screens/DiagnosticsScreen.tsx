@@ -89,7 +89,9 @@ const DiagnosticsScreen: React.FC = () => {
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {snapshot ? (
           <View style={styles.snapshot}>
-            <Text style={styles.snapshotText}>SSID: {snapshot.ssid ?? '—'}</Text>
+            <Text style={styles.snapshotText}>
+              SSID: {snapshot.ssid ?? '—'}
+            </Text>
             <Text style={styles.snapshotText}>
               Adresse IP: {snapshot.ip ?? '—'}
             </Text>

@@ -22,7 +22,10 @@ function renderHighlighted(content: string, highlight?: string) {
       {parts.map((part, index) => {
         const match = part.toLowerCase() === token.toLowerCase();
         return (
-          <Text key={`${part}-${index}`} style={match ? styles.match : undefined}>
+          <Text
+            key={`${part}-${index}`}
+            style={match ? styles.match : undefined}
+          >
             {part}
           </Text>
         );

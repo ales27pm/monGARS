@@ -21,35 +21,33 @@ export function buildMessageId(prefix: string): string {
 export function mapHistoryToMessages(
   history: ConversationHistoryRecord[],
 ): Message[] {
-  return [...history]
-    .reverse()
-    .flatMap((item, index) => {
-      const createdAt = toDate(item.timestamp);
-      const baseId = `${createdAt.getTime()}-${index}`;
-      const userMessage: Message = {
-        id: `history-user-${baseId}`,
-        role: 'user',
-        content: item.query,
-        createdAt,
-        metadata: {
-          mode: 'chat',
-          source: 'history',
-        },
-      };
+  return [...history].reverse().flatMap((item, index) => {
+    const createdAt = toDate(item.timestamp);
+    const baseId = `${createdAt.getTime()}-${index}`;
+    const userMessage: Message = {
+      id: `history-user-${baseId}`,
+      role: 'user',
+      content: item.query,
+      createdAt,
+      metadata: {
+        mode: 'chat',
+        source: 'history',
+      },
+    };
 
-      const assistantMessage: Message = {
-        id: `history-assistant-${baseId}`,
-        role: 'assistant',
-        content: item.response,
-        createdAt,
-        metadata: {
-          mode: 'chat',
-          source: 'history',
-        },
-      };
+    const assistantMessage: Message = {
+      id: `history-assistant-${baseId}`,
+      role: 'assistant',
+      content: item.response,
+      createdAt,
+      metadata: {
+        mode: 'chat',
+        source: 'history',
+      },
+    };
 
-      return item.response ? [userMessage, assistantMessage] : [userMessage];
-    });
+    return item.response ? [userMessage, assistantMessage] : [userMessage];
+  });
 }
 
 export function formatEmbeddingResult(result: EmbeddingResponse): string {

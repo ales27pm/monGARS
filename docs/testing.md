@@ -14,7 +14,7 @@ the command variants that engineering and operations rely on.
 | Backend (FastAPI, cognition, evolution engine) | `pytest` | ~110 s | Runs 631 tests covering API contracts, curiosity heuristics, reinforcement loops, and adapter manifests. Mirrors the CI `python-tests` job. |
 | Backend lint & formatting | `make lint` or `ruff check` / `black --check` (see `pyproject.toml`) | ~35 s | CI drives these via the `python-quality` job after scope detection. |
 | Frontend (Django assets) | `npm test -- --watch=false` inside `webapp/` | ~45 s | Executes Jest with coverage. CI additionally runs `npm run build` to confirm the production bundle compiles. |
-| React Native client | `npm test -- --watch=false` inside `mobile-app/` | ~60 s | Uses the shared Jest config, TypeScript `--noEmit`, and ESLint (mirrors the `mobile-quality` workflow job). |
+| React Native client | `npm test -- --watch=false` inside `mobile-app/` | ~60 s | Uses the shared Jest config, runs in-band with a dedicated localStorage backing file for Node 22+, and pairs with TypeScript `--noEmit` plus ESLint (mirrors the `mobile-quality` workflow job). |
 | TypeScript lint (root + mobile) | `npm run lint` (repository root) | ~25 s | Validates shared tooling and Django UI assets. React Native lint executes via the `mobile-quality` job. |
 | Container smoke test | `docker compose -f docker-compose.yml up --build --abort-on-container-exit` followed by `pytest --maxfail=1 --disable-warnings -k "not long"` inside the app container | ~6 min | Mirrors the CI Docker job. Use after dependency upgrades or Dockerfile edits. |
 

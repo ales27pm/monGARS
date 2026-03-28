@@ -88,7 +88,10 @@ const Composer: React.FC<Props> = ({
         <Pressable
           accessibilityRole="button"
           onPress={() => onModeChange('chat')}
-          style={[styles.modeButton, mode === 'chat' && styles.modeButtonActive]}
+          style={[
+            styles.modeButton,
+            mode === 'chat' && styles.modeButtonActive,
+          ]}
         >
           <Text
             style={[styles.modeText, mode === 'chat' && styles.modeTextActive]}
@@ -99,7 +102,10 @@ const Composer: React.FC<Props> = ({
         <Pressable
           accessibilityRole="button"
           onPress={() => onModeChange('embed')}
-          style={[styles.modeButton, mode === 'embed' && styles.modeButtonActive]}
+          style={[
+            styles.modeButton,
+            mode === 'embed' && styles.modeButtonActive,
+          ]}
         >
           <Text
             style={[styles.modeText, mode === 'embed' && styles.modeTextActive]}

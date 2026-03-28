@@ -26,10 +26,7 @@ import MessageBubble from '../components/MessageBubble';
 import { settings } from '../services/config';
 import { useChatStore } from '../store/chatStore';
 import type { Message } from '../types';
-import {
-  buildJsonExport,
-  buildMarkdownExport,
-} from '../utils/conversation';
+import { buildJsonExport, buildMarkdownExport } from '../utils/conversation';
 
 const EmptyState: React.FC<{
   title: string;
@@ -95,6 +92,16 @@ const ChatScreen: React.FC = () => {
     retryRealtime,
   } = useChatStore();
 
+  const renderHeaderActions = useCallback(
+    () => (
+      <HeaderActions
+        onDiagnostics={() => navigation.navigate('Diagnostics' as never)}
+        onSettings={() => navigation.navigate('Settings' as never)}
+      />
+    ),
+    [navigation],
+  );
+
   useEffect(() => {
     navigation.setOptions({
       headerStyle: {
@@ -104,14 +111,9 @@ const ChatScreen: React.FC = () => {
       headerTitleStyle: {
         fontWeight: '700',
       },
-      headerRight: () => (
-        <HeaderActions
-          onDiagnostics={() => navigation.navigate('Diagnostics' as never)}
-          onSettings={() => navigation.navigate('Settings' as never)}
-        />
-      ),
+      headerRight: renderHeaderActions,
     });
-  }, [navigation]);
+  }, [navigation, renderHeaderActions]);
 
   useEffect(() => {
     initialize().catch((err) => console.warn('[ChatScreen] init failed', err));
@@ -119,8 +121,8 @@ const ChatScreen: React.FC = () => {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      requestQuickActions(draft).catch((error) => {
-        console.warn('[ChatScreen] suggestions failed', error);
+      requestQuickActions(draft).catch((suggestionError) => {
+        console.warn('[ChatScreen] suggestions failed', suggestionError);
       });
     }, 220);
 
@@ -295,7 +297,9 @@ const ChatScreen: React.FC = () => {
           {historyLoading ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator color="#f59e0b" />
-              <Text style={styles.loadingText}>Chargement de l historique…</Text>
+              <Text style={styles.loadingText}>
+                Chargement de l historique…
+              </Text>
             </View>
           ) : null}
 
@@ -335,7 +339,7 @@ const ChatScreen: React.FC = () => {
                 useChatStore.setState({
                   notice: {
                     tone: 'warning',
-                    message: "Service d embedding indisponible.",
+                    message: 'Service d embedding indisponible.',
                   },
                 });
                 return;

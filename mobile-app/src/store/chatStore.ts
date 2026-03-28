@@ -67,8 +67,14 @@ const DEFAULT_CONNECTION: ConnectionSnapshot = {
 
 let realtimeClient: ReturnType<typeof createRealtimeClient> | null = null;
 
-function isDuplicateRealtimePair(messages: Message[], query: string, response: string) {
-  const lastUser = [...messages].reverse().find((message) => message.role === 'user');
+function isDuplicateRealtimePair(
+  messages: Message[],
+  query: string,
+  response: string,
+) {
+  const lastUser = [...messages]
+    .reverse()
+    .find((message) => message.role === 'user');
   const lastAssistant = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
@@ -78,11 +84,14 @@ function isDuplicateRealtimePair(messages: Message[], query: string, response: s
   );
 }
 
-function upsertRealtimeMessages(messages: Message[], item: {
-  query: string;
-  response: string;
-  timestamp: string;
-}): Message[] {
+function upsertRealtimeMessages(
+  messages: Message[],
+  item: {
+    query: string;
+    response: string;
+    timestamp: string;
+  },
+): Message[] {
   if (isDuplicateRealtimePair(messages, item.query, item.response)) {
     return messages;
   }
@@ -116,7 +125,9 @@ function upsertRealtimeMessages(messages: Message[], item: {
 }
 
 function ensureRealtime(
-  set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  set: (
+    partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>),
+  ) => void,
   get: () => ChatState,
 ) {
   if (realtimeClient) {
@@ -162,7 +173,8 @@ function ensureRealtime(
       const fingerprint = buildRealtimeFingerprint(item);
       set(
         produce<ChatState>((draft) => {
-          const suppressionIndex = draft.realtimeSuppression.indexOf(fingerprint);
+          const suppressionIndex =
+            draft.realtimeSuppression.indexOf(fingerprint);
           if (suppressionIndex !== -1) {
             draft.realtimeSuppression.splice(suppressionIndex, 1);
             draft.connection.lastMessageAt = new Date(item.timestamp);
@@ -288,7 +300,7 @@ export const useChatStore = create<ChatState>()(
               tone: 'info',
               message:
                 activeMode === 'embed'
-                  ? "Generation d embedding…"
+                  ? 'Generation d embedding…'
                   : 'Generation de reponse…',
             };
           }),
@@ -438,9 +450,7 @@ export const useChatStore = create<ChatState>()(
           notice: {
             tone: 'info',
             message:
-              mode === 'embed'
-                ? "Mode embedding actif."
-                : 'Mode chat actif.',
+              mode === 'embed' ? 'Mode embedding actif.' : 'Mode chat actif.',
           },
         });
       },

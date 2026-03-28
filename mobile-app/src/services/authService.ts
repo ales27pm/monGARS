@@ -10,12 +10,16 @@ export async function authenticate(
   body.set('username', username);
   body.set('password', credentials.password);
 
-  const response = await axios.post(`${settings.baseUrl}/token`, body.toString(), {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
+  const response = await axios.post(
+    `${settings.baseUrl}/token`,
+    body.toString(),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      timeout: 10000,
     },
-    timeout: 10000,
-  });
+  );
 
   return {
     accessToken: response.data.access_token,

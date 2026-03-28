@@ -94,8 +94,12 @@ const SettingsScreen: React.FC = () => {
         {session ? (
           <View style={styles.sessionCard}>
             <Text style={styles.sessionTitle}>Session active</Text>
-            <Text style={styles.sessionText}>Utilisateur: {session.username}</Text>
-            <Text style={styles.sessionText}>Etat temps reel: {connection.status}</Text>
+            <Text style={styles.sessionText}>
+              Utilisateur: {session.username}
+            </Text>
+            <Text style={styles.sessionText}>
+              Etat temps reel: {connection.status}
+            </Text>
             <Text style={styles.sessionToken}>
               JWT: {session.token.slice(0, 18)}…
             </Text>
@@ -139,9 +143,7 @@ const SettingsScreen: React.FC = () => {
             Activer le tunnel de diagnostic
           </Text>
         </Pressable>
-        <Text style={styles.footerText}>
-          Plateforme: {Platform.OS}
-        </Text>
+        <Text style={styles.footerText}>Plateforme: {Platform.OS}</Text>
       </View>
     </ScrollView>
   );

@@ -130,7 +130,11 @@ export function createRealtimeClient(callbacks: RealtimeCallbacks) {
 
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      void connect();
+      connect().catch((error) => {
+        callbacks.onError(
+          error instanceof Error ? error.message : 'Reconnexion impossible.',
+        );
+      });
     }, delay);
   };
 
@@ -154,7 +158,8 @@ export function createRealtimeClient(callbacks: RealtimeCallbacks) {
   };
 
   const handleAck = (event: RealtimeEvent) => {
-    const payload = 'payload' in event ? event.payload ?? event.data ?? {} : {};
+    const payload =
+      'payload' in event ? (event.payload ?? event.data ?? {}) : {};
     if (
       typeof payload?.detail === 'string' &&
       payload.detail === 'client.ping' &&
@@ -286,7 +291,9 @@ export function createRealtimeClient(callbacks: RealtimeCallbacks) {
       };
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Connexion temps réel impossible.';
+        error instanceof Error
+          ? error.message
+          : 'Connexion temps réel impossible.';
       if (/401|403|auth/i.test(message)) {
         callbacks.onStatus({
           status: 'auth-required',
@@ -325,7 +332,11 @@ export function createRealtimeClient(callbacks: RealtimeCallbacks) {
       clearReconnect();
       clearPingTimer();
       closeSocket('reconnect');
-      void connect();
+      connect().catch((error) => {
+        callbacks.onError(
+          error instanceof Error ? error.message : 'Reconnexion impossible.',
+        );
+      });
     },
   };
 }

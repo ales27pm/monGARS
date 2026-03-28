@@ -165,7 +165,9 @@ export async function requestEmbedding(
   return embeddingSchema.parse(response.data);
 }
 
-export async function fetchRealtimeTicket(session: UserSession): Promise<string> {
+export async function fetchRealtimeTicket(
+  session: UserSession,
+): Promise<string> {
   const response = await axios.post(
     `${settings.apiBaseUrl}/auth/ws/ticket`,
     undefined,
