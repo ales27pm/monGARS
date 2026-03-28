@@ -4,6 +4,7 @@ import { useDiagnostics } from '../src/hooks/useDiagnostics';
 import type { DiagnosticsHookValue } from '../src/hooks/useDiagnostics';
 
 jest.mock('../src/native/diagnostics', () => ({
+  diagnosticsModuleAvailable: true,
   refreshNetworkSnapshot: jest.fn().mockResolvedValue({
     timestamp: '2024-01-01T00:00:00.000Z',
     ssid: 'test-network',

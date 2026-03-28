@@ -85,6 +85,7 @@ NativeModules.PlatformConstants = NativeModules.PlatformConstants || {
 };
 
 jest.mock('./src/native/diagnostics', () => ({
+  diagnosticsModuleAvailable: true,
   prepare: jest.fn().mockResolvedValue(undefined),
   refreshNetworkSnapshot: jest.fn().mockResolvedValue({
     timestamp: new Date().toISOString(),
@@ -106,6 +107,7 @@ jest.mock('./src/native/diagnostics', () => ({
 }));
 
 jest.mock('./src/native/voice', () => ({
+  voiceModuleAvailable: true,
   configureAudioSession: jest.fn().mockResolvedValue(undefined),
   startListening: jest.fn().mockResolvedValue(undefined),
   stopListening: jest.fn().mockResolvedValue(undefined),

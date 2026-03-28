@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Diagnostics, {
   CaptureOptions,
+  diagnosticsModuleAvailable,
   NetworkSnapshot,
   PacketCaptureStatus,
 } from '../native/diagnostics';
@@ -23,12 +24,21 @@ export function useDiagnostics(): DiagnosticsHookValue {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (!diagnosticsModuleAvailable) {
+      setError('Le module de diagnostics natif est indisponible sur ce build.');
+      return;
+    }
     Diagnostics.refreshNetworkSnapshot()
       .then(setSnapshot)
       .catch((err) => setError(err.message));
   }, []);
 
   const refresh = async () => {
+    if (!diagnosticsModuleAvailable) {
+      const message = 'Le module de diagnostics natif est indisponible.';
+      setError(message);
+      throw new Error(message);
+    }
     try {
       const next = await Diagnostics.refreshNetworkSnapshot();
       setSnapshot(next);
@@ -38,6 +48,11 @@ export function useDiagnostics(): DiagnosticsHookValue {
   };
 
   const startCapture = async (options: CaptureOptions) => {
+    if (!diagnosticsModuleAvailable) {
+      const message = 'La capture reseau n est pas disponible sur ce build.';
+      setError(message);
+      throw new Error(message);
+    }
     setLoading(true);
     setError(null);
     try {
@@ -54,6 +69,11 @@ export function useDiagnostics(): DiagnosticsHookValue {
   };
 
   const stopCapture = async () => {
+    if (!diagnosticsModuleAvailable) {
+      const message = 'La capture reseau n est pas disponible sur ce build.';
+      setError(message);
+      throw new Error(message);
+    }
     if (!capture) {
       return null;
     }
@@ -68,6 +88,11 @@ export function useDiagnostics(): DiagnosticsHookValue {
   };
 
   const enablePacketTunnel = async (serverAddress: string) => {
+    if (!diagnosticsModuleAvailable) {
+      const message = 'Le tunnel de diagnostic est indisponible sur ce build.';
+      setError(message);
+      throw new Error(message);
+    }
     setError(null);
     await Diagnostics.enablePacketTunnel({ serverAddress });
   };

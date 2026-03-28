@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import {
   Pressable,
   StyleSheet,
-  Switch,
   Text,
+  Switch,
   TextInput,
   View,
 } from 'react-native';
 import { useVoiceAssistant } from '../hooks/useVoiceAssistant';
+import { voiceModuleAvailable } from '../native/voice';
 import { settings } from '../services/config';
 import type { ChatMode, QuickAction } from '../types';
 
@@ -161,10 +162,15 @@ const Composer: React.FC<Props> = ({
           <Pressable
             accessibilityRole="button"
             onPress={listening ? stop : start}
+            disabled={!voiceModuleAvailable}
             style={[styles.voiceButton, listening && styles.voiceButtonActive]}
           >
             <Text style={styles.voiceButtonText}>
-              {listening ? 'Arreter' : 'Dicter'}
+              {!voiceModuleAvailable
+                ? 'Indisponible'
+                : listening
+                  ? 'Arreter'
+                  : 'Dicter'}
             </Text>
           </Pressable>
           <View style={styles.switchRow}>
@@ -181,7 +187,9 @@ const Composer: React.FC<Props> = ({
           <Text style={styles.transcriptPreview}>{transcript}</Text>
         ) : (
           <Text style={styles.voiceHint}>
-            Le texte intermediaire apparait ici pendant la dictee.
+            {voiceModuleAvailable
+              ? 'Le texte intermediaire apparait ici pendant la dictee.'
+              : 'Le module vocal natif n est pas relie a ce build.'}
           </Text>
         )}
       </View>

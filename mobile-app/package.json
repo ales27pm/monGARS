@@ -9,6 +9,7 @@
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .ts,.tsx src",
     "test": "node --localstorage-file=.jest-localstorage ./node_modules/jest/bin/jest.js --runInBand",
     "typecheck": "tsc --noEmit",
+    "doctor:native": "node ./scripts/native-preflight.mjs",
     "pod-install": "cd ios && RCT_NEW_ARCH_ENABLED=1 bundle exec pod install"
   },
   "dependencies": {

@@ -1,6 +1,6 @@
 import { AppState, Platform } from 'react-native';
-import Diagnostics from './diagnostics';
-import VoiceControl from './voice';
+import Diagnostics, { diagnosticsModuleAvailable } from './diagnostics';
+import VoiceControl, { voiceModuleAvailable } from './voice';
 
 diagnosticsWarmup();
 voiceWarmup();
@@ -8,6 +8,10 @@ voiceWarmup();
 let appStateSubscription: { remove: () => void } | null = null;
 
 function diagnosticsWarmup() {
+  if (!diagnosticsModuleAvailable) {
+    return;
+  }
+
   Diagnostics.prepare().catch((error) => {
     console.warn('[Diagnostics] Failed to prepare module', error);
   });
@@ -24,7 +28,7 @@ function diagnosticsWarmup() {
 }
 
 function voiceWarmup() {
-  if (Platform.OS === 'ios') {
+  if (Platform.OS === 'ios' && voiceModuleAvailable) {
     VoiceControl.configureAudioSession().catch((error) => {
       console.warn('[VoiceControl] Failed to prime audio session', error);
     });

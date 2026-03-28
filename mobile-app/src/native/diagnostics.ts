@@ -44,7 +44,36 @@ export interface DiagnosticsSpec extends TurboModule {
   }): Promise<void>;
 }
 
-const Diagnostics =
-  TurboModuleRegistry.getEnforcing<DiagnosticsSpec>('DiagnosticsModule');
+function unavailableError() {
+  return new Error('DiagnosticsModule is unavailable in this native build.');
+}
+
+const nativeDiagnosticsModule =
+  TurboModuleRegistry.get<DiagnosticsSpec>('DiagnosticsModule');
+
+export const diagnosticsModuleAvailable = nativeDiagnosticsModule != null;
+
+const Diagnostics: DiagnosticsSpec =
+  nativeDiagnosticsModule ??
+  ({
+    async prepare() {
+      throw unavailableError();
+    },
+    async refreshNetworkSnapshot() {
+      throw unavailableError();
+    },
+    async listInterfaces() {
+      throw unavailableError();
+    },
+    async startCapture() {
+      throw unavailableError();
+    },
+    async stopCapture() {
+      throw unavailableError();
+    },
+    async enablePacketTunnel() {
+      throw unavailableError();
+    },
+  } as DiagnosticsSpec);
 
 export default Diagnostics;

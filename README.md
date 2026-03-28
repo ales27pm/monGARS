@@ -156,6 +156,16 @@ uvicorn monGARS.api.web_api:app --host 0.0.0.0 --port 8000 --reload
 - Quick path: `scripts/install_test_dependencies.sh` installs the runtime and
   test dependencies defined in `requirements.txt` so `pytest` can start
   collecting modules without import errors.
+- Native mobile path:
+```bash
+cd mobile-app
+npm install
+npm run doctor:native
+```
+  `doctor:native` checks whether the repo actually contains the iOS and Android
+  app shells required for store builds. Today it will flag the missing `ios`
+  Xcode project/Podfile and `android/app` module until those native targets are
+  restored.
 
 ### Multi-stage training & export pipeline
 - Use [`mongars_multistage_pipeline.py`](mongars_multistage_pipeline.py) to

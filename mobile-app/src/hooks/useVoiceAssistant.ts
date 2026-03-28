@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import VoiceControl from '../native/voice';
+import VoiceControl, { voiceModuleAvailable } from '../native/voice';
 import { settings } from '../services/config';
 
 type VoiceState = {
@@ -46,7 +46,8 @@ export const createUseVoiceAssistant = (
       transcript: '',
     });
     const isSupportedPlatform =
-      deps.platform.OS === 'ios' || deps.platform.OS === 'android';
+      (deps.platform.OS === 'ios' || deps.platform.OS === 'android') &&
+      voiceModuleAvailable;
 
     useEffect(() => {
       if (!isSupportedPlatform) {

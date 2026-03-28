@@ -5,6 +5,7 @@ import { createUseVoiceAssistant } from '../src/hooks/useVoiceAssistant';
 import type { VoiceAssistantValue } from '../src/hooks/useVoiceAssistant';
 
 jest.mock('../src/native/voice', () => ({
+  voiceModuleAvailable: true,
   configureAudioSession: jest.fn().mockResolvedValue(undefined),
   startListening: jest.fn().mockResolvedValue(undefined),
   stopListening: jest.fn().mockResolvedValue(undefined),
