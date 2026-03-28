@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>monGARS - Interface de Chat</title>
+    <title>monGARS - Console conversationnelle</title>
     {% load static %}
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link
@@ -18,30 +18,25 @@
     <link rel="stylesheet" href="{% static 'css/chat.css' %}" />
   </head>
   <body class="chat-page">
-    <div class="app-backdrop" aria-hidden="true">
-      <div class="backdrop-orb backdrop-orb-a"></div>
-      <div class="backdrop-orb backdrop-orb-b"></div>
-      <div class="backdrop-grid"></div>
-    </div>
-
-    <div class="page-shell">
-      <header class="app-header">
-        <div class="brand-cluster">
-          <p class="eyebrow">monGARS control surface</p>
-          <div class="brand-row">
-            <div class="brand-mark">MG</div>
-            <div>
-              <h1 class="app-title">Conversation Studio</h1>
+    <div class="scene-shell">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <p class="eyebrow">monGARS operator grid</p>
+          <div class="brand-lockup">
+            <div class="brand-mark" aria-hidden="true">MG</div>
+            <div class="brand-copy">
+              <h1 class="app-title">Sharp Conversation Console</h1>
               <p class="app-subtitle">
-                Un espace de pilotage unifié pour les échanges, les diagnostics
-                de session et les actions rapides.
+                Une interface mobile d’abord, nette et directe, pour piloter la
+                session, suivre le réseau et agir sans perdre le fil.
               </p>
             </div>
           </div>
         </div>
-        <div class="header-actions">
-          <div class="status-chip">
-            <span class="status-chip-label">Utilisateur</span>
+
+        <div class="topbar-controls">
+          <div class="identity-chip">
+            <span class="identity-chip__label">Opérateur</span>
             <strong>{{ user_id }}</strong>
           </div>
           <button
@@ -50,7 +45,7 @@
             id="toggle-dark-mode"
             aria-pressed="false"
           >
-            Mode Sombre
+            Contraste +
           </button>
         </div>
       </header>
@@ -61,6 +56,48 @@
       </div>
       {% endif %}
 
+      <section class="live-ribbon" aria-label="Résumé de session">
+        <article class="ribbon-card ribbon-card-focus">
+          <p class="panel-eyebrow">Flux</p>
+          <div class="ribbon-card__row">
+            <div>
+              <h2 class="ribbon-title">Connexion active</h2>
+              <p
+                id="connection-meta"
+                class="ribbon-copy"
+                aria-live="polite"
+              >
+                Démarrage de la session…
+              </p>
+            </div>
+            <span
+              id="ws-status"
+              class="badge ws-badge offline"
+              aria-live="polite"
+              >Hors ligne</span
+            >
+          </div>
+        </article>
+
+        <article class="ribbon-card">
+          <p class="panel-eyebrow">Mode</p>
+          <h2 class="ribbon-title">Chat + embeddings</h2>
+          <p class="ribbon-copy">
+            Basculez entre dialogue naturel et calcul vectoriel depuis le même
+            composeur.
+          </p>
+        </article>
+
+        <article class="ribbon-card">
+          <p class="panel-eyebrow">Cadence</p>
+          <h2 class="ribbon-title">Actions immédiates</h2>
+          <p class="ribbon-copy">
+            Filtrage, exports et commandes vocales restent visibles sans
+            quitter la conversation.
+          </p>
+        </article>
+      </section>
+
       <section
         id="connection"
         class="surface-banner surface-banner-info visually-hidden"
@@ -68,37 +105,23 @@
         aria-live="polite"
       ></section>
 
-      <div class="workspace-grid">
-        <section class="conversation-panel">
-          <main id="chat" class="panel-shell">
-            <header class="panel-header">
-              <div>
-                <p class="panel-eyebrow">Session active</p>
-                <h2 class="panel-title">Historique conversationnel</h2>
+      <div class="workspace">
+        <main class="conversation-column">
+          <section id="chat" class="conversation-card panel-shell">
+            <header class="conversation-card__header">
+              <div class="section-copy">
+                <p class="panel-eyebrow">Conversation</p>
+                <h2 class="panel-title">Transcript temps réel</h2>
                 <p class="panel-copy">
-                  Suivez les messages, la présence réseau et la télémétrie de
-                  connexion depuis une seule surface de travail.
-                </p>
-              </div>
-              <div class="panel-status">
-                <span
-                  id="ws-status"
-                  class="badge ws-badge offline"
-                  aria-live="polite"
-                  >Hors ligne</span
-                >
-                <p
-                  id="connection-meta"
-                  class="panel-status-copy"
-                  aria-live="polite"
-                >
-                  En attente de connexion…
+                  L’historique reste prioritaire: lecture confortable sur
+                  mobile, surface large sur desktop, et signaux réseau toujours
+                  visibles.
                 </p>
               </div>
             </header>
 
-            <div class="conversation-stage">
-              <div class="transcript-frame">
+            <div class="conversation-card__body">
+              <div class="transcript-shell">
                 <div
                   id="transcript"
                   class="chat-transcript"
@@ -132,41 +155,37 @@
                   {% endif %} {% empty %} {% if not history_error %}
                   <div class="chat-row chat-system">
                     <div class="chat-bubble chat-bubble-hint">
-                      Aucun échange pour le moment.
+                      Aucune conversation enregistrée pour l’instant.
                     </div>
                   </div>
                   {% endif %} {% endfor %}
                 </div>
+
                 <p
                   id="filter-empty"
-                  class="text-muted small text-center py-3 d-none"
+                  class="filter-empty d-none"
                   role="status"
                   aria-live="polite"
                 >
                   Aucun message ne correspond à votre filtre.
                 </p>
+
                 <button
                   type="button"
                   id="scroll-bottom"
                   class="btn btn-outline-secondary btn-sm scroll-bottom d-none"
                   aria-hidden="true"
                 >
-                  Dernier message
+                  Revenir au direct
                 </button>
               </div>
 
               <div
                 id="error-alert"
-                class="alert alert-danger m-0 d-none alert-dismissible fade show"
+                class="alert alert-danger d-none"
                 role="alert"
               >
                 <span id="error-message"></span>
-                <button
-                  type="button"
-                  class="btn-close"
-                  data-bs-dismiss="alert"
-                  aria-label="Fermer"
-                ></button>
               </div>
 
               <form
@@ -184,14 +203,15 @@
 
                 <div class="composer-head">
                   <div>
-                    <p class="panel-eyebrow mb-2">Composer</p>
-                    <h3 class="composer-title">Rédiger, dicter, itérer</h3>
+                    <p class="panel-eyebrow">Composer</p>
+                    <h3 class="composer-title">Écrire, dicter, expédier</h3>
                   </div>
-                  <div class="chat-mode-toggle d-flex align-items-center gap-2">
-                    <label class="mb-0 small" for="chat-mode">Mode</label>
+
+                  <div class="chat-mode-toggle">
+                    <label for="chat-mode">Mode</label>
                     <select
                       id="chat-mode"
-                      class="form-select form-select-sm w-auto"
+                      class="form-select form-select-sm"
                       aria-label="Sélection du mode de requête"
                     >
                       <option value="chat" selected>Chat</option>
@@ -200,7 +220,7 @@
                   </div>
                 </div>
 
-                <div class="composer-input-wrap">
+                <div class="composer-grid">
                   <textarea
                     id="prompt"
                     name="prompt"
@@ -216,6 +236,7 @@
                   >
                   {{ prompt_value|default_if_none:"" }}
                   </textarea>
+
                   <button
                     id="send"
                     type="submit"
@@ -226,7 +247,7 @@
                     data-embed-aria-label="Générer un embedding"
                   >
                     <span
-                      class="spinner-border spinner-border-sm me-2 d-none"
+                      class="spinner-border spinner-border-sm d-none"
                       data-role="send-spinner"
                       role="status"
                       aria-hidden="true"
@@ -235,10 +256,7 @@
                   </button>
                 </div>
 
-                <div
-                  class="composer-meta"
-                  id="composer-hint"
-                >
+                <div class="composer-meta" id="composer-hint">
                   <span
                     id="composer-status"
                     class="composer-status text-muted"
@@ -254,17 +272,21 @@
                 </div>
               </form>
             </div>
-          </main>
-        </section>
+          </section>
+        </main>
 
         <aside class="command-rail">
-          <section class="rail-card">
-            <p class="panel-eyebrow">Télémétrie</p>
-            <h3 class="rail-title">Connexion en direct</h3>
-            <p class="rail-copy">
-              Suivi de session, latence réseau et horodatage des derniers
-              échanges.
-            </p>
+          <section class="utility-card rail-card">
+            <div class="utility-card__header">
+              <div>
+                <p class="panel-eyebrow">Lecture rapide</p>
+                <h3 class="rail-title">Diagnostics de session</h3>
+              </div>
+              <p class="rail-copy">
+                Horodatage, latence et état réseau sans changer d’écran.
+              </p>
+            </div>
+
             <section
               id="connection-diagnostics"
               class="connection-diagnostics"
@@ -292,24 +314,27 @@
             </section>
           </section>
 
-          <aside id="actions" class="rail-card chat-actions">
-            <p class="panel-eyebrow">Commandes</p>
-            <h3 class="rail-title">Navigation rapide</h3>
-            <p class="rail-copy">
-              Filtrez, exportez ou relancez la conversation en un geste.
-            </p>
+          <section id="actions" class="utility-card rail-card chat-actions">
+            <div class="utility-card__header">
+              <div>
+                <p class="panel-eyebrow">Commandes</p>
+                <h3 class="rail-title">Filtrer et exporter</h3>
+              </div>
+              <p class="rail-copy">
+                Une pile d’actions compacte, pensée pour le pouce comme pour la
+                souris.
+              </p>
+            </div>
 
-            <div class="chat-actions-toolbar">
-              <div class="input-group input-group-sm chat-filter">
-                <span class="input-group-text" id="chat-search-label">
-                  Filtrer
-                </span>
+            <div class="utility-stack">
+              <label class="mini-label" for="chat-search">Recherche locale</label>
+              <div class="search-cluster">
                 <input
                   type="search"
                   id="chat-search"
                   class="form-control"
                   placeholder="Rechercher dans la conversation"
-                  aria-describedby="chat-search-label chat-search-hint"
+                  aria-describedby="chat-search-hint"
                 />
                 <button
                   type="button"
@@ -319,9 +344,8 @@
                   Effacer
                 </button>
               </div>
-              <p id="chat-search-hint" class="form-text small text-muted mb-0">
-                Utilisez le filtre pour limiter l'historique. Appuyez sur Échap
-                pour effacer.
+              <p id="chat-search-hint" class="helper-copy">
+                Appuyez sur Échap pour vider le filtre.
               </p>
 
               <div class="export-stack" role="toolbar" aria-label="Exports">
@@ -344,55 +368,54 @@
                   class="btn btn-outline-secondary btn-sm"
                   id="export-copy"
                 >
-                  Copier la conversation
+                  Copier
                 </button>
               </div>
-              <p class="form-text small text-muted mb-0" id="export-hint">
-                Les exports incluent l'ensemble des messages, même ceux qui ne
-                sont plus visibles.
+
+              <div
+                class="quick-actions"
+                id="quick-actions"
+                role="list"
+                aria-label="Suggestions rapides"
+              >
+                <button
+                  type="button"
+                  role="listitem"
+                  class="qa btn btn-outline-secondary"
+                  data-action="summarize"
+                >
+                  Résumer
+                </button>
+                <button
+                  type="button"
+                  role="listitem"
+                  class="qa btn btn-outline-secondary"
+                  data-action="code"
+                >
+                  Code
+                </button>
+                <button
+                  type="button"
+                  role="listitem"
+                  class="qa btn btn-outline-secondary"
+                  data-action="explain"
+                >
+                  Expliquer
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="utility-card rail-card voice-deck">
+            <div class="utility-card__header">
+              <div>
+                <p class="panel-eyebrow">Voix</p>
+                <h3 class="rail-title">Commande vocale</h3>
+              </div>
+              <p class="rail-copy">
+                Dictée, lecture et contrôle du débit sur la même carte.
               </p>
             </div>
-
-            <div
-              class="chat-actions-row"
-              id="quick-actions"
-              role="list"
-              aria-label="Suggestions rapides"
-            >
-              <button
-                type="button"
-                role="listitem"
-                class="qa btn btn-outline-secondary"
-                data-action="summarize"
-              >
-                Résumer
-              </button>
-              <button
-                type="button"
-                role="listitem"
-                class="qa btn btn-outline-secondary"
-                data-action="code"
-              >
-                Code
-              </button>
-              <button
-                type="button"
-                role="listitem"
-                class="qa btn btn-outline-secondary"
-                data-action="explain"
-              >
-                Expliquer
-              </button>
-            </div>
-          </aside>
-
-          <section class="rail-card voice-deck">
-            <p class="panel-eyebrow">Voix</p>
-            <h3 class="rail-title">Interaction vocale</h3>
-            <p class="rail-copy">
-              Dictez vos requêtes, activez la lecture des réponses et ajustez
-              le comportement du flux vocal.
-            </p>
 
             <div
               class="voice-controls"
@@ -401,7 +424,7 @@
               aria-label="Contrôles vocaux"
             >
               <div id="voice-recognition-group" class="voice-section">
-                <div class="d-flex flex-wrap align-items-center gap-2">
+                <div class="voice-inline">
                   <button
                     type="button"
                     class="btn btn-outline-secondary btn-sm"
@@ -409,7 +432,7 @@
                     aria-pressed="false"
                     disabled
                   >
-                    🎙️ Activer la dictée
+                    Activer la dictée
                   </button>
                   <div class="form-check form-switch m-0">
                     <input
@@ -418,14 +441,14 @@
                       id="voice-auto-send"
                     />
                     <label class="form-check-label" for="voice-auto-send">
-                      Envoyer automatiquement
+                      Envoi auto
                     </label>
                   </div>
                 </div>
               </div>
 
               <div id="voice-synthesis-group" class="voice-section">
-                <div class="d-flex flex-wrap align-items-center gap-2">
+                <div class="voice-inline">
                   <div class="form-check form-switch m-0">
                     <input
                       class="form-check-input"
@@ -436,21 +459,22 @@
                       Lire les réponses
                     </label>
                   </div>
-                  <label class="form-label mb-0 small" for="voice-voice-select">
-                    Voix
-                  </label>
+
+                  <label class="mini-label" for="voice-voice-select">Voix</label>
                   <select
                     id="voice-voice-select"
                     class="form-select form-select-sm voice-select"
                   ></select>
+
                   <button
                     type="button"
                     class="btn btn-outline-secondary btn-sm"
                     id="voice-stop-playback"
                     disabled
                   >
-                    🔇 Couper la lecture
+                    Couper
                   </button>
+
                   <span
                     id="voice-speaking-indicator"
                     class="badge bg-secondary d-none"
@@ -460,12 +484,12 @@
                 </div>
               </div>
 
-              <p class="small text-muted mb-1 mt-3" id="voice-status">
+              <p class="helper-copy" id="voice-status">
                 Vérification des capacités vocales…
               </p>
               <output
                 id="voice-transcript"
-                class="voice-transcript form-text text-muted"
+                class="voice-transcript"
                 aria-live="polite"
               ></output>
             </div>

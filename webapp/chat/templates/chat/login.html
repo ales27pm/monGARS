@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>monGARS - Connexion</title>
+    <title>monGARS - Connexion opérateur</title>
     {% load static %}
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link
@@ -18,54 +18,58 @@
     <link rel="stylesheet" href="{% static 'css/chat.css' %}" />
   </head>
   <body class="login-page">
-    <div class="app-backdrop" aria-hidden="true">
-      <div class="backdrop-orb backdrop-orb-a"></div>
-      <div class="backdrop-orb backdrop-orb-b"></div>
-      <div class="backdrop-grid"></div>
-    </div>
-
     <div class="login-shell">
-      <section class="login-hero">
-        <p class="eyebrow">monGARS control surface</p>
-        <div class="brand-row">
-          <div class="brand-mark">MG</div>
-          <div>
-            <h1 class="app-title">Operator Access</h1>
+      <section class="login-intro">
+        <p class="eyebrow">monGARS operator grid</p>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">MG</div>
+          <div class="brand-copy">
+            <h1 class="app-title">Interface nette. Accès immédiat.</h1>
             <p class="app-subtitle">
-              Une interface conversationnelle plus nette, plus stable et pensée
-              comme une véritable console de travail.
+              Une entrée pensée mobile d’abord, avec une hiérarchie courte,
+              lisible et directement orientée vers l’action.
             </p>
           </div>
         </div>
 
-        <div class="hero-copy-stack">
-          <p class="hero-lead">
-            Connectez-vous pour superviser les échanges, piloter les modes de
-            requête et garder la télémétrie utile sous les yeux.
-          </p>
-          <div class="hero-metrics">
-            <div class="metric-card">
-              <span class="metric-label">Conversation</span>
-              <strong>Temps réel</strong>
-            </div>
-            <div class="metric-card">
-              <span class="metric-label">Exports</span>
-              <strong>JSON / Markdown</strong>
-            </div>
-            <div class="metric-card">
-              <span class="metric-label">Voix</span>
-              <strong>Dictée + lecture</strong>
-            </div>
+        <div class="login-metrics">
+          <article class="login-metric">
+            <span class="metric-label">Conversation</span>
+            <strong>Temps réel</strong>
+          </article>
+          <article class="login-metric">
+            <span class="metric-label">Outils</span>
+            <strong>Exports + voix</strong>
+          </article>
+          <article class="login-metric">
+            <span class="metric-label">Pilotage</span>
+            <strong>Desktop + mobile</strong>
+          </article>
+        </div>
+
+        <div class="login-notes">
+          <div class="login-note">
+            <span class="login-note__index">01</span>
+            <p>La conversation reste le centre de gravité de l’interface.</p>
+          </div>
+          <div class="login-note">
+            <span class="login-note__index">02</span>
+            <p>Les diagnostics réseau et exports restent à portée immédiate.</p>
+          </div>
+          <div class="login-note">
+            <span class="login-note__index">03</span>
+            <p>La mise en page s’adapte sans friction du téléphone au poste large.</p>
           </div>
         </div>
       </section>
 
-      <section class="login-card">
-        <div class="login-card-header">
+      <section class="login-panel">
+        <div class="login-panel__header">
           <p class="panel-eyebrow">Connexion sécurisée</p>
-          <h2 class="rail-title">Entrer dans l’atelier</h2>
+          <h2 class="rail-title">Entrer dans la console</h2>
           <p class="rail-copy">
-            Utilisez vos identifiants opérateur pour ouvrir la console.
+            Utilisez vos identifiants opérateur pour reprendre le contrôle de
+            la session.
           </p>
         </div>
 
@@ -77,6 +81,7 @@
 
         <form method="post" class="auth-form">
           {% csrf_token %}
+
           <label class="auth-label" for="username">Nom d’utilisateur</label>
           <input
             type="text"
