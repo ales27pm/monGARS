@@ -65,6 +65,7 @@ from monGARS.api.schemas import (
     UserListResponse,
     UserRegistration,
 )
+from monGARS.api.ws_origin import private_network_origin_regex
 from monGARS.api.ws_ticket import router as ws_ticket_router
 from monGARS.config import get_settings
 from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
@@ -179,9 +180,11 @@ _RAY_DEPLOYMENT_NAME = "RayLLMDeployment"
 _settings = get_settings()
 settings = _settings
 _cors_origins = [str(origin).rstrip("/") for origin in settings.WS_ALLOWED_ORIGINS]
+_cors_origin_regex = private_network_origin_regex(settings.WS_ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

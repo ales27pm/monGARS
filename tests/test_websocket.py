@@ -65,16 +65,16 @@ def _issue_ws_ticket(client: TestClient, token: str) -> str:
     return response.json()["ticket"]
 
 
-def _connect_ws(client: TestClient, ticket: str):
+def _connect_ws(client: TestClient, ticket: str, origin: str | None = None):
     settings = get_settings()
-    origin = (
+    resolved_origin = origin or (
         str(settings.WS_ALLOWED_ORIGINS[0]).rstrip("/")
         if settings.WS_ALLOWED_ORIGINS
         else ""
     )
     return client.websocket_connect(
         f"/ws/chat/?t={ticket}",
-        headers={"origin": origin},
+        headers={"origin": resolved_origin},
     )
 
 
@@ -124,6 +124,38 @@ def test_ws_ticket_post_returns_cors_headers(client: TestClient) -> None:
     assert response.headers["access-control-allow-methods"] == "POST, OPTIONS"
 
 
+def test_ws_ticket_preflight_accepts_private_lan_origin(client: TestClient) -> None:
+    origin = "http://10.0.0.154:8001"
+
+    response = client.options(
+        "/api/v1/auth/ws/ticket",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_chat_preflight_accepts_private_lan_origin(client: TestClient) -> None:
+    origin = "http://10.0.0.154:8001"
+
+    response = client.options(
+        "/api/v1/conversation/chat",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
 @pytest.mark.asyncio
 async def test_websocket_sends_history_and_updates(client):
     await hippocampus.store("u1", "hello", "hi")
@@ -151,6 +183,18 @@ async def test_websocket_sends_history_and_updates(client):
         assert second["type"] == "chat.message"
         assert second["data"]["query"] == "new"
         assert second["data"]["response"] == "resp"
+
+
+@pytest.mark.asyncio
+async def test_websocket_accepts_private_lan_origin(client):
+    token = client.post("/token", data={"username": "u1", "password": "x"}).json()[
+        "access_token"
+    ]
+    ticket = _issue_ws_ticket(client, token)
+
+    with _connect_ws(client, ticket, origin="http://10.0.0.154:8001") as ws:
+        connected = ws.receive_json()
+        assert connected["type"] == "ws.connected"
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from monGARS.api.authentication import get_current_user
 from monGARS.api.ticket_signer import BadSignature, SignatureExpired, TicketSigner
+from monGARS.api.ws_origin import is_allowed_ws_origin, normalise_origin
 from monGARS.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -27,11 +28,6 @@ def _ticket_signer() -> TicketSigner:
     return TicketSigner(get_settings().SECRET_KEY)
 
 
-def _allowed_ws_origins() -> set[str]:
-    settings = get_settings()
-    return {str(origin).rstrip("/") for origin in settings.WS_ALLOWED_ORIGINS}
-
-
 def _cors_headers_for_origin(origin: str) -> dict[str, str]:
     return {
         "Access-Control-Allow-Credentials": "true",
@@ -44,9 +40,8 @@ def _cors_headers_for_origin(origin: str) -> dict[str, str]:
 
 @router.options("/ticket", include_in_schema=False)
 async def issue_ws_ticket_options(request: Request) -> Response:
-    origin = (request.headers.get("origin") or "").rstrip("/")
-    allowed = _allowed_ws_origins()
-    if allowed and origin not in allowed:
+    origin = normalise_origin(request.headers.get("origin"))
+    if not is_allowed_ws_origin(origin, get_settings().WS_ALLOWED_ORIGINS):
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
     requested_headers = request.headers.get("access-control-request-headers")
@@ -63,9 +58,8 @@ async def issue_ws_ticket(
     response: Response,
     current: Mapping[str, Any] = Depends(get_current_user),
 ) -> WSTicketResponse:
-    origin = (request.headers.get("origin") or "").rstrip("/")
-    allowed = _allowed_ws_origins()
-    if origin and (not allowed or origin in allowed):
+    origin = normalise_origin(request.headers.get("origin"))
+    if origin and is_allowed_ws_origin(origin, get_settings().WS_ALLOWED_ORIGINS):
         for key, value in _cors_headers_for_origin(origin).items():
             response.headers[key] = value
     uid = current.get("sub")

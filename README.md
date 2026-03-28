@@ -286,7 +286,7 @@ user/token.
 | `RAG_ENABLED` / `RAG_SERVICE_URL` / `RAG_REPO_LIST` / `RAG_MAX_RESULTS` | Toggle repository-aware enrichment, direct the enrichment service, scope repositories, and clamp the number of references. |
 | `WORKER_DEPLOYMENT_NAME` / `WORKER_DEPLOYMENT_NAMESPACE` | Kubernetes deployment targeted by the evolution engine when scaling. |
 | `VAULT_URL` / `VAULT_TOKEN` | Vault dev server address and bootstrap token for local testing. |
-| `WS_ALLOWED_ORIGINS` / `WS_ENABLE_EVENTS` | Comma-separated list of origins allowed to open WebSocket sessions and a feature flag to disable streaming entirely. |
+| `WS_ALLOWED_ORIGINS` / `WS_ENABLE_EVENTS` | Comma-separated list of origins allowed to open WebSocket sessions and a feature flag to disable streaming entirely. When every configured origin is local-only, the API also accepts RFC1918/ULA LAN origins such as `http://10.0.0.154:8001` for CORS preflights and WebSocket upgrades so mobile devices can connect without rewriting the allow-list for each private IP. |
 | `REDIS_URL`, `DATABASE_URL` | Connection strings for cache and persistence layers. |
 | `OPEN_TELEMETRY_EXPORTER` | Optional metrics exporter configuration for observability pipelines. |
 | `TRAINING_PIPELINE_ENABLED` / `TRAINING_CYCLE_INTERVAL_SECONDS` / `TRAINING_CYCLE_JITTER_SECONDS` | Control whether the background evolution training workflow runs and how often cycles are executed. |

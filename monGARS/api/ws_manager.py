@@ -20,6 +20,7 @@ from fastapi import (
 from sqlalchemy.exc import SQLAlchemyError
 
 from monGARS.api.dependencies import get_hippocampus
+from monGARS.api.ws_origin import is_allowed_ws_origin, normalise_origin
 from monGARS.api.ws_ticket import verify_ws_ticket
 from monGARS.config import get_settings
 from monGARS.core.ui_events import BackendUnavailable, Event, event_bus, make_event
@@ -404,9 +405,8 @@ async def _receiver_loop(state: _ConnectionState) -> None:
 @router.websocket("/ws/chat/")
 async def ws_chat(ws: WebSocket, ticket: str = Query(..., alias="t")) -> None:
     raw_origin = ws.headers.get("origin", "")
-    origin = raw_origin.rstrip("/")
-    allowed = {str(origin).rstrip("/") for origin in settings.WS_ALLOWED_ORIGINS}
-    if allowed and origin not in allowed:
+    origin = normalise_origin(raw_origin)
+    if not is_allowed_ws_origin(origin, settings.WS_ALLOWED_ORIGINS):
         await ws.close(code=4403)
         return
 
