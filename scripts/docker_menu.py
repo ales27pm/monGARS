@@ -69,6 +69,7 @@ class DockerMenu:
     def __init__(self) -> None:
         self.project_root = Path(__file__).resolve().parent.parent
         self.compose_file = self.project_root / "docker-compose.yml"
+        self.gpu_compose_file = self.project_root / "docker-compose.gpu.yml"
         self.searx_compose_file = self.project_root / "docker-compose.searxng.yml"
         self.env_file = self.project_root / ".env"
         self.env_template = self.project_root / ".env.example"
@@ -248,6 +249,12 @@ class DockerMenu:
             index += 1
 
         return "".join(result)
+
+    @staticmethod
+    def _env_flag_enabled(value: str | None, *, default: bool = False) -> bool:
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def _write_env_updates(self, updates: Dict[str, str]) -> None:
         lines: List[str] = []
@@ -491,10 +498,23 @@ class DockerMenu:
     def _compose_files(self) -> List[Path]:
         files: List[Path] = [self.compose_file]
         env_values = self._read_env_file()
+        gpu_flag = env_values.get(
+            "MONGARS_ENABLE_GPU", os.environ.get("MONGARS_ENABLE_GPU")
+        )
+        include_gpu = self._env_flag_enabled(gpu_flag, default=False)
         searx_flag = (
             (env_values.get("SEARCH_SEARX_ENABLED", "true") or "").strip().lower()
         )
         include_searx = searx_flag in {"1", "true", "yes", "on"}
+
+        if include_gpu:
+            if self.gpu_compose_file.exists():
+                files.append(self.gpu_compose_file)
+            else:
+                self.log(
+                    "MONGARS_ENABLE_GPU=true but docker-compose.gpu.yml is missing; proceeding without GPU overlay.",
+                    error=True,
+                )
 
         if include_searx:
             if self.searx_compose_file.exists():

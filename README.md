@@ -141,7 +141,8 @@ slide decks or ops runbooks.
 - Docker & Docker Compose for container workflows
 - NVIDIA drivers compatible with CUDA 12.1 when running GPU workloads inside the
   official `pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime` image
-- Optional: GPU drivers for Ollama or Torch-based adapters
+- Optional: GPU drivers plus NVIDIA Container Toolkit when you want Dockerized
+  Ollama or Torch-based adapters to see the GPU
 
 ### Local Development
 ```bash
@@ -204,6 +205,11 @@ service, and destroy the stack. Additional tooling now:
   and a dedicated worker port range (`${RAY_MIN_WORKER_PORT:-20000}`-
   `${RAY_MAX_WORKER_PORT:-20100}`) that avoids collisions with the Ray client
   endpoint by default.
+- Automatically layers `docker-compose.gpu.yml` when `MONGARS_ENABLE_GPU=true`
+  in `.env`, which applies NVIDIA device reservations to Ollama and the CUDA
+  build variants. The host still needs NVIDIA Container Toolkit configured for
+  Docker first; a quick smoke test is `docker run --rm --gpus all
+  nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`.
 - Provides guided diagnostics (`option 12`) that optionally auto-remediate
   missing `.env` entries, weak secrets, stale ports, and Compose syntax issues
   before you deploy.
@@ -286,6 +292,8 @@ user/token.
 | `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
 | `ENABLE_ADMIN_BOOTSTRAP` | When `true`, the migration bootstrap seeds the first persisted admin account after Alembic reaches `head`. Local Compose defaults this to `true`; disable it for shared or pre-provisioned environments. |
 | `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` | Credentials for the initial persisted admin created by `init_db.py` when admin bootstrap is enabled. Local Compose defaults to `admin` / `admin`; rotate or unset them for non-local deployments. |
+| `MONGARS_ENABLE_GPU` | When `true`, the compose launcher adds `docker-compose.gpu.yml` so Ollama, API, and Ray services request NVIDIA GPUs. This requires NVIDIA Container Toolkit on the host; verify Docker GPU access with `docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi` before enabling it. |
+| `NVIDIA_VISIBLE_DEVICES` / `NVIDIA_DRIVER_CAPABILITIES` / `NVIDIA_DEVICE_COUNT` | GPU selection knobs passed through the GPU overlay for Ollama and CUDA-based services. Leave the local defaults (`all`, `compute,utility`, `all`) unless you need to pin a subset of devices. |
 | `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8000/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG_HOSTS`, `DJANGO_ALLOW_PRIVATE_NETWORK_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. When `DJANGO_ALLOWED_HOSTS` is unset the console trusts `localhost`, loopback addresses, `0.0.0.0`, and Compose provided `WEBAPP_HOST`/`HOST` values automatically. If every configured host is local-only, Django now also accepts RFC1918/ULA LAN IP hosts such as `10.0.0.154` without requiring `ALLOWED_HOSTS=*`; disable that widening with `DJANGO_ALLOW_PRIVATE_NETWORK_HOSTS=false`. `DJANGO_DEBUG_HOSTS` appends comma-separated hostnames/IPs that should be trusted automatically when `DJANGO_DEBUG=true`. |
 | `MONGARS_IMAGE` / `MONGARS_GPU_IMAGE` | Tags applied to the CPU and GPU application builds. Using distinct values prevents rebuilds for one profile from overwriting the other. |

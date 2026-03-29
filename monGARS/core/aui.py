@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any, List
 
-from .llm_integration import GuardRejectionError, LLMIntegration
+from .llm_integration import GuardRejectionError, LLMIntegration, LLMRuntimeError
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,20 @@ class LLMActionSuggester:
             except GuardRejectionError:
                 fallback_used = True
                 result = self._heuristic_fallback(prompt, actions)
+            except LLMRuntimeError as exc:
+                fallback_used = True
+                if self._is_permanently_unavailable(exc):
+                    logger.warning(
+                        "llm_action_suggester_runtime_disabled",
+                        extra={"error": str(exc)},
+                    )
+                    self.llm = None
+                else:
+                    logger.warning(
+                        "llm_action_suggester_runtime_unavailable",
+                        extra={"error": str(exc)},
+                    )
+                result = self._heuristic_fallback(prompt, actions)
             except (json.JSONDecodeError, ValueError, TypeError) as exc:
                 fallback_used = True
                 logger.error(
@@ -116,6 +130,14 @@ class LLMActionSuggester:
             },
         )
         return result
+
+    def _is_permanently_unavailable(self, exc: LLMRuntimeError) -> bool:
+        message = str(exc)
+        return (
+            "tracked placeholder scaffold" in message
+            or "bundle.placeholder.json" in message
+            or "Unified model directory" in message
+        )
 
     def _trim_context_to_tokens(
         self, context: dict | None, *, max_tokens: int

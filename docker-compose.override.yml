@@ -15,3 +15,15 @@ services:
   webapp:
     environment:
       DJANGO_DATABASE_URL: postgresql+psycopg://api_user:ApiPass123@postgres:5432/mongars_db
+
+  ollama:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${NVIDIA_DEVICE_COUNT:-all}
+              capabilities: [gpu]

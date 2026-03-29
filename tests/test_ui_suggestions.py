@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from monGARS.core.aui import LLMActionSuggester
+from monGARS.core.llm_integration import LLMRuntimeError
 
 
 def test_llm_action_suggester_fallback_orders_by_keyword(
@@ -125,3 +126,33 @@ def test_llm_action_suggester_forwards_context_to_llm(
 
     assert order == ["code"]
     assert fake_llm.received_context == provided_context
+
+
+def test_llm_action_suggester_disables_placeholder_runtime_after_first_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self, prompt: str, max_new_tokens: int, **_: Any
+        ) -> str:  # noqa: ARG002
+            self.calls += 1
+            raise LLMRuntimeError(
+                "Unified model directory 'models/dolphin_x1_unified_enhanced' "
+                "only contains the tracked placeholder scaffold."
+            )
+
+    fake_llm = FakeLLM()
+    monkeypatch.setattr("monGARS.core.aui.LLMIntegration.instance", lambda: fake_llm)
+
+    suggester = LLMActionSuggester()
+    actions = ["code", "summarize"]
+
+    first = suggester.suggest("code code", actions, {})
+    second = suggester.suggest("summarize summarize", actions, {})
+
+    assert fake_llm.calls == 1
+    assert first[0] == "code"
+    assert second[0] == "summarize"

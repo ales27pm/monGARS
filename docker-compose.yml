@@ -317,7 +317,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null"
+        - "ollama list >/dev/null"
       interval: 30s
       timeout: 10s
       retries: 5
