@@ -1,6 +1,6 @@
 import { build } from "esbuild";
-import { fileURLToPath } from "url";
-import path from "path";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +22,11 @@ await build({
   minify: isProd,
   logLevel: "error",
   metafile: true,
-  write: true
+  loader: {
+    ".js": "jsx",
+    ".jsx": "jsx",
+  },
+  write: true,
 }).catch((err) => {
   console.error("Build failed:", err);
   process.exit(1);
