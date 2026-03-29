@@ -1,3 +1,9 @@
+x-mongars-image: &mongars-image ales27pm/mongars-app:latest
+x-mongars-build: &mongars-build
+  context: .
+  dockerfile: Dockerfile
+  target: runtime
+
 services:
   postgres:
     image: pgvector/pgvector:pg18
@@ -85,11 +91,7 @@ services:
       - backend
 
   migrations:
-    image: ales27pm/mongars-app:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: *mongars-image
     restart: "no"
     env_file:
       - .env
@@ -130,11 +132,8 @@ services:
         condition: service_healthy
 
   api:
-    image: ales27pm/mongars-app:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: *mongars-image
+    build: *mongars-build
     restart: unless-stopped
     env_file:
       - .env
@@ -169,11 +168,7 @@ services:
         condition: service_healthy
 
   webapp-migrations:
-    image: ales27pm/mongars-app:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: *mongars-image
     restart: "no"
     env_file:
       - .env
@@ -202,11 +197,7 @@ services:
         condition: service_completed_successfully
 
   webapp:
-    image: ales27pm/mongars-app:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
+    image: *mongars-image
     restart: unless-stopped
     env_file:
       - .env

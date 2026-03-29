@@ -222,6 +222,12 @@ For automated pipelines you can continue to call Docker Compose directly:
 docker compose -f docker-compose.yml --project-name mongars up -d
 ```
 
+The Compose stack now builds the shared `ales27pm/mongars-app:latest` runtime
+through the `api` service only. `migrations`, `webapp-migrations`, and
+`webapp` reuse that same image tag so `docker compose up --build` exports and
+unpacks the heavyweight app image once instead of repeating the same work for
+each service.
+
 #### Docker Compose v1 compatibility
 
 Docker Engine 27+ removes the legacy `ContainerConfig` field that Compose v1
