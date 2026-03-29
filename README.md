@@ -228,6 +228,12 @@ through the `api` service only. `migrations`, `webapp-migrations`, and
 unpacks the heavyweight app image once instead of repeating the same work for
 each service.
 
+On a fresh local stack, the `migrations` service also bootstraps the first
+persisted admin account before the API starts when
+`ENABLE_ADMIN_BOOTSTRAP=true`. The local defaults create `admin` / `admin`;
+override `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD` in `.env`
+or disable the seed entirely before using the stack outside a workstation.
+
 #### Docker Compose v1 compatibility
 
 Docker Engine 27+ removes the legacy `ContainerConfig` field that Compose v1
@@ -278,6 +284,8 @@ user/token.
 | `POSTGRES_PORT`, `REDIS_PORT`, `MLFLOW_PORT`, `VAULT_PORT`, `OLLAMA_PORT`, `RAY_HTTP_PORT`, `RAY_DASHBOARD_PORT`, `RAY_CLIENT_PORT` | Host bindings for stateful and optional services managed by Compose. |
 | `RAY_MIN_WORKER_PORT`, `RAY_MAX_WORKER_PORT` | Lower/upper bounds for the Ray head worker port range. Defaults prevent overlaps with `RAY_CLIENT_PORT`. |
 | `DB_PASSWORD` | Password applied to the Postgres user `mongars`; rotated automatically by the deploy script when left as `changeme`. |
+| `ENABLE_ADMIN_BOOTSTRAP` | When `true`, the migration bootstrap seeds the first persisted admin account after Alembic reaches `head`. Local Compose defaults this to `true`; disable it for shared or pre-provisioned environments. |
+| `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` | Credentials for the initial persisted admin created by `init_db.py` when admin bootstrap is enabled. Local Compose defaults to `admin` / `admin`; rotate or unset them for non-local deployments. |
 | `USE_RAY_SERVE` / `RAY_SERVE_URL` | Enable distributed inference and point at Ray Serve HTTP endpoints (defaults to `http://rayserve:8000/generate`). |
 | `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_DEBUG_HOSTS`, `DJANGO_ALLOW_PRIVATE_NETWORK_HOSTS`, `FASTAPI_URL` | Settings used by the Django operator console when running inside Compose. When `DJANGO_ALLOWED_HOSTS` is unset the console trusts `localhost`, loopback addresses, `0.0.0.0`, and Compose provided `WEBAPP_HOST`/`HOST` values automatically. If every configured host is local-only, Django now also accepts RFC1918/ULA LAN IP hosts such as `10.0.0.154` without requiring `ALLOWED_HOSTS=*`; disable that widening with `DJANGO_ALLOW_PRIVATE_NETWORK_HOSTS=false`. `DJANGO_DEBUG_HOSTS` appends comma-separated hostnames/IPs that should be trusted automatically when `DJANGO_DEBUG=true`. |
 | `MONGARS_IMAGE` / `MONGARS_GPU_IMAGE` | Tags applied to the CPU and GPU application builds. Using distinct values prevents rebuilds for one profile from overwriting the other. |

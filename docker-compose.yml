@@ -3,6 +3,29 @@ x-mongars-build: &mongars-build
   context: .
   dockerfile: Dockerfile
   target: runtime
+x-app-environment: &app-environment
+  DATABASE_URL: "postgresql+asyncpg://${DB_USER:-mongars}:${DB_PASSWORD?DB_PASSWORD required}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mongars_db}"
+  DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
+  DB_HOST: ${DB_HOST:-postgres}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_USER: ${DB_USER:-mongars}
+  DB_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
+  DB_NAME: ${DB_NAME:-mongars_db}
+  DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
+  DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
+  ENV: ${APP_ENV:-production}
+  HOST: 0.0.0.0
+  PORT: 8000
+  USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
+  RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
+  REDIS_URL: redis://redis:6379/0
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
+  VAULT_URL: http://vault:8200
+  VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+  WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
+  SEARCH_SEARX_ENABLED: ${SEARCH_SEARX_ENABLED:-true}
+  SEARCH_SEARX_BASE_URL: ${SEARCH_SEARX_INTERNAL_BASE_URL:-http://searxng:8080}
 
 services:
   postgres:
@@ -95,29 +118,11 @@ services:
     restart: "no"
     env_file:
       - .env
-    environment: &app-environment
-      DATABASE_URL: "postgresql+asyncpg://${DB_USER:-mongars}:${DB_PASSWORD?DB_PASSWORD required}@${DB_HOST:-postgres}:${DB_PORT:-5432}/${DB_NAME:-mongars_db}"
-      DJANGO_DATABASE_URL: ${DJANGO_DATABASE_URL:-}
-      DB_HOST: ${DB_HOST:-postgres}
-      DB_PORT: ${DB_PORT:-5432}
-      DB_USER: ${DB_USER:-mongars}
-      DB_PASSWORD: ${DB_PASSWORD?DB_PASSWORD required}
-      DB_NAME: ${DB_NAME:-mongars_db}
-      DB_STARTUP_TIMEOUT: ${DB_STARTUP_TIMEOUT:-120}
-      DB_STARTUP_RETRY_INTERVAL: ${DB_STARTUP_RETRY_INTERVAL:-3}
-      ENV: ${APP_ENV:-production}
-      HOST: 0.0.0.0
-      PORT: 8000
-      USE_RAY_SERVE: ${USE_RAY_SERVE:-false}
-      RAY_SERVE_URL: ${RAY_SERVE_URL:-http://rayserve:8000/generate}
-      REDIS_URL: redis://redis:6379/0
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
-      VAULT_URL: http://vault:8200
-      VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
-      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-"[\"http://localhost:8000\",\"http://localhost:8001\"]"}
-      SEARCH_SEARX_ENABLED: ${SEARCH_SEARX_ENABLED:-true}
-      SEARCH_SEARX_BASE_URL: ${SEARCH_SEARX_INTERNAL_BASE_URL:-http://searxng:8080}
+    environment:
+      <<: *app-environment
+      ENABLE_ADMIN_BOOTSTRAP: ${ENABLE_ADMIN_BOOTSTRAP:-true}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin}
     working_dir: /app
     volumes:
       - ./datasets/monGARS_llm:/app/datasets/monGARS_llm:ro

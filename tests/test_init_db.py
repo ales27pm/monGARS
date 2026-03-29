@@ -11,7 +11,15 @@ from pathlib import Path
 
 import pytest
 
+os.environ["DEBUG"] = "true"
+os.environ["DATABASE_URL"] = (
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/mongars_db"
+)
+os.environ["REDIS_URL"] = "redis://localhost:6379/0"
+
 try:
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import URL
     from sqlalchemy.engine.url import make_url
 
     from monGARS import init_db
@@ -23,6 +31,7 @@ except ModuleNotFoundError:
             "hvac",
             "dotenv",
             "opentelemetry",
+            "passlib",
             "pydantic",
             "pydantic_settings",
         )
@@ -52,6 +61,28 @@ def _load_init_db_script(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _prepare_bootstrap_db(tmp_path: Path) -> URL:
+    db_path = tmp_path / "bootstrap.db"
+    url = make_url(f"sqlite:///{db_path}")
+    engine = create_engine(url.render_as_string(hide_password=False))
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE user_accounts (
+                        username TEXT PRIMARY KEY,
+                        password_hash TEXT NOT NULL,
+                        is_admin BOOLEAN NOT NULL
+                    )
+                    """
+                )
+            )
+    finally:
+        engine.dispose()
+    return url
 
 
 def test_sync_driver_detection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,3 +199,102 @@ def test_build_sync_url_invalid_port_logging(monkeypatch, caplog):
     assert "Invalid database port override provided; ignoring." in caplog.text
     assert "6543bad" not in caplog.text
     assert url.port == 5432
+
+
+def test_bootstrap_admin_credentials_require_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_init_db_script(monkeypatch)
+
+    for key in (
+        "ENABLE_ADMIN_BOOTSTRAP",
+        "BOOTSTRAP_ADMIN_USERNAME",
+        "BOOTSTRAP_ADMIN_PASSWORD",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert module._bootstrap_admin_credentials() is None
+
+    monkeypatch.setenv("ENABLE_ADMIN_BOOTSTRAP", "true")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", " ")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "secret")
+
+    assert module._bootstrap_admin_credentials() is None
+
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", " admin ")
+
+    assert module._bootstrap_admin_credentials() == ("admin", "secret")
+
+
+def test_ensure_bootstrap_admin_inserts_first_admin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_init_db_script(monkeypatch)
+    url = _prepare_bootstrap_db(tmp_path)
+    monkeypatch.setenv("ENABLE_ADMIN_BOOTSTRAP", "true")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "admin")
+
+    created = module.ensure_bootstrap_admin(url)
+
+    assert created is True
+
+    engine = create_engine(url.render_as_string(hide_password=False))
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT username, password_hash, is_admin FROM user_accounts"
+                )
+            ).mappings().one()
+    finally:
+        engine.dispose()
+
+    assert row["username"] == "admin"
+    assert bool(row["is_admin"]) is True
+    assert row["password_hash"] != "admin"
+    assert module._BOOTSTRAP_PASSWORD_CONTEXT.verify("admin", row["password_hash"])
+
+
+def test_ensure_bootstrap_admin_skips_when_admin_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_init_db_script(monkeypatch)
+    url = _prepare_bootstrap_db(tmp_path)
+    engine = create_engine(url.render_as_string(hide_password=False))
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO user_accounts (username, password_hash, is_admin) "
+                    "VALUES (:username, :password_hash, :is_admin)"
+                ),
+                {
+                    "username": "existing-admin",
+                    "password_hash": "existing-hash",
+                    "is_admin": True,
+                },
+            )
+    finally:
+        engine.dispose()
+
+    monkeypatch.setenv("ENABLE_ADMIN_BOOTSTRAP", "true")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "admin")
+
+    created = module.ensure_bootstrap_admin(url)
+
+    assert created is False
+
+    engine = create_engine(url.render_as_string(hide_password=False))
+    try:
+        with engine.connect() as conn:
+            usernames = conn.execute(
+                text("SELECT username FROM user_accounts ORDER BY username")
+            ).scalars().all()
+    finally:
+        engine.dispose()
+
+    assert usernames == ["existing-admin"]
