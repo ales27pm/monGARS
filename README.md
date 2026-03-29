@@ -277,7 +277,7 @@ user/token.
 | `MONGARS_IMAGE` / `MONGARS_GPU_IMAGE` | Tags applied to the CPU and GPU application builds. Using distinct values prevents rebuilds for one profile from overwriting the other. |
 | `PYTORCH_IMAGE` / `PYTORCH_IMAGE_GPU` | Base images consumed by the Dockerfiles; override to align with local CUDA driver stacks without editing manifests. |
 | `RAY_HEAD_IMAGE`, `RAY_HEAD_IMAGE_GPU`, `RAY_SERVE_IMAGE`, `RAY_SERVE_GPU_IMAGE` | Control the Ray head/Serve container tags for CPU and GPU deployments. Pair with the new build args to align with cluster driver versions. |
-| `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). |
+| `OLLAMA_HOST` | URL for the Ollama runtime; defaults to the local container (`http://ollama:11434`). Keep the Compose `ollama` image on a recent release when using newer manifests such as `nemotron-3-nano:4b`, otherwise `POST /api/pull` can fail with a manifest-version error. |
 | `LLM_MODELS_CONFIG_PATH` | Path to the JSON manifest listing model profiles and download preferences. |
 | `LLM_MODELS_PROFILE` | Name of the profile within `LLM_MODELS_CONFIG_PATH` used for inference defaults. |
 | `LLM_MODELS_AUTO_DOWNLOAD` | When `true`, missing local models are pulled automatically if the provider supports it. |

@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
-from monGARS.config import get_settings
+from monGARS.config import database_url_to_string, get_settings
 from monGARS.core.dynamic_response import AdaptiveResponseGenerator
 from monGARS.core.hippocampus import Hippocampus
 from monGARS.core.model_manager import LLMModelManager
@@ -37,7 +37,7 @@ _approval_session_lock = Lock()
 def _build_approval_sync_url() -> str | None:
     settings = get_settings()
     try:
-        url = make_url(str(settings.database_url))
+        url = make_url(database_url_to_string(settings.database_url))
     except Exception:  # pragma: no cover - defensive configuration guard
         logger.exception("dependencies.approval.invalid_database_url")
         return None

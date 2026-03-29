@@ -22,7 +22,7 @@ try:  # pragma: no cover - optional dependency during tests
 except ModuleNotFoundError:  # pragma: no cover - fallback to sync engine
     HAS_AIOSQLITE = False
 
-from monGARS.config import get_settings
+from monGARS.config import database_url_to_string, get_settings
 from monGARS.db import (
     Base,
     ConversationHistory,
@@ -106,7 +106,9 @@ def _resolve_database_url(raw_url: str | None, *, default_url: URL) -> URL:
 
 
 try:
-    _default_database_url: URL = make_url(str(_settings.database_url))
+    _default_database_url: URL = make_url(
+        database_url_to_string(_settings.database_url)
+    )
 except Exception:  # pragma: no cover - invalid default URL fallback
     logger.warning(
         "Invalid configured database URL; using local sqlite fallback",

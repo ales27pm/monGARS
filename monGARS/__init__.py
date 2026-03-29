@@ -29,7 +29,7 @@ try:  # optional dependency
 except ModuleNotFoundError:
     HAS_AIOSQLITE = False
 
-from monGARS.config import get_settings
+from monGARS.config import database_url_to_string, get_settings
 from monGARS.db import (
     Base,
     ConversationHistory,
@@ -136,7 +136,7 @@ def _resolve_database_url(raw_url: str | None, *, default_url: URL) -> URL:
 # ---------------------------------------------------------------------
 
 try:
-    _default_database_url = make_url(str(_settings.database_url))
+    _default_database_url = make_url(database_url_to_string(_settings.database_url))
 except Exception:
     logger.warning("Invalid settings database URL; using SQLite")
     _default_database_url = _safe_sqlite_url()

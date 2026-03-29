@@ -34,6 +34,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -46,6 +47,19 @@ from monGARS.utils.database import apply_database_url_overrides
 from monGARS.utils.hardware import recommended_worker_count
 
 log = logging.getLogger(__name__)
+
+
+def database_url_to_string(url: AnyUrl | URL | str) -> str:
+    """Return a database URL string without redacting credentials."""
+
+    if isinstance(url, URL):
+        return url.render_as_string(hide_password=False)
+
+    unicode_string = getattr(url, "unicode_string", None)
+    if callable(unicode_string):
+        return unicode_string()
+
+    return str(url)
 
 
 EMBEDDING_BACKEND_CHOICES: tuple[str, ...] = tuple(sorted(SUPPORTED_EMBEDDING_BACKENDS))
@@ -464,7 +478,7 @@ class Settings(BaseSettings):
         """Ensure DATABASE_URL honours discrete DB_* overrides."""
 
         try:
-            url = make_url(str(self.database_url))
+            url = make_url(database_url_to_string(self.database_url))
         except ArgumentError as exc:
             raise ValueError("Invalid DATABASE_URL provided") from exc
 

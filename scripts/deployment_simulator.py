@@ -21,7 +21,12 @@ from pydantic import ValidationError
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
-from monGARS.config import Settings, ensure_secret_key, validate_jwt_configuration
+from monGARS.config import (
+    Settings,
+    database_url_to_string,
+    ensure_secret_key,
+    validate_jwt_configuration,
+)
 
 Severity = Literal["error", "warning", "info"]
 
@@ -167,7 +172,7 @@ class DeploymentSimulator:
 
         # Highlight local-only database defaults when running in production mode.
         try:
-            url = make_url(str(settings.database_url))
+            url = make_url(database_url_to_string(settings.database_url))
         except ArgumentError as exc:
             issues.append(
                 DeploymentIssue(

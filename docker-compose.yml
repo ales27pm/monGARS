@@ -309,7 +309,7 @@ services:
         $${UNSLOTH_SKIP_MERGE:+--skip-merge}"
 
   ollama:
-    image: ollama/ollama:0.3.12
+    image: ollama/ollama:0.18.3
     profiles: [inference]
     restart: unless-stopped
     ports:
