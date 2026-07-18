@@ -371,7 +371,7 @@ const ChatScreen: React.FC = () => {
 
           {backend === 'on-device' &&
           !localReady &&
-          filteredMessages.length === 0 ? (
+          activeMessages.length === 0 ? (
             <EmptyState
               title="Modele local requis"
               description={

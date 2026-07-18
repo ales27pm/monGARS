@@ -328,6 +328,10 @@ jobs:
         working-directory: mobile-app
         run: npm ci --no-audit --no-fund
 
+      - name: Validate native project wiring
+        working-directory: mobile-app
+        run: npm run doctor:native
+
       - name: Run ESLint
         env:
           CI: "true"

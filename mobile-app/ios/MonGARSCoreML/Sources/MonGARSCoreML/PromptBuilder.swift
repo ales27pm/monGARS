@@ -44,24 +44,18 @@ enum PromptBuilder {
         contentTokens.count,
         min(maximumPromptTokens, MonGARSModelManifest.contextLength)
       )
-
-      if let candidate = try largestFittingEncodedSuffix(
+      let emptyLatest = ChatMessage(role: latest.role, content: "")
+      let emptyPromptTokens = try encode(
+        [system, emptyLatest],
+        tokenizer: tokenizer
+      )
+      encoded = try tokenLevelSuffixPrompt(
         contentTokens: contentTokens,
+        emptyPromptTokens: emptyPromptTokens,
         maximumSuffixTokens: maximumSuffixTokens,
         maximumPromptTokens: maximumPromptTokens,
-        encodeCandidate: { suffix in
-          let shortened = ChatMessage(
-            role: latest.role,
-            content: tokenizer.decode(
-              tokens: suffix,
-              skipSpecialTokens: false
-            )
-          )
-          return try encode([system, shortened], tokenizer: tokenizer)
-        }
-      ) {
-        encoded = candidate
-      }
+        messageEndTokenID: MonGARSModelManifest.chatMessageEndTokenID
+      )
 
       if encoded.count > maximumPromptTokens {
         throw InferenceError.promptTooLong
@@ -72,31 +66,44 @@ enum PromptBuilder {
     return encoded
   }
 
-  static func largestFittingEncodedSuffix(
+  static func tokenLevelSuffixPrompt(
     contentTokens: [Int],
+    emptyPromptTokens: [Int],
     maximumSuffixTokens: Int,
     maximumPromptTokens: Int,
-    encodeCandidate: ([Int]) throws -> [Int]
-  ) throws -> [Int]? {
-    let upperBound = min(
-      contentTokens.count,
-      min(max(maximumSuffixTokens, 0), MonGARSModelManifest.contextLength)
-    )
-    guard upperBound > 0 else { return nil }
-
-    // Re-encoding decoded BPE suffixes is not monotonic: prepending one token
-    // can merge neighboring pieces and shorten the encoded prompt. Descending
-    // exhaustive search is therefore the smallest exact strategy. The model
-    // context bounds it to at most 512 attempts.
-    for length in stride(from: upperBound, through: 1, by: -1) {
-      try Task.checkCancellation()
-      let candidate = try encodeCandidate(Array(contentTokens.suffix(length)))
-      try Task.checkCancellation()
-      if candidate.count <= maximumPromptTokens {
-        return candidate
-      }
+    messageEndTokenID: Int
+  ) throws -> [Int] {
+    try Task.checkCancellation()
+    guard let messageEndIndex = emptyPromptTokens.lastIndex(
+      of: messageEndTokenID
+    ) else {
+      throw InferenceError.invalidModel(
+        "Le gabarit de conversation ne contient pas le marqueur de fin attendu."
+      )
     }
-    return nil
+
+    let prefix = Array(emptyPromptTokens[..<messageEndIndex])
+    let suffix = Array(emptyPromptTokens[messageEndIndex...])
+    let availableContentTokens = maximumPromptTokens
+      - prefix.count
+      - suffix.count
+    guard availableContentTokens > 0 else {
+      throw InferenceError.promptTooLong
+    }
+
+    let suffixLength = min(
+      contentTokens.count,
+      min(max(maximumSuffixTokens, 0), availableContentTokens)
+    )
+    guard suffixLength > 0 else { throw InferenceError.emptyPrompt }
+
+    let selectedContent = contentTokens.suffix(suffixLength)
+    let result = prefix + selectedContent + suffix
+    guard result.count <= maximumPromptTokens else {
+      throw InferenceError.promptTooLong
+    }
+    try Task.checkCancellation()
+    return result
   }
 
   private static func encode(

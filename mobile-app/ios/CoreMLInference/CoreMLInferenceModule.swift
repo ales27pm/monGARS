@@ -93,15 +93,204 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     }
   }
 
-  private let coordinator = InferenceCoordinator()
+  private final class EventTarget: @unchecked Sendable {
+    weak var module: CoreMLInferenceModule?
+
+    func emit(_ event: CoreMLBridgeEvent, body: [String: Any]) {
+      module?.emit(event, body: body)
+    }
+  }
+
+  private final class OperationWorker: @unchecked Sendable {
+    private let coordinator: InferenceCoordinator
+    private let logger: Logger
+    private let emit: @Sendable (CoreMLBridgeEvent, [String: Any]) -> Void
+
+    init(
+      coordinator: InferenceCoordinator,
+      logger: Logger,
+      emit: @escaping @Sendable (CoreMLBridgeEvent, [String: Any]) -> Void
+    ) {
+      self.coordinator = coordinator
+      self.logger = logger
+      self.emit = emit
+    }
+
+    func status(promise: CoreMLBridgePromise) async {
+      let status = await coordinator.status()
+      promise.resolve(CoreMLInferenceModule.statusPayload(status))
+    }
+
+    func prepare(promise: CoreMLBridgePromise) async {
+      emit(
+        .status,
+        CoreMLInferenceModule.transientStatusPayload(
+          phase: .downloading,
+          detail: "Telechargement du modele Hugging Face"
+        )
+      )
+
+      do {
+        let status = try await coordinator.prepareModel { [emit = self.emit] progress in
+          emit(
+            .downloadProgress,
+            CoreMLInferenceModule.progressPayload(progress)
+          )
+        }
+        let payload = CoreMLInferenceModule.statusPayload(status)
+        emit(.status, payload)
+        promise.resolve(payload)
+      } catch {
+        await publishCurrentStatus()
+        if CoreMLInferenceModule.isCancellation(error) {
+          promise.reject(
+            code: "coreml_cancelled",
+            message: "Preparation du modele annulee.",
+            error: error
+          )
+          return
+        }
+
+        let code = CoreMLInferenceModule.bridgeErrorCode(error)
+        let message = error.localizedDescription
+        logger.error("Model preparation failed: \(message, privacy: .public)")
+        emit(
+          .error,
+          CoreMLInferenceModule.errorPayload(
+            requestID: nil,
+            operation: .prepare,
+            code: code,
+            message: message,
+            recoverable: CoreMLInferenceModule.isRecoverable(error)
+          )
+        )
+        promise.reject(code: code, message: message, error: error)
+      }
+    }
+
+    func generate(
+      requestID: String,
+      messages: [ChatMessage],
+      options: GenerationOptions
+    ) async {
+      let accumulator = GenerationAccumulator()
+      let startedAt = Date()
+      emit(
+        .status,
+        CoreMLInferenceModule.transientStatusPayload(
+          phase: .generating,
+          detail: "Generation locale en cours",
+          installedBytes: MonGARSModelManifest.installedBytes
+        )
+      )
+
+      do {
+        let result = try await coordinator.generate(
+          messages: messages,
+          options: options
+        ) { [emit = self.emit] update in
+          await accumulator.record(update)
+          emit(
+            .generation,
+            CoreMLInferenceModule.generationPayload(
+              requestID: requestID,
+              sequence: update.generatedTokens,
+              update: update
+            )
+          )
+        }
+
+        emit(
+          .complete,
+          CoreMLInferenceModule.completionPayload(
+            requestID: requestID,
+            sequence: result.generatedTokens + 1,
+            result: result
+          )
+        )
+        await publishCurrentStatus()
+      } catch {
+        if CoreMLInferenceModule.isCancellation(error) {
+          let latest = await accumulator.snapshot()
+          emit(
+            .complete,
+            [
+              "requestId": requestID,
+              "sequence": latest.generatedTokens + 1,
+              "text": latest.text,
+              "promptTokens": NSNull(),
+              "generatedTokens": latest.generatedTokens,
+              "duration": max(Date().timeIntervalSince(startedAt), 0),
+              "tokensPerSecond": latest.tokensPerSecond,
+              "finishReason": "cancelled",
+              "modelId": MonGARSModelManifest.modelID,
+            ]
+          )
+          await publishCurrentStatus()
+          return
+        }
+
+        let code = CoreMLInferenceModule.bridgeErrorCode(error)
+        let message = error.localizedDescription
+        logger.error("Local generation failed: \(message, privacy: .public)")
+        emit(
+          .error,
+          CoreMLInferenceModule.errorPayload(
+            requestID: requestID,
+            operation: .generate,
+            code: code,
+            message: message,
+            recoverable: CoreMLInferenceModule.isRecoverable(error)
+          )
+        )
+        await publishCurrentStatus()
+      }
+    }
+
+    func unload(promise: CoreMLBridgePromise? = nil) async {
+      await coordinator.unloadModel()
+      let status = await coordinator.status()
+      let payload = CoreMLInferenceModule.statusPayload(status)
+      emit(.status, payload)
+      promise?.resolve(payload)
+    }
+
+    func delete(promise: CoreMLBridgePromise) async {
+      do {
+        let status = try await coordinator.deleteModel()
+        let payload = CoreMLInferenceModule.statusPayload(status)
+        emit(.status, payload)
+        promise.resolve(payload)
+      } catch {
+        let code = CoreMLInferenceModule.bridgeErrorCode(error)
+        let message = error.localizedDescription
+        emit(
+          .error,
+          CoreMLInferenceModule.errorPayload(
+            requestID: nil,
+            operation: .delete,
+            code: code,
+            message: message,
+            recoverable: CoreMLInferenceModule.isRecoverable(error)
+          )
+        )
+        promise.reject(code: code, message: message, error: error)
+      }
+    }
+
+    private func publishCurrentStatus() async {
+      let status = await coordinator.status()
+      emit(.status, CoreMLInferenceModule.statusPayload(status))
+    }
+  }
+
+  private let coordinator: InferenceCoordinator
   private let operationStateQueue = DispatchQueue(
     label: "com.mongars.mobile.coreml.operation-state"
   )
   private let lifecycleObserverLock = NSLock()
-  private let logger = Logger(
-    subsystem: "com.mongars.mobile",
-    category: "CoreMLInference"
-  )
+  private let logger: Logger
+  private let operationWorker: OperationWorker
 
   // Access to these properties is confined to operationStateQueue.
   private var activeOperation: ActiveOperation?
@@ -114,7 +303,23 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
   private var lifecycleObservers: [NSObjectProtocol] = []
 
   override init() {
+    let coordinator = InferenceCoordinator()
+    let logger = Logger(
+      subsystem: "com.mongars.mobile",
+      category: "CoreMLInference"
+    )
+    let eventTarget = EventTarget()
+    self.coordinator = coordinator
+    self.logger = logger
+    self.operationWorker = OperationWorker(
+      coordinator: coordinator,
+      logger: logger,
+      emit: { [eventTarget] event, body in
+        eventTarget.emit(event, body: body)
+      }
+    )
     super.init()
+    eventTarget.module = self
     installLifecycleObservers()
   }
 
@@ -175,9 +380,9 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
         return
       }
 
-      Task { [self] in
-        let status = await self.coordinator.status()
-        promise.resolve(self.statusPayload(status))
+      let worker = self.operationWorker
+      Task { [worker] in
+        await worker.status(promise: promise)
       }
     }
   }
@@ -191,12 +396,13 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     // to MonGARSModelManifest and is never accepted from JavaScript.
     _ = options
     let promise = CoreMLBridgePromise(resolve: resolve, reject: reject)
+    let worker = operationWorker
     let operation = ScheduledOperation(
       id: UUID().uuidString,
       kind: .prepare,
       priority: .utility,
-      run: { [self] in
-        await self.performPrepare(promise: promise)
+      run: { [worker] in
+        await worker.prepare(promise: promise)
       },
       rejectWhenBusy: { code, message in
         promise.reject(code: code, message: message)
@@ -221,7 +427,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       promise.reject(code: "coreml_invalid_request", message: message, error: error)
       emit(
         .error,
-        body: errorPayload(
+        body: Self.errorPayload(
           requestID: requestID,
           operation: .generate,
           code: "coreml_invalid_request",
@@ -232,12 +438,13 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       return
     }
 
+    let worker = operationWorker
     let operation = ScheduledOperation(
       id: requestID,
       kind: .generate,
       priority: .userInitiated,
-      run: { [self] in
-        await self.performGeneration(
+      run: { [worker] in
+        await worker.generate(
           requestID: requestID,
           messages: parsed.messages,
           options: parsed.options
@@ -289,12 +496,13 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
     let promise = CoreMLBridgePromise(resolve: resolve, reject: reject)
+    let worker = operationWorker
     let operation = ScheduledOperation(
       id: UUID().uuidString,
       kind: .unload,
       priority: .utility,
-      run: { [self] in
-        await self.performUnload(promise: promise)
+      run: { [worker] in
+        await worker.unload(promise: promise)
       },
       rejectWhenBusy: { code, message in
         promise.reject(code: code, message: message)
@@ -308,174 +516,19 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
     let promise = CoreMLBridgePromise(resolve: resolve, reject: reject)
+    let worker = operationWorker
     let operation = ScheduledOperation(
       id: UUID().uuidString,
       kind: .delete,
       priority: .utility,
-      run: { [self] in
-        await self.performDelete(promise: promise)
+      run: { [worker] in
+        await worker.delete(promise: promise)
       },
       rejectWhenBusy: { code, message in
         promise.reject(code: code, message: message)
       }
     )
     enqueue(operation, cancellingCurrentOperation: true)
-  }
-
-  private func performPrepare(promise: CoreMLBridgePromise) async {
-    emit(
-      .status,
-      body: transientStatusPayload(
-        phase: .downloading,
-        detail: "Telechargement du modele Hugging Face"
-      )
-    )
-
-    do {
-      let status = try await coordinator.prepareModel { [weak self] progress in
-        guard let self else { return }
-        self.emit(.downloadProgress, body: self.progressPayload(progress))
-      }
-      let payload = statusPayload(status)
-      emit(.status, body: payload)
-      promise.resolve(payload)
-    } catch {
-      await publishCurrentStatus()
-      if isCancellation(error) {
-        promise.reject(
-          code: "coreml_cancelled",
-          message: "Preparation du modele annulee.",
-          error: error
-        )
-        return
-      }
-
-      let code = bridgeErrorCode(error)
-      let message = error.localizedDescription
-      logger.error("Model preparation failed: \(message, privacy: .public)")
-      emit(
-        .error,
-        body: errorPayload(
-          requestID: nil,
-          operation: .prepare,
-          code: code,
-          message: message,
-          recoverable: isRecoverable(error)
-        )
-      )
-      promise.reject(code: code, message: message, error: error)
-    }
-  }
-
-  private func performGeneration(
-    requestID: String,
-    messages: [ChatMessage],
-    options: GenerationOptions
-  ) async {
-    let accumulator = GenerationAccumulator()
-    let startedAt = Date()
-    emit(
-      .status,
-      body: transientStatusPayload(
-        phase: .generating,
-        detail: "Generation locale en cours",
-        installedBytes: MonGARSModelManifest.installedBytes
-      )
-    )
-
-    do {
-      let result = try await coordinator.generate(
-        messages: messages,
-        options: options
-      ) { [weak self] update in
-        guard let self else { return }
-        await accumulator.record(update)
-        self.emit(
-          .generation,
-          body: self.generationPayload(
-            requestID: requestID,
-            sequence: update.generatedTokens,
-            update: update
-          )
-        )
-      }
-
-      emit(
-        .complete,
-        body: completionPayload(
-          requestID: requestID,
-          sequence: result.generatedTokens + 1,
-          result: result
-        )
-      )
-      await publishCurrentStatus()
-    } catch {
-      if isCancellation(error) {
-        let latest = await accumulator.snapshot()
-        emit(
-          .complete,
-          body: [
-            "requestId": requestID,
-            "sequence": latest.generatedTokens + 1,
-            "text": latest.text,
-            "promptTokens": NSNull(),
-            "generatedTokens": latest.generatedTokens,
-            "duration": max(Date().timeIntervalSince(startedAt), 0),
-            "tokensPerSecond": latest.tokensPerSecond,
-            "finishReason": "cancelled",
-            "modelId": MonGARSModelManifest.modelID,
-          ]
-        )
-        await publishCurrentStatus()
-        return
-      }
-
-      let code = bridgeErrorCode(error)
-      let message = error.localizedDescription
-      logger.error("Local generation failed: \(message, privacy: .public)")
-      emit(
-        .error,
-        body: errorPayload(
-          requestID: requestID,
-          operation: .generate,
-          code: code,
-          message: message,
-          recoverable: isRecoverable(error)
-        )
-      )
-      await publishCurrentStatus()
-    }
-  }
-
-  private func performUnload(promise: CoreMLBridgePromise) async {
-    await coordinator.unloadModel()
-    let status = await coordinator.status()
-    let payload = statusPayload(status)
-    emit(.status, body: payload)
-    promise.resolve(payload)
-  }
-
-  private func performDelete(promise: CoreMLBridgePromise) async {
-    do {
-      let status = try await coordinator.deleteModel()
-      let payload = statusPayload(status)
-      emit(.status, body: payload)
-      promise.resolve(payload)
-    } catch {
-      let code = bridgeErrorCode(error)
-      let message = error.localizedDescription
-      emit(
-        .error,
-        body: errorPayload(
-          requestID: nil,
-          operation: .delete,
-          code: code,
-          message: message,
-          recoverable: isRecoverable(error)
-        )
-      )
-      promise.reject(code: code, message: message, error: error)
-    }
   }
 
   private func enqueue(
@@ -601,14 +654,13 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
   }
 
   private func enqueueLifecycleCleanup(reason: String) {
+    let worker = operationWorker
     let cleanup = ScheduledOperation(
       id: "lifecycle-\(UUID().uuidString)",
       kind: .lifecycle,
       priority: .utility,
-      run: { [weak self] in
-        guard let self else { return }
-        await self.coordinator.unloadModel()
-        await self.publishCurrentStatus()
+      run: { [worker] in
+        await worker.unload()
       },
       rejectWhenBusy: { _, _ in }
     )
@@ -634,7 +686,20 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       guard !isInvalidated else { return }
       isInvalidated = true
       hasEventListeners = false
-      scheduleCleanupLocked(cleanup, reason: "react-native-invalidate")
+      logger.info("Scheduling Core ML cleanup: react-native-invalidate")
+
+      if let pendingOperation {
+        pendingOperation.rejectWhenBusy(
+          "coreml_invalidated",
+          "Le pont React Native a ete invalide."
+        )
+        self.pendingOperation = nil
+      }
+
+      let interruptedOperation = activeOperation
+      activeOperation = nil
+      interruptedOperation?.task?.cancel()
+      launchLocked(cleanup)
     }
   }
 
@@ -684,11 +749,6 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     operationStateQueue.sync {
       hasEventListeners && !isInvalidated
     }
-  }
-
-  private func publishCurrentStatus() async {
-    let status = await coordinator.status()
-    emit(.status, body: statusPayload(status))
   }
 
   private func parseGenerationRequest(
@@ -749,7 +809,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     (value as? NSNumber)?.boolValue
   }
 
-  private func statusPayload(_ status: ModelStatus) -> [String: Any] {
+  private static func statusPayload(_ status: ModelStatus) -> [String: Any] {
     [
       "phase": status.phase.rawValue,
       "modelId": status.modelID,
@@ -762,7 +822,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ]
   }
 
-  private func transientStatusPayload(
+  private static func transientStatusPayload(
     phase: InferencePhase,
     detail: String,
     installedBytes: Int64 = 0
@@ -779,7 +839,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ]
   }
 
-  private func progressPayload(_ progress: ModelProgress) -> [String: Any] {
+  private static func progressPayload(_ progress: ModelProgress) -> [String: Any] {
     [
       "phase": progress.phase.rawValue,
       "fractionCompleted": progress.fractionCompleted,
@@ -788,7 +848,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ]
   }
 
-  private func generationPayload(
+  private static func generationPayload(
     requestID: String,
     sequence: Int,
     update: GenerationUpdate
@@ -802,7 +862,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ]
   }
 
-  private func completionPayload(
+  private static func completionPayload(
     requestID: String,
     sequence: Int,
     result: GenerationResult
@@ -820,7 +880,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ]
   }
 
-  private func errorPayload(
+  private static func errorPayload(
     requestID: String?,
     operation: CoreMLBridgeOperation,
     code: String,
@@ -836,12 +896,12 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ]
   }
 
-  private func nullable(_ value: String?) -> Any {
+  private static func nullable(_ value: String?) -> Any {
     guard let value else { return NSNull() }
     return value
   }
 
-  private func isCancellation(_ error: Error) -> Bool {
+  private static func isCancellation(_ error: Error) -> Bool {
     if error is CancellationError { return true }
     guard let inferenceError = error as? InferenceError else { return false }
     if case .preparationCancelled = inferenceError { return true }
@@ -849,7 +909,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     return false
   }
 
-  private func bridgeErrorCode(_ error: Error) -> String {
+  private static func bridgeErrorCode(_ error: Error) -> String {
     guard let inferenceError = error as? InferenceError else {
       return "coreml_error"
     }
@@ -883,7 +943,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     }
   }
 
-  private func isRecoverable(_ error: Error) -> Bool {
+  private static func isRecoverable(_ error: Error) -> Bool {
     guard let inferenceError = error as? InferenceError else { return true }
     switch inferenceError {
     case .unsupportedOS, .simulatorUnsupported, .invalidModel, .integrityFailure:

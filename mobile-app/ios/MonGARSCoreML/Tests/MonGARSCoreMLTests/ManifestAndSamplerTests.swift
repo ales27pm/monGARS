@@ -111,6 +111,28 @@ final class ManifestAndSamplerTests: XCTestCase {
     }
   }
 
+  func testSamplerClassifiesMutatedZeroTopKAsInvalidGenerationOptions() {
+    var options = GenerationOptions(doSample: true)
+    options.topK = 0
+
+    XCTAssertThrowsError(
+      try Sampler.select(
+        vocabularySize: 3,
+        generatedTokens: [],
+        options: options
+      ) { Float($0) }
+    ) { error in
+      guard let inferenceError = error as? InferenceError else {
+        XCTFail("InferenceError attendu, recu: \(error)")
+        return
+      }
+      guard case .invalidGenerationOptions = inferenceError else {
+        XCTFail("invalidGenerationOptions attendu, recu: \(error)")
+        return
+      }
+    }
+  }
+
   func testSamplerObservesTaskCancellation() async {
     let task = Task { () throws -> Int in
       await Task.yield()

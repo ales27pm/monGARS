@@ -34,7 +34,11 @@ final class StatefulCoreMLRunner {
     )
 
     try Self.validate(model: inferModel, function: "infer", sequenceLength: 1)
-    try Self.validate(model: prefillModel, function: "prefill", sequenceLength: 64)
+    try Self.validate(
+      model: prefillModel,
+      function: "prefill",
+      sequenceLength: Self.prefillBatchSize
+    )
   }
 
   func generate(
@@ -174,11 +178,22 @@ final class StatefulCoreMLRunner {
 
     while position + batchSize <= promptTokens.count {
       try Task.checkCancellation()
-      let inputIDs = try MLMultiArray(shape: [1, 64], dataType: .int32)
-      let positionIDs = try MLMultiArray(shape: [64], dataType: .int32)
+      let inputIDs = try MLMultiArray(
+        shape: [1, NSNumber(value: batchSize)],
+        dataType: .int32
+      )
+      let positionIDs = try MLMultiArray(
+        shape: [NSNumber(value: batchSize)],
+        dataType: .int32
+      )
       let currentPosition = try MLMultiArray(shape: [1], dataType: .int32)
       let causalMask = try MLMultiArray(
-        shape: [1, 1, 64, NSNumber(value: MonGARSModelManifest.contextLength)],
+        shape: [
+          1,
+          1,
+          NSNumber(value: batchSize),
+          NSNumber(value: MonGARSModelManifest.contextLength),
+        ],
         dataType: .float16
       )
 
@@ -208,9 +223,9 @@ final class StatefulCoreMLRunner {
 
     var logits: [MLMultiArray]?
     if position == promptTokens.count {
-      // Prefill populates the state but its 64-row logits are intentionally not
-      // retained. Replaying the final position gives the decode-shaped logits
-      // while deterministically overwriting the same KV slot.
+      // Prefill populates the state but its batched logits are intentionally
+      // not retained. Replaying the final position gives the decode-shaped
+      // logits while deterministically overwriting the same KV slot.
       logits = try predict(
         token: promptTokens[position - 1],
         position: position - 1,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import App from '../src/App';
 import { useChatStore } from '../src/store/chatStore';
 import { useInferenceStore } from '../src/store/inferenceStore';
@@ -51,10 +51,18 @@ describe('App', () => {
       ],
     });
 
-    const { getByText, queryByText } = render(<App />);
+    const { getByPlaceholderText, getByText, queryByText } = render(<App />);
 
     expect(getByText('Conversation')).toBeTruthy();
     expect(getByText('Conversation locale conservée')).toBeTruthy();
+    expect(queryByText('Modele local requis')).toBeNull();
+
+    fireEvent.changeText(
+      getByPlaceholderText('Filtrer les messages'),
+      'aucune-correspondance',
+    );
+
+    expect(getByText('Aucun message ne correspond au filtre.')).toBeTruthy();
     expect(queryByText('Modele local requis')).toBeNull();
   });
 });

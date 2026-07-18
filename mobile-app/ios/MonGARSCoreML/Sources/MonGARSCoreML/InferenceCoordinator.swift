@@ -71,7 +71,7 @@ public actor InferenceCoordinator {
       phase = .ready
       return status()
     } catch {
-      if isCancellation(error) {
+      if Self.isCancellation(error) {
         lastError = nil
         phase = store.isInstalled() ? .ready : .notDownloaded
         throw InferenceError.preparationCancelled
@@ -115,7 +115,7 @@ public actor InferenceCoordinator {
       phase = .ready
       return result
     } catch {
-      if isCancellation(error) {
+      if Self.isCancellation(error) {
         runner = nil
         lastError = nil
         phase = store.isInstalled() ? .ready : .notDownloaded
@@ -199,8 +199,10 @@ public actor InferenceCoordinator {
     unloadNow()
   }
 
-  private func isCancellation(_ error: Error) -> Bool {
-    if error is CancellationError || Task.isCancelled { return true }
+  static func isCancellation(_ error: Error) -> Bool {
+    // A task's cancellation flag is sticky and can coexist with a concrete
+    // failure. Classify the thrown error so the concrete failure is preserved.
+    if error is CancellationError { return true }
     guard let inferenceError = error as? InferenceError else { return false }
     switch inferenceError {
     case .preparationCancelled, .generationCancelled:

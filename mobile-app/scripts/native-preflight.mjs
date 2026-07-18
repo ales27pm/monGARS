@@ -48,17 +48,18 @@ function readEnvTemplate() {
 }
 
 const envKeys = readEnvTemplate();
-const iosProjectPath = path.join(
+const iosXcodeProjectPath = path.join(
   projectRoot,
   'ios',
   'MonGARSMobile.xcodeproj',
-  'project.pbxproj',
 );
+const iosProjectPath = path.join(iosXcodeProjectPath, 'project.pbxproj');
 const iosProjectText = existsSync(iosProjectPath)
   ? readFileSync(iosProjectPath, 'utf8')
   : '';
 const hostHasXcodebuild =
   spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
+const iosApplicationTargetName = 'MonGARSMobile';
 
 function pbxSection(name) {
   const start = `/* Begin ${name} section */`;
@@ -78,32 +79,58 @@ function pbxObjectBody(section, objectID) {
     return '';
   }
   const objectStart = section.indexOf('{', markerIndex);
-  const objectEnd = section.indexOf('\n\t\t};', objectStart);
-  if (objectStart === -1 || objectEnd === -1) {
+  if (objectStart === -1) {
+    return '';
+  }
+  const lineEnd = section.indexOf('\n', objectStart);
+  const inlineObjectEnd = section.indexOf('};', objectStart);
+  const objectEnd =
+    inlineObjectEnd !== -1 && (lineEnd === -1 || inlineObjectEnd < lineEnd)
+      ? inlineObjectEnd
+      : section.indexOf('\n\t\t};', objectStart);
+  if (objectEnd === -1) {
     return '';
   }
   return section.slice(objectStart + 1, objectEnd);
 }
 
-function applicationTargetBuildPhaseID(phaseName) {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function pbxObjectID(section, comment) {
+  const match = section.match(
+    new RegExp(`([A-F0-9]{24}) \\/\\* ${escapeRegExp(comment)} \\*\\/ = \\{`),
+  );
+  return match?.[1] ?? null;
+}
+
+function pbxProperty(body, property) {
+  const match = body.match(new RegExp(`\\b${property}\\s*=\\s*([^;]+);`));
+  return match?.[1]?.trim().replace(/^"|"$/g, '') ?? null;
+}
+
+function nativeTargetBody(targetName) {
   const targets = pbxSection('PBXNativeTarget');
-  const applicationMarker =
-    'productType = "com.apple.product-type.application";';
-  const applicationMarkerIndex = targets.indexOf(applicationMarker);
-  if (applicationMarkerIndex === -1) {
+  const targetID = pbxObjectID(targets, targetName);
+  if (!targetID) {
+    return '';
+  }
+  const body = pbxObjectBody(targets, targetID);
+  if (
+    pbxProperty(body, 'name') !== targetName ||
+    pbxProperty(body, 'productType') !== 'com.apple.product-type.application'
+  ) {
+    return '';
+  }
+  return body;
+}
+
+function applicationTargetBuildPhaseID(phaseName) {
+  const targetBody = nativeTargetBody(iosApplicationTargetName);
+  if (!targetBody) {
     return null;
   }
-  const targetHeaders = [
-    ...targets
-      .slice(0, applicationMarkerIndex)
-      .matchAll(/\n\t\t[A-F0-9]{24} \/\* [^\n]+ \*\/ = \{/g),
-  ];
-  const targetStart = targetHeaders.at(-1)?.index ?? -1;
-  const targetEnd = targets.indexOf('\n\t\t};', applicationMarkerIndex);
-  if (targetStart === -1 || targetEnd === -1) {
-    return null;
-  }
-  const targetBody = targets.slice(targetStart, targetEnd);
   const phaseMatch = targetBody.match(
     new RegExp(`([A-F0-9]{24}) \\/\\* ${phaseName} \\*\\/`),
   );
@@ -119,19 +146,191 @@ function applicationBuildPhaseContains(phaseType, phaseName, entries) {
   return entries.every((entry) => phaseBody.includes(entry));
 }
 
-function allDeploymentTargetsAreAtLeast(minimumMajorVersion) {
-  const assignments = [
-    ...iosProjectText.matchAll(/IPHONEOS_DEPLOYMENT_TARGET\s*=\s*([^;]+);/g),
-  ].map(([, value]) => value.trim().replace(/^"|"$/g, ''));
+function buildConfigurationsForList(configurationListID) {
+  const listBody = pbxObjectBody(
+    pbxSection('XCConfigurationList'),
+    configurationListID,
+  );
+  const configurationIDs = [
+    ...listBody.matchAll(/([A-F0-9]{24}) \/\* [^\n]+ \*\//g),
+  ].map(([, objectID]) => objectID);
+  const configurations = pbxSection('XCBuildConfiguration');
+  return configurationIDs
+    .map((objectID) => pbxObjectBody(configurations, objectID))
+    .filter(Boolean)
+    .map((body) => ({ body, name: pbxProperty(body, 'name') }));
+}
 
-  return (
-    assignments.length > 0 &&
-    assignments.every((value) => {
-      if (!/^\d+(?:\.\d+)*$/.test(value)) {
-        return false;
+function targetBuildConfigurations(targetName) {
+  const body = nativeTargetBody(targetName);
+  const listID = body.match(/buildConfigurationList\s*=\s*([A-F0-9]{24})/)?.[1];
+  return listID ? buildConfigurationsForList(listID) : [];
+}
+
+function projectBuildConfigurations() {
+  const projects = pbxSection('PBXProject');
+  const projectID = projects.match(
+    /\n\t\t([A-F0-9]{24}) \/\* Project object \*\/ = \{/,
+  )?.[1];
+  const body = projectID ? pbxObjectBody(projects, projectID) : '';
+  const listID = body.match(/buildConfigurationList\s*=\s*([A-F0-9]{24})/)?.[1];
+  return listID ? buildConfigurationsForList(listID) : [];
+}
+
+function numericDeploymentTarget(value) {
+  const normalized = value
+    ?.replace(/\$\(inherited\)/g, '')
+    .trim()
+    .replace(/^"|"$/g, '');
+  return normalized && /^\d+(?:\.\d+)*$/.test(normalized)
+    ? Number(normalized)
+    : null;
+}
+
+function deploymentTargetAssignment(text) {
+  const assignments = [
+    ...text.matchAll(
+      /IPHONEOS_DEPLOYMENT_TARGET(?:\[[^\]]+\])?\s*=\s*([^;\n]+);?/g,
+    ),
+  ];
+  for (const [, value] of assignments.reverse()) {
+    const parsed = numericDeploymentTarget(value);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function resolveFileReference(referenceID) {
+  const body = pbxObjectBody(pbxSection('PBXFileReference'), referenceID);
+  const configuredPath = pbxProperty(body, 'path') ?? pbxProperty(body, 'name');
+  if (!configuredPath) {
+    return null;
+  }
+
+  const iosRoot = path.join(projectRoot, 'ios');
+  const candidates = [
+    path.resolve(iosRoot, configuredPath),
+    path.resolve(projectRoot, configuredPath),
+  ];
+  const direct = candidates.find((candidate) => existsSync(candidate));
+  if (direct) {
+    return direct;
+  }
+
+  const discovered = findFile(
+    iosRoot,
+    (_, name) => name === path.basename(configuredPath),
+  );
+  return discovered ? path.join(projectRoot, discovered) : null;
+}
+
+function deploymentTargetFromXcconfig(filePath, includeStack = new Set()) {
+  if (!filePath || includeStack.has(filePath) || !existsSync(filePath)) {
+    return null;
+  }
+  const nextIncludeStack = new Set(includeStack);
+  nextIncludeStack.add(filePath);
+
+  let resolved = null;
+  const lines = readFileSync(filePath, 'utf8').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\/\/.*$/, '').trim();
+    const include = line.match(/^#include\??\s+["<]([^">]+)[">]/);
+    if (include) {
+      const includedValue = deploymentTargetFromXcconfig(
+        path.resolve(path.dirname(filePath), include[1]),
+        nextIncludeStack,
+      );
+      if (includedValue !== null) {
+        resolved = includedValue;
       }
-      return Number(value.split('.')[0]) >= minimumMajorVersion;
-    })
+      continue;
+    }
+    const assignment = deploymentTargetAssignment(line);
+    if (assignment !== null) {
+      resolved = assignment;
+    }
+  }
+  return resolved;
+}
+
+function deploymentTargetFromConfiguration(configuration) {
+  const direct = deploymentTargetAssignment(configuration.body);
+  if (direct !== null) {
+    return direct;
+  }
+  const referenceID = configuration.body.match(
+    /baseConfigurationReference\s*=\s*([A-F0-9]{24})/,
+  )?.[1];
+  return referenceID
+    ? deploymentTargetFromXcconfig(resolveFileReference(referenceID))
+    : null;
+}
+
+function xcodebuildDeploymentTargets(configurations) {
+  if (!hostHasXcodebuild) {
+    return null;
+  }
+  const values = [];
+  for (const configuration of configurations) {
+    const result = spawnSync(
+      'xcodebuild',
+      [
+        '-project',
+        iosXcodeProjectPath,
+        '-target',
+        iosApplicationTargetName,
+        '-configuration',
+        configuration.name,
+        '-disableAutomaticPackageResolution',
+        '-showBuildSettings',
+      ],
+      { encoding: 'utf8', timeout: 30_000 },
+    );
+    if (result.status !== 0) {
+      return null;
+    }
+    const match = result.stdout.match(
+      /^\s*IPHONEOS_DEPLOYMENT_TARGET\s*=\s*(\S+)\s*$/m,
+    );
+    const parsed = numericDeploymentTarget(match?.[1]);
+    if (parsed === null) {
+      return null;
+    }
+    values.push(parsed);
+  }
+  return values;
+}
+
+function allDeploymentTargetsAreAtLeast(minimumMajorVersion) {
+  const targetConfigurations = targetBuildConfigurations(
+    iosApplicationTargetName,
+  );
+  if (targetConfigurations.length === 0) {
+    return false;
+  }
+
+  const effectiveValues = xcodebuildDeploymentTargets(targetConfigurations);
+  if (effectiveValues) {
+    return effectiveValues.every((value) => value >= minimumMajorVersion);
+  }
+
+  const projectConfigurations = new Map(
+    projectBuildConfigurations().map((configuration) => [
+      configuration.name,
+      deploymentTargetFromConfiguration(configuration),
+    ]),
+  );
+  const staticValues = targetConfigurations.map(
+    (configuration) =>
+      deploymentTargetFromConfiguration(configuration) ??
+      projectConfigurations.get(configuration.name) ??
+      null,
+  );
+  return staticValues.every(
+    (value) => value !== null && value >= minimumMajorVersion,
   );
 }
 

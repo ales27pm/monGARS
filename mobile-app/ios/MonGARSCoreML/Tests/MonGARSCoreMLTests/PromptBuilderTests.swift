@@ -1,61 +1,66 @@
-import Dispatch
 import XCTest
 @testable import MonGARSCoreML
 
 final class PromptBuilderTests: XCTestCase {
-  func testLargestFittingSuffixHandlesNonMonotonicEncodedLengths() throws {
-    var attemptedLengths: [Int] = []
-    let fittingLengths: Set<Int> = [4, 2, 1]
-
-    let candidate = try PromptBuilder.largestFittingEncodedSuffix(
+  func testTokenLevelTruncationPreservesTemplateAndLargestFittingSuffix() throws {
+    let candidate = try PromptBuilder.tokenLevelSuffixPrompt(
       contentTokens: Array(1...6),
+      emptyPromptTokens: [100, 999, 101, 102, 999, 200, 201],
       maximumSuffixTokens: 6,
-      maximumPromptTokens: 10
-    ) { suffix in
-      attemptedLengths.append(suffix.count)
-      let encodedCount = fittingLengths.contains(suffix.count) ? 10 : 11
-      return Array(repeating: suffix.count, count: encodedCount)
-    }
+      maximumPromptTokens: 10,
+      messageEndTokenID: 999
+    )
 
-    XCTAssertEqual(attemptedLengths, [6, 5, 4])
-    XCTAssertEqual(candidate?.first, 4)
+    XCTAssertEqual(
+      candidate,
+      [100, 999, 101, 102, 4, 5, 6, 999, 200, 201]
+    )
   }
 
-  func testLargestFittingSuffixCapsAttemptsAtModelContextLength() throws {
-    let tokenCount = MonGARSModelManifest.contextLength + 100
-    var attemptedLengths: [Int] = []
-
-    let candidate = try PromptBuilder.largestFittingEncodedSuffix(
-      contentTokens: Array(0..<tokenCount),
-      maximumSuffixTokens: tokenCount,
-      maximumPromptTokens: 1
-    ) { suffix in
-      attemptedLengths.append(suffix.count)
-      return [suffix.count]
-    }
-
-    XCTAssertEqual(attemptedLengths, [MonGARSModelManifest.contextLength])
-    XCTAssertEqual(candidate, [MonGARSModelManifest.contextLength])
-  }
-
-  func testLargestFittingSuffixObservesCancellationAfterEncodingAttempt() async {
-    let encodingStarted = DispatchSemaphore(value: 0)
-    let finishEncoding = DispatchSemaphore(value: 0)
-    let task = Task.detached { () throws -> [Int]? in
-      try PromptBuilder.largestFittingEncodedSuffix(
-        contentTokens: Array(1...4),
-        maximumSuffixTokens: 4,
-        maximumPromptTokens: 1
-      ) { _ in
-        encodingStarted.signal()
-        finishEncoding.wait()
-        return [0, 1]
+  func testTokenLevelTruncationRejectsMissingMessageEndMarker() {
+    XCTAssertThrowsError(
+      try PromptBuilder.tokenLevelSuffixPrompt(
+        contentTokens: [1, 2],
+        emptyPromptTokens: [100, 101],
+        maximumSuffixTokens: 2,
+        maximumPromptTokens: 8,
+        messageEndTokenID: 999
+      )
+    ) { error in
+      guard case InferenceError.invalidModel = error else {
+        return XCTFail("invalidModel attendu, recu: \(error)")
       }
     }
+  }
 
-    XCTAssertEqual(encodingStarted.wait(timeout: .now() + 1), .success)
+  func testTokenLevelTruncationRejectsTemplateWithoutContentBudget() {
+    XCTAssertThrowsError(
+      try PromptBuilder.tokenLevelSuffixPrompt(
+        contentTokens: [1],
+        emptyPromptTokens: [100, 999, 200],
+        maximumSuffixTokens: 1,
+        maximumPromptTokens: 3,
+        messageEndTokenID: 999
+      )
+    ) { error in
+      guard case InferenceError.promptTooLong = error else {
+        return XCTFail("promptTooLong attendu, recu: \(error)")
+      }
+    }
+  }
+
+  func testTokenLevelTruncationObservesCancellation() async {
+    let task = Task { () throws -> [Int] in
+      await Task.yield()
+      return try PromptBuilder.tokenLevelSuffixPrompt(
+        contentTokens: Array(1...100),
+        emptyPromptTokens: [100, 999, 200],
+        maximumSuffixTokens: 100,
+        maximumPromptTokens: 32,
+        messageEndTokenID: 999
+      )
+    }
     task.cancel()
-    finishEncoding.signal()
 
     do {
       _ = try await task.value

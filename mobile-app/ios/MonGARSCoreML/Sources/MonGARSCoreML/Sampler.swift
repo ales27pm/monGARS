@@ -15,6 +15,11 @@ enum Sampler {
     guard vocabularySize > 0 else {
       throw InferenceError.invalidModel("Le vocabulaire de sortie est vide.")
     }
+    guard !options.doSample || options.topK > 0 else {
+      throw InferenceError.invalidGenerationOptions(
+        "topK doit etre strictement positif pour l'echantillonnage."
+      )
+    }
     let candidateCount = options.doSample ? min(options.topK, vocabularySize) : 1
     var heap: [Candidate] = []
     heap.reserveCapacity(candidateCount)

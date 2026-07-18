@@ -6,11 +6,6 @@ import CryptoKit
 #endif
 
 final class ModelStore {
-  private struct FileSignature: Equatable {
-    let bytes: Int64
-    let modificationDate: Date
-  }
-
   private struct VerificationMarker: Codable {
     let modelID: String
     let revision: String
@@ -21,7 +16,6 @@ final class ModelStore {
   private let fileManager: FileManager
   private let rootDirectory: URL
   private let hub: HubApi
-  private var verifiedFileSignatures: [String: FileSignature]?
 
   private static let manifestFingerprint = MonGARSModelManifest.expectedFiles
     .map { "\($0.path)|\($0.bytes)|\($0.sha256)" }
@@ -99,18 +93,10 @@ final class ModelStore {
   ) async throws {
     guard isInstalled() else { throw InferenceError.modelNotInstalled }
     try applyBackupExclusion(to: repositoryDirectory)
-    let currentSignatures = try currentFileSignatures()
-    if
-      let verifiedFileSignatures,
-      verifiedFileSignatures == currentSignatures
-    {
-      return
-    }
 
     do {
       try await verify(snapshot: repositoryDirectory, progress: progress)
       try Task.checkCancellation()
-      verifiedFileSignatures = try currentFileSignatures()
     } catch {
       if
         let inferenceError = error as? InferenceError,
@@ -176,7 +162,6 @@ final class ModelStore {
         try Task.checkCancellation()
         try applyBackupExclusion(to: snapshot)
         try writeVerificationMarker()
-        verifiedFileSignatures = try currentFileSignatures()
         return snapshot
       } catch let error as InferenceError {
         guard case let .integrityFailure(path) = error else { throw error }
@@ -189,7 +174,6 @@ final class ModelStore {
   }
 
   func deleteModel() throws {
-    verifiedFileSignatures = nil
     if fileManager.fileExists(atPath: repositoryDirectory.path) {
       try fileManager.removeItem(at: repositoryDirectory)
     }
@@ -254,7 +238,7 @@ final class ModelStore {
         throw InferenceError.integrityFailure(expected.path)
       }
 
-      let checksum = try await sha256(fileURL)
+      let checksum = try await Self.sha256(fileURL)
       guard checksum == expected.sha256 else {
         throw InferenceError.integrityFailure(expected.path)
       }
@@ -281,30 +265,7 @@ final class ModelStore {
     try data.write(to: markerURL, options: .atomic)
   }
 
-  private func currentFileSignatures() throws -> [String: FileSignature] {
-    var signatures: [String: FileSignature] = [:]
-    signatures.reserveCapacity(MonGARSModelManifest.expectedFiles.count)
-
-    for expected in MonGARSModelManifest.expectedFiles {
-      let fileURL = repositoryDirectory.appendingPathComponent(expected.path)
-      guard
-        let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
-        let size = (attributes[.size] as? NSNumber)?.int64Value,
-        size == expected.bytes,
-        let modificationDate = attributes[.modificationDate] as? Date
-      else {
-        throw InferenceError.integrityFailure(expected.path)
-      }
-      signatures[expected.path] = FileSignature(
-        bytes: size,
-        modificationDate: modificationDate
-      )
-    }
-
-    return signatures
-  }
-
-  private func sha256(_ url: URL) async throws -> String {
+  static func sha256(_ url: URL) async throws -> String {
     let hashTask: Task<String, Error> = Task.detached(priority: .utility) {
       #if canImport(CryptoKit)
       let handle = try FileHandle(forReadingFrom: url)
@@ -329,7 +290,6 @@ final class ModelStore {
   }
 
   private func purgeArtifact(at relativePath: String) throws {
-    verifiedFileSignatures = nil
     let artifact = repositoryDirectory.appendingPathComponent(relativePath)
     if fileManager.fileExists(atPath: artifact.path) {
       try fileManager.removeItem(at: artifact)

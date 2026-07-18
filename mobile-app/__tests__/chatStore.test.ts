@@ -593,4 +593,300 @@ describe('chatStore', () => {
       ]),
     );
   });
+
+  it('keeps both halves of a server turn split by the history snapshot', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+      messages: [
+        {
+          id: 'in-flight-user',
+          role: 'user',
+          content: 'Question en vol',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'chat' },
+        },
+      ],
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: 'in-flight-assistant',
+          role: 'assistant',
+          content: 'Réponse en vol',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'chat' },
+        },
+      ],
+    }));
+    history.resolve([]);
+    await refresh;
+
+    expect(useChatStore.getState().messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'in-flight-user' }),
+        expect.objectContaining({ id: 'in-flight-assistant' }),
+      ]),
+    );
+  });
+
+  it('does not duplicate the assistant when history includes a split in-flight turn', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+      messages: [
+        {
+          id: 'in-flight-user',
+          role: 'user',
+          content: 'Question en vol',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'chat' },
+        },
+      ],
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: 'in-flight-assistant',
+          role: 'assistant',
+          content: 'Réponse en vol',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'chat' },
+        },
+      ],
+    }));
+    history.resolve([
+      {
+        query: 'Question en vol',
+        response: 'Réponse en vol',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    await refresh;
+
+    const messages = useChatStore.getState().messages;
+    expect(
+      messages.filter((message) => message.content === 'Question en vol'),
+    ).toHaveLength(1);
+    expect(
+      messages.filter((message) => message.content === 'Réponse en vol'),
+    ).toHaveLength(1);
+  });
+
+  it('rejoins a split turn when an unrelated realtime turn arrives between its halves', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+      messages: [
+        {
+          id: 'split-user',
+          role: 'user',
+          content: 'Question principale',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'chat' },
+        },
+      ],
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: 'realtime-user-between',
+          role: 'user',
+          content: 'Question temps réel',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+        {
+          id: 'realtime-assistant-between',
+          role: 'assistant',
+          content: 'Réponse temps réel',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+        {
+          id: 'split-assistant',
+          role: 'assistant',
+          content: 'Réponse principale',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'chat' },
+        },
+      ],
+    }));
+    history.resolve([
+      {
+        query: 'Question principale',
+        response: 'Réponse principale',
+        timestamp: new Date().toISOString(),
+      },
+      {
+        query: 'Question temps réel',
+        response: 'Réponse temps réel',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    await refresh;
+
+    const contents = useChatStore
+      .getState()
+      .messages.map((message) => message.content);
+    expect(contents).toHaveLength(4);
+    expect(
+      contents.filter((content) => content === 'Question principale'),
+    ).toHaveLength(1);
+    expect(
+      contents.filter((content) => content === 'Réponse principale'),
+    ).toHaveLength(1);
+    expect(
+      contents.filter((content) => content === 'Question temps réel'),
+    ).toHaveLength(1);
+    expect(
+      contents.filter((content) => content === 'Réponse temps réel'),
+    ).toHaveLength(1);
+  });
+
+  it('uses history fingerprint counts without collapsing a repeated turn', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        ...[1, 2].flatMap((turn) => [
+          {
+            id: `repeated-user-${turn}`,
+            role: 'user' as const,
+            content: 'Même question',
+            createdAt: new Date(),
+            metadata: {
+              inferenceBackend: 'server' as const,
+              source: 'realtime' as const,
+            },
+          },
+          {
+            id: `repeated-assistant-${turn}`,
+            role: 'assistant' as const,
+            content: 'Même réponse',
+            createdAt: new Date(),
+            metadata: {
+              inferenceBackend: 'server' as const,
+              source: 'realtime' as const,
+            },
+          },
+        ]),
+      ],
+    }));
+    history.resolve([
+      {
+        query: 'Même question',
+        response: 'Même réponse',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    await refresh;
+
+    const messages = useChatStore.getState().messages;
+    expect(
+      messages.filter((message) => message.content === 'Même question'),
+    ).toHaveLength(2);
+    expect(
+      messages.filter((message) => message.content === 'Même réponse'),
+    ).toHaveLength(2);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'repeated-user-2' }),
+        expect.objectContaining({ id: 'repeated-assistant-2' }),
+      ]),
+    );
+  });
+
+  it('assigns legacy v4 local turns to the persisted session owner', async () => {
+    const migrate = useChatStore.persist.getOptions().migrate;
+    if (!migrate) {
+      throw new Error('Migration chat manquante');
+    }
+
+    const migrated = (await migrate(
+      {
+        session: { username: 'Alice', token: 'alice-token' },
+        messages: [
+          {
+            id: 'legacy-user',
+            role: 'user',
+            content: 'Question locale',
+            createdAt: new Date().toISOString(),
+            metadata: {
+              inferenceBackend: 'on-device',
+              source: 'on-device',
+            },
+          },
+          {
+            id: 'legacy-assistant',
+            role: 'assistant',
+            content: 'Réponse locale',
+            createdAt: new Date().toISOString(),
+            metadata: {
+              inferenceBackend: 'on-device',
+              source: 'on-device',
+              finishReason: 'eos',
+            },
+          },
+        ],
+        mode: 'chat',
+        quickActions: ['code', 'summarize', 'explain'],
+      },
+      4,
+    )) as {
+      messages: Array<{
+        metadata?: { localOwnerId?: string };
+      }>;
+    };
+
+    expect(migrated.messages).toHaveLength(2);
+    expect(migrated.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            localOwnerId: 'account:alice',
+          }),
+        }),
+      ]),
+    );
+    expect(
+      migrated.messages.every(
+        (message) => message.metadata?.localOwnerId === 'account:alice',
+      ),
+    ).toBe(true);
+  });
 });

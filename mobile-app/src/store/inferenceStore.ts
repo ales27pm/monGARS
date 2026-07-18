@@ -61,6 +61,11 @@ type LifecycleSignal<T> = {
   resolve: (value: T) => void;
 };
 
+type GenerationLifecycle = {
+  startSignal: LifecycleSignal<string | null>;
+  terminalSignal: LifecycleSignal<void>;
+};
+
 type InferenceSetter = (
   partial:
     | Partial<InferenceState>
@@ -125,20 +130,34 @@ function createLifecycleSignal<T>(): LifecycleSignal<T> {
   return { promise, resolve };
 }
 
-function beginGenerationLifecycle() {
-  generationStartSignal = createLifecycleSignal<string | null>();
-  generationTerminalSignal = createLifecycleSignal<void>();
+function beginGenerationLifecycle(): GenerationLifecycle {
+  const lifecycle = {
+    startSignal: createLifecycleSignal<string | null>(),
+    terminalSignal: createLifecycleSignal<void>(),
+  };
+  generationStartSignal = lifecycle.startSignal;
+  generationTerminalSignal = lifecycle.terminalSignal;
+  return lifecycle;
 }
 
-function markGenerationStarted(requestId: string | null) {
-  generationStartSignal?.resolve(requestId);
-  generationStartSignal = null;
+function markGenerationStarted(
+  requestId: string | null,
+  lifecycle?: GenerationLifecycle,
+) {
+  const startSignal = lifecycle?.startSignal ?? generationStartSignal;
+  startSignal?.resolve(requestId);
+  if (generationStartSignal === startSignal) {
+    generationStartSignal = null;
+  }
 }
 
-function finishGenerationLifecycle() {
-  generationTerminalSignal?.resolve();
-  generationTerminalSignal = null;
-  markGenerationStarted(null);
+function finishGenerationLifecycle(lifecycle?: GenerationLifecycle) {
+  const terminalSignal = lifecycle?.terminalSignal ?? generationTerminalSignal;
+  terminalSignal?.resolve();
+  if (generationTerminalSignal === terminalSignal) {
+    generationTerminalSignal = null;
+  }
+  markGenerationStarted(null, lifecycle);
 }
 
 async function waitAtMost(
@@ -255,10 +274,10 @@ function bindNativeEvents(set: InferenceSetter, get: () => InferenceState) {
   unsubscribeNativeEvents = subscribeToCoreMLEvents({
     onStatus: (status) => {
       invalidateStatusRefresh();
-      set((state) => ({
+      set({
         status,
-        error: status.phase === 'error' ? status.detail : state.error,
-      }));
+        error: status.phase === 'error' ? status.detail : null,
+      });
     },
     onDownloadProgress: (progress) => {
       invalidateStatusRefresh();
@@ -428,7 +447,7 @@ export const useInferenceStore = create<InferenceState>()(
         const operationEpoch = ++generationEpoch;
         startingGeneration = true;
         cancelRequestedWhileStarting = false;
-        beginGenerationLifecycle();
+        const lifecycle = beginGenerationLifecycle();
         invalidateStatusRefresh();
         clearEarlyEvents();
         set({ generation: null, lastResult: null, error: null });
@@ -437,15 +456,19 @@ export const useInferenceStore = create<InferenceState>()(
         try {
           const acknowledgement = await startCoreMLGeneration(request);
           requestId = acknowledgement.requestId;
-          markGenerationStarted(requestId);
+          markGenerationStarted(requestId, lifecycle);
         } catch (error) {
-          markGenerationStarted(null);
+          markGenerationStarted(null, lifecycle);
+          if (operationEpoch !== generationEpoch) {
+            finishGenerationLifecycle(lifecycle);
+            throw new Error("Le moteur d'inférence locale a été arrêté.");
+          }
           startingGeneration = false;
           cancelRequestedWhileStarting = false;
           clearEarlyEvents();
           const status = errorStatus(get().status, error);
           set({ status, activeRequestId: null, error: status.detail });
-          finishGenerationLifecycle();
+          finishGenerationLifecycle(lifecycle);
           throw error;
         }
 
@@ -459,10 +482,7 @@ export const useInferenceStore = create<InferenceState>()(
             // Teardown is already in progress; the native bridge will also
             // cancel its operation when React Native invalidates the module.
           }
-          startingGeneration = false;
-          cancelRequestedWhileStarting = false;
-          clearEarlyEvents();
-          finishGenerationLifecycle();
+          finishGenerationLifecycle(lifecycle);
           throw stoppedError;
         }
 
@@ -473,7 +493,7 @@ export const useInferenceStore = create<InferenceState>()(
           clearEarlyEvents();
           const status = errorStatus(get().status, earlyError);
           set({ status, activeRequestId: null, error: status.detail });
-          finishGenerationLifecycle();
+          finishGenerationLifecycle(lifecycle);
           throw earlyError;
         }
         const earlyResult = earlyCompletions.get(requestId);
@@ -482,7 +502,7 @@ export const useInferenceStore = create<InferenceState>()(
           cancelRequestedWhileStarting = false;
           clearEarlyEvents();
           applyGenerationCompletion(set, earlyResult);
-          finishGenerationLifecycle();
+          finishGenerationLifecycle(lifecycle);
           return earlyResult;
         }
         const earlyUpdate = earlyUpdates.get(requestId) ?? null;
@@ -518,7 +538,7 @@ export const useInferenceStore = create<InferenceState>()(
                 error: cancellationError.message,
               }));
               rejectPending(cancellationError, requestId);
-              finishGenerationLifecycle();
+              finishGenerationLifecycle(lifecycle);
             });
           }
         });

@@ -116,6 +116,23 @@ describe('inferenceStore', () => {
     expect(useInferenceStore.getState().progress).toBeNull();
   });
 
+  it('clears a stale native error when a successful status arrives', async () => {
+    await useInferenceStore.getState().initialize();
+    listeners().onError?.({
+      requestId: null,
+      code: 'COREML_TEMPORARY_FAILURE',
+      message: 'Erreur transitoire',
+    });
+    expect(useInferenceStore.getState().error).toBe('Erreur transitoire');
+
+    listeners().onStatus?.(readyStatus());
+
+    expect(useInferenceStore.getState()).toMatchObject({
+      status: { phase: 'ready' },
+      error: null,
+    });
+  });
+
   it('streams cumulative text and resolves generation on the completion event', async () => {
     const generation = useInferenceStore.getState().generate({
       messages: [{ role: 'user', content: 'Bonjour' }],
@@ -230,6 +247,73 @@ describe('inferenceStore', () => {
     );
     expect(mockCancelCoreMLGeneration).toHaveBeenCalledWith('request-1');
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a stale native start clean up a newer generation', async () => {
+    jest.useFakeTimers();
+    try {
+      const staleAcknowledgement =
+        deferred<CoreML.CoreMLGenerationAcknowledgement>();
+      const currentAcknowledgement =
+        deferred<CoreML.CoreMLGenerationAcknowledgement>();
+      mockStartCoreMLGeneration
+        .mockReturnValueOnce(staleAcknowledgement.promise)
+        .mockReturnValueOnce(currentAcknowledgement.promise);
+
+      const staleGeneration = useInferenceStore.getState().generate({
+        messages: [{ role: 'user', content: 'Ancienne demande' }],
+      });
+      const staleOutcome = staleGeneration.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      const disposal = useInferenceStore.getState().dispose();
+      await jest.advanceTimersByTimeAsync(5_000);
+      await jest.advanceTimersByTimeAsync(5_000);
+      await disposal;
+
+      const currentGeneration = useInferenceStore.getState().generate({
+        messages: [{ role: 'user', content: 'Nouvelle demande' }],
+      });
+      listeners().onGeneration?.({
+        requestId: 'request-2',
+        text: 'Nouvelle réponse en cours',
+        generatedTokens: 3,
+        tokensPerSecond: 4,
+        sequence: 1,
+      });
+
+      staleAcknowledgement.resolve({ requestId: 'request-1' });
+      const staleError = await staleOutcome;
+      expect(staleError).toBeInstanceOf(Error);
+
+      currentAcknowledgement.resolve({ requestId: 'request-2' });
+      await flushPromises();
+      const stateAfterAcknowledgement = useInferenceStore.getState();
+
+      const result: CoreMLGenerationResult = {
+        requestId: 'request-2',
+        text: 'Nouvelle réponse',
+        promptTokens: 3,
+        generatedTokens: 4,
+        duration: 0.5,
+        tokensPerSecond: 8,
+        finishReason: 'eos',
+        modelId: 'example/model',
+      };
+      listeners().onComplete?.(result);
+      await expect(currentGeneration).resolves.toEqual(result);
+
+      expect(stateAfterAcknowledgement).toMatchObject({
+        activeRequestId: 'request-2',
+        generation: {
+          requestId: 'request-2',
+          text: 'Nouvelle réponse en cours',
+        },
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('ignores stale request events and out-of-order stream updates', async () => {

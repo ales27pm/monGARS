@@ -96,6 +96,34 @@ function isLocalMessageForOwner(message: Message, ownerId: string): boolean {
   );
 }
 
+function serverTurnChannel(message: Message): string {
+  return `${message.metadata?.source ?? 'server'}::${
+    message.metadata?.mode ?? 'chat'
+  }`;
+}
+
+function unmatchedServerUserMessageIDs(messages: Message[]): Set<string> {
+  const pendingUsers = new Map<string, Message[]>();
+  messages.filter(isServerMessage).forEach((message) => {
+    const channel = serverTurnChannel(message);
+    if (message.role === 'user') {
+      const users = pendingUsers.get(channel) ?? [];
+      users.push(message);
+      pendingUsers.set(channel, users);
+      return;
+    }
+    if (message.role === 'assistant') {
+      pendingUsers.get(channel)?.pop();
+    }
+  });
+
+  return new Set(
+    [...pendingUsers.values()].flatMap((users) =>
+      users.map((message) => message.id),
+    ),
+  );
+}
+
 function removeTurnsAlreadyInHistory(
   messages: Message[],
   history: ReadonlyArray<{ query: string; response: string }>,
@@ -109,26 +137,46 @@ function removeTurnsAlreadyInHistory(
     );
   });
 
-  const retained: Message[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const userMessage = messages[index];
-    const assistantMessage = messages[index + 1];
-    if (userMessage.role === 'user' && assistantMessage?.role === 'assistant') {
+  const pendingUserIndexes = new Map<string, number[]>();
+  const duplicateMessageIndexes = new Set<number>();
+  messages.forEach((message, index) => {
+    const channel = serverTurnChannel(message);
+    if (message.role === 'user') {
+      const indexes = pendingUserIndexes.get(channel) ?? [];
+      indexes.push(index);
+      pendingUserIndexes.set(channel, indexes);
+      return;
+    }
+    if (message.role === 'assistant') {
+      const userMessageIndex = pendingUserIndexes.get(channel)?.pop();
+      if (userMessageIndex === undefined) {
+        return;
+      }
+      const userMessage = messages[userMessageIndex];
       const fingerprint = buildRealtimeFingerprint({
         query: userMessage.content,
-        response: assistantMessage.content,
+        response: message.content,
       });
       const remainingMatches = remainingHistoryTurns.get(fingerprint) ?? 0;
       if (remainingMatches > 0) {
         remainingHistoryTurns.set(fingerprint, remainingMatches - 1);
-        index += 1;
-        continue;
+        duplicateMessageIndexes.add(userMessageIndex);
+        duplicateMessageIndexes.add(index);
       }
     }
-    retained.push(userMessage);
-  }
+  });
 
-  return retained;
+  return messages.filter((_, index) => !duplicateMessageIndexes.has(index));
+}
+
+function serverMessagesPreservedAcrossSnapshot(
+  messages: Message[],
+  snapshotMessageIDs: ReadonlySet<string>,
+): Message[] {
+  return messages.filter(
+    (message) =>
+      isServerMessage(message) && !snapshotMessageIDs.has(message.id),
+  );
 }
 
 function isDuplicateRealtimePair(
@@ -724,9 +772,13 @@ export const useChatStore = create<ChatState>()(
         }
 
         const refreshVersion = ++historyRefreshVersion;
+        const snapshotServerMessages = get().messages.filter(isServerMessage);
+        const unmatchedServerUserIDs = unmatchedServerUserMessageIDs(
+          snapshotServerMessages,
+        );
         const replacedServerMessageIDs = new Set(
-          get()
-            .messages.filter(isServerMessage)
+          snapshotServerMessages
+            .filter((message) => !unmatchedServerUserIDs.has(message.id))
             .map((message) => message.id),
         );
 
@@ -751,11 +803,11 @@ export const useChatStore = create<ChatState>()(
           }
           const historyMessages = mapHistoryToMessages(history);
           set((state) => {
-            const preservedServerMessages = state.messages.filter(
-              (message) =>
-                isServerMessage(message) &&
-                !replacedServerMessageIDs.has(message.id),
-            );
+            const preservedServerMessages =
+              serverMessagesPreservedAcrossSnapshot(
+                state.messages,
+                replacedServerMessageIDs,
+              );
             return {
               messages: [
                 ...state.messages.filter(
@@ -913,31 +965,37 @@ export const useChatStore = create<ChatState>()(
           session?: { username?: string; token?: string };
         };
 
+        const session: UserSession | null =
+          state.session?.username && state.session?.token
+            ? {
+                username: state.session.username,
+                token: state.session.token,
+              }
+            : null;
+        const legacyLocalOwnerId = getLocalConversationOwner(session);
+
         return {
-          session:
-            state.session?.username && state.session?.token
-              ? {
-                  username: state.session.username,
-                  token: state.session.token,
-                }
-              : null,
-          messages: (state.messages ?? [])
-            .filter(
-              (message) =>
-                message.metadata?.inferenceBackend !== 'on-device' ||
-                typeof message.metadata.localOwnerId === 'string',
-            )
-            .map((message) => ({
+          session,
+          messages: (state.messages ?? []).map((message) => {
+            const inferenceBackend =
+              message.metadata?.inferenceBackend ?? 'server';
+            return {
               ...message,
               createdAt: message.createdAt
                 ? new Date(message.createdAt)
                 : new Date(),
               metadata: {
                 ...message.metadata,
-                inferenceBackend:
-                  message.metadata?.inferenceBackend ?? 'server',
+                inferenceBackend,
+                ...(inferenceBackend === 'on-device'
+                  ? {
+                      localOwnerId:
+                        message.metadata?.localOwnerId ?? legacyLocalOwnerId,
+                    }
+                  : {}),
               },
-            })) as Message[],
+            };
+          }) as Message[],
           mode: state.mode ?? 'chat',
           quickActions: orderQuickActions(state.quickActions),
         };
