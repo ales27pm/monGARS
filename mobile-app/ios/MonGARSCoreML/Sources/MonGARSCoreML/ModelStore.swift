@@ -353,7 +353,10 @@ final class ModelStore {
       at: snapshot,
       includingPropertiesForKeys: nil
     ) else {
-      return
+      throw CocoaError(
+        .fileReadUnknown,
+        userInfo: [NSFilePathErrorKey: snapshot.path]
+      )
     }
     while let artifact = enumerator.nextObject() as? URL {
       var excludedArtifact = artifact

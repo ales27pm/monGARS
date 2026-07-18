@@ -17,6 +17,9 @@ import { settings } from '../services/config';
 import { useChatStore } from '../store/chatStore';
 import { useInferenceStore } from '../store/inferenceStore';
 
+const MODEL_DOWNLOAD_BYTES = 1_825_812_981;
+const MODEL_REQUIRED_FREE_DISK_BYTES = 5_000_000_000;
+
 function formatBytes(bytes: number): string {
   if (bytes <= 0) {
     return 'Non installe';
@@ -115,7 +118,11 @@ const SettingsScreen: React.FC = () => {
   const confirmDownload = () => {
     Alert.alert(
       'Telecharger le modele local?',
-      'Le telechargement fait environ 1,57 Go et exige au moins 2,5 Go libres. Utilisez de preference le Wi-Fi.',
+      `Le telechargement fait environ ${formatBytes(
+        MODEL_DOWNLOAD_BYTES,
+      )} et exige au moins ${formatBytes(
+        MODEL_REQUIRED_FREE_DISK_BYTES,
+      )} libres. Utilisez de preference le Wi-Fi.`,
       [
         { text: 'Annuler', style: 'cancel' },
         { text: 'Telecharger', onPress: downloadModel },
