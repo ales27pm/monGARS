@@ -37,7 +37,15 @@ function renderHighlighted(content: string, highlight?: string) {
 const MessageBubble: React.FC<Props> = ({ message, highlight }) => {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
-  const roleLabel = isUser ? 'Operateur' : isSystem ? 'Systeme' : 'monGARS';
+  const metadata = message.metadata;
+  const isOnDevice = metadata?.inferenceBackend === 'on-device';
+  const roleLabel = isUser
+    ? 'Operateur'
+    : isSystem
+      ? 'Systeme'
+      : isOnDevice
+        ? 'monGARS · iPhone'
+        : 'monGARS';
 
   return (
     <View
@@ -56,10 +64,24 @@ const MessageBubble: React.FC<Props> = ({ message, highlight }) => {
         <Text style={styles.timestamp}>{format(message.createdAt, 'p')}</Text>
       </View>
       {renderHighlighted(message.content, highlight)}
-      {message.metadata?.confidence !== undefined ? (
+      {metadata?.confidence !== undefined ? (
         <Text style={styles.meta}>
-          Confiance {message.metadata.confidence.toFixed(2)} · Temps{' '}
-          {message.metadata.processingTime?.toFixed(2) ?? '0.00'}s
+          Confiance {metadata.confidence.toFixed(2)} · Temps{' '}
+          {metadata.processingTime?.toFixed(2) ?? '0.00'}s
+        </Text>
+      ) : null}
+      {isOnDevice &&
+      (metadata.generatedTokens !== undefined ||
+        metadata.finishReason != null) ? (
+        <Text style={styles.meta}>
+          Core ML
+          {metadata.generatedTokens !== undefined
+            ? ` · ${metadata.generatedTokens} jetons`
+            : ''}
+          {metadata.tokensPerSecond !== undefined
+            ? ` · ${metadata.tokensPerSecond.toFixed(1)} j/s`
+            : ''}
+          {metadata.finishReason ? ` · ${metadata.finishReason}` : ''}
         </Text>
       ) : null}
     </View>

@@ -1,5 +1,36 @@
 export type ChatMode = 'chat' | 'embed';
 
+export type InferenceBackend = 'server' | 'on-device';
+
+export type OnDeviceInferencePhase =
+  | 'unavailable'
+  | 'not-downloaded'
+  | 'downloading'
+  | 'verifying'
+  | 'compiling'
+  | 'loading'
+  | 'ready'
+  | 'generating'
+  | 'error';
+
+export type OnDeviceModelStatus = {
+  phase: OnDeviceInferencePhase;
+  modelId: string | null;
+  displayName: string | null;
+  revision: string | null;
+  installedBytes: number;
+  contextLength: number;
+  minimumIOSVersion: number;
+  detail: string | null;
+};
+
+export type OnDeviceModelProgress = {
+  phase: OnDeviceInferencePhase;
+  fractionCompleted: number;
+  bytesPerSecond: number | null;
+  detail: string | null;
+};
+
 export type QuickAction = 'code' | 'summarize' | 'explain';
 
 export type SpeechSegment = {
@@ -19,7 +50,20 @@ export type SpeechTurn = {
 
 export type MessageMetadata = {
   mode?: ChatMode;
-  source?: 'history' | 'chat' | 'embedding' | 'realtime' | 'system';
+  source?:
+    | 'history'
+    | 'chat'
+    | 'embedding'
+    | 'realtime'
+    | 'system'
+    | 'on-device';
+  inferenceBackend?: InferenceBackend;
+  modelId?: string | null;
+  promptTokens?: number;
+  generatedTokens?: number;
+  tokensPerSecond?: number;
+  finishReason?: string | null;
+  localOwnerId?: string;
   confidence?: number;
   processingTime?: number;
   speechTurn?: SpeechTurn | null;

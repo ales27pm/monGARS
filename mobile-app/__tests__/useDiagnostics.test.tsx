@@ -27,9 +27,9 @@ jest.mock('../src/native/diagnostics', () => ({
 
 const Diagnostics = require('../src/native/diagnostics');
 
-const HookHarness: React.FC<{ onRender: (value: DiagnosticsHookValue) => void }> = ({
-  onRender,
-}) => {
+const HookHarness: React.FC<{
+  onRender: (value: DiagnosticsHookValue) => void;
+}> = ({ onRender }) => {
   const value: DiagnosticsHookValue = useDiagnostics();
   React.useEffect(() => {
     onRender(value);
@@ -62,13 +62,19 @@ describe('useDiagnostics', () => {
     });
 
     await act(async () => {
-      const status = await latest!.startCapture({ interfaceName: 'en0', durationSeconds: 5 });
+      const status = await latest!.startCapture({
+        interfaceName: 'en0',
+        durationSeconds: 5,
+      });
       expect(status.captureId).toBe('cap-1');
     });
 
     const state = latest!;
     expect(state.loading).toBe(false);
-    expect(Diagnostics.startCapture).toHaveBeenCalledWith({ interfaceName: 'en0', durationSeconds: 5 });
+    expect(Diagnostics.startCapture).toHaveBeenCalledWith({
+      interfaceName: 'en0',
+      durationSeconds: 5,
+    });
 
     await act(async () => {
       const stopped = await latest!.stopCapture();

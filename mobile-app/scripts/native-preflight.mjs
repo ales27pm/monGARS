@@ -48,18 +48,323 @@ function readEnvTemplate() {
 }
 
 const envKeys = readEnvTemplate();
-const iosProjectPath = path.join(projectRoot, 'ios', 'MonGARSMobile.xcodeproj', 'project.pbxproj');
+const iosXcodeProjectPath = path.join(
+  projectRoot,
+  'ios',
+  'MonGARSMobile.xcodeproj',
+);
+const iosProjectPath = path.join(iosXcodeProjectPath, 'project.pbxproj');
 const iosProjectText = existsSync(iosProjectPath)
   ? readFileSync(iosProjectPath, 'utf8')
   : '';
-const hostHasXcodebuild = spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
+const hostHasXcodebuild =
+  spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
+const iosApplicationTargetName = 'MonGARSMobile';
+
+function pbxSection(name) {
+  const start = `/* Begin ${name} section */`;
+  const end = `/* End ${name} section */`;
+  const startIndex = iosProjectText.indexOf(start);
+  const endIndex = iosProjectText.indexOf(end);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return '';
+  }
+  return iosProjectText.slice(startIndex + start.length, endIndex);
+}
+
+function pbxObjectBody(section, objectID) {
+  const marker = `${objectID} /*`;
+  const markerIndex = section.indexOf(marker);
+  if (markerIndex === -1) {
+    return '';
+  }
+  const objectStart = section.indexOf('{', markerIndex);
+  if (objectStart === -1) {
+    return '';
+  }
+  const lineEnd = section.indexOf('\n', objectStart);
+  const inlineObjectEnd = section.indexOf('};', objectStart);
+  const objectEnd =
+    inlineObjectEnd !== -1 && (lineEnd === -1 || inlineObjectEnd < lineEnd)
+      ? inlineObjectEnd
+      : section.indexOf('\n\t\t};', objectStart);
+  if (objectEnd === -1) {
+    return '';
+  }
+  return section.slice(objectStart + 1, objectEnd);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function pbxObjectID(section, comment) {
+  const match = section.match(
+    new RegExp(`([A-F0-9]{24}) \\/\\* ${escapeRegExp(comment)} \\*\\/ = \\{`),
+  );
+  return match?.[1] ?? null;
+}
+
+function pbxProperty(body, property) {
+  const match = body.match(new RegExp(`\\b${property}\\s*=\\s*([^;]+);`));
+  return match?.[1]?.trim().replace(/^"|"$/g, '') ?? null;
+}
+
+function applicationTargetBody(targetName) {
+  const targets = pbxSection('PBXNativeTarget');
+  const targetID = pbxObjectID(targets, targetName);
+  if (!targetID) {
+    return '';
+  }
+  const body = pbxObjectBody(targets, targetID);
+  if (
+    pbxProperty(body, 'name') !== targetName ||
+    pbxProperty(body, 'productType') !== 'com.apple.product-type.application'
+  ) {
+    return '';
+  }
+  return body;
+}
+
+function applicationTargetBuildPhaseID(phaseName) {
+  const targetBody = applicationTargetBody(iosApplicationTargetName);
+  if (!targetBody) {
+    return null;
+  }
+  const phaseMatch = targetBody.match(
+    new RegExp(`([A-F0-9]{24}) \\/\\* ${phaseName} \\*\\/`),
+  );
+  return phaseMatch?.[1] ?? null;
+}
+
+function applicationBuildPhaseContains(phaseType, phaseName, entries) {
+  const phaseID = applicationTargetBuildPhaseID(phaseName);
+  if (!phaseID) {
+    return false;
+  }
+  const phaseBody = pbxObjectBody(pbxSection(phaseType), phaseID);
+  return entries.every((entry) => phaseBody.includes(entry));
+}
+
+function buildConfigurationsForList(configurationListID) {
+  const listBody = pbxObjectBody(
+    pbxSection('XCConfigurationList'),
+    configurationListID,
+  );
+  const configurationIDs = [
+    ...listBody.matchAll(/([A-F0-9]{24}) \/\* [^\n]+ \*\//g),
+  ].map(([, objectID]) => objectID);
+  const configurations = pbxSection('XCBuildConfiguration');
+  return configurationIDs
+    .map((objectID) => pbxObjectBody(configurations, objectID))
+    .filter(Boolean)
+    .map((body) => ({ body, name: pbxProperty(body, 'name') }));
+}
+
+function applicationBuildConfigurations() {
+  const body = applicationTargetBody(iosApplicationTargetName);
+  const listID = body.match(/buildConfigurationList\s*=\s*([A-F0-9]{24})/)?.[1];
+  return listID ? buildConfigurationsForList(listID) : [];
+}
+
+function projectBuildConfigurations() {
+  const projects = pbxSection('PBXProject');
+  const projectID = projects.match(
+    /\n\t\t([A-F0-9]{24}) \/\* Project object \*\/ = \{/,
+  )?.[1];
+  const body = projectID ? pbxObjectBody(projects, projectID) : '';
+  const listID = body.match(/buildConfigurationList\s*=\s*([A-F0-9]{24})/)?.[1];
+  return listID ? buildConfigurationsForList(listID) : [];
+}
+
+function numericDeploymentTarget(value) {
+  const normalized = value
+    ?.replace(/\$\(inherited\)/g, '')
+    .trim()
+    .replace(/^"|"$/g, '');
+  return normalized && /^\d+(?:\.\d+)*$/.test(normalized)
+    ? Number(normalized)
+    : null;
+}
+
+function sdkSelectorMatches(selectors, sdkFamily) {
+  const sdkSelectors = [
+    ...selectors.matchAll(/\[\s*sdk\s*=\s*([^\]]+)\]/gi),
+  ].map(([, selector]) => selector.trim().toLowerCase());
+  if (sdkSelectors.length === 0) {
+    return true;
+  }
+
+  return sdkSelectors.every((selector) => {
+    if (selector.startsWith(sdkFamily)) {
+      return true;
+    }
+    const pattern = `^${escapeRegExp(selector).replace(/\\\*/g, '.*')}$`;
+    const matcher = new RegExp(pattern, 'i');
+    return matcher.test(sdkFamily) || matcher.test(`${sdkFamily}18.0`);
+  });
+}
+
+function deploymentTargetAssignment(text, sdkFamily = 'iphoneos') {
+  const assignments = [
+    ...text.matchAll(
+      /"?IPHONEOS_DEPLOYMENT_TARGET((?:\[[^\]]+\])*)"?\s*=\s*([^;\n]+);?/g,
+    ),
+  ];
+  let resolved = null;
+  for (const [, selectors, value] of assignments) {
+    if (!sdkSelectorMatches(selectors, sdkFamily)) {
+      continue;
+    }
+    const parsed = numericDeploymentTarget(value);
+    if (parsed !== null) {
+      resolved = parsed;
+    }
+  }
+  return resolved;
+}
+
+function resolveFileReference(referenceID) {
+  const body = pbxObjectBody(pbxSection('PBXFileReference'), referenceID);
+  const configuredPath = pbxProperty(body, 'path') ?? pbxProperty(body, 'name');
+  if (!configuredPath) {
+    return null;
+  }
+
+  const iosRoot = path.join(projectRoot, 'ios');
+  const candidates = [
+    path.resolve(iosRoot, configuredPath),
+    path.resolve(projectRoot, configuredPath),
+  ];
+  const direct = candidates.find((candidate) => existsSync(candidate));
+  if (direct) {
+    return direct;
+  }
+
+  const discovered = findFile(
+    iosRoot,
+    (_, name) => name === path.basename(configuredPath),
+  );
+  return discovered ? path.join(projectRoot, discovered) : null;
+}
+
+function deploymentTargetFromXcconfig(filePath, includeStack = new Set()) {
+  if (!filePath || includeStack.has(filePath) || !existsSync(filePath)) {
+    return null;
+  }
+  const nextIncludeStack = new Set(includeStack);
+  nextIncludeStack.add(filePath);
+
+  let resolved = null;
+  const lines = readFileSync(filePath, 'utf8').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\/\/.*$/, '').trim();
+    const include = line.match(/^#include\??\s+["<]([^">]+)[">]/);
+    if (include) {
+      const includedValue = deploymentTargetFromXcconfig(
+        path.resolve(path.dirname(filePath), include[1]),
+        nextIncludeStack,
+      );
+      if (includedValue !== null) {
+        resolved = includedValue;
+      }
+      continue;
+    }
+    const assignment = deploymentTargetAssignment(line);
+    if (assignment !== null) {
+      resolved = assignment;
+    }
+  }
+  return resolved;
+}
+
+function deploymentTargetFromConfiguration(configuration) {
+  const direct = deploymentTargetAssignment(configuration.body);
+  if (direct !== null) {
+    return direct;
+  }
+  const referenceID = configuration.body.match(
+    /baseConfigurationReference\s*=\s*([A-F0-9]{24})/,
+  )?.[1];
+  return referenceID
+    ? deploymentTargetFromXcconfig(resolveFileReference(referenceID))
+    : null;
+}
+
+function xcodebuildDeploymentTargets(configurations) {
+  if (!hostHasXcodebuild) {
+    return null;
+  }
+  const values = [];
+  for (const configuration of configurations) {
+    const result = spawnSync(
+      'xcodebuild',
+      [
+        '-project',
+        iosXcodeProjectPath,
+        '-target',
+        iosApplicationTargetName,
+        '-configuration',
+        configuration.name,
+        '-sdk',
+        'iphoneos',
+        '-disableAutomaticPackageResolution',
+        '-showBuildSettings',
+      ],
+      { encoding: 'utf8', timeout: 30_000 },
+    );
+    if (result.status !== 0) {
+      return null;
+    }
+    const match = result.stdout.match(
+      /^\s*IPHONEOS_DEPLOYMENT_TARGET\s*=\s*(\S+)\s*$/m,
+    );
+    const parsed = numericDeploymentTarget(match?.[1]);
+    if (parsed === null) {
+      return null;
+    }
+    values.push(parsed);
+  }
+  return values;
+}
+
+// MonGARSMobile is the only target that links MonGARSCoreML. Unit-test and
+// packet-tunnel targets have independent deployment contracts.
+function applicationDeploymentTargetsAreAtLeast(minimumMajorVersion) {
+  const targetConfigurations = applicationBuildConfigurations();
+  if (targetConfigurations.length === 0) {
+    return false;
+  }
+
+  const effectiveValues = xcodebuildDeploymentTargets(targetConfigurations);
+  if (effectiveValues) {
+    return effectiveValues.every((value) => value >= minimumMajorVersion);
+  }
+
+  const projectConfigurations = new Map(
+    projectBuildConfigurations().map((configuration) => [
+      configuration.name,
+      deploymentTargetFromConfiguration(configuration),
+    ]),
+  );
+  const staticValues = targetConfigurations.map(
+    (configuration) =>
+      deploymentTargetFromConfiguration(configuration) ??
+      projectConfigurations.get(configuration.name) ??
+      null,
+  );
+  return staticValues.every(
+    (value) => value !== null && value >= minimumMajorVersion,
+  );
+}
 
 const checks = [
   {
     label: 'JavaScript entrypoint',
     path: 'index.js',
     required: true,
-    advice: 'Restore the React Native entry files before attempting a native build.',
+    advice:
+      'Restore the React Native entry files before attempting a native build.',
   },
   {
     label: 'Metro config',
@@ -117,7 +422,8 @@ const checks = [
     label: 'Voice native module',
     path: 'ios/Voice/VoiceModule.swift',
     required: false,
-    advice: 'Voice input will be unavailable on iOS until the native module is restored.',
+    advice:
+      'Voice input will be unavailable on iOS until the native module is restored.',
   },
   {
     label: 'Diagnostics native module',
@@ -125,6 +431,41 @@ const checks = [
     required: false,
     advice:
       'Packet capture and tunnel diagnostics are unavailable on iOS until the native module is restored.',
+  },
+  {
+    label: 'Core ML inference native module',
+    path: 'ios/CoreMLInference/CoreMLInferenceModule.swift',
+    required: true,
+    advice:
+      'The on-device backend needs its Swift bridge before it can load or run the model.',
+  },
+  {
+    label: 'Core ML React Native facade',
+    path: 'src/native/coreml.ts',
+    required: true,
+    advice:
+      'Restore the typed JavaScript facade so native failures remain explicit and events can be normalized.',
+  },
+  {
+    label: 'Core ML inference state store',
+    path: 'src/store/inferenceStore.ts',
+    required: true,
+    advice:
+      'Restore the inference state store that serializes generation, cancellation, and model lifecycle operations.',
+  },
+  {
+    label: 'Core ML inference Objective-C bridge',
+    path: 'ios/CoreMLInference/CoreMLInferenceModuleBridge.m',
+    required: true,
+    advice:
+      'React Native cannot expose the Swift Core ML module without its extern bridge.',
+  },
+  {
+    label: 'Local MonGARSCoreML package',
+    path: 'ios/MonGARSCoreML/Package.swift',
+    required: true,
+    advice:
+      'Restore the local Swift package that owns model download, tokenization, and generation.',
   },
   {
     label: 'iOS packet tunnel provider',
@@ -146,6 +487,37 @@ const checks = [
     required: false,
     advice:
       'The Xcode project exists, but DiagnosticsModule.swift is not part of the app target yet.',
+  },
+  {
+    label: 'iOS project registers Core ML inference',
+    custom: () =>
+      applicationBuildPhaseContains('PBXSourcesBuildPhase', 'Sources', [
+        'CoreMLInferenceModule.swift in Sources',
+        'CoreMLInferenceModuleBridge.m in Sources',
+      ]) &&
+      applicationBuildPhaseContains('PBXFrameworksBuildPhase', 'Frameworks', [
+        'MonGARSCoreML in Frameworks',
+      ]) &&
+      iosProjectText.includes('XCLocalSwiftPackageReference "MonGARSCoreML"') &&
+      iosProjectText.includes('relativePath = MonGARSCoreML;'),
+    required: true,
+    advice:
+      'Add the Core ML bridge and MonGARSCoreML package product to the app target.',
+  },
+  {
+    label: 'MonGARSMobile iOS 18 deployment target for stateful Core ML',
+    custom: () => applicationDeploymentTargetsAreAtLeast(18),
+    required: true,
+    advice:
+      'The MonGARSMobile app target that links the pinned stateful ML Program requires iOS 18 or newer.',
+  },
+  {
+    label: 'iOS frameworks use the active SDK',
+    custom: () =>
+      !iosProjectText.includes('Platforms/iPhoneOS.platform/Developer/SDKs/'),
+    required: true,
+    advice:
+      'Replace versioned SDK paths with SDKROOT so new Xcode releases can resolve frameworks.',
   },
   {
     label: 'iOS project registers packet tunnel extension',
@@ -180,8 +552,9 @@ const checks = [
   {
     label: 'Android native voice module',
     matcher: () =>
-      findFile(path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'), (_, name) =>
-        /Voice.*\.(kt|java)$/.test(name),
+      findFile(
+        path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'),
+        (_, name) => /Voice.*\.(kt|java)$/.test(name),
       ),
     required: false,
     advice:
@@ -190,8 +563,9 @@ const checks = [
   {
     label: 'Android native diagnostics module',
     matcher: () =>
-      findFile(path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'), (_, name) =>
-        /Diagnostics.*\.(kt|java)$/.test(name),
+      findFile(
+        path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'),
+        (_, name) => /Diagnostics.*\.(kt|java)$/.test(name),
       ),
     required: false,
     advice:
@@ -201,7 +575,8 @@ const checks = [
     label: 'Env key MONGARS_BASE_URL',
     custom: () => envKeys.has('MONGARS_BASE_URL'),
     required: true,
-    advice: 'Define MONGARS_BASE_URL in .env.example for a single source of truth.',
+    advice:
+      'Define MONGARS_BASE_URL in .env.example for a single source of truth.',
   },
   {
     label: 'Env key MONGARS_WS_URL',
@@ -213,7 +588,8 @@ const checks = [
     label: 'Env key MONGARS_VOICE_LOCALE',
     custom: () => envKeys.has('MONGARS_VOICE_LOCALE'),
     required: true,
-    advice: 'Define MONGARS_VOICE_LOCALE in .env.example for voice recognition defaults.',
+    advice:
+      'Define MONGARS_VOICE_LOCALE in .env.example for voice recognition defaults.',
   },
 ];
 
@@ -234,7 +610,9 @@ for (const check of checks) {
 
   const ok = Boolean(found);
   const marker = ok ? '[ok]' : check.required ? '[missing]' : '[warn]';
-  console.log(`${marker} ${check.label}${ok && found !== check.label ? ` -> ${found}` : ''}`);
+  console.log(
+    `${marker} ${check.label}${ok && found !== check.label ? ` -> ${found}` : ''}`,
+  );
 
   if (!ok && check.advice) {
     console.log(`      ${check.advice}`);

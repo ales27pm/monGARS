@@ -32,6 +32,7 @@ export function mapHistoryToMessages(
       metadata: {
         mode: 'chat',
         source: 'history',
+        inferenceBackend: 'server',
       },
     };
 
@@ -43,6 +44,7 @@ export function mapHistoryToMessages(
       metadata: {
         mode: 'chat',
         source: 'history',
+        inferenceBackend: 'server',
       },
     };
 
