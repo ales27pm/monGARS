@@ -1,6 +1,10 @@
 import { act } from '@testing-library/react-native';
 import { useChatStore } from '../src/store/chatStore';
 import { useInferenceStore } from '../src/store/inferenceStore';
+import type {
+  CoreMLGenerationRequest,
+  CoreMLGenerationResult,
+} from '../src/native/coreml';
 
 jest.mock('../src/services/chatService', () => ({
   fetchConversationHistory: jest.fn(),
@@ -24,6 +28,19 @@ import {
 } from '../src/services/chatService';
 import { createRealtimeClient } from '../src/services/realtimeService';
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('chatStore', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -32,7 +49,7 @@ describe('chatStore', () => {
       close: jest.fn(),
       reconnect: jest.fn(),
     });
-    (fetchConversationHistory as jest.Mock).mockResolvedValue([]);
+    (fetchConversationHistory as jest.Mock).mockReset().mockResolvedValue([]);
     const storage = {
       getItem: jest.fn().mockResolvedValue(null),
       setItem: jest.fn().mockResolvedValue(undefined),
@@ -71,6 +88,16 @@ describe('chatStore', () => {
     useChatStore.persist?.clearStorage?.();
     useInferenceStore.setState({
       backend: 'server',
+      status: {
+        phase: 'unavailable',
+        modelId: null,
+        displayName: null,
+        revision: null,
+        installedBytes: 0,
+        contextLength: 0,
+        minimumIOSVersion: 18,
+        detail: 'Module indisponible',
+      },
       activeRequestId: null,
       generation: null,
       lastResult: null,
@@ -225,5 +252,275 @@ describe('chatStore', () => {
     });
     expect(postConversationMessage).not.toHaveBeenCalled();
     expect(requestEmbedding).not.toHaveBeenCalled();
+  });
+
+  it('rejects a second local send without appending a phantom turn', async () => {
+    const pending = deferred<{
+      requestId: string;
+      text: string;
+      promptTokens: number;
+      generatedTokens: number;
+      duration: number;
+      tokensPerSecond: number;
+      finishReason: string;
+      modelId: string;
+    }>();
+    const generate = jest.fn(() => pending.promise);
+    useInferenceStore.setState({
+      backend: 'on-device',
+      generate,
+    });
+
+    const firstSend = useChatStore
+      .getState()
+      .sendMessage('Première demande', 'chat');
+    await expect(
+      useChatStore.getState().sendMessage('Deuxième demande', 'chat'),
+    ).rejects.toThrow('Une requête est déjà en cours.');
+
+    expect(useChatStore.getState().messages).toHaveLength(2);
+    expect(
+      useChatStore
+        .getState()
+        .messages.some((message) => message.content === 'Deuxième demande'),
+    ).toBe(false);
+    expect(generate).toHaveBeenCalledTimes(1);
+
+    pending.resolve({
+      requestId: 'local-1',
+      text: 'Réponse finale',
+      promptTokens: 4,
+      generatedTokens: 2,
+      duration: 0.5,
+      tokensPerSecond: 4,
+      finishReason: 'eos',
+      modelId: 'example/model',
+    });
+    await expect(firstSend).resolves.toBeUndefined();
+  });
+
+  it('blocks backend changes while a local request is active', async () => {
+    const pending = deferred<{
+      requestId: string;
+      text: string;
+      promptTokens: number;
+      generatedTokens: number;
+      duration: number;
+      tokensPerSecond: number;
+      finishReason: string;
+      modelId: string;
+    }>();
+    useInferenceStore.setState({
+      backend: 'on-device',
+      generate: jest.fn(() => pending.promise),
+    });
+
+    const send = useChatStore.getState().sendMessage('Continue', 'chat');
+    await expect(
+      useChatStore.getState().setInferenceBackend('server'),
+    ).rejects.toThrow('annulez-la avant de changer de backend');
+    expect(useInferenceStore.getState().backend).toBe('on-device');
+
+    pending.resolve({
+      requestId: 'local-2',
+      text: 'Terminé',
+      promptTokens: 4,
+      generatedTokens: 1,
+      duration: 0.25,
+      tokensPerSecond: 4,
+      finishReason: 'eos',
+      modelId: 'example/model',
+    });
+    await send;
+  });
+
+  it('blocks backend changes when the native store still owns an active request', async () => {
+    useInferenceStore.setState({
+      backend: 'on-device',
+      activeRequestId: 'active-native-request',
+      status: {
+        ...useInferenceStore.getState().status,
+        phase: 'generating',
+      },
+    });
+
+    await expect(
+      useChatStore.getState().setInferenceBackend('server'),
+    ).rejects.toThrow('annulez-la avant de changer de backend');
+    expect(useInferenceStore.getState().backend).toBe('on-device');
+  });
+
+  it('discards server history that resolves after selecting on-device mode', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    expect(fetchConversationHistory).toHaveBeenCalledTimes(1);
+    useInferenceStore.getState().setBackend('on-device');
+    history.resolve([
+      {
+        query: 'Serveur',
+        response: 'Réponse tardive',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    await refresh;
+
+    expect(useChatStore.getState().historyLoading).toBe(false);
+    expect(useChatStore.getState().messages).toHaveLength(0);
+  });
+
+  it('hydrates the persisted backend before deciding whether to contact the server', async () => {
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+    });
+    const hasHydrated = jest
+      .spyOn(useInferenceStore.persist, 'hasHydrated')
+      .mockReturnValue(false);
+    const rehydrate = jest
+      .spyOn(useInferenceStore.persist, 'rehydrate')
+      .mockImplementation(async () => {
+        useInferenceStore.setState({ backend: 'on-device' });
+      });
+
+    try {
+      await useChatStore.getState().initialize();
+
+      expect(rehydrate).toHaveBeenCalledTimes(1);
+      expect(fetchConversationHistory).not.toHaveBeenCalled();
+      expect(createRealtimeClient).not.toHaveBeenCalled();
+      expect(useChatStore.getState().connection).toMatchObject({
+        status: 'offline',
+        detail: expect.stringContaining('Inference locale active'),
+      });
+    } finally {
+      hasHydrated.mockRestore();
+      rehydrate.mockRestore();
+    }
+  });
+
+  it('keeps local prompt history isolated between signed-in accounts', async () => {
+    let generationCount = 0;
+    const generate = jest.fn(
+      async (
+        request: CoreMLGenerationRequest,
+      ): Promise<CoreMLGenerationResult> => {
+        generationCount += 1;
+        return {
+          requestId: `local-${generationCount}`,
+          text: `Réponse ${generationCount}`,
+          promptTokens: request.messages.length,
+          generatedTokens: 2,
+          duration: 0.5,
+          tokensPerSecond: 4,
+          finishReason: 'eos',
+          modelId: 'example/model',
+        };
+      },
+    );
+    useInferenceStore.setState({ backend: 'on-device', generate });
+    useChatStore.setState({
+      session: { username: 'Alice', token: 'alice-token' },
+    });
+
+    await useChatStore.getState().sendMessage('Secret Alice', 'chat');
+    useChatStore.setState({
+      session: { username: 'Bob', token: 'bob-token' },
+    });
+    await useChatStore.getState().sendMessage('Question Bob', 'chat');
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1][0].messages).toEqual([
+      { role: 'user', content: 'Question Bob' },
+    ]);
+    expect(
+      useChatStore
+        .getState()
+        .messages.filter(
+          (message) => message.metadata?.localOwnerId === 'account:alice',
+        ),
+    ).toHaveLength(2);
+    expect(
+      useChatStore
+        .getState()
+        .messages.filter(
+          (message) => message.metadata?.localOwnerId === 'account:bob',
+        ),
+    ).toHaveLength(2);
+  });
+
+  it('preserves server messages received while history refresh is in flight', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+      messages: [
+        {
+          id: 'old-server-message',
+          role: 'assistant',
+          content: 'Ancienne copie serveur',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'history' },
+        },
+        {
+          id: 'local-message',
+          role: 'assistant',
+          content: 'Conversation locale',
+          createdAt: new Date(),
+          metadata: {
+            inferenceBackend: 'on-device',
+            source: 'on-device',
+            localOwnerId: 'account:u1',
+          },
+        },
+      ],
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    expect(fetchConversationHistory).toHaveBeenCalledTimes(1);
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: 'live-server-message',
+          role: 'assistant',
+          content: 'Message temps réel',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+      ],
+    }));
+    history.resolve([
+      {
+        query: 'Historique frais',
+        response: 'Réponse fraîche',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    await refresh;
+
+    const contents = useChatStore
+      .getState()
+      .messages.map((message) => message.content);
+    expect(contents).toEqual(
+      expect.arrayContaining([
+        'Conversation locale',
+        'Historique frais',
+        'Réponse fraîche',
+        'Message temps réel',
+      ]),
+    );
+    expect(contents).not.toContain('Ancienne copie serveur');
   });
 });

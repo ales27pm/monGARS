@@ -24,7 +24,7 @@ import { useNavigation } from '@react-navigation/native';
 import Composer from '../components/Composer';
 import MessageBubble from '../components/MessageBubble';
 import { settings } from '../services/config';
-import { useChatStore } from '../store/chatStore';
+import { getLocalConversationOwner, useChatStore } from '../store/chatStore';
 import { useInferenceStore } from '../store/inferenceStore';
 import type { Message } from '../types';
 import { buildJsonExport, buildMarkdownExport } from '../utils/conversation';
@@ -126,7 +126,7 @@ const ChatScreen: React.FC = () => {
 
   useEffect(() => {
     initialize().catch((err) => console.warn('[ChatScreen] init failed', err));
-  }, [backend, initialize, session?.token, session?.username]);
+  }, [initialize, session?.token, session?.username]);
 
   useEffect(() => {
     if (backend === 'on-device') {
@@ -141,14 +141,16 @@ const ChatScreen: React.FC = () => {
     return () => clearTimeout(timer);
   }, [backend, draft, requestQuickActions, mode]);
 
-  const activeMessages = useMemo(
-    () =>
-      messages.filter(
-        (message) =>
-          (message.metadata?.inferenceBackend ?? 'server') === backend,
-      ),
-    [backend, messages],
-  );
+  const activeMessages = useMemo(() => {
+    const localOwnerId = getLocalConversationOwner(session);
+    return messages.filter((message) => {
+      const messageBackend = message.metadata?.inferenceBackend ?? 'server';
+      return backend === 'server'
+        ? messageBackend === 'server'
+        : messageBackend === 'on-device' &&
+            message.metadata?.localOwnerId === localOwnerId;
+    });
+  }, [backend, messages, session]);
 
   const filteredMessages = useMemo(() => {
     const query = deferredSearchQuery.trim().toLowerCase();
@@ -233,7 +235,6 @@ const ChatScreen: React.FC = () => {
                         'connecting',
                         'downloading',
                         'verifying',
-                        'compiling',
                         'loading',
                       ].includes(activeStatus)
                     ? styles.statusConnecting
@@ -368,7 +369,9 @@ const ChatScreen: React.FC = () => {
             </View>
           ) : null}
 
-          {backend === 'on-device' && !localReady ? (
+          {backend === 'on-device' &&
+          !localReady &&
+          filteredMessages.length === 0 ? (
             <EmptyState
               title="Modele local requis"
               description={

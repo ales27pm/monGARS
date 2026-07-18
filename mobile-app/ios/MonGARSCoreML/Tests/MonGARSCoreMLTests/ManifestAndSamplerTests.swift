@@ -14,6 +14,7 @@ final class ManifestAndSamplerTests: XCTestCase {
   }
 
   func testManifestPinsEveryLargeRuntimeArtifact() {
+    let lowercaseHex = Set("0123456789abcdef")
     let expectedPaths = Set(MonGARSModelManifest.expectedFiles.map(\.path))
     XCTAssertEqual(expectedPaths, Set(MonGARSModelManifest.files))
     XCTAssertEqual(
@@ -32,8 +33,10 @@ final class ManifestAndSamplerTests: XCTestCase {
       )
     )
     XCTAssertTrue(
-      MonGARSModelManifest.expectedFiles.allSatisfy {
-        $0.bytes > 0 && $0.sha256.count == 64
+      MonGARSModelManifest.expectedFiles.allSatisfy { file in
+        file.bytes > 0
+          && file.sha256.count == 64
+          && file.sha256.allSatisfy(lowercaseHex.contains)
       }
     )
   }
@@ -53,9 +56,20 @@ final class ManifestAndSamplerTests: XCTestCase {
     XCTAssertEqual(options.repetitionPenalty, 2)
   }
 
-  func testGreedySamplerReturnsHighestFiniteScore() {
+  func testGenerationOptionsReplaceNonFiniteValues() {
+    let options = GenerationOptions(
+      temperature: .nan,
+      topP: .infinity,
+      repetitionPenalty: -.infinity
+    )
+    XCTAssertEqual(options.temperature, 0.6)
+    XCTAssertEqual(options.topP, 0.95)
+    XCTAssertEqual(options.repetitionPenalty, 1.08)
+  }
+
+  func testGreedySamplerReturnsHighestFiniteScore() throws {
     let scores: [Float] = [-10, 0.2, .nan, 3.5, 1.4]
-    let token = Sampler.select(
+    let token = try Sampler.select(
       vocabularySize: scores.count,
       generatedTokens: [],
       options: GenerationOptions(doSample: false)
@@ -63,13 +77,73 @@ final class ManifestAndSamplerTests: XCTestCase {
     XCTAssertEqual(token, 3)
   }
 
-  func testRepetitionPenaltyCanChangeGreedyChoice() {
+  func testRepetitionPenaltyCanChangeGreedyChoice() throws {
     let scores: [Float] = [5, 4.9]
-    let token = Sampler.select(
+    let token = try Sampler.select(
       vocabularySize: scores.count,
       generatedTokens: [0],
       options: GenerationOptions(repetitionPenalty: 2, doSample: false)
     ) { scores[$0] }
     XCTAssertEqual(token, 1)
+  }
+
+  func testSamplerRejectsEmptyVocabulary() {
+    XCTAssertThrowsError(
+      try Sampler.select(
+        vocabularySize: 0,
+        generatedTokens: [],
+        options: GenerationOptions(doSample: false)
+      ) { _ in 0 }
+    ) { error in
+      assertInvalidModel(error)
+    }
+  }
+
+  func testSamplerRejectsAllNonFiniteLogits() {
+    XCTAssertThrowsError(
+      try Sampler.select(
+        vocabularySize: 3,
+        generatedTokens: [],
+        options: GenerationOptions(doSample: false)
+      ) { _ in .nan }
+    ) { error in
+      assertInvalidModel(error)
+    }
+  }
+
+  func testSamplerObservesTaskCancellation() async {
+    let task = Task { () throws -> Int in
+      await Task.yield()
+      return try Sampler.select(
+        vocabularySize: 100_000,
+        generatedTokens: [],
+        options: GenerationOptions(doSample: false)
+      ) { Float($0) }
+    }
+    task.cancel()
+
+    do {
+      _ = try await task.value
+      XCTFail("Le sampler aurait du propager l'annulation.")
+    } catch is CancellationError {
+      // Expected.
+    } catch {
+      XCTFail("Erreur inattendue: \(error)")
+    }
+  }
+
+  private func assertInvalidModel(
+    _ error: Error,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard let inferenceError = error as? InferenceError else {
+      XCTFail("InferenceError attendu, recu: \(error)", file: file, line: line)
+      return
+    }
+    guard case .invalidModel = inferenceError else {
+      XCTFail("invalidModel attendu, recu: \(error)", file: file, line: line)
+      return
+    }
   }
 }

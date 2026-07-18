@@ -82,10 +82,15 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     let rejectWhenBusy: @Sendable (_ code: String, _ message: String) -> Void
   }
 
-  private struct ActiveOperation {
+  private final class ActiveOperation {
     let id: String
     let kind: CoreMLBridgeOperation
-    let task: Task<Void, Never>
+    var task: Task<Void, Never>?
+
+    init(id: String, kind: CoreMLBridgeOperation) {
+      self.id = id
+      self.kind = kind
+    }
   }
 
   private let coordinator = InferenceCoordinator()
@@ -170,8 +175,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
         return
       }
 
-      Task { [weak self] in
-        guard let self else { return }
+      Task { [self] in
         let status = await self.coordinator.status()
         promise.resolve(self.statusPayload(status))
       }
@@ -191,8 +195,8 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       id: UUID().uuidString,
       kind: .prepare,
       priority: .utility,
-      run: { [weak self] in
-        await self?.performPrepare(promise: promise)
+      run: { [self] in
+        await self.performPrepare(promise: promise)
       },
       rejectWhenBusy: { code, message in
         promise.reject(code: code, message: message)
@@ -232,8 +236,8 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       id: requestID,
       kind: .generate,
       priority: .userInitiated,
-      run: { [weak self] in
-        await self?.performGeneration(
+      run: { [self] in
+        await self.performGeneration(
           requestID: requestID,
           messages: parsed.messages,
           options: parsed.options
@@ -275,7 +279,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
         return
       }
 
-      active.task.cancel()
+      active.task?.cancel()
       promise.resolve(["requestId": identifier, "cancelled": true])
     }
   }
@@ -289,8 +293,8 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       id: UUID().uuidString,
       kind: .unload,
       priority: .utility,
-      run: { [weak self] in
-        await self?.performUnload(promise: promise)
+      run: { [self] in
+        await self.performUnload(promise: promise)
       },
       rejectWhenBusy: { code, message in
         promise.reject(code: code, message: message)
@@ -308,8 +312,8 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       id: UUID().uuidString,
       kind: .delete,
       priority: .utility,
-      run: { [weak self] in
-        await self?.performDelete(promise: promise)
+      run: { [self] in
+        await self.performDelete(promise: promise)
       },
       rejectWhenBusy: { code, message in
         promise.reject(code: code, message: message)
@@ -520,7 +524,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       }
 
       self.pendingOperation = operation
-      active.task.cancel()
+      active.task?.cancel()
     }
   }
 
@@ -531,16 +535,15 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     dispatchPrecondition(condition: .onQueue(operationStateQueue))
     precondition(activeOperation == nil)
 
+    let active = ActiveOperation(id: operation.id, kind: operation.kind)
+    activeOperation = active
+    onStarted?()
+
     let task = Task(priority: operation.priority) { [weak self] in
       await operation.run()
       self?.finishOperation(identifier: operation.id)
     }
-    activeOperation = ActiveOperation(
-      id: operation.id,
-      kind: operation.kind,
-      task: task
-    )
-    onStarted?()
+    active.task = task
   }
 
   private func finishOperation(identifier: String) {
@@ -660,7 +663,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       return
     }
 
-    active.task.cancel()
+    active.task?.cancel()
     if pendingOperation == nil {
       pendingOperation = cleanup
     }
@@ -869,6 +872,8 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
       return "coreml_empty_prompt"
     case .promptTooLong:
       return "coreml_prompt_too_long"
+    case .invalidGenerationOptions:
+      return "coreml_invalid_options"
     case .operationInProgress:
       return "coreml_busy"
     case .preparationCancelled:
@@ -884,8 +889,8 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     case .unsupportedOS, .simulatorUnsupported, .invalidModel, .integrityFailure:
       return false
     case .insufficientDisk, .modelNotInstalled, .thermalCritical, .emptyPrompt,
-      .promptTooLong, .operationInProgress, .preparationCancelled,
-      .generationCancelled:
+      .promptTooLong, .invalidGenerationOptions, .operationInProgress,
+      .preparationCancelled, .generationCancelled:
       return true
     }
   }

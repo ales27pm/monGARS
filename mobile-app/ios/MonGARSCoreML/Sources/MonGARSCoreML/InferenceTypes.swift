@@ -82,14 +82,19 @@ public struct GenerationOptions: Sendable, Equatable {
     repetitionPenalty: Float = 1.08,
     doSample: Bool = true
   ) {
+    let finiteTemperature = temperature.isFinite ? temperature : 0.6
+    let finiteTopP = topP.isFinite ? topP : 0.95
+    let finiteRepetitionPenalty = repetitionPenalty.isFinite
+      ? repetitionPenalty
+      : 1.08
     self.maxNewTokens = min(
       max(maxNewTokens, 1),
       MonGARSModelManifest.maximumNewTokens
     )
-    self.temperature = min(max(temperature, 0.05), 2)
+    self.temperature = min(max(finiteTemperature, 0.05), 2)
     self.topK = min(max(topK, 1), 200)
-    self.topP = min(max(topP, 0.05), 1)
-    self.repetitionPenalty = min(max(repetitionPenalty, 1), 2)
+    self.topP = min(max(finiteTopP, 0.05), 1)
+    self.repetitionPenalty = min(max(finiteRepetitionPenalty, 1), 2)
     self.doSample = doSample
   }
 }
@@ -143,6 +148,7 @@ public enum InferenceError: LocalizedError, Sendable {
   case thermalCritical
   case emptyPrompt
   case promptTooLong
+  case invalidGenerationOptions(String)
   case operationInProgress
   case preparationCancelled
   case generationCancelled
@@ -167,6 +173,8 @@ public enum InferenceError: LocalizedError, Sendable {
       return "Le prompt local est vide."
     case .promptTooLong:
       return "Le prompt local depasse le contexte disponible."
+    case let .invalidGenerationOptions(detail):
+      return "Options de generation locale invalides: \(detail)"
     case .operationInProgress:
       return "Une operation Core ML est deja en cours."
     case .preparationCancelled:

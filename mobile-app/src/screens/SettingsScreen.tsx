@@ -29,8 +29,14 @@ const SettingsScreen: React.FC = () => {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
-  const { session, connection, setSession, setInferenceBackend, logout } =
-    useChatStore();
+  const {
+    session,
+    connection,
+    loading: chatRequestInProgress,
+    setSession,
+    setInferenceBackend,
+    logout,
+  } = useChatStore();
   const {
     backend,
     status: modelStatus,
@@ -141,12 +147,16 @@ const SettingsScreen: React.FC = () => {
   };
 
   const modelInstalled = modelStatus.installedBytes > 0;
+  const generationInProgress =
+    chatRequestInProgress ||
+    activeRequestId !== null ||
+    modelStatus.phase === 'generating';
+  const onDeviceBackendUnavailable =
+    Platform.OS !== 'ios' || modelStatus.phase === 'unavailable';
   const modelOperationInProgress =
     modelBusy ||
     activeRequestId !== null ||
-    ['downloading', 'verifying', 'compiling', 'loading'].includes(
-      modelStatus.phase,
-    );
+    ['downloading', 'verifying', 'loading'].includes(modelStatus.phase);
 
   return (
     <ScrollView
@@ -163,10 +173,12 @@ const SettingsScreen: React.FC = () => {
         <View style={styles.backendRow}>
           <Pressable
             accessibilityRole="button"
+            disabled={generationInProgress}
             onPress={() => selectBackend('server')}
             style={[
               styles.backendButton,
               backend === 'server' && styles.backendButtonActive,
+              generationInProgress && styles.buttonDisabled,
             ]}
           >
             <Text
@@ -180,12 +192,18 @@ const SettingsScreen: React.FC = () => {
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            disabled={Platform.OS !== 'ios' || modelOperationInProgress}
+            disabled={
+              onDeviceBackendUnavailable ||
+              modelOperationInProgress ||
+              generationInProgress
+            }
             onPress={() => selectBackend('on-device')}
             style={[
               styles.backendButton,
               backend === 'on-device' && styles.backendButtonActive,
-              (Platform.OS !== 'ios' || modelOperationInProgress) &&
+              (onDeviceBackendUnavailable ||
+                modelOperationInProgress ||
+                generationInProgress) &&
                 styles.buttonDisabled,
             ]}
           >

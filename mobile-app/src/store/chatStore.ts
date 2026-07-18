@@ -9,7 +9,10 @@ import {
   requestEmbedding,
 } from '../services/chatService';
 import { createRealtimeClient } from '../services/realtimeService';
-import { useInferenceStore } from './inferenceStore';
+import {
+  ensureInferenceStoreHydrated,
+  useInferenceStore,
+} from './inferenceStore';
 import type {
   ChatMode,
   ConnectionSnapshot,
@@ -75,9 +78,22 @@ const LOCAL_CONNECTION: ConnectionSnapshot = {
 };
 
 let realtimeClient: ReturnType<typeof createRealtimeClient> | null = null;
+let historyRefreshVersion = 0;
+
+export function getLocalConversationOwner(session: UserSession | null): string {
+  const username = session?.username.trim().toLowerCase();
+  return username ? `account:${username}` : 'guest';
+}
 
 function isServerMessage(message: Message): boolean {
   return (message.metadata?.inferenceBackend ?? 'server') === 'server';
+}
+
+function isLocalMessageForOwner(message: Message, ownerId: string): boolean {
+  return (
+    message.metadata?.inferenceBackend === 'on-device' &&
+    message.metadata.localOwnerId === ownerId
+  );
 }
 
 function isDuplicateRealtimePair(
@@ -181,6 +197,9 @@ function ensureRealtime(
       }));
     },
     onHistory: (items) => {
+      if (useInferenceStore.getState().backend !== 'server') {
+        return;
+      }
       if (get().messages.some(isServerMessage)) {
         return;
       }
@@ -213,6 +232,9 @@ function ensureRealtime(
       );
     },
     onError: (message) => {
+      if (useInferenceStore.getState().backend !== 'server') {
+        return;
+      }
       set({
         error: message,
         notice: {
@@ -240,11 +262,13 @@ export const useChatStore = create<ChatState>()(
       connection: DEFAULT_CONNECTION,
       realtimeSuppression: [],
       initialize: async () => {
+        await ensureInferenceStoreHydrated();
         const inference = useInferenceStore.getState();
         if (inference.backend === 'on-device') {
           realtimeClient?.close('on-device');
           set({
             connection: LOCAL_CONNECTION,
+            historyLoading: false,
             mode: 'chat',
             quickActions: [...DEFAULT_QUICK_ACTIONS],
           });
@@ -261,15 +285,37 @@ export const useChatStore = create<ChatState>()(
         }
 
         await get().refreshHistory();
+        const currentSession = get().session;
+        if (
+          useInferenceStore.getState().backend !== 'server' ||
+          currentSession?.username !== session.username ||
+          currentSession?.token !== session.token
+        ) {
+          return;
+        }
         await ensureRealtime(set, get).open(session);
       },
       setInferenceBackend: async (backend) => {
-        useInferenceStore.getState().setBackend(backend);
+        await ensureInferenceStoreHydrated();
+        const inference = useInferenceStore.getState();
+        if (
+          backend !== inference.backend &&
+          (get().loading ||
+            inference.activeRequestId !== null ||
+            inference.status.phase === 'generating')
+        ) {
+          throw new Error(
+            'Attendez la fin de la requête active ou annulez-la avant de changer de backend.',
+          );
+        }
+        inference.setBackend(backend);
         if (backend === 'on-device') {
+          historyRefreshVersion += 1;
           realtimeClient?.close('on-device');
           set({
             mode: 'chat',
             connection: LOCAL_CONNECTION,
+            historyLoading: false,
             quickActions: [...DEFAULT_QUICK_ACTIONS],
             error: null,
             notice: {
@@ -296,10 +342,12 @@ export const useChatStore = create<ChatState>()(
         await get().initialize();
       },
       setSession: async (session) => {
+        historyRefreshVersion += 1;
         if (!session) {
           realtimeClient?.close('logout');
           set((state) => ({
             session: null,
+            historyLoading: false,
             messages: state.messages.filter(
               (message) => !isServerMessage(message),
             ),
@@ -342,11 +390,16 @@ export const useChatStore = create<ChatState>()(
         if (!trimmed) {
           return;
         }
+        await ensureInferenceStoreHydrated();
+        if (get().loading) {
+          throw new Error('Une requête est déjà en cours.');
+        }
 
         const inference = useInferenceStore.getState();
         const backend = inference.backend;
         const activeMode = mode ?? get().mode;
         const session = get().session;
+        const localOwnerId = getLocalConversationOwner(session);
         if (backend === 'on-device' && activeMode === 'embed') {
           const error = 'Les embeddings restent disponibles sur le serveur.';
           set({
@@ -386,6 +439,7 @@ export const useChatStore = create<ChatState>()(
                   ? 'embedding'
                   : 'chat',
             inferenceBackend: backend,
+            ...(backend === 'on-device' ? { localOwnerId } : {}),
           },
         };
 
@@ -420,6 +474,7 @@ export const useChatStore = create<ChatState>()(
                     mode: 'chat',
                     source: 'on-device',
                     inferenceBackend: 'on-device',
+                    localOwnerId,
                   },
                 });
               }),
@@ -447,7 +502,7 @@ export const useChatStore = create<ChatState>()(
               const localMessages = get()
                 .messages.filter(
                   (message) =>
-                    message.metadata?.inferenceBackend === 'on-device' &&
+                    isLocalMessageForOwner(message, localOwnerId) &&
                     (message.role === 'user' || message.role === 'assistant') &&
                     message.content.trim().length > 0,
                 )
@@ -461,15 +516,18 @@ export const useChatStore = create<ChatState>()(
 
               set(
                 produce<ChatState>((draft) => {
-                  const assistant = draft.messages.find(
+                  const assistantIndex = draft.messages.findIndex(
                     (message) => message.id === assistantID,
                   );
-                  if (assistant) {
+                  const assistant = draft.messages[assistantIndex];
+                  const hasGeneratedText = result.text.trim().length > 0;
+                  if (assistant && hasGeneratedText) {
                     assistant.content = result.text;
                     assistant.metadata = {
                       mode: 'chat',
                       source: 'on-device',
                       inferenceBackend: 'on-device',
+                      localOwnerId,
                       modelId: result.modelId,
                       promptTokens: result.promptTokens ?? undefined,
                       generatedTokens: result.generatedTokens,
@@ -477,15 +535,23 @@ export const useChatStore = create<ChatState>()(
                       finishReason: result.finishReason,
                       processingTime: result.duration,
                     };
+                  } else if (assistantIndex !== -1) {
+                    draft.messages.splice(assistantIndex, 1);
                   }
                   draft.loading = false;
                   draft.notice = {
                     tone:
-                      result.finishReason === 'cancelled' ? 'info' : 'success',
+                      result.finishReason === 'cancelled'
+                        ? 'info'
+                        : hasGeneratedText
+                          ? 'success'
+                          : 'warning',
                     message:
                       result.finishReason === 'cancelled'
                         ? 'Generation locale arretee.'
-                        : 'Reponse generee sur l iPhone.',
+                        : hasGeneratedText
+                          ? 'Reponse generee sur l iPhone.'
+                          : 'La generation locale s est terminee sans texte.',
                   };
                 }),
               );
@@ -506,6 +572,7 @@ export const useChatStore = create<ChatState>()(
                       mode: 'chat',
                       source: 'on-device',
                       inferenceBackend: 'on-device',
+                      localOwnerId,
                       finishReason: 'error',
                     };
                   } else {
@@ -612,6 +679,7 @@ export const useChatStore = create<ChatState>()(
         }
       },
       refreshHistory: async () => {
+        await ensureInferenceStoreHydrated();
         if (useInferenceStore.getState().backend !== 'server') {
           return;
         }
@@ -620,6 +688,13 @@ export const useChatStore = create<ChatState>()(
           return;
         }
 
+        const refreshVersion = ++historyRefreshVersion;
+        const replacedServerMessageIDs = new Set(
+          get()
+            .messages.filter(isServerMessage)
+            .map((message) => message.id),
+        );
+
         set({
           historyLoading: true,
           error: null,
@@ -627,10 +702,27 @@ export const useChatStore = create<ChatState>()(
 
         try {
           const history = await fetchConversationHistory(session);
+          const currentSession = get().session;
+          if (refreshVersion !== historyRefreshVersion) {
+            return;
+          }
+          if (
+            useInferenceStore.getState().backend !== 'server' ||
+            currentSession?.username !== session.username ||
+            currentSession?.token !== session.token
+          ) {
+            set({ historyLoading: false });
+            return;
+          }
           set((state) => ({
             messages: [
               ...state.messages.filter((message) => !isServerMessage(message)),
               ...mapHistoryToMessages(history),
+              ...state.messages.filter(
+                (message) =>
+                  isServerMessage(message) &&
+                  !replacedServerMessageIDs.has(message.id),
+              ),
             ],
             historyLoading: false,
             notice: history.length
@@ -644,6 +736,18 @@ export const useChatStore = create<ChatState>()(
                 },
           }));
         } catch (error) {
+          const currentSession = get().session;
+          if (refreshVersion !== historyRefreshVersion) {
+            return;
+          }
+          if (
+            useInferenceStore.getState().backend !== 'server' ||
+            currentSession?.username !== session.username ||
+            currentSession?.token !== session.token
+          ) {
+            set({ historyLoading: false });
+            return;
+          }
           const message =
             error instanceof Error ? error.message : 'Historique indisponible.';
           set({
@@ -657,6 +761,7 @@ export const useChatStore = create<ChatState>()(
         }
       },
       requestQuickActions: async (prompt) => {
+        await ensureInferenceStoreHydrated();
         const session = get().session;
         if (
           useInferenceStore.getState().backend !== 'server' ||
@@ -674,11 +779,23 @@ export const useChatStore = create<ChatState>()(
 
         try {
           const response = await fetchQuickActions(session, prompt.trim());
+          const currentSession = get().session;
+          if (
+            useInferenceStore.getState().backend !== 'server' ||
+            currentSession?.username !== session.username ||
+            currentSession?.token !== session.token ||
+            get().mode !== 'chat'
+          ) {
+            return;
+          }
           set({
             quickActions: orderQuickActions(response.actions),
           });
         } catch (error) {
           console.debug('[chatStore] suggestions unavailable', error);
+          if (useInferenceStore.getState().backend !== 'server') {
+            return;
+          }
           set({
             quickActions: [...DEFAULT_QUICK_ACTIONS],
           });
@@ -741,7 +858,7 @@ export const useChatStore = create<ChatState>()(
           return value;
         },
       }),
-      version: 4,
+      version: 5,
       migrate: (persistedState) => {
         if (!persistedState) {
           return persistedState as ChatState;
@@ -760,16 +877,23 @@ export const useChatStore = create<ChatState>()(
                   token: state.session.token,
                 }
               : null,
-          messages: (state.messages ?? []).map((message) => ({
-            ...message,
-            createdAt: message.createdAt
-              ? new Date(message.createdAt)
-              : new Date(),
-            metadata: {
-              ...message.metadata,
-              inferenceBackend: message.metadata?.inferenceBackend ?? 'server',
-            },
-          })) as Message[],
+          messages: (state.messages ?? [])
+            .filter(
+              (message) =>
+                message.metadata?.inferenceBackend !== 'on-device' ||
+                typeof message.metadata.localOwnerId === 'string',
+            )
+            .map((message) => ({
+              ...message,
+              createdAt: message.createdAt
+                ? new Date(message.createdAt)
+                : new Date(),
+              metadata: {
+                ...message.metadata,
+                inferenceBackend:
+                  message.metadata?.inferenceBackend ?? 'server',
+              },
+            })) as Message[],
           mode: state.mode ?? 'chat',
           quickActions: orderQuickActions(state.quickActions),
         };

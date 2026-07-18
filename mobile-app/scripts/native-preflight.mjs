@@ -48,18 +48,100 @@ function readEnvTemplate() {
 }
 
 const envKeys = readEnvTemplate();
-const iosProjectPath = path.join(projectRoot, 'ios', 'MonGARSMobile.xcodeproj', 'project.pbxproj');
+const iosProjectPath = path.join(
+  projectRoot,
+  'ios',
+  'MonGARSMobile.xcodeproj',
+  'project.pbxproj',
+);
 const iosProjectText = existsSync(iosProjectPath)
   ? readFileSync(iosProjectPath, 'utf8')
   : '';
-const hostHasXcodebuild = spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
+const hostHasXcodebuild =
+  spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
+
+function pbxSection(name) {
+  const start = `/* Begin ${name} section */`;
+  const end = `/* End ${name} section */`;
+  const startIndex = iosProjectText.indexOf(start);
+  const endIndex = iosProjectText.indexOf(end);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return '';
+  }
+  return iosProjectText.slice(startIndex + start.length, endIndex);
+}
+
+function pbxObjectBody(section, objectID) {
+  const marker = `${objectID} /*`;
+  const markerIndex = section.indexOf(marker);
+  if (markerIndex === -1) {
+    return '';
+  }
+  const objectStart = section.indexOf('{', markerIndex);
+  const objectEnd = section.indexOf('\n\t\t};', objectStart);
+  if (objectStart === -1 || objectEnd === -1) {
+    return '';
+  }
+  return section.slice(objectStart + 1, objectEnd);
+}
+
+function applicationTargetBuildPhaseID(phaseName) {
+  const targets = pbxSection('PBXNativeTarget');
+  const applicationMarker =
+    'productType = "com.apple.product-type.application";';
+  const applicationMarkerIndex = targets.indexOf(applicationMarker);
+  if (applicationMarkerIndex === -1) {
+    return null;
+  }
+  const targetHeaders = [
+    ...targets
+      .slice(0, applicationMarkerIndex)
+      .matchAll(/\n\t\t[A-F0-9]{24} \/\* [^\n]+ \*\/ = \{/g),
+  ];
+  const targetStart = targetHeaders.at(-1)?.index ?? -1;
+  const targetEnd = targets.indexOf('\n\t\t};', applicationMarkerIndex);
+  if (targetStart === -1 || targetEnd === -1) {
+    return null;
+  }
+  const targetBody = targets.slice(targetStart, targetEnd);
+  const phaseMatch = targetBody.match(
+    new RegExp(`([A-F0-9]{24}) \\/\\* ${phaseName} \\*\\/`),
+  );
+  return phaseMatch?.[1] ?? null;
+}
+
+function applicationBuildPhaseContains(phaseType, phaseName, entries) {
+  const phaseID = applicationTargetBuildPhaseID(phaseName);
+  if (!phaseID) {
+    return false;
+  }
+  const phaseBody = pbxObjectBody(pbxSection(phaseType), phaseID);
+  return entries.every((entry) => phaseBody.includes(entry));
+}
+
+function allDeploymentTargetsAreAtLeast(minimumMajorVersion) {
+  const assignments = [
+    ...iosProjectText.matchAll(/IPHONEOS_DEPLOYMENT_TARGET\s*=\s*([^;]+);/g),
+  ].map(([, value]) => value.trim().replace(/^"|"$/g, ''));
+
+  return (
+    assignments.length > 0 &&
+    assignments.every((value) => {
+      if (!/^\d+(?:\.\d+)*$/.test(value)) {
+        return false;
+      }
+      return Number(value.split('.')[0]) >= minimumMajorVersion;
+    })
+  );
+}
 
 const checks = [
   {
     label: 'JavaScript entrypoint',
     path: 'index.js',
     required: true,
-    advice: 'Restore the React Native entry files before attempting a native build.',
+    advice:
+      'Restore the React Native entry files before attempting a native build.',
   },
   {
     label: 'Metro config',
@@ -117,7 +199,8 @@ const checks = [
     label: 'Voice native module',
     path: 'ios/Voice/VoiceModule.swift',
     required: false,
-    advice: 'Voice input will be unavailable on iOS until the native module is restored.',
+    advice:
+      'Voice input will be unavailable on iOS until the native module is restored.',
   },
   {
     label: 'Diagnostics native module',
@@ -132,6 +215,20 @@ const checks = [
     required: true,
     advice:
       'The on-device backend needs its Swift bridge before it can load or run the model.',
+  },
+  {
+    label: 'Core ML React Native facade',
+    path: 'src/native/coreml.ts',
+    required: true,
+    advice:
+      'Restore the typed JavaScript facade so native failures remain explicit and events can be normalized.',
+  },
+  {
+    label: 'Core ML inference state store',
+    path: 'src/store/inferenceStore.ts',
+    required: true,
+    advice:
+      'Restore the inference state store that serializes generation, cancellation, and model lifecycle operations.',
   },
   {
     label: 'Core ML inference Objective-C bridge',
@@ -171,24 +268,29 @@ const checks = [
   {
     label: 'iOS project registers Core ML inference',
     custom: () =>
-      iosProjectText.includes('CoreMLInferenceModule.swift in Sources') &&
-      iosProjectText.includes('MonGARSCoreML in Frameworks'),
+      applicationBuildPhaseContains('PBXSourcesBuildPhase', 'Sources', [
+        'CoreMLInferenceModule.swift in Sources',
+        'CoreMLInferenceModuleBridge.m in Sources',
+      ]) &&
+      applicationBuildPhaseContains('PBXFrameworksBuildPhase', 'Frameworks', [
+        'MonGARSCoreML in Frameworks',
+      ]) &&
+      iosProjectText.includes('XCLocalSwiftPackageReference "MonGARSCoreML"') &&
+      iosProjectText.includes('relativePath = MonGARSCoreML;'),
     required: true,
     advice:
       'Add the Core ML bridge and MonGARSCoreML package product to the app target.',
   },
   {
     label: 'iOS 18 deployment target for stateful Core ML',
-    custom: () =>
-      iosProjectText.includes('IPHONEOS_DEPLOYMENT_TARGET = 18.0;') &&
-      !iosProjectText.includes('IPHONEOS_DEPLOYMENT_TARGET = 13.4;'),
+    custom: () => allDeploymentTargetsAreAtLeast(18),
     required: true,
-    advice:
-      'The pinned stateful ML Program requires iOS 18 or newer.',
+    advice: 'The pinned stateful ML Program requires iOS 18 or newer.',
   },
   {
     label: 'iOS frameworks use the active SDK',
-    custom: () => !iosProjectText.includes('Platforms/iPhoneOS.platform/Developer/SDKs/'),
+    custom: () =>
+      !iosProjectText.includes('Platforms/iPhoneOS.platform/Developer/SDKs/'),
     required: true,
     advice:
       'Replace versioned SDK paths with SDKROOT so new Xcode releases can resolve frameworks.',
@@ -226,8 +328,9 @@ const checks = [
   {
     label: 'Android native voice module',
     matcher: () =>
-      findFile(path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'), (_, name) =>
-        /Voice.*\.(kt|java)$/.test(name),
+      findFile(
+        path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'),
+        (_, name) => /Voice.*\.(kt|java)$/.test(name),
       ),
     required: false,
     advice:
@@ -236,8 +339,9 @@ const checks = [
   {
     label: 'Android native diagnostics module',
     matcher: () =>
-      findFile(path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'), (_, name) =>
-        /Diagnostics.*\.(kt|java)$/.test(name),
+      findFile(
+        path.join(projectRoot, 'android', 'app', 'src', 'main', 'java'),
+        (_, name) => /Diagnostics.*\.(kt|java)$/.test(name),
       ),
     required: false,
     advice:
@@ -247,7 +351,8 @@ const checks = [
     label: 'Env key MONGARS_BASE_URL',
     custom: () => envKeys.has('MONGARS_BASE_URL'),
     required: true,
-    advice: 'Define MONGARS_BASE_URL in .env.example for a single source of truth.',
+    advice:
+      'Define MONGARS_BASE_URL in .env.example for a single source of truth.',
   },
   {
     label: 'Env key MONGARS_WS_URL',
@@ -259,7 +364,8 @@ const checks = [
     label: 'Env key MONGARS_VOICE_LOCALE',
     custom: () => envKeys.has('MONGARS_VOICE_LOCALE'),
     required: true,
-    advice: 'Define MONGARS_VOICE_LOCALE in .env.example for voice recognition defaults.',
+    advice:
+      'Define MONGARS_VOICE_LOCALE in .env.example for voice recognition defaults.',
   },
 ];
 
@@ -280,7 +386,9 @@ for (const check of checks) {
 
   const ok = Boolean(found);
   const marker = ok ? '[ok]' : check.required ? '[missing]' : '[warn]';
-  console.log(`${marker} ${check.label}${ok && found !== check.label ? ` -> ${found}` : ''}`);
+  console.log(
+    `${marker} ${check.label}${ok && found !== check.label ? ` -> ${found}` : ''}`,
+  );
 
   if (!ok && check.advice) {
     console.log(`      ${check.advice}`);

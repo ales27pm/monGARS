@@ -17,6 +17,7 @@ public actor InferenceCoordinator {
   private var phase: InferencePhase = .notDownloaded
   private var lastError: String?
   private var activeOperation: Operation?
+  private var shouldUnloadWhenIdle = false
 
   public init() {
     store = ModelStore()
@@ -49,7 +50,7 @@ public actor InferenceCoordinator {
   ) async throws -> ModelStatus {
     try ensurePhysicalDevice()
     try begin(.prepare)
-    defer { activeOperation = nil }
+    defer { finishOperation() }
     phase = .downloading
     lastError = nil
 
@@ -57,6 +58,7 @@ public actor InferenceCoordinator {
       _ = try await store.prepare { update in
         progress(update)
       }
+      try Task.checkCancellation()
       phase = .loading
       progress(
         ModelProgress(
@@ -68,10 +70,12 @@ public actor InferenceCoordinator {
       try await loadIfNeeded()
       phase = .ready
       return status()
-    } catch is CancellationError {
-      phase = store.isInstalled() ? .ready : .notDownloaded
-      throw InferenceError.preparationCancelled
     } catch {
+      if isCancellation(error) {
+        lastError = nil
+        phase = store.isInstalled() ? .ready : .notDownloaded
+        throw InferenceError.preparationCancelled
+      }
       phase = .error
       lastError = error.localizedDescription
       throw error
@@ -85,10 +89,12 @@ public actor InferenceCoordinator {
   ) async throws -> GenerationResult {
     try ensurePhysicalDevice()
     try begin(.generate)
-    defer { activeOperation = nil }
-    guard store.isInstalled() else { throw InferenceError.modelNotInstalled }
+    defer { finishOperation() }
+    lastError = nil
 
     do {
+      try Task.checkCancellation()
+      guard store.isInstalled() else { throw InferenceError.modelNotInstalled }
       try await loadIfNeeded()
       guard let runner, let tokenizer else {
         throw InferenceError.invalidModel("Moteur ou tokenizer absent.")
@@ -108,25 +114,30 @@ public actor InferenceCoordinator {
       )
       phase = .ready
       return result
-    } catch is CancellationError {
-      runner = nil
-      phase = .ready
-      throw InferenceError.generationCancelled
-    } catch let error as InferenceError {
-      lastError = error.localizedDescription
-      switch error {
-      case .emptyPrompt, .promptTooLong:
-        // Invalid user input must not make a healthy, verified model unusable.
-        phase = .ready
-      case .thermalCritical:
-        runner = nil
-        phase = .ready
-      default:
-        runner = nil
-        phase = .error
-      }
-      throw error
     } catch {
+      if isCancellation(error) {
+        runner = nil
+        lastError = nil
+        phase = store.isInstalled() ? .ready : .notDownloaded
+        throw InferenceError.generationCancelled
+      }
+
+      if let inferenceError = error as? InferenceError {
+        lastError = inferenceError.localizedDescription
+        switch inferenceError {
+        case .emptyPrompt, .promptTooLong, .invalidGenerationOptions:
+          // Invalid user input must not make a healthy, verified model unusable.
+          phase = .ready
+        case .thermalCritical:
+          runner = nil
+          phase = .ready
+        default:
+          runner = nil
+          phase = .error
+        }
+        throw inferenceError
+      }
+
       runner = nil
       phase = .error
       lastError = error.localizedDescription
@@ -135,13 +146,18 @@ public actor InferenceCoordinator {
   }
 
   public func unloadModel() {
-    runner = nil
-    tokenizer = nil
-    phase = store.isInstalled() ? .ready : .notDownloaded
+    guard activeOperation == nil else {
+      // Actor methods may interleave at every await. Defer an unload requested
+      // by a direct package client instead of invalidating a runner in use.
+      shouldUnloadWhenIdle = true
+      return
+    }
+    unloadNow()
   }
 
   public func deleteModel() throws -> ModelStatus {
     guard activeOperation == nil else { throw InferenceError.operationInProgress }
+    shouldUnloadWhenIdle = false
     runner = nil
     tokenizer = nil
     try store.deleteModel()
@@ -153,16 +169,45 @@ public actor InferenceCoordinator {
   private func loadIfNeeded() async throws {
     if runner != nil, tokenizer != nil { return }
     phase = .loading
+    try Task.checkCancellation()
     try await store.ensureVerified()
+    try Task.checkCancellation()
     let loadedTokenizer = try await AutoTokenizer.from(
       modelFolder: store.tokenizerDirectory
     )
+    try Task.checkCancellation()
     let loadedRunner = try StatefulCoreMLRunner(
       modelURL: store.modelDirectory,
       tokenizer: loadedTokenizer
     )
+    try Task.checkCancellation()
     tokenizer = loadedTokenizer
     runner = loadedRunner
+  }
+
+  private func unloadNow() {
+    runner = nil
+    tokenizer = nil
+    phase = store.isInstalled() ? .ready : .notDownloaded
+    lastError = nil
+  }
+
+  private func finishOperation() {
+    activeOperation = nil
+    guard shouldUnloadWhenIdle else { return }
+    shouldUnloadWhenIdle = false
+    unloadNow()
+  }
+
+  private func isCancellation(_ error: Error) -> Bool {
+    if error is CancellationError || Task.isCancelled { return true }
+    guard let inferenceError = error as? InferenceError else { return false }
+    switch inferenceError {
+    case .preparationCancelled, .generationCancelled:
+      return true
+    default:
+      return false
+    }
   }
 
   private func ensurePhysicalDevice() throws {

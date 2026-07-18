@@ -1,6 +1,8 @@
 import React from 'react';
 import { render } from '@testing-library/react-native';
 import App from '../src/App';
+import { useChatStore } from '../src/store/chatStore';
+import { useInferenceStore } from '../src/store/inferenceStore';
 
 describe('App', () => {
   it('renders the settings call-to-action when no session is present', async () => {
@@ -10,5 +12,44 @@ describe('App', () => {
         'Ouvrez les parametres pour recuperer un jeton et demarrer la conversation native.',
       ),
     ).toBeTruthy();
+  });
+
+  it('does not replace persisted local history with the unavailable-model empty state', () => {
+    useInferenceStore.setState({
+      backend: 'on-device',
+      status: {
+        phase: 'unavailable',
+        modelId: null,
+        displayName: null,
+        revision: null,
+        installedBytes: 0,
+        contextLength: 0,
+        minimumIOSVersion: 18,
+        detail: 'Module Core ML indisponible',
+      },
+    });
+    useChatStore.setState({
+      session: null,
+      initialize: jest.fn().mockResolvedValue(undefined),
+      messages: [
+        {
+          id: 'persisted-local-message',
+          role: 'assistant',
+          content: 'Conversation locale conservée',
+          createdAt: new Date(),
+          metadata: {
+            inferenceBackend: 'on-device',
+            source: 'on-device',
+            localOwnerId: 'guest',
+            finishReason: 'eos',
+          },
+        },
+      ],
+    });
+
+    const { getByText, queryByText } = render(<App />);
+
+    expect(getByText('Conversation')).toBeTruthy();
+    expect(queryByText('Modele local requis')).toBeNull();
   });
 });

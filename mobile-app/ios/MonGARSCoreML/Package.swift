@@ -5,8 +5,8 @@ import PackageDescription
 let package = Package(
   name: "MonGARSCoreML",
   platforms: [
-    .iOS(.v18),
-    .macOS(.v15),
+    .iOS("18.0"),
+    .macOS("15.0"),
   ],
   products: [
     .library(name: "MonGARSCoreML", targets: ["MonGARSCoreML"]),

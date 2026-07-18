@@ -6,6 +6,9 @@ import Tokenizers
 
 @available(iOS 18.0, macOS 15.0, *)
 final class StatefulCoreMLRunner {
+  private static let prefillBatchSize = 64
+  private static let outputBackingCount = 16
+
   private let inferModel: MLModel
   private let prefillModel: MLModel
   private let tokenizer: any Tokenizer
@@ -26,7 +29,9 @@ final class StatefulCoreMLRunner {
     prefillConfiguration.functionName = "prefill"
     prefillModel = try MLModel(contentsOf: modelURL, configuration: prefillConfiguration)
     self.tokenizer = tokenizer
-    inferOutputBackings = try Self.makeInferOutputBackings(count: 16)
+    inferOutputBackings = try Self.makeInferOutputBackings(
+      count: Self.outputBackingCount
+    )
 
     try Self.validate(model: inferModel, function: "infer", sequenceLength: 1)
     try Self.validate(model: prefillModel, function: "prefill", sequenceLength: 64)
@@ -37,6 +42,7 @@ final class StatefulCoreMLRunner {
     requestedOptions: GenerationOptions,
     onUpdate: @escaping @Sendable (GenerationUpdate) async -> Void
   ) async throws -> GenerationResult {
+    try Task.checkCancellation()
     guard !promptTokens.isEmpty else { throw InferenceError.emptyPrompt }
     guard promptTokens.count < MonGARSModelManifest.contextLength else {
       throw InferenceError.invalidModel("Le prompt remplit tout le contexte.")
@@ -57,6 +63,11 @@ final class StatefulCoreMLRunner {
       options.maxNewTokens,
       MonGARSModelManifest.contextLength - promptTokens.count
     )
+    guard options.maxNewTokens > 0 else {
+      throw InferenceError.invalidGenerationOptions(
+        "maxNewTokens doit etre strictement positif."
+      )
+    }
 
     let state = inferModel.makeState()
     let startedAt = Date()
@@ -77,13 +88,14 @@ final class StatefulCoreMLRunner {
       if ProcessInfo.processInfo.thermalState == .critical {
         throw InferenceError.thermalCritical
       }
-      let token = Sampler.select(
+      let token = try Sampler.select(
         vocabularySize: MonGARSModelManifest.vocabularySize,
         generatedTokens: generatedSet,
         options: options
       ) { tokenID in
         Self.score(tokenID: tokenID, chunks: currentLogits)
       }
+      try Task.checkCancellation()
 
       if MonGARSModelManifest.eosTokenIDs.contains(token) {
         finishReason = "eos"
@@ -109,6 +121,11 @@ final class StatefulCoreMLRunner {
           )
         )
       }
+      try Task.checkCancellation()
+
+      // The logits produced for the last requested token would never be read.
+      // Avoid one unnecessary state mutation and ANE prediction at the limit.
+      if generated.count == options.maxNewTokens { break }
 
       let position = promptTokens.count + generated.count - 1
       guard position < MonGARSModelManifest.contextLength else {
@@ -121,6 +138,7 @@ final class StatefulCoreMLRunner {
         state: state
       )
     }
+    try Task.checkCancellation()
 
     let finalText = clean(
       tokenizer.decode(tokens: generated, skipSpecialTokens: true)
@@ -134,6 +152,7 @@ final class StatefulCoreMLRunner {
           tokensPerSecond: Double(generated.count) / duration
         )
       )
+      try Task.checkCancellation()
     }
 
     return GenerationResult(
@@ -150,7 +169,7 @@ final class StatefulCoreMLRunner {
     promptTokens: [Int],
     state: MLState
   ) async throws -> [MLMultiArray] {
-    let batchSize = 64
+    let batchSize = Self.prefillBatchSize
     var position = 0
 
     while position + batchSize <= promptTokens.count {
@@ -176,15 +195,15 @@ final class StatefulCoreMLRunner {
         "causal_mask": causalMask,
         "current_pos": currentPosition,
       ])
-      _ = try predictionQueue.sync {
-        try prefillModel.prediction(
-          from: provider,
-          using: state,
-          options: MLPredictionOptions()
-        )
-      }
+      try runPrediction(
+        model: prefillModel,
+        provider: provider,
+        state: state,
+        options: MLPredictionOptions()
+      )
       position += batchSize
       await Task.yield()
+      try Task.checkCancellation()
     }
 
     var logits: [MLMultiArray]?
@@ -207,6 +226,7 @@ final class StatefulCoreMLRunner {
       )
       position += 1
       await Task.yield()
+      try Task.checkCancellation()
     }
 
     guard let logits else {
@@ -220,6 +240,7 @@ final class StatefulCoreMLRunner {
     position: Int,
     state: MLState
   ) throws -> [MLMultiArray] {
+    try Task.checkCancellation()
     let inputIDs = try MLMultiArray(shape: [1, 1], dataType: .int32)
     inputIDs[0] = NSNumber(value: token)
 
@@ -245,13 +266,12 @@ final class StatefulCoreMLRunner {
     nextBackingIndex = (nextBackingIndex + 1) % inferOutputBackings.count
     let predictionOptions = MLPredictionOptions()
     predictionOptions.outputBackings = backings
-    _ = try predictionQueue.sync {
-      try inferModel.prediction(
-        from: provider,
-        using: state,
-        options: predictionOptions
-      )
-    }
+    try runPrediction(
+      model: inferModel,
+      provider: provider,
+      state: state,
+      options: predictionOptions
+    )
 
     return try (1...MonGARSModelManifest.logitsChunkCount).map { index in
       guard let logits = backings["logits\(index)"] else {
@@ -259,6 +279,25 @@ final class StatefulCoreMLRunner {
       }
       return logits
     }
+  }
+
+  private func runPrediction(
+    model: MLModel,
+    provider: MLDictionaryFeatureProvider,
+    state: MLState,
+    options: MLPredictionOptions
+  ) throws {
+    try Task.checkCancellation()
+    _ = try predictionQueue.sync {
+      try model.prediction(
+        from: provider,
+        using: state,
+        options: options
+      )
+    }
+    // Core ML predictions are synchronous but cannot be interrupted while the
+    // ANE is executing. Drop partially advanced state as soon as it returns.
+    try Task.checkCancellation()
   }
 
   private func fill(mask: MLMultiArray, visibleThrough position: Int) {
@@ -366,6 +405,9 @@ final class StatefulCoreMLRunner {
   private static func makeInferOutputBackings(
     count: Int
   ) throws -> [[String: MLMultiArray]] {
+    guard count > 0 else {
+      throw InferenceError.invalidModel("Le ring de sorties Core ML est vide.")
+    }
     try (0..<count).map { _ in
       var backings: [String: MLMultiArray] = [:]
       for index in 1...MonGARSModelManifest.logitsChunkCount {

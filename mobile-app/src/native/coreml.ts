@@ -83,7 +83,6 @@ const INFERENCE_PHASES = new Set<OnDeviceInferencePhase>([
   'not-downloaded',
   'downloading',
   'verifying',
-  'compiling',
   'loading',
   'ready',
   'generating',

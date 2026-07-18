@@ -33,29 +33,31 @@ enum PromptBuilder {
     }
 
     if encoded.count > maximumPromptTokens, let latest = selected.last {
-      let characters = Array(latest.content)
-      var lowerBound = 1
-      var upperBound = characters.count
-      var best: [Int]?
+      let contentTokens = tokenizer.encode(
+        text: latest.content,
+        addSpecialTokens: false
+      )
+      let maximumSuffixTokens = min(
+        contentTokens.count,
+        maximumPromptTokens
+      )
 
-      while lowerBound <= upperBound {
-        let length = (lowerBound + upperBound) / 2
+      for length in stride(from: maximumSuffixTokens, through: 1, by: -1) {
         let shortened = ChatMessage(
           role: latest.role,
-          content: String(characters.suffix(length))
+          content: tokenizer.decode(
+            tokens: Array(contentTokens.suffix(length)),
+            skipSpecialTokens: false
+          )
         )
         let candidate = try encode([system, shortened], tokenizer: tokenizer)
         if candidate.count <= maximumPromptTokens {
-          best = candidate
-          lowerBound = length + 1
-        } else {
-          upperBound = length - 1
+          encoded = candidate
+          break
         }
       }
 
-      if let best {
-        encoded = best
-      } else {
+      if encoded.count > maximumPromptTokens {
         throw InferenceError.promptTooLong
       }
     }
@@ -73,7 +75,6 @@ enum PromptBuilder {
     }
     return try tokenizer.applyChatTemplate(
       messages: templateMessages,
-      addGenerationPrompt: true,
       tools: nil,
       additionalContext: ["enable_thinking": false]
     )

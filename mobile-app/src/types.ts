@@ -7,7 +7,6 @@ export type OnDeviceInferencePhase =
   | 'not-downloaded'
   | 'downloading'
   | 'verifying'
-  | 'compiling'
   | 'loading'
   | 'ready'
   | 'generating'
@@ -63,6 +62,7 @@ export type MessageMetadata = {
   generatedTokens?: number;
   tokensPerSecond?: number;
   finishReason?: string | null;
+  localOwnerId?: string;
   confidence?: number;
   processingTime?: number;
   speechTurn?: SpeechTurn | null;

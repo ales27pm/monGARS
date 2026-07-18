@@ -11,12 +11,18 @@ enum Sampler {
     generatedTokens: Set<Int>,
     options: GenerationOptions,
     scoreAt: (Int) -> Float
-  ) -> Int {
+  ) throws -> Int {
+    guard vocabularySize > 0 else {
+      throw InferenceError.invalidModel("Le vocabulaire de sortie est vide.")
+    }
     let candidateCount = options.doSample ? min(options.topK, vocabularySize) : 1
     var heap: [Candidate] = []
     heap.reserveCapacity(candidateCount)
 
     for token in 0..<vocabularySize {
+      if token.isMultiple(of: 1_024) {
+        try Task.checkCancellation()
+      }
       var score = scoreAt(token)
       guard score.isFinite else { continue }
 
@@ -36,10 +42,14 @@ enum Sampler {
         capacity: candidateCount
       )
     }
+    try Task.checkCancellation()
 
     let sorted = heap.sorted { $0.score > $1.score }
+    guard !sorted.isEmpty else {
+      throw InferenceError.invalidModel("Aucun logit fini n'a ete produit.")
+    }
     guard options.doSample, sorted.count > 1, let maximum = sorted.first?.score else {
-      return sorted.first?.token ?? 0
+      return sorted[0].token
     }
 
     let weights = sorted.map { exp(Double($0.score - maximum)) }

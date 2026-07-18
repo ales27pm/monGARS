@@ -47,13 +47,18 @@ export type InferenceState = {
   unloadModel: () => Promise<OnDeviceModelStatus>;
   deleteModel: () => Promise<OnDeviceModelStatus>;
   clearError: () => void;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 };
 
 type PendingGeneration = {
   requestId: string;
   resolve: (result: CoreMLGenerationResult) => void;
   reject: (error: Error) => void;
+};
+
+type LifecycleSignal<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
 };
 
 type InferenceSetter = (
@@ -65,8 +70,18 @@ type InferenceSetter = (
 let unsubscribeNativeEvents: (() => void) | null = null;
 let pendingGeneration: PendingGeneration | null = null;
 let startingGeneration = false;
+let cancelRequestedWhileStarting = false;
+let statusRefreshVersion = 0;
+let generationEpoch = 0;
+let generationStartSignal: LifecycleSignal<string | null> | null = null;
+let generationTerminalSignal: LifecycleSignal<void> | null = null;
+const earlyUpdates = new Map<string, CoreMLGenerationUpdate>();
 const earlyCompletions = new Map<string, CoreMLGenerationResult>();
 const earlyErrors = new Map<string, Error>();
+let earlyUnscopedError: Error | null = null;
+let inferenceHydrationInFlight: Promise<void> | null = null;
+
+const DISPOSE_WAIT_TIMEOUT_MS = 5_000;
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -98,6 +113,129 @@ function errorStatus(
   };
 }
 
+function invalidateStatusRefresh() {
+  statusRefreshVersion += 1;
+}
+
+function createLifecycleSignal<T>(): LifecycleSignal<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function beginGenerationLifecycle() {
+  generationStartSignal = createLifecycleSignal<string | null>();
+  generationTerminalSignal = createLifecycleSignal<void>();
+}
+
+function markGenerationStarted(requestId: string | null) {
+  generationStartSignal?.resolve(requestId);
+  generationStartSignal = null;
+}
+
+function finishGenerationLifecycle() {
+  generationTerminalSignal?.resolve();
+  generationTerminalSignal = null;
+  markGenerationStarted(null);
+}
+
+async function waitAtMost(
+  promise: Promise<unknown>,
+  timeoutMilliseconds: number,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  await Promise.race([
+    promise,
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, timeoutMilliseconds);
+    }),
+  ]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
+}
+
+function isNewerGenerationUpdate(
+  current: CoreMLGenerationUpdate | null,
+  next: CoreMLGenerationUpdate,
+): boolean {
+  if (!current || current.requestId !== next.requestId) {
+    return true;
+  }
+
+  if (current.sequence !== undefined && next.sequence !== undefined) {
+    return next.sequence > current.sequence;
+  }
+  if (next.generatedTokens < current.generatedTokens) {
+    return false;
+  }
+  if (
+    next.generatedTokens === current.generatedTokens &&
+    next.text.length < current.text.length
+  ) {
+    return false;
+  }
+  return (
+    next.text !== current.text ||
+    next.generatedTokens !== current.generatedTokens ||
+    next.tokensPerSecond !== current.tokensPerSecond
+  );
+}
+
+function clearEarlyEvents() {
+  earlyUpdates.clear();
+  earlyCompletions.clear();
+  earlyErrors.clear();
+  earlyUnscopedError = null;
+}
+
+function applyGenerationUpdate(
+  set: InferenceSetter,
+  generation: CoreMLGenerationUpdate,
+) {
+  invalidateStatusRefresh();
+  set((state) => {
+    if (!isNewerGenerationUpdate(state.generation, generation)) {
+      return {};
+    }
+    return {
+      activeRequestId: generation.requestId,
+      generation,
+      status: {
+        ...state.status,
+        phase: 'generating',
+        detail: null,
+      },
+      error: null,
+    };
+  });
+}
+
+function applyGenerationCompletion(
+  set: InferenceSetter,
+  result: CoreMLGenerationResult,
+) {
+  invalidateStatusRefresh();
+  set((state) => ({
+    activeRequestId: null,
+    generation: {
+      requestId: result.requestId,
+      text: result.text,
+      generatedTokens: result.generatedTokens,
+      tokensPerSecond: result.tokensPerSecond,
+    },
+    lastResult: result,
+    status: {
+      ...state.status,
+      phase: 'ready',
+      detail: null,
+    },
+    error: null,
+  }));
+}
+
 function rejectPending(error: Error, requestId?: string | null) {
   if (
     pendingGeneration &&
@@ -116,12 +254,14 @@ function bindNativeEvents(set: InferenceSetter, get: () => InferenceState) {
 
   unsubscribeNativeEvents = subscribeToCoreMLEvents({
     onStatus: (status) => {
-      set({
+      invalidateStatusRefresh();
+      set((state) => ({
         status,
-        error: status.phase === 'error' ? status.detail : null,
-      });
+        error: status.phase === 'error' ? status.detail : state.error,
+      }));
     },
     onDownloadProgress: (progress) => {
+      invalidateStatusRefresh();
       set((state) => ({
         progress,
         status: {
@@ -134,43 +274,33 @@ function bindNativeEvents(set: InferenceSetter, get: () => InferenceState) {
     },
     onGeneration: (generation) => {
       const activeRequestId = get().activeRequestId;
-      if (activeRequestId && activeRequestId !== generation.requestId) {
+      if (!activeRequestId) {
+        if (startingGeneration) {
+          const current = earlyUpdates.get(generation.requestId) ?? null;
+          if (isNewerGenerationUpdate(current, generation)) {
+            earlyUpdates.set(generation.requestId, generation);
+          }
+        }
         return;
       }
-      set((state) => ({
-        activeRequestId: generation.requestId,
-        generation,
-        status: {
-          ...state.status,
-          phase: 'generating',
-          detail: null,
-        },
-        error: null,
-      }));
+      if (activeRequestId !== generation.requestId) {
+        return;
+      }
+      applyGenerationUpdate(set, generation);
     },
     onComplete: (result) => {
       const activeRequestId = get().activeRequestId;
-      if (activeRequestId && activeRequestId !== result.requestId) {
-        earlyCompletions.set(result.requestId, result);
+      if (!activeRequestId) {
+        if (startingGeneration) {
+          earlyCompletions.set(result.requestId, result);
+        }
+        return;
+      }
+      if (activeRequestId !== result.requestId) {
         return;
       }
 
-      set((state) => ({
-        activeRequestId: null,
-        generation: {
-          requestId: result.requestId,
-          text: result.text,
-          generatedTokens: result.generatedTokens,
-          tokensPerSecond: result.tokensPerSecond,
-        },
-        lastResult: result,
-        status: {
-          ...state.status,
-          phase: 'ready',
-          detail: null,
-        },
-        error: null,
-      }));
+      applyGenerationCompletion(set, result);
 
       if (
         pendingGeneration &&
@@ -179,38 +309,37 @@ function bindNativeEvents(set: InferenceSetter, get: () => InferenceState) {
         const pending = pendingGeneration;
         pendingGeneration = null;
         pending.resolve(result);
-      } else if (startingGeneration) {
-        earlyCompletions.set(result.requestId, result);
       }
+      finishGenerationLifecycle();
     },
     onError: (event) => {
       const error = nativeEventError(event);
       const activeRequestId = get().activeRequestId;
-      if (
-        event.requestId &&
-        activeRequestId &&
-        event.requestId !== activeRequestId
-      ) {
+      if (event.requestId && !activeRequestId) {
         if (startingGeneration) {
           earlyErrors.set(event.requestId, error);
         }
         return;
       }
+      if (event.requestId && event.requestId !== activeRequestId) {
+        return;
+      }
+      if (!event.requestId && startingGeneration && !activeRequestId) {
+        earlyUnscopedError = error;
+        return;
+      }
 
+      invalidateStatusRefresh();
       set((state) => ({
         activeRequestId: null,
         status: errorStatus(state.status, error),
         error: error.message,
       }));
 
-      if (
-        startingGeneration &&
-        event.requestId &&
-        (!pendingGeneration || pendingGeneration.requestId !== event.requestId)
-      ) {
-        earlyErrors.set(event.requestId, error);
-      }
       rejectPending(error, event.requestId);
+      if (activeRequestId || startingGeneration) {
+        finishGenerationLifecycle();
+      }
     },
   });
 }
@@ -222,8 +351,9 @@ function clearPendingGeneration(error: Error) {
     pending.reject(error);
   }
   startingGeneration = false;
-  earlyCompletions.clear();
-  earlyErrors.clear();
+  cancelRequestedWhileStarting = false;
+  clearEarlyEvents();
+  finishGenerationLifecycle();
 }
 
 const INITIAL_STATUS = unavailableCoreMLStatus();
@@ -241,29 +371,43 @@ export const useInferenceStore = create<InferenceState>()(
       error: null,
       initialize: async () => {
         bindNativeEvents(set, get);
+        const refreshVersion = statusRefreshVersion;
         try {
           const status = await getCoreMLStatus();
-          set({
-            status,
-            initialized: true,
-            error: status.phase === 'error' ? status.detail : null,
-          });
+          if (refreshVersion === statusRefreshVersion) {
+            set({
+              status,
+              initialized: true,
+              error: status.phase === 'error' ? status.detail : null,
+            });
+          }
           return status;
         } catch (error) {
           const status = errorStatus(get().status, error);
-          set({
-            status,
-            initialized: true,
-            error: status.detail,
-          });
+          if (refreshVersion === statusRefreshVersion) {
+            set({
+              status,
+              initialized: true,
+              error: status.detail,
+            });
+          }
           return status;
         }
       },
       setBackend: (backend) => {
+        if (
+          backend !== get().backend &&
+          (startingGeneration ||
+            pendingGeneration !== null ||
+            get().activeRequestId !== null)
+        ) {
+          throw new CoreMLBusyError();
+        }
         set({ backend, error: null });
       },
       prepareModel: async (options = {}) => {
         bindNativeEvents(set, get);
+        invalidateStatusRefresh();
         set({ progress: null, error: null });
         try {
           const status = await prepareCoreMLModel(options);
@@ -281,37 +425,74 @@ export const useInferenceStore = create<InferenceState>()(
           throw new CoreMLBusyError();
         }
 
+        const operationEpoch = ++generationEpoch;
         startingGeneration = true;
+        cancelRequestedWhileStarting = false;
+        beginGenerationLifecycle();
+        invalidateStatusRefresh();
+        clearEarlyEvents();
         set({ generation: null, lastResult: null, error: null });
 
         let requestId: string;
         try {
           const acknowledgement = await startCoreMLGeneration(request);
           requestId = acknowledgement.requestId;
+          markGenerationStarted(requestId);
         } catch (error) {
+          markGenerationStarted(null);
           startingGeneration = false;
-          earlyCompletions.clear();
-          earlyErrors.clear();
+          cancelRequestedWhileStarting = false;
+          clearEarlyEvents();
           const status = errorStatus(get().status, error);
           set({ status, activeRequestId: null, error: status.detail });
+          finishGenerationLifecycle();
           throw error;
         }
 
-        const earlyResult = earlyCompletions.get(requestId);
-        if (earlyResult) {
-          earlyCompletions.delete(requestId);
+        if (operationEpoch !== generationEpoch) {
+          const stoppedError = new Error(
+            "Le moteur d'inférence locale a été arrêté.",
+          );
+          try {
+            await cancelCoreMLGeneration(requestId);
+          } catch {
+            // Teardown is already in progress; the native bridge will also
+            // cancel its operation when React Native invalidates the module.
+          }
           startingGeneration = false;
-          return earlyResult;
+          cancelRequestedWhileStarting = false;
+          clearEarlyEvents();
+          finishGenerationLifecycle();
+          throw stoppedError;
         }
-        const earlyError = earlyErrors.get(requestId);
+
+        const earlyError = earlyErrors.get(requestId) ?? earlyUnscopedError;
         if (earlyError) {
-          earlyErrors.delete(requestId);
           startingGeneration = false;
+          cancelRequestedWhileStarting = false;
+          clearEarlyEvents();
+          const status = errorStatus(get().status, earlyError);
+          set({ status, activeRequestId: null, error: status.detail });
+          finishGenerationLifecycle();
           throw earlyError;
         }
+        const earlyResult = earlyCompletions.get(requestId);
+        if (earlyResult) {
+          startingGeneration = false;
+          cancelRequestedWhileStarting = false;
+          clearEarlyEvents();
+          applyGenerationCompletion(set, earlyResult);
+          finishGenerationLifecycle();
+          return earlyResult;
+        }
+        const earlyUpdate = earlyUpdates.get(requestId) ?? null;
+        const shouldCancel = cancelRequestedWhileStarting;
+        cancelRequestedWhileStarting = false;
+        clearEarlyEvents();
 
         set((state) => ({
           activeRequestId: requestId,
+          ...(earlyUpdate ? { generation: earlyUpdate } : {}),
           status: {
             ...state.status,
             phase: 'generating',
@@ -322,15 +503,45 @@ export const useInferenceStore = create<InferenceState>()(
         return new Promise<CoreMLGenerationResult>((resolve, reject) => {
           pendingGeneration = { requestId, resolve, reject };
           startingGeneration = false;
+
+          if (shouldCancel) {
+            cancelCoreMLGeneration(requestId).catch((error) => {
+              if (get().activeRequestId !== requestId) {
+                return;
+              }
+              const cancellationError =
+                error instanceof Error ? error : new Error(errorMessage(error));
+              invalidateStatusRefresh();
+              set((state) => ({
+                activeRequestId: null,
+                status: errorStatus(state.status, cancellationError),
+                error: cancellationError.message,
+              }));
+              rejectPending(cancellationError, requestId);
+              finishGenerationLifecycle();
+            });
+          }
         });
       },
       cancelGeneration: async (requestId) => {
         const targetRequestId = requestId ?? get().activeRequestId;
         if (!targetRequestId) {
+          if (startingGeneration) {
+            cancelRequestedWhileStarting = true;
+            set((state) => ({
+              status: {
+                ...state.status,
+                phase: 'generating',
+                detail: 'Annulation demandée…',
+              },
+            }));
+            return true;
+          }
           return false;
         }
 
         try {
+          invalidateStatusRefresh();
           const result = await cancelCoreMLGeneration(targetRequestId);
           if (result.cancelled) {
             set((state) => ({
@@ -349,6 +560,7 @@ export const useInferenceStore = create<InferenceState>()(
         }
       },
       unloadModel: async () => {
+        invalidateStatusRefresh();
         if (get().activeRequestId) {
           await get().cancelGeneration();
         }
@@ -368,6 +580,7 @@ export const useInferenceStore = create<InferenceState>()(
         }
       },
       deleteModel: async () => {
+        invalidateStatusRefresh();
         if (get().activeRequestId) {
           await get().cancelGeneration();
         }
@@ -388,7 +601,30 @@ export const useInferenceStore = create<InferenceState>()(
         }
       },
       clearError: () => set({ error: null }),
-      dispose: () => {
+      dispose: async () => {
+        invalidateStatusRefresh();
+        generationEpoch += 1;
+        cancelRequestedWhileStarting = false;
+
+        const startPromise = generationStartSignal?.promise ?? null;
+        const terminalPromise = generationTerminalSignal?.promise ?? null;
+        if (startingGeneration && startPromise) {
+          await waitAtMost(startPromise, DISPOSE_WAIT_TIMEOUT_MS);
+        }
+
+        const requestId = get().activeRequestId;
+        if (requestId) {
+          try {
+            await cancelCoreMLGeneration(requestId);
+          } catch {
+            // Continue teardown even if native cancellation cannot be
+            // acknowledged; bridge invalidation is the final safety net.
+          }
+        }
+        if (terminalPromise) {
+          await waitAtMost(terminalPromise, DISPOSE_WAIT_TIMEOUT_MS);
+        }
+
         unsubscribeNativeEvents?.();
         unsubscribeNativeEvents = null;
         clearPendingGeneration(
@@ -417,3 +653,20 @@ export const useInferenceStore = create<InferenceState>()(
     },
   ),
 );
+
+export async function ensureInferenceStoreHydrated(): Promise<void> {
+  if (useInferenceStore.persist.hasHydrated()) {
+    return;
+  }
+  if (!inferenceHydrationInFlight) {
+    const hydration = Promise.resolve(
+      useInferenceStore.persist.rehydrate(),
+    ).finally(() => {
+      if (inferenceHydrationInFlight === hydration) {
+        inferenceHydrationInFlight = null;
+      }
+    });
+    inferenceHydrationInFlight = hydration;
+  }
+  await inferenceHydrationInFlight;
+}

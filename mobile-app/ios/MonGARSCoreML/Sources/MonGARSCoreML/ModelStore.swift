@@ -6,6 +6,11 @@ import CryptoKit
 #endif
 
 final class ModelStore {
+  private struct FileSignature: Equatable {
+    let bytes: Int64
+    let modificationDate: Date
+  }
+
   private struct VerificationMarker: Codable {
     let modelID: String
     let revision: String
@@ -16,7 +21,7 @@ final class ModelStore {
   private let fileManager: FileManager
   private let rootDirectory: URL
   private let hub: HubApi
-  private var verifiedThisProcess = false
+  private var verifiedFileSignatures: [String: FileSignature]?
 
   private static let manifestFingerprint = MonGARSModelManifest.expectedFiles
     .map { "\($0.path)|\($0.bytes)|\($0.sha256)" }
@@ -93,11 +98,19 @@ final class ModelStore {
     progress: @escaping @Sendable (ModelProgress) -> Void = { _ in }
   ) async throws {
     guard isInstalled() else { throw InferenceError.modelNotInstalled }
-    guard !verifiedThisProcess else { return }
+    try applyBackupExclusion(to: repositoryDirectory)
+    let currentSignatures = try currentFileSignatures()
+    if
+      let verifiedFileSignatures,
+      verifiedFileSignatures == currentSignatures
+    {
+      return
+    }
 
     do {
       try await verify(snapshot: repositoryDirectory, progress: progress)
-      verifiedThisProcess = true
+      try Task.checkCancellation()
+      verifiedFileSignatures = try currentFileSignatures()
     } catch {
       if
         let inferenceError = error as? InferenceError,
@@ -160,8 +173,10 @@ final class ModelStore {
       try Task.checkCancellation()
       do {
         try await verify(snapshot: snapshot, progress: progress)
+        try Task.checkCancellation()
+        try applyBackupExclusion(to: snapshot)
         try writeVerificationMarker()
-        verifiedThisProcess = true
+        verifiedFileSignatures = try currentFileSignatures()
         return snapshot
       } catch let error as InferenceError {
         guard case let .integrityFailure(path) = error else { throw error }
@@ -174,7 +189,7 @@ final class ModelStore {
   }
 
   func deleteModel() throws {
-    verifiedThisProcess = false
+    verifiedFileSignatures = nil
     if fileManager.fileExists(atPath: repositoryDirectory.path) {
       try fileManager.removeItem(at: repositoryDirectory)
     }
@@ -188,10 +203,24 @@ final class ModelStore {
     var excluded = rootDirectory
     var values = URLResourceValues()
     values.isExcludedFromBackup = true
-    try? excluded.setResourceValues(values)
+    try excluded.setResourceValues(values)
+  }
+
+  private func applyBackupExclusion(to snapshot: URL) throws {
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+
+    var excludedSnapshot = snapshot
+    try excludedSnapshot.setResourceValues(values)
+
+    for expected in MonGARSModelManifest.expectedFiles {
+      var excludedArtifact = snapshot.appendingPathComponent(expected.path)
+      try excludedArtifact.setResourceValues(values)
+    }
   }
 
   private func availableDiskCapacity() throws -> Int64 {
+    #if canImport(Darwin)
     let values = try rootDirectory.resourceValues(forKeys: [
       .volumeAvailableCapacityForImportantUsageKey,
       .volumeAvailableCapacityKey,
@@ -200,6 +229,12 @@ final class ModelStore {
       return Int64(capacity)
     }
     return Int64(values.volumeAvailableCapacity ?? 0)
+    #else
+    let attributes = try fileManager.attributesOfFileSystem(
+      forPath: rootDirectory.path
+    )
+    return (attributes[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+    #endif
   }
 
   private func verify(
@@ -246,8 +281,31 @@ final class ModelStore {
     try data.write(to: markerURL, options: .atomic)
   }
 
+  private func currentFileSignatures() throws -> [String: FileSignature] {
+    var signatures: [String: FileSignature] = [:]
+    signatures.reserveCapacity(MonGARSModelManifest.expectedFiles.count)
+
+    for expected in MonGARSModelManifest.expectedFiles {
+      let fileURL = repositoryDirectory.appendingPathComponent(expected.path)
+      guard
+        let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+        let size = (attributes[.size] as? NSNumber)?.int64Value,
+        size == expected.bytes,
+        let modificationDate = attributes[.modificationDate] as? Date
+      else {
+        throw InferenceError.integrityFailure(expected.path)
+      }
+      signatures[expected.path] = FileSignature(
+        bytes: size,
+        modificationDate: modificationDate
+      )
+    }
+
+    return signatures
+  }
+
   private func sha256(_ url: URL) async throws -> String {
-    let hashTask = Task.detached(priority: .utility) {
+    let hashTask: Task<String, Error> = Task.detached(priority: .utility) {
       #if canImport(CryptoKit)
       let handle = try FileHandle(forReadingFrom: url)
       defer { try? handle.close() }
@@ -271,7 +329,7 @@ final class ModelStore {
   }
 
   private func purgeArtifact(at relativePath: String) throws {
-    verifiedThisProcess = false
+    verifiedFileSignatures = nil
     let artifact = repositoryDirectory.appendingPathComponent(relativePath)
     if fileManager.fileExists(atPath: artifact.path) {
       try fileManager.removeItem(at: artifact)
