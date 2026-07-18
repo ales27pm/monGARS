@@ -4,6 +4,10 @@ import App from '../src/App';
 import { useChatStore } from '../src/store/chatStore';
 import { useInferenceStore } from '../src/store/inferenceStore';
 
+jest.mock('@shopify/flash-list', () => ({
+  FlashList: require('react-native').FlatList,
+}));
+
 describe('App', () => {
   it('renders the settings call-to-action when no session is present', async () => {
     const { findByText } = render(<App />);
@@ -50,6 +54,7 @@ describe('App', () => {
     const { getByText, queryByText } = render(<App />);
 
     expect(getByText('Conversation')).toBeTruthy();
+    expect(getByText('Conversation locale conservée')).toBeTruthy();
     expect(queryByText('Modele local requis')).toBeNull();
   });
 });

@@ -523,4 +523,74 @@ describe('chatStore', () => {
     );
     expect(contents).not.toContain('Ancienne copie serveur');
   });
+
+  it('deduplicates a preserved in-flight turn that is also returned by history', async () => {
+    const history =
+      deferred<Array<{ query: string; response: string; timestamp: string }>>();
+    (fetchConversationHistory as jest.Mock).mockReturnValueOnce(
+      history.promise,
+    );
+    useChatStore.setState({
+      session: { username: 'u1', token: 'token' },
+    });
+
+    const refresh = useChatStore.getState().refreshHistory();
+    await flushPromises();
+    expect(fetchConversationHistory).toHaveBeenCalledTimes(1);
+    useChatStore.setState((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          id: 'live-duplicate-user',
+          role: 'user',
+          content: 'Question synchronisée',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+        {
+          id: 'live-duplicate-assistant',
+          role: 'assistant',
+          content: 'Réponse synchronisée',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+        {
+          id: 'live-unrelated-user',
+          role: 'user',
+          content: 'Question indépendante',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+        {
+          id: 'live-unrelated-assistant',
+          role: 'assistant',
+          content: 'Réponse indépendante',
+          createdAt: new Date(),
+          metadata: { inferenceBackend: 'server', source: 'realtime' },
+        },
+      ],
+    }));
+    history.resolve([
+      {
+        query: 'Question synchronisée',
+        response: 'Réponse synchronisée',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    await refresh;
+
+    const messages = useChatStore.getState().messages;
+    expect(
+      messages.filter((message) => message.content === 'Question synchronisée'),
+    ).toHaveLength(1);
+    expect(
+      messages.filter((message) => message.content === 'Réponse synchronisée'),
+    ).toHaveLength(1);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'live-unrelated-user' }),
+        expect.objectContaining({ id: 'live-unrelated-assistant' }),
+      ]),
+    );
+  });
 });

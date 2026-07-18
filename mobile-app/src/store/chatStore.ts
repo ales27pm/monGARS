@@ -96,6 +96,41 @@ function isLocalMessageForOwner(message: Message, ownerId: string): boolean {
   );
 }
 
+function removeTurnsAlreadyInHistory(
+  messages: Message[],
+  history: ReadonlyArray<{ query: string; response: string }>,
+): Message[] {
+  const remainingHistoryTurns = new Map<string, number>();
+  history.forEach((item) => {
+    const fingerprint = buildRealtimeFingerprint(item);
+    remainingHistoryTurns.set(
+      fingerprint,
+      (remainingHistoryTurns.get(fingerprint) ?? 0) + 1,
+    );
+  });
+
+  const retained: Message[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const userMessage = messages[index];
+    const assistantMessage = messages[index + 1];
+    if (userMessage.role === 'user' && assistantMessage?.role === 'assistant') {
+      const fingerprint = buildRealtimeFingerprint({
+        query: userMessage.content,
+        response: assistantMessage.content,
+      });
+      const remainingMatches = remainingHistoryTurns.get(fingerprint) ?? 0;
+      if (remainingMatches > 0) {
+        remainingHistoryTurns.set(fingerprint, remainingMatches - 1);
+        index += 1;
+        continue;
+      }
+    }
+    retained.push(userMessage);
+  }
+
+  return retained;
+}
+
 function isDuplicateRealtimePair(
   messages: Message[],
   query: string,
@@ -714,27 +749,36 @@ export const useChatStore = create<ChatState>()(
             set({ historyLoading: false });
             return;
           }
-          set((state) => ({
-            messages: [
-              ...state.messages.filter((message) => !isServerMessage(message)),
-              ...mapHistoryToMessages(history),
-              ...state.messages.filter(
-                (message) =>
-                  isServerMessage(message) &&
-                  !replacedServerMessageIDs.has(message.id),
-              ),
-            ],
-            historyLoading: false,
-            notice: history.length
-              ? {
-                  tone: 'info',
-                  message: 'Historique synchronise.',
-                }
-              : {
-                  tone: 'info',
-                  message: 'Aucun historique disponible.',
-                },
-          }));
+          const historyMessages = mapHistoryToMessages(history);
+          set((state) => {
+            const preservedServerMessages = state.messages.filter(
+              (message) =>
+                isServerMessage(message) &&
+                !replacedServerMessageIDs.has(message.id),
+            );
+            return {
+              messages: [
+                ...state.messages.filter(
+                  (message) => !isServerMessage(message),
+                ),
+                ...historyMessages,
+                ...removeTurnsAlreadyInHistory(
+                  preservedServerMessages,
+                  history,
+                ),
+              ],
+              historyLoading: false,
+              notice: history.length
+                ? {
+                    tone: 'info',
+                    message: 'Historique synchronise.',
+                  }
+                : {
+                    tone: 'info',
+                    message: 'Aucun historique disponible.',
+                  },
+            };
+          });
         } catch (error) {
           const currentSession = get().session;
           if (refreshVersion !== historyRefreshVersion) {
