@@ -2,15 +2,17 @@ import XCTest
 @testable import MonGARSCoreML
 
 final class ManifestAndSamplerTests: XCTestCase {
-  func testSegmentedLogitsCoverEntireVocabulary() {
-    XCTAssertEqual(
-      MonGARSModelManifest.logitsChunkCount * MonGARSModelManifest.logitsChunkSize,
-      MonGARSModelManifest.vocabularySize
-    )
+  func testDolphinVocabularyMatchesPinnedModel() {
+    XCTAssertEqual(MonGARSModelManifest.vocabularySize, 128_258)
   }
 
   func testKVCacheMatchesPinnedStatefulContract() {
-    XCTAssertEqual(MonGARSModelManifest.kvCacheShape, [56, 8, 512, 128])
+    XCTAssertEqual(
+      MonGARSModelManifest.kvCacheShape,
+      [28, 1, 8, 2_048, 128]
+    )
+    XCTAssertEqual(MonGARSModelManifest.maximumQueryLength, 512)
+    XCTAssertEqual(MonGARSModelManifest.contextLength, 2_048)
   }
 
   func testManifestPinsEveryLargeRuntimeArtifact() {
@@ -24,12 +26,13 @@ final class ManifestAndSamplerTests: XCTestCase {
     )
     XCTAssertEqual(
       MonGARSModelManifest.expectedFiles.reduce(Int64(0)) { $0 + $1.bytes },
-      MonGARSModelManifest.installedBytes
+      MonGARSModelManifest.downloadBytes
     )
     XCTAssertTrue(expectedPaths.contains("tokenizer.json"))
     XCTAssertTrue(
       expectedPaths.contains(
-        "\(MonGARSModelManifest.compiledDirectory)/weights/weight.bin"
+        "\(MonGARSModelManifest.packageDirectory)"
+          + "/Data/com.apple.CoreML/weights/weight.bin"
       )
     )
     XCTAssertTrue(
@@ -38,6 +41,22 @@ final class ManifestAndSamplerTests: XCTestCase {
           && file.sha256.count == 64
           && file.sha256.allSatisfy(lowercaseHex.contains)
       }
+    )
+  }
+
+  func testManifestPinsDolphinHubAndSourceRevisions() {
+    XCTAssertEqual(MonGARSModelManifest.modelID, "ales27pm/Dolphin3.0-CoreML")
+    XCTAssertEqual(
+      MonGARSModelManifest.revision,
+      "95671cf9a2f56d2a381816ae264cd9aae335d96f"
+    )
+    XCTAssertEqual(
+      MonGARSModelManifest.sourceRevision,
+      "392a6f57223e7ccfe6ef4ebdb2ff101a42d57364"
+    )
+    XCTAssertEqual(
+      MonGARSModelManifest.eosTokenIDs,
+      Set([128_256, 128_001, 128_008, 128_009])
     )
   }
 
@@ -68,7 +87,7 @@ final class ManifestAndSamplerTests: XCTestCase {
   }
 
   func testGreedySamplerReturnsHighestFiniteScore() throws {
-    let scores: [Float] = [-10, 0.2, .nan, 3.5, 1.4]
+    let scores: [Float] = [-10, 0.2, -3, 3.5, 1.4]
     let token = try Sampler.select(
       vocabularySize: scores.count,
       generatedTokens: [],
@@ -111,9 +130,44 @@ final class ManifestAndSamplerTests: XCTestCase {
     }
   }
 
+  func testSamplerRejectsAnyNonFiniteLogit() {
+    let scores: [Float] = [2, .nan, 1]
+    XCTAssertThrowsError(
+      try Sampler.select(
+        vocabularySize: scores.count,
+        generatedTokens: [],
+        options: GenerationOptions(doSample: false)
+      ) { scores[$0] }
+    ) { error in
+      assertInvalidModel(error)
+    }
+  }
+
   func testSamplerClassifiesMutatedZeroTopKAsInvalidGenerationOptions() {
     var options = GenerationOptions(doSample: true)
     options.topK = 0
+
+    XCTAssertThrowsError(
+      try Sampler.select(
+        vocabularySize: 3,
+        generatedTokens: [],
+        options: options
+      ) { Float($0) }
+    ) { error in
+      guard let inferenceError = error as? InferenceError else {
+        XCTFail("InferenceError attendu, recu: \(error)")
+        return
+      }
+      guard case .invalidGenerationOptions = inferenceError else {
+        XCTFail("invalidGenerationOptions attendu, recu: \(error)")
+        return
+      }
+    }
+  }
+
+  func testSamplerRejectsMutatedNonFiniteTemperature() {
+    var options = GenerationOptions(doSample: true)
+    options.temperature = .nan
 
     XCTAssertThrowsError(
       try Sampler.select(

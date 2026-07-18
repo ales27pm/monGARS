@@ -1,6 +1,10 @@
 import Foundation
 import Hub
 
+#if canImport(CoreML)
+import CoreML
+#endif
+
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
@@ -27,6 +31,13 @@ final class ModelStore {
     let revision: String
     let manifestFingerprint: String
     let verifiedAt: Date
+  }
+
+  private struct CompilationMarker: Codable {
+    let modelID: String
+    let revision: String
+    let manifestFingerprint: String
+    let compiledAt: Date
   }
 
   private let fileManager: FileManager
@@ -63,7 +74,14 @@ final class ModelStore {
     hub.localRepoLocation(Hub.Repo(id: MonGARSModelManifest.modelID))
   }
 
-  var modelDirectory: URL {
+  var modelPackageDirectory: URL {
+    repositoryDirectory.appendingPathComponent(
+      MonGARSModelManifest.packageDirectory,
+      isDirectory: true
+    )
+  }
+
+  var compiledModelDirectory: URL {
     repositoryDirectory.appendingPathComponent(
       MonGARSModelManifest.compiledDirectory,
       isDirectory: true
@@ -76,9 +94,13 @@ final class ModelStore {
     repositoryDirectory.appendingPathComponent("mongars-verification.json")
   }
 
+  private var compilationMarkerURL: URL {
+    repositoryDirectory.appendingPathComponent("mongars-compilation.json")
+  }
+
   func isInstalled() -> Bool {
     guard
-      fileManager.fileExists(atPath: modelDirectory.path),
+      fileManager.fileExists(atPath: modelPackageDirectory.path),
       fileManager.fileExists(
         atPath: repositoryDirectory.appendingPathComponent("tokenizer.json").path
       ),
@@ -161,6 +183,7 @@ final class ModelStore {
       // Hub.snapshot may create or replace artifacts. Any previously verified
       // in-process repository therefore stops being trusted before it runs.
       verificationSession.invalidate()
+      try removeCompiledModel()
       progress(
         ModelProgress(
           phase: .downloading,
@@ -211,6 +234,103 @@ final class ModelStore {
     }
   }
 
+  #if canImport(CoreML)
+  @available(iOS 18.0, macOS 15.0, *)
+  func ensureCompiledModel(
+    progress: @escaping @Sendable (ModelProgress) -> Void = { _ in }
+  ) async throws -> URL {
+    guard isInstalled() else { throw InferenceError.modelNotInstalled }
+    try await ensureVerified()
+    if isCompiledModelCurrent() {
+      try applyBackupExclusion(to: compiledModelDirectory)
+      return compiledModelDirectory
+    }
+
+    try removeCompiledModel()
+    let available = try availableDiskCapacity()
+    guard available >= MonGARSModelManifest.requiredCompilationFreeDiskBytes else {
+      throw InferenceError.insufficientDisk(
+        required: MonGARSModelManifest.requiredCompilationFreeDiskBytes,
+        available: available
+      )
+    }
+
+    progress(
+      ModelProgress(
+        phase: .compiling,
+        fractionCompleted: 0,
+        detail: "Compilation Core ML sur cet iPhone"
+      )
+    )
+    try Task.checkCancellation()
+    let temporaryCompiledURL = try await MLModel.compileModel(
+      at: modelPackageDirectory
+    )
+    defer {
+      if fileManager.fileExists(atPath: temporaryCompiledURL.path) {
+        try? fileManager.removeItem(at: temporaryCompiledURL)
+      }
+    }
+    try Task.checkCancellation()
+
+    let stagingURL = repositoryDirectory.appendingPathComponent(
+      ".mongars-\(UUID().uuidString).mlmodelc",
+      isDirectory: true
+    )
+    do {
+      try fileManager.moveItem(at: temporaryCompiledURL, to: stagingURL)
+    } catch {
+      if fileManager.fileExists(atPath: stagingURL.path) {
+        try? fileManager.removeItem(at: stagingURL)
+      }
+      let copyBytes = directoryBytes(at: temporaryCompiledURL)
+      let copyHeadroom = copyBytes + 500_000_000
+      let copyCapacity = try availableDiskCapacity()
+      guard copyCapacity >= copyHeadroom else {
+        throw InferenceError.insufficientDisk(
+          required: copyHeadroom,
+          available: copyCapacity
+        )
+      }
+      try fileManager.copyItem(at: temporaryCompiledURL, to: stagingURL)
+    }
+
+    do {
+      try Task.checkCancellation()
+      try fileManager.moveItem(at: stagingURL, to: compiledModelDirectory)
+      try applyBackupExclusion(to: compiledModelDirectory)
+      try writeCompilationMarker()
+    } catch {
+      if fileManager.fileExists(atPath: stagingURL.path) {
+        try? fileManager.removeItem(at: stagingURL)
+      }
+      try? removeCompiledModel()
+      throw error
+    }
+
+    progress(
+      ModelProgress(
+        phase: .compiling,
+        fractionCompleted: 1,
+        detail: "Compilation Core ML terminee"
+      )
+    )
+    return compiledModelDirectory
+  }
+  #endif
+
+  func invalidateCompiledModel() throws {
+    try removeCompiledModel()
+  }
+
+  func installedDiskBytes() -> Int64 {
+    guard isInstalled() else { return 0 }
+    let compiledBytes = isCompiledModelCurrent()
+      ? directoryBytes(at: compiledModelDirectory)
+      : 0
+    return MonGARSModelManifest.downloadBytes + compiledBytes
+  }
+
   private func createRootDirectory() throws {
     try fileManager.createDirectory(
       at: rootDirectory,
@@ -229,9 +349,59 @@ final class ModelStore {
     var excludedSnapshot = snapshot
     try excludedSnapshot.setResourceValues(values)
 
-    for expected in MonGARSModelManifest.expectedFiles {
-      var excludedArtifact = snapshot.appendingPathComponent(expected.path)
+    guard let enumerator = fileManager.enumerator(
+      at: snapshot,
+      includingPropertiesForKeys: nil
+    ) else {
+      return
+    }
+    while let artifact = enumerator.nextObject() as? URL {
+      var excludedArtifact = artifact
       try excludedArtifact.setResourceValues(values)
+    }
+  }
+
+  private func isCompiledModelCurrent() -> Bool {
+    guard
+      fileManager.fileExists(atPath: compiledModelDirectory.path),
+      let data = try? Data(contentsOf: compilationMarkerURL),
+      let marker = try? JSONDecoder().decode(CompilationMarker.self, from: data)
+    else {
+      return false
+    }
+    return marker.modelID == MonGARSModelManifest.modelID
+      && marker.revision == MonGARSModelManifest.revision
+      && marker.manifestFingerprint == Self.manifestFingerprint
+  }
+
+  private func writeCompilationMarker() throws {
+    let marker = CompilationMarker(
+      modelID: MonGARSModelManifest.modelID,
+      revision: MonGARSModelManifest.revision,
+      manifestFingerprint: Self.manifestFingerprint,
+      compiledAt: Date()
+    )
+    let data = try JSONEncoder().encode(marker)
+    try data.write(to: compilationMarkerURL, options: .atomic)
+  }
+
+  private func removeCompiledModel() throws {
+    if fileManager.fileExists(atPath: compiledModelDirectory.path) {
+      try fileManager.removeItem(at: compiledModelDirectory)
+    }
+    if fileManager.fileExists(atPath: compilationMarkerURL.path) {
+      try fileManager.removeItem(at: compilationMarkerURL)
+    }
+    if let entries = try? fileManager.contentsOfDirectory(
+      at: repositoryDirectory,
+      includingPropertiesForKeys: nil
+    ) {
+      for entry in entries
+      where entry.lastPathComponent.hasPrefix(".mongars-")
+        && entry.pathExtension == "mlmodelc"
+      {
+        try fileManager.removeItem(at: entry)
+      }
     }
   }
 
@@ -251,6 +421,31 @@ final class ModelStore {
     )
     return (attributes[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
     #endif
+  }
+
+  private func directoryBytes(at directory: URL) -> Int64 {
+    guard fileManager.fileExists(atPath: directory.path) else { return 0 }
+    guard let enumerator = fileManager.enumerator(
+      at: directory,
+      includingPropertiesForKeys: [.fileSizeKey],
+      options: []
+    ) else {
+      return 0
+    }
+    var total: Int64 = 0
+    while let file = enumerator.nextObject() as? URL {
+      guard
+        let values = try? file.resourceValues(
+          forKeys: [.isRegularFileKey, .fileSizeKey]
+        ),
+        values.isRegularFile == true,
+        let bytes = values.fileSize
+      else {
+        continue
+      }
+      total += Int64(bytes)
+    }
+    return total
   }
 
   private func verify(
@@ -323,6 +518,7 @@ final class ModelStore {
 
   private func purgeArtifact(at relativePath: String) throws {
     verificationSession.invalidate()
+    try removeCompiledModel()
     let artifact = repositoryDirectory.appendingPathComponent(relativePath)
     if fileManager.fileExists(atPath: artifact.path) {
       try fileManager.removeItem(at: artifact)

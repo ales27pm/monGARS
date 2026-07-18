@@ -1,33 +1,37 @@
 import Foundation
 
 public enum MonGARSModelManifest {
-  public static let modelID = "mariocde/Qwen3-1.7B-CoreML-LUT6"
-  public static let revision = "51c5bc038afa962216e3880bf870e92b219328e6"
-  public static let sourceModelID = "Qwen/Qwen3-1.7B"
-  public static let sourceRevision = "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  public static let modelID = "ales27pm/Dolphin3.0-CoreML"
+  public static let revision = "95671cf9a2f56d2a381816ae264cd9aae335d96f"
+  public static let sourceModelID = "dphn/Dolphin3.0-Llama3.2-3B"
+  public static let sourceRevision = "392a6f57223e7ccfe6ef4ebdb2ff101a42d57364"
 
-  public static let displayName = "Qwen3 1.7B · Core ML LUT6"
-  public static let compiledDirectory = "qwen_monolithic_full_lut6.mlmodelc"
-  public static let contextLength = 512
-  public static let vocabularySize = 151_936
-  public static let logitsChunkCount = 16
-  public static let logitsChunkSize = 9_496
-  public static let kvCacheShape = [56, 8, 512, 128]
+  public static let displayName = "Dolphin 3.0 · Llama 3.2 3B · Core ML INT4"
+  public static let packageDirectory =
+    "Dolphin3.0-Llama3.2-3B-stateful-int4.mlpackage"
+  public static let compiledDirectory =
+    "Dolphin3.0-Llama3.2-3B-stateful-int4.mlmodelc"
+  public static let contextLength = 2_048
+  public static let maximumQueryLength = 512
+  public static let vocabularySize = 128_258
+  public static let kvCacheShape = [28, 1, 8, 2_048, 128]
   public static let defaultMaxNewTokens = 96
   public static let maximumNewTokens = 192
-  public static let installedBytes: Int64 = 1_566_306_707
-  public static let requiredFreeDiskBytes: Int64 = 2_500_000_000
+  public static let downloadBytes: Int64 = 1_825_812_981
+  // Runtime compilation keeps both the verified source package and a derived
+  // mlmodelc. Leave enough room for both plus Core ML compiler scratch space.
+  public static let requiredFreeDiskBytes: Int64 = 5_000_000_000
+  public static let requiredCompilationFreeDiskBytes: Int64 = 2_500_000_000
 
   public static let files = [
     "config.json",
-    "meta.yaml",
+    "generation_config.json",
+    "special_tokens_map.json",
     "tokenizer.json",
     "tokenizer_config.json",
-    "\(compiledDirectory)/analytics/coremldata.bin",
-    "\(compiledDirectory)/coremldata.bin",
-    "\(compiledDirectory)/metadata.json",
-    "\(compiledDirectory)/model.mil",
-    "\(compiledDirectory)/weights/weight.bin",
+    "\(packageDirectory)/Data/com.apple.CoreML/model.mlmodel",
+    "\(packageDirectory)/Data/com.apple.CoreML/weights/weight.bin",
+    "\(packageDirectory)/Manifest.json",
   ]
 
   public struct ExpectedFile: Sendable, Equatable {
@@ -45,52 +49,47 @@ public enum MonGARSModelManifest {
   public static let expectedFiles = [
     ExpectedFile(
       path: "config.json",
-      bytes: 67,
-      sha256: "4d94b801ff5bfcf173898ec2a47988f9fec3a93a621200875d9cc732f5bf9a20"
+      bytes: 935,
+      sha256: "e21ff53ea39726f972362beba869807216775d5e308bc2f531784846c06a0249"
     ),
     ExpectedFile(
-      path: "meta.yaml",
-      bytes: 1_856,
-      sha256: "e1d32a5aa4ca503d51724c194c524c6939ca7c2705a83f274982d389178dee39"
+      path: "generation_config.json",
+      bytes: 206,
+      sha256: "e627b5a8b2dc371f90388947ada64fa6e71de0f991c04c835f0c0bc97e305a4f"
+    ),
+    ExpectedFile(
+      path: "special_tokens_map.json",
+      bytes: 444,
+      sha256: "2df2c4620bb1a9eb877bc7c90c7fa04608bda9fa7c0cf2cdcc0a17b849649683"
     ),
     ExpectedFile(
       path: "tokenizer.json",
-      bytes: 11_422_654,
-      sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+      bytes: 17_210_298,
+      sha256: "e40b93124a3e29f62d5f4ff41be56cb2af34ecacf9239acd9da53a98860380b5"
     ),
     ExpectedFile(
       path: "tokenizer_config.json",
-      bytes: 9_732,
-      sha256: "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101"
+      bytes: 53_573,
+      sha256: "51ad9580aba8d00016efda43357185a0d8ff9884584dcc82ab58ca552afd14e1"
     ),
     ExpectedFile(
-      path: "\(compiledDirectory)/analytics/coremldata.bin",
-      bytes: 243,
-      sha256: "d979784eba8948f332cd4c355fb00d047b4d98c744d3eebb852efaa2e29a812a"
+      path: "\(packageDirectory)/Data/com.apple.CoreML/model.mlmodel",
+      bytes: 809_496,
+      sha256: "a34a00a253c98153cf3b231105493edddde532086e224443e40b255b0f10a924"
     ),
     ExpectedFile(
-      path: "\(compiledDirectory)/coremldata.bin",
-      bytes: 1_797,
-      sha256: "e0309bc6a03ee8e4437b5ba0a5162f500d8ad06bb40fa37006872c5804f92bcd"
+      path: "\(packageDirectory)/Data/com.apple.CoreML/weights/weight.bin",
+      bytes: 1_807_737_412,
+      sha256: "6240edc377b1a0158812454c4bb6e3053d8e8a75a7eedb751b9740fffdfd3e15"
     ),
     ExpectedFile(
-      path: "\(compiledDirectory)/metadata.json",
-      bytes: 25_227,
-      sha256: "5346a6d41d46cf920bd9a2d050746ccdd52a3d7116a10cb5eb594b008e944361"
-    ),
-    ExpectedFile(
-      path: "\(compiledDirectory)/model.mil",
-      bytes: 2_252_363,
-      sha256: "bc1229df0107d8be2410cf4d5803a3817357bbbc1a8e92203b837d43a4b2836e"
-    ),
-    ExpectedFile(
-      path: "\(compiledDirectory)/weights/weight.bin",
-      bytes: 1_552_592_768,
-      sha256: "59f0f1b1732c48d0c67e4f38734e36310e9c9b2d903e3de287751d68d46d5588"
+      path: "\(packageDirectory)/Manifest.json",
+      bytes: 617,
+      sha256: "5b8ac347a822f02ba3a6d9ccff60dd723f2649424c8e88570961f12b1c59afb6"
     ),
   ]
 
-  public static let eosTokenIDs: Set<Int> = [151_643, 151_645]
+  public static let eosTokenIDs: Set<Int> = [128_256, 128_001, 128_008, 128_009]
 
   public static let systemPrompt = """
     Tu es monGARS, un assistant personnel local, fiable et direct. Reponds dans la langue de \

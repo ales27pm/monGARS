@@ -156,7 +156,9 @@ const SettingsScreen: React.FC = () => {
   const modelOperationInProgress =
     modelBusy ||
     activeRequestId !== null ||
-    ['downloading', 'verifying', 'loading'].includes(modelStatus.phase);
+    ['downloading', 'verifying', 'compiling', 'loading'].includes(
+      modelStatus.phase,
+    );
 
   return (
     <ScrollView
@@ -222,10 +224,11 @@ const SettingsScreen: React.FC = () => {
           <View style={styles.modelHeader}>
             <View style={styles.modelHeaderText}>
               <Text style={styles.modelName}>
-                {modelStatus.displayName ?? 'Qwen3 1.7B · Core ML LUT6'}
+                {modelStatus.displayName ??
+                  'Dolphin 3.0 · Llama 3.2 3B · Core ML INT4'}
               </Text>
               <Text style={styles.modelIdentifier}>
-                {modelStatus.modelId ?? 'mariocde/Qwen3-1.7B-CoreML-LUT6'}
+                {modelStatus.modelId ?? 'ales27pm/Dolphin3.0-CoreML'}
               </Text>
             </View>
             <Text style={styles.modelPhase}>{modelStatus.phase}</Text>
@@ -235,7 +238,7 @@ const SettingsScreen: React.FC = () => {
               Disque: {formatBytes(modelStatus.installedBytes)}
             </Text>
             <Text style={styles.modelFact}>
-              Contexte: {modelStatus.contextLength || 512} jetons
+              Contexte: {modelStatus.contextLength || 2048} jetons
             </Text>
             <Text style={styles.modelFact}>
               Minimum: iOS {modelStatus.minimumIOSVersion || 18}
@@ -299,7 +302,7 @@ const SettingsScreen: React.FC = () => {
               style={styles.linkButton}
               onPress={() =>
                 Linking.openURL(
-                  'https://huggingface.co/mariocde/Qwen3-1.7B-CoreML-LUT6',
+                  'https://huggingface.co/ales27pm/Dolphin3.0-CoreML/tree/main/Dolphin3.0-Llama3.2-3B-stateful-int4.mlpackage',
                 )
               }
             >
@@ -307,8 +310,9 @@ const SettingsScreen: React.FC = () => {
             </Pressable>
           </View>
           <Text style={styles.footerText}>
-            Artefact epingle et verifie par SHA-256. Source Qwen3 Apache-2.0;
-            embeddings toujours cote serveur.
+            Artefact stateful INT4 epingle et verifie par SHA-256. Source
+            Dolphin/Llama 3.2 sous licence communautaire Llama; embeddings
+            toujours cote serveur.
           </Text>
         </View>
       </View>

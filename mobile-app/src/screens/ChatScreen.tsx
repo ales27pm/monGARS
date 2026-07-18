@@ -235,6 +235,7 @@ const ChatScreen: React.FC = () => {
                         'connecting',
                         'downloading',
                         'verifying',
+                        'compiling',
                         'loading',
                       ].includes(activeStatus)
                     ? styles.statusConnecting

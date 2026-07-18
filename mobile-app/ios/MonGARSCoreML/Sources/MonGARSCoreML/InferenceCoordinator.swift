@@ -39,7 +39,7 @@ public actor InferenceCoordinator {
     return ModelStatus(
       phase: phase,
       detail: lastError,
-      installedBytes: installed ? MonGARSModelManifest.installedBytes : 0
+      installedBytes: installed ? store.installedDiskBytes() : 0
     )
     #endif
   }
@@ -59,15 +59,15 @@ public actor InferenceCoordinator {
         progress(update)
       }
       try Task.checkCancellation()
-      phase = .loading
-      progress(
-        ModelProgress(
-          phase: .loading,
-          fractionCompleted: 1,
-          detail: "Chargement sur le Neural Engine"
-        )
+      phase = .compiling
+      let compiledModelURL = try await store.ensureCompiledModel { update in
+        progress(update)
+      }
+      try Task.checkCancellation()
+      try await loadIfNeeded(
+        compiledModelURL: compiledModelURL,
+        progress: progress
       )
-      try await loadIfNeeded()
       phase = .ready
       return status()
     } catch {
@@ -85,6 +85,7 @@ public actor InferenceCoordinator {
   public func generate(
     messages: [ChatMessage],
     options: GenerationOptions,
+    progress: @escaping @Sendable (ModelProgress) -> Void = { _ in },
     onUpdate: @escaping @Sendable (GenerationUpdate) async -> Void
   ) async throws -> GenerationResult {
     try ensurePhysicalDevice()
@@ -95,11 +96,12 @@ public actor InferenceCoordinator {
     do {
       try Task.checkCancellation()
       guard store.isInstalled() else { throw InferenceError.modelNotInstalled }
-      try await loadIfNeeded()
+      try await loadIfNeeded(progress: progress)
       guard let runner, let tokenizer else {
         throw InferenceError.invalidModel("Moteur ou tokenizer absent.")
       }
 
+      try options.validate()
       let prompt = try PromptBuilder.build(
         messages: messages,
         tokenizer: tokenizer,
@@ -166,20 +168,65 @@ public actor InferenceCoordinator {
     return status()
   }
 
-  private func loadIfNeeded() async throws {
+  private func loadIfNeeded(
+    compiledModelURL: URL? = nil,
+    progress: @escaping @Sendable (ModelProgress) -> Void = { _ in }
+  ) async throws {
     if runner != nil, tokenizer != nil { return }
+    try Task.checkCancellation()
+    let modelURL: URL
+    if let compiledModelURL {
+      modelURL = compiledModelURL
+    } else {
+      phase = .compiling
+      modelURL = try await store.ensureCompiledModel(progress: progress)
+    }
+    try Task.checkCancellation()
     phase = .loading
-    try Task.checkCancellation()
-    try await store.ensureVerified()
-    try Task.checkCancellation()
+    progress(
+      ModelProgress(
+        phase: .loading,
+        fractionCompleted: 1,
+        detail: "Chargement du modele Core ML"
+      )
+    )
     let loadedTokenizer = try await AutoTokenizer.from(
       modelFolder: store.tokenizerDirectory
     )
     try Task.checkCancellation()
-    let loadedRunner = try StatefulCoreMLRunner(
-      modelURL: store.modelDirectory,
-      tokenizer: loadedTokenizer
-    )
+    var loadedRunner: StatefulCoreMLRunner
+    do {
+      loadedRunner = try await StatefulCoreMLRunner(
+        modelURL: modelURL,
+        tokenizer: loadedTokenizer
+      )
+    } catch {
+      if InferenceError.isCancellation(error) { throw error }
+      // Rebuild an unusable derived cache once from the verified source. The
+      // source package itself remains protected by its pinned SHA-256 manifest.
+      try store.invalidateCompiledModel()
+      phase = .compiling
+      let rebuiltURL = try await store.ensureCompiledModel(progress: progress)
+      try Task.checkCancellation()
+      phase = .loading
+      progress(
+        ModelProgress(
+          phase: .loading,
+          fractionCompleted: 1,
+          detail: "Rechargement du modele Core ML"
+        )
+      )
+      do {
+        loadedRunner = try await StatefulCoreMLRunner(
+          modelURL: rebuiltURL,
+          tokenizer: loadedTokenizer
+        )
+      } catch {
+        if InferenceError.isCancellation(error) { throw error }
+        try? store.invalidateCompiledModel()
+        throw error
+      }
+    }
     try Task.checkCancellation()
     tokenizer = loadedTokenizer
     runner = loadedRunner

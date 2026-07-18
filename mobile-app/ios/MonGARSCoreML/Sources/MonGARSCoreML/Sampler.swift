@@ -12,13 +12,9 @@ enum Sampler {
     options: GenerationOptions,
     scoreAt: (Int) -> Float
   ) throws -> Int {
+    try options.validate()
     guard vocabularySize > 0 else {
       throw InferenceError.invalidModel("Le vocabulaire de sortie est vide.")
-    }
-    guard !options.doSample || options.topK > 0 else {
-      throw InferenceError.invalidGenerationOptions(
-        "topK doit etre strictement positif pour l'echantillonnage."
-      )
     }
     let candidateCount = options.doSample ? min(options.topK, vocabularySize) : 1
     var heap: [Candidate] = []
@@ -29,7 +25,11 @@ enum Sampler {
         try Task.checkCancellation()
       }
       var score = scoreAt(token)
-      guard score.isFinite else { continue }
+      guard score.isFinite else {
+        throw InferenceError.invalidModel(
+          "Les logits contiennent une valeur non finie."
+        )
+      }
 
       if generatedTokens.contains(token), options.repetitionPenalty > 1 {
         score = score < 0

@@ -7,6 +7,7 @@ export type OnDeviceInferencePhase =
   | 'not-downloaded'
   | 'downloading'
   | 'verifying'
+  | 'compiling'
   | 'loading'
   | 'ready'
   | 'generating'

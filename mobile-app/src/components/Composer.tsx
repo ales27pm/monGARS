@@ -146,7 +146,7 @@ const Composer: React.FC<Props> = ({
           {mode === 'embed'
             ? 'Renvoie un resume de vecteurs.'
             : backend === 'on-device'
-              ? 'Qwen3 Core ML genere sans envoyer le prompt au serveur.'
+              ? 'Dolphin Core ML genere sans envoyer le prompt au serveur.'
               : 'Reponse LLM avec synchro temps reel.'}
         </Text>
         <Text style={styles.counter}>{text.trim().length}/1000</Text>

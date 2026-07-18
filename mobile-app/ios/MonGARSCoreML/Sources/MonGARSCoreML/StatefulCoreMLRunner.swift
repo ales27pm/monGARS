@@ -1,44 +1,64 @@
 #if canImport(CoreML)
 import CoreML
-import CoreVideo
 import Foundation
 import Tokenizers
 
 @available(iOS 18.0, macOS 15.0, *)
 final class StatefulCoreMLRunner {
-  private static let prefillBatchSize = 64
-  private static let outputBackingCount = 16
+  private struct LogitsView {
+    let backing: MLMultiArray
+    let values: UnsafeMutablePointer<Float16>
+    let rowOffset: Int
+    let tokenStride: Int
+    let vocabularySize: Int
 
-  private let inferModel: MLModel
-  private let prefillModel: MLModel
+    init(_ logits: MLMultiArray) throws {
+      let shape = logits.shape.map(\.intValue)
+      let strides = logits.strides.map(\.intValue)
+      guard
+        logits.dataType == .float16,
+        shape.count == 3,
+        strides.count == 3,
+        shape[1] > 0,
+        shape[2] == MonGARSModelManifest.vocabularySize
+      else {
+        throw InferenceError.invalidModel("Vue logits Dolphin invalide.")
+      }
+      backing = logits
+      values = logits.dataPointer.bindMemory(
+        to: Float16.self,
+        capacity: logits.count
+      )
+      rowOffset = (shape[1] - 1) * strides[1]
+      tokenStride = strides[2]
+      vocabularySize = shape[2]
+    }
+
+    func score(tokenID: Int) -> Float {
+      guard tokenID >= 0, tokenID < vocabularySize else {
+        return -Float.infinity
+      }
+      return Float(values[rowOffset + tokenID * tokenStride])
+    }
+  }
+
+  private let model: MLModel
   private let tokenizer: any Tokenizer
   private let predictionQueue = DispatchQueue(
     label: "com.mongars.coreml.stateful-prediction"
   )
-  private let inferOutputBackings: [[String: MLMultiArray]]
-  private var nextBackingIndex = 0
 
-  init(modelURL: URL, tokenizer: any Tokenizer) throws {
-    let inferConfiguration = MLModelConfiguration()
-    inferConfiguration.computeUnits = .cpuAndNeuralEngine
-    inferConfiguration.functionName = "infer"
-    inferModel = try MLModel(contentsOf: modelURL, configuration: inferConfiguration)
-
-    let prefillConfiguration = MLModelConfiguration()
-    prefillConfiguration.computeUnits = .cpuAndNeuralEngine
-    prefillConfiguration.functionName = "prefill"
-    prefillModel = try MLModel(contentsOf: modelURL, configuration: prefillConfiguration)
+  init(modelURL: URL, tokenizer: any Tokenizer) async throws {
+    let configuration = MLModelConfiguration()
+    // This artifact's published Swift reference runtime is validated on
+    // CPU/GPU. Core ML remains free to partition supported operations there.
+    configuration.computeUnits = .cpuAndGPU
+    model = try await MLModel.load(
+      contentsOf: modelURL,
+      configuration: configuration
+    )
     self.tokenizer = tokenizer
-    inferOutputBackings = try Self.makeInferOutputBackings(
-      count: Self.outputBackingCount
-    )
-
-    try Self.validate(model: inferModel, function: "infer", sequenceLength: 1)
-    try Self.validate(
-      model: prefillModel,
-      function: "prefill",
-      sequenceLength: Self.prefillBatchSize
-    )
+    try Self.validate(model: model)
   }
 
   func generate(
@@ -47,6 +67,7 @@ final class StatefulCoreMLRunner {
     onUpdate: @escaping @Sendable (GenerationUpdate) async -> Void
   ) async throws -> GenerationResult {
     try Task.checkCancellation()
+    try requestedOptions.validate()
     guard !promptTokens.isEmpty else { throw InferenceError.emptyPrompt }
     guard promptTokens.count < MonGARSModelManifest.contextLength else {
       throw InferenceError.invalidModel("Le prompt remplit tout le contexte.")
@@ -67,13 +88,9 @@ final class StatefulCoreMLRunner {
       options.maxNewTokens,
       MonGARSModelManifest.contextLength - promptTokens.count
     )
-    guard options.maxNewTokens > 0 else {
-      throw InferenceError.invalidGenerationOptions(
-        "maxNewTokens doit etre strictement positif."
-      )
-    }
+    try options.validate()
 
-    let state = inferModel.makeState()
+    let state = model.makeState()
     let startedAt = Date()
     var currentLogits = try await prefill(
       promptTokens: promptTokens,
@@ -92,12 +109,14 @@ final class StatefulCoreMLRunner {
       if ProcessInfo.processInfo.thermalState == .critical {
         throw InferenceError.thermalCritical
       }
+
+      let logitsView = try LogitsView(currentLogits)
       let token = try Sampler.select(
         vocabularySize: MonGARSModelManifest.vocabularySize,
         generatedTokens: generatedSet,
         options: options
       ) { tokenID in
-        Self.score(tokenID: tokenID, chunks: currentLogits)
+        logitsView.score(tokenID: tokenID)
       }
       try Task.checkCancellation()
 
@@ -108,9 +127,7 @@ final class StatefulCoreMLRunner {
 
       generated.append(token)
       generatedSet.insert(token)
-      let text = clean(
-        tokenizer.decode(tokens: generated, skipSpecialTokens: true)
-      )
+      let text = tokenizer.decode(tokens: generated, skipSpecialTokens: true)
       let now = Date()
       let elapsed = max(now.timeIntervalSince(startedAt), 0.001)
 
@@ -127,25 +144,25 @@ final class StatefulCoreMLRunner {
       }
       try Task.checkCancellation()
 
-      // The logits produced for the last requested token would never be read.
-      // Avoid one unnecessary state mutation and ANE prediction at the limit.
+      // The logits produced for the final requested token would never be read.
       if generated.count == options.maxNewTokens { break }
 
-      let position = promptTokens.count + generated.count - 1
-      guard position < MonGARSModelManifest.contextLength else {
+      let endStep = promptTokens.count + generated.count
+      guard endStep < MonGARSModelManifest.contextLength else {
         finishReason = "context"
         break
       }
       currentLogits = try predict(
-        token: token,
-        position: position,
+        tokens: [token],
+        endStep: endStep,
         state: state
       )
     }
     try Task.checkCancellation()
 
-    let finalText = clean(
-      tokenizer.decode(tokens: generated, skipSpecialTokens: true)
+    let finalText = tokenizer.decode(
+      tokens: generated,
+      skipSpecialTokens: true
     )
     let duration = max(Date().timeIntervalSince(startedAt), 0.001)
     if finalText != emittedText {
@@ -172,74 +189,21 @@ final class StatefulCoreMLRunner {
   private func prefill(
     promptTokens: [Int],
     state: MLState
-  ) async throws -> [MLMultiArray] {
-    let batchSize = Self.prefillBatchSize
-    var position = 0
+  ) async throws -> MLMultiArray {
+    var logits: MLMultiArray?
 
-    while position + batchSize <= promptTokens.count {
+    for range in DolphinRuntimeContract.prefillRanges(
+      tokenCount: promptTokens.count
+    ) {
       try Task.checkCancellation()
-      let inputIDs = try MLMultiArray(
-        shape: [1, NSNumber(value: batchSize)],
-        dataType: .int32
+      let nextLogits = try predict(
+        tokens: Array(promptTokens[range]),
+        endStep: range.upperBound,
+        state: state
       )
-      let positionIDs = try MLMultiArray(
-        shape: [NSNumber(value: batchSize)],
-        dataType: .int32
-      )
-      let currentPosition = try MLMultiArray(shape: [1], dataType: .int32)
-      let causalMask = try MLMultiArray(
-        shape: [
-          1,
-          1,
-          NSNumber(value: batchSize),
-          NSNumber(value: MonGARSModelManifest.contextLength),
-        ],
-        dataType: .float16
-      )
-
-      for index in 0..<batchSize {
-        inputIDs[index] = NSNumber(value: promptTokens[position + index])
-        positionIDs[index] = NSNumber(value: position + index)
+      if range.upperBound == promptTokens.count {
+        logits = nextLogits
       }
-      currentPosition[0] = NSNumber(value: position)
-      fill(mask: causalMask, batchPosition: position, batchSize: batchSize)
-
-      let provider = try MLDictionaryFeatureProvider(dictionary: [
-        "input_ids": inputIDs,
-        "position_ids": positionIDs,
-        "causal_mask": causalMask,
-        "current_pos": currentPosition,
-      ])
-      try runPrediction(
-        model: prefillModel,
-        provider: provider,
-        state: state,
-        options: MLPredictionOptions()
-      )
-      position += batchSize
-      await Task.yield()
-      try Task.checkCancellation()
-    }
-
-    var logits: [MLMultiArray]?
-    if position == promptTokens.count {
-      // Prefill populates the state but its batched logits are intentionally
-      // not retained. Replaying the final position gives the decode-shaped
-      // logits while deterministically overwriting the same KV slot.
-      logits = try predict(
-        token: promptTokens[position - 1],
-        position: position - 1,
-        state: state
-      )
-    }
-    while position < promptTokens.count {
-      try Task.checkCancellation()
-      logits = try predict(
-        token: promptTokens[position],
-        position: position,
-        state: state
-      )
-      position += 1
       await Task.yield()
       try Task.checkCancellation()
     }
@@ -251,206 +215,177 @@ final class StatefulCoreMLRunner {
   }
 
   private func predict(
-    token: Int,
-    position: Int,
+    tokens: [Int],
+    endStep: Int,
     state: MLState
-  ) throws -> [MLMultiArray] {
+  ) throws -> MLMultiArray {
     try Task.checkCancellation()
-    let inputIDs = try MLMultiArray(shape: [1, 1], dataType: .int32)
-    inputIDs[0] = NSNumber(value: token)
+    guard
+      !tokens.isEmpty,
+      tokens.count <= MonGARSModelManifest.maximumQueryLength,
+      endStep >= tokens.count,
+      endStep <= MonGARSModelManifest.contextLength
+    else {
+      throw InferenceError.invalidModel("Dimensions de requete Core ML invalides.")
+    }
 
-    let positionIDs = try MLMultiArray(shape: [1], dataType: .int32)
-    positionIDs[0] = NSNumber(value: position)
-
-    let currentPosition = try MLMultiArray(shape: [1], dataType: .int32)
-    currentPosition[0] = NSNumber(value: position)
-
-    let causalMask = try MLMultiArray(
-      shape: [1, 1, 1, NSNumber(value: MonGARSModelManifest.contextLength)],
-      dataType: .float16
+    let inputIDs = try makeInputIDs(tokens)
+    let causalMask = try makeCausalMask(
+      queryLength: tokens.count,
+      endStep: endStep
     )
-    fill(mask: causalMask, visibleThrough: position)
-
     let provider = try MLDictionaryFeatureProvider(dictionary: [
-      "input_ids": inputIDs,
-      "position_ids": positionIDs,
-      "causal_mask": causalMask,
-      "current_pos": currentPosition,
+      "inputIds": inputIDs,
+      "causalMask": causalMask,
     ])
-    let backings = inferOutputBackings[nextBackingIndex]
-    nextBackingIndex = (nextBackingIndex + 1) % inferOutputBackings.count
-    let predictionOptions = MLPredictionOptions()
-    predictionOptions.outputBackings = backings
-    try runPrediction(
-      model: inferModel,
+    let options = MLPredictionOptions()
+
+    let output = try runPrediction(
       provider: provider,
       state: state,
-      options: predictionOptions
+      options: options
     )
-
-    return try (1...MonGARSModelManifest.logitsChunkCount).map { index in
-      guard let logits = backings["logits\(index)"] else {
-        throw InferenceError.invalidModel("Sortie logits\(index) absente.")
-      }
-      return logits
+    guard let logits = output.featureValue(for: "logits")?.multiArrayValue else {
+      throw InferenceError.invalidModel("Sortie logits absente.")
     }
+    try Self.validate(logits: logits, queryLength: tokens.count)
+    return logits
   }
 
   private func runPrediction(
-    model: MLModel,
     provider: MLDictionaryFeatureProvider,
     state: MLState,
     options: MLPredictionOptions
-  ) throws {
+  ) throws -> MLFeatureProvider {
     try Task.checkCancellation()
-    _ = try predictionQueue.sync {
+    let output = try predictionQueue.sync {
       try model.prediction(
         from: provider,
         using: state,
         options: options
       )
     }
-    // Core ML predictions are synchronous but cannot be interrupted while the
-    // ANE is executing. Drop partially advanced state as soon as it returns.
+    // A synchronous Core ML prediction cannot be interrupted while executing.
+    // Drop its partially advanced state immediately when control returns.
     try Task.checkCancellation()
+    return output
   }
 
-  private func fill(mask: MLMultiArray, visibleThrough position: Int) {
-    let pointer = mask.dataPointer.assumingMemoryBound(to: Float16.self)
-    for index in 0..<MonGARSModelManifest.contextLength {
-      pointer[index] = index <= position ? 0 : -Float16.infinity
+  private func makeInputIDs(_ tokens: [Int]) throws -> MLMultiArray {
+    let result = try MLMultiArray(
+      shape: [1, NSNumber(value: tokens.count)],
+      dataType: .int32
+    )
+    let strides = result.strides.map(\.intValue)
+    let pointer = result.dataPointer.bindMemory(
+      to: Int32.self,
+      capacity: result.count
+    )
+    for (index, token) in tokens.enumerated() {
+      guard let value = Int32(exactly: token) else {
+        throw InferenceError.invalidModel("Identifiant de jeton hors Int32.")
+      }
+      pointer[index * strides[1]] = value
     }
+    return result
   }
 
-  private func fill(mask: MLMultiArray, batchPosition: Int, batchSize: Int) {
-    let pointer = mask.dataPointer.assumingMemoryBound(to: Float16.self)
-    let context = MonGARSModelManifest.contextLength
-    for row in 0..<batchSize {
-      let visibleThrough = batchPosition + row
-      for column in 0..<context {
-        pointer[row * context + column] = column <= visibleThrough ? 0 : -Float16.infinity
+  private func makeCausalMask(
+    queryLength: Int,
+    endStep: Int
+  ) throws -> MLMultiArray {
+    guard queryLength > 0, endStep >= queryLength else {
+      throw InferenceError.invalidModel("Dimensions du masque causal invalides.")
+    }
+    let result = try MLMultiArray(
+      shape: [1, 1, NSNumber(value: queryLength), NSNumber(value: endStep)],
+      dataType: .float16
+    )
+    let strides = result.strides.map(\.intValue)
+    let pointer = result.dataPointer.bindMemory(
+      to: UInt16.self,
+      capacity: result.count
+    )
+    for row in 0..<queryLength {
+      for column in 0..<endStep {
+        let offset = row * strides[2] + column * strides[3]
+        // IEEE-754 binary16: +0 for visible positions, -65504 otherwise.
+        pointer[offset] = DolphinRuntimeContract.causalMaskAllows(
+          row: row,
+          column: column,
+          queryLength: queryLength,
+          endStep: endStep
+        ) ? 0x0000 : 0xFBFF
       }
     }
+    return result
   }
 
-  private func clean(_ value: String) -> String {
-    let thinkingPrefix = "<think>\n\n</think>\n\n"
-    if value.hasPrefix(thinkingPrefix) {
-      return String(value.dropFirst(thinkingPrefix.count))
-    }
-    return value
-  }
-
-  private static func score(tokenID: Int, chunks: [MLMultiArray]) -> Float {
-    let chunkIndex = tokenID / MonGARSModelManifest.logitsChunkSize
-    let localIndex = tokenID % MonGARSModelManifest.logitsChunkSize
-    guard chunks.indices.contains(chunkIndex) else { return -Float.infinity }
-    let logits = chunks[chunkIndex]
-    guard localIndex < logits.count else { return -Float.infinity }
-
-    switch logits.dataType {
-    case .float16:
-      let pointer = logits.dataPointer.assumingMemoryBound(to: Float16.self)
-      return Float(pointer[localIndex])
-    case .float32:
-      let pointer = logits.dataPointer.assumingMemoryBound(to: Float.self)
-      return pointer[localIndex]
-    case .double:
-      let pointer = logits.dataPointer.assumingMemoryBound(to: Double.self)
-      return Float(pointer[localIndex])
-    default:
-      return logits[localIndex].floatValue
-    }
-  }
-
-  private static func validate(
-    model: MLModel,
-    function: String,
-    sequenceLength: Int
-  ) throws {
+  private static func validate(model: MLModel) throws {
     let description = model.modelDescription
-    let expectedInputs: [String: (shape: [Int], type: MLMultiArrayDataType)] = [
-      "input_ids": ([1, sequenceLength], .int32),
-      "position_ids": ([sequenceLength], .int32),
-      "causal_mask": (
-        [1, 1, sequenceLength, MonGARSModelManifest.contextLength],
-        .float16
-      ),
-      "current_pos": ([1], .int32),
-    ]
+    let inputIDs = description.inputDescriptionsByName["inputIds"]
+    let causalMask = description.inputDescriptionsByName["causalMask"]
+    guard
+      description.inputDescriptionsByName.count == 2,
+      inputIDs?.multiArrayConstraint?.dataType == .int32,
+      inputIDs?.multiArrayConstraint?.shape.count == 2,
+      inputIDs?.multiArrayConstraint?.shape.first?.intValue == 1,
+      causalMask?.multiArrayConstraint?.dataType == .float16,
+      causalMask?.multiArrayConstraint?.shape.count == 4
+    else {
+      throw InferenceError.invalidModel("Entrees Dolphin Core ML invalides.")
+    }
 
-    for (name, expected) in expectedInputs {
+    for stateName in ["keyCache", "valueCache"] {
       guard
-        let input = description.inputDescriptionsByName[name],
-        let constraint = input.multiArrayConstraint,
-        constraint.shape.map(\.intValue) == expected.shape,
-        constraint.dataType == expected.type
+        let state = description.stateDescriptionsByName[stateName],
+        let constraint = state.stateConstraint,
+        constraint.bufferShape.map(\.intValue) == MonGARSModelManifest.kvCacheShape,
+        constraint.dataType == .float16
       else {
-        throw InferenceError.invalidModel(
-          "\(function).\(name) ne respecte pas \(expected.shape)."
-        )
+        throw InferenceError.invalidModel("Etat \(stateName) absent ou invalide.")
       }
     }
 
     guard
-      let state = description.stateDescriptionsByName["model_model_kv_cache_0"],
-      let stateConstraint = state.stateConstraint,
-      stateConstraint.bufferShape == MonGARSModelManifest.kvCacheShape,
-      stateConstraint.dataType == .float16
+      description.stateDescriptionsByName.count == 2,
+      let output = description.outputDescriptionsByName["logits"],
+      let outputConstraint = output.multiArrayConstraint,
+      outputConstraint.dataType == .float16
     else {
-      throw InferenceError.invalidModel("Etat KV absent ou invalide pour \(function).")
+      throw InferenceError.invalidModel("Sortie logits Dolphin invalide.")
     }
 
-    for index in 1...MonGARSModelManifest.logitsChunkCount {
-      guard
-        let output = description.outputDescriptionsByName["logits\(index)"],
-        let constraint = output.multiArrayConstraint,
-        constraint.dataType == .float16,
-        constraint.shape.map(\.intValue) == [
-          1,
-          sequenceLength,
-          MonGARSModelManifest.logitsChunkSize,
-        ]
-      else {
-        throw InferenceError.invalidModel("Sortie logits\(index) invalide.")
-      }
+    let metadata = description.metadata[
+      MLModelMetadataKey.creatorDefinedKey
+    ] as? [String: String]
+    guard
+      metadata?["com.ales27pm.dolphin.source_revision"]
+        == MonGARSModelManifest.sourceRevision,
+      metadata?["com.ales27pm.dolphin.max_context_length"]
+        == String(MonGARSModelManifest.contextLength),
+      metadata?["com.ales27pm.dolphin.max_query_length"]
+        == String(MonGARSModelManifest.maximumQueryLength)
+    else {
+      throw InferenceError.invalidModel("Metadonnees Dolphin incompatibles.")
     }
   }
 
-  private static func makeInferOutputBackings(
-    count: Int
-  ) throws -> [[String: MLMultiArray]] {
-    guard count > 0 else {
-      throw InferenceError.invalidModel("Le ring de sorties Core ML est vide.")
-    }
-    try (0..<count).map { _ in
-      var backings: [String: MLMultiArray] = [:]
-      for index in 1...MonGARSModelManifest.logitsChunkCount {
-        var pixelBuffer: CVPixelBuffer?
-        let attributes: [String: Any] = [
-          kCVPixelBufferMetalCompatibilityKey as String: true,
-          kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
-        ]
-        let status = CVPixelBufferCreate(
-          kCFAllocatorDefault,
-          MonGARSModelManifest.logitsChunkSize,
-          1,
-          kCVPixelFormatType_OneComponent16Half,
-          attributes as CFDictionary,
-          &pixelBuffer
-        )
-        guard status == kCVReturnSuccess, let pixelBuffer else {
-          throw InferenceError.invalidModel(
-            "Impossible d'allouer le backing IOSurface logits\(index)."
-          )
-        }
-        backings["logits\(index)"] = MLMultiArray(
-          pixelBuffer: pixelBuffer,
-          shape: [1, 1, NSNumber(value: MonGARSModelManifest.logitsChunkSize)]
-        )
-      }
-      return backings
+  private static func validate(
+    logits: MLMultiArray,
+    queryLength: Int
+  ) throws {
+    let shape = logits.shape.map(\.intValue)
+    guard
+      logits.dataType == .float16,
+      shape == [1, queryLength, MonGARSModelManifest.vocabularySize]
+    else {
+      throw InferenceError.invalidModel(
+        "Sortie logits ne respecte pas [1, \(queryLength), "
+          + "\(MonGARSModelManifest.vocabularySize)]."
+      )
     }
   }
+
 }
 #endif

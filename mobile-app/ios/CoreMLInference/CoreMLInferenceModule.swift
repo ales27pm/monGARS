@@ -175,30 +175,38 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
     ) async {
       let accumulator = GenerationAccumulator()
       let startedAt = Date()
+      let currentStatus = await coordinator.status()
       emit(
         .status,
         CoreMLInferenceModule.transientStatusPayload(
           phase: .generating,
           detail: "Generation locale en cours",
-          installedBytes: MonGARSModelManifest.installedBytes
+          installedBytes: currentStatus.installedBytes
         )
       )
 
       do {
         let result = try await coordinator.generate(
           messages: messages,
-          options: options
-        ) { [emit = self.emit] update in
-          await accumulator.record(update)
-          emit(
-            .generation,
-            CoreMLInferenceModule.generationPayload(
-              requestID: requestID,
-              sequence: update.generatedTokens,
-              update: update
+          options: options,
+          progress: { [emit = self.emit] progress in
+            emit(
+              .downloadProgress,
+              CoreMLInferenceModule.progressPayload(progress)
             )
-          )
-        }
+          },
+          onUpdate: { [emit = self.emit] update in
+            await accumulator.record(update)
+            emit(
+              .generation,
+              CoreMLInferenceModule.generationPayload(
+                requestID: requestID,
+                sequence: update.generatedTokens,
+                update: update
+              )
+            )
+          }
+        )
 
         emit(
           .complete,

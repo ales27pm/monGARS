@@ -5,6 +5,7 @@ public enum InferencePhase: String, Sendable {
   case notDownloaded = "not-downloaded"
   case downloading
   case verifying
+  case compiling
   case loading
   case ready
   case generating
@@ -96,6 +97,37 @@ public struct GenerationOptions: Sendable, Equatable {
     self.topP = min(max(finiteTopP, 0.05), 1)
     self.repetitionPenalty = min(max(finiteRepetitionPenalty, 1), 2)
     self.doSample = doSample
+  }
+
+  func validate() throws {
+    guard (1...MonGARSModelManifest.maximumNewTokens).contains(maxNewTokens) else {
+      throw InferenceError.invalidGenerationOptions(
+        "maxNewTokens doit respecter les limites du modele."
+      )
+    }
+    guard temperature.isFinite, (0.05...2).contains(temperature) else {
+      throw InferenceError.invalidGenerationOptions(
+        "temperature doit etre finie et comprise entre 0,05 et 2."
+      )
+    }
+    guard (1...200).contains(topK) else {
+      throw InferenceError.invalidGenerationOptions(
+        "topK doit etre compris entre 1 et 200."
+      )
+    }
+    guard topP.isFinite, (0.05...1).contains(topP) else {
+      throw InferenceError.invalidGenerationOptions(
+        "topP doit etre fini et compris entre 0,05 et 1."
+      )
+    }
+    guard
+      repetitionPenalty.isFinite,
+      (1...2).contains(repetitionPenalty)
+    else {
+      throw InferenceError.invalidGenerationOptions(
+        "repetitionPenalty doit etre fini et compris entre 1 et 2."
+      )
+    }
   }
 }
 
