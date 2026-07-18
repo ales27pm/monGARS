@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -13,12 +15,38 @@ import Diagnostics from '../native/diagnostics';
 import { authenticate } from '../services/authService';
 import { settings } from '../services/config';
 import { useChatStore } from '../store/chatStore';
+import { useInferenceStore } from '../store/inferenceStore';
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) {
+    return 'Non installe';
+  }
+  return `${(bytes / 1_000_000_000).toFixed(2)} Go`;
+}
 
 const SettingsScreen: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const { session, connection, setSession, logout } = useChatStore();
+  const [modelBusy, setModelBusy] = useState(false);
+  const { session, connection, setSession, setInferenceBackend, logout } =
+    useChatStore();
+  const {
+    backend,
+    status: modelStatus,
+    progress: modelProgress,
+    error: modelError,
+    activeRequestId,
+    initialize: initializeInference,
+    prepareModel,
+    deleteModel,
+  } = useInferenceStore();
+
+  useEffect(() => {
+    initializeInference().catch((error) => {
+      console.warn('[Settings] Core ML status failed', error);
+    });
+  }, [initializeInference]);
 
   const handleLogin = async () => {
     setBusy(true);
@@ -52,12 +80,221 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  const selectBackend = async (nextBackend: 'server' | 'on-device') => {
+    if (nextBackend === backend) {
+      return;
+    }
+    try {
+      await setInferenceBackend(nextBackend);
+    } catch (error) {
+      Alert.alert('Backend indisponible', (error as Error).message);
+    }
+  };
+
+  const downloadModel = async () => {
+    setModelBusy(true);
+    try {
+      await prepareModel();
+      Alert.alert(
+        'Modele pret',
+        'Le modele Core ML est verifie et charge sur l iPhone.',
+      );
+    } catch (error) {
+      Alert.alert('Modele indisponible', (error as Error).message);
+    } finally {
+      setModelBusy(false);
+    }
+  };
+
+  const confirmDownload = () => {
+    Alert.alert(
+      'Telecharger le modele local?',
+      'Le telechargement fait environ 1,57 Go et exige au moins 2,5 Go libres. Utilisez de preference le Wi-Fi.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Telecharger', onPress: downloadModel },
+      ],
+    );
+  };
+
+  const removeModel = async () => {
+    setModelBusy(true);
+    try {
+      await deleteModel();
+      Alert.alert('Modele supprime', 'Les poids locaux ont ete effaces.');
+    } catch (error) {
+      Alert.alert('Suppression impossible', (error as Error).message);
+    } finally {
+      setModelBusy(false);
+    }
+  };
+
+  const confirmRemoveModel = () => {
+    Alert.alert(
+      'Supprimer le modele local?',
+      'Une nouvelle inference locale exigera de le telecharger de nouveau.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Supprimer', style: 'destructive', onPress: removeModel },
+      ],
+    );
+  };
+
+  const modelInstalled = modelStatus.installedBytes > 0;
+  const modelOperationInProgress =
+    modelBusy ||
+    activeRequestId !== null ||
+    ['downloading', 'verifying', 'compiling', 'loading'].includes(
+      modelStatus.phase,
+    );
+
   return (
     <ScrollView
       style={styles.screen}
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Moteur d inference</Text>
+        <Text style={styles.description}>
+          Choisissez explicitement le serveur ou Core ML. Aucun basculement
+          silencieux vers le reseau n est effectue.
+        </Text>
+        <View style={styles.backendRow}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => selectBackend('server')}
+            style={[
+              styles.backendButton,
+              backend === 'server' && styles.backendButtonActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.backendButtonText,
+                backend === 'server' && styles.backendButtonTextActive,
+              ]}
+            >
+              Serveur
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={Platform.OS !== 'ios' || modelOperationInProgress}
+            onPress={() => selectBackend('on-device')}
+            style={[
+              styles.backendButton,
+              backend === 'on-device' && styles.backendButtonActive,
+              (Platform.OS !== 'ios' || modelOperationInProgress) &&
+                styles.buttonDisabled,
+            ]}
+          >
+            <Text
+              style={[
+                styles.backendButtonText,
+                backend === 'on-device' && styles.backendButtonTextActive,
+              ]}
+            >
+              Sur l iPhone
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.modelCard}>
+          <View style={styles.modelHeader}>
+            <View style={styles.modelHeaderText}>
+              <Text style={styles.modelName}>
+                {modelStatus.displayName ?? 'Qwen3 1.7B · Core ML LUT6'}
+              </Text>
+              <Text style={styles.modelIdentifier}>
+                {modelStatus.modelId ?? 'mariocde/Qwen3-1.7B-CoreML-LUT6'}
+              </Text>
+            </View>
+            <Text style={styles.modelPhase}>{modelStatus.phase}</Text>
+          </View>
+          <View style={styles.modelFacts}>
+            <Text style={styles.modelFact}>
+              Disque: {formatBytes(modelStatus.installedBytes)}
+            </Text>
+            <Text style={styles.modelFact}>
+              Contexte: {modelStatus.contextLength || 512} jetons
+            </Text>
+            <Text style={styles.modelFact}>
+              Minimum: iOS {modelStatus.minimumIOSVersion || 18}
+            </Text>
+          </View>
+
+          {modelProgress ? (
+            <View style={styles.progressContainer}>
+              <View style={styles.progressTrack}>
+                <View
+                  style={[
+                    styles.progressFill,
+                    {
+                      width: `${Math.round(
+                        modelProgress.fractionCompleted * 100,
+                      )}%`,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.progressText}>
+                {modelProgress.detail ?? 'Preparation'} ·{' '}
+                {Math.round(modelProgress.fractionCompleted * 100)}%
+              </Text>
+            </View>
+          ) : null}
+
+          {modelError || modelStatus.detail ? (
+            <Text style={styles.modelDetail}>
+              {modelError ?? modelStatus.detail}
+            </Text>
+          ) : null}
+
+          <View style={styles.modelActions}>
+            {modelOperationInProgress ? (
+              <ActivityIndicator color="#f59e0b" />
+            ) : modelInstalled ? (
+              <Pressable
+                style={styles.destructiveButton}
+                onPress={confirmRemoveModel}
+              >
+                <Text style={styles.destructiveButtonText}>
+                  Supprimer les poids
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                disabled={modelStatus.phase === 'unavailable'}
+                style={[
+                  styles.primaryButton,
+                  modelStatus.phase === 'unavailable' && styles.buttonDisabled,
+                ]}
+                onPress={confirmDownload}
+              >
+                <Text style={styles.primaryButtonText}>
+                  Telecharger et verifier
+                </Text>
+              </Pressable>
+            )}
+            <Pressable
+              style={styles.linkButton}
+              onPress={() =>
+                Linking.openURL(
+                  'https://huggingface.co/mariocde/Qwen3-1.7B-CoreML-LUT6',
+                )
+              }
+            >
+              <Text style={styles.linkButtonText}>Voir la provenance HF</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.footerText}>
+            Artefact epingle et verifie par SHA-256. Source Qwen3 Apache-2.0;
+            embeddings toujours cote serveur.
+          </Text>
+        </View>
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Authentification</Text>
         <Text style={styles.description}>
@@ -174,6 +411,113 @@ const styles = StyleSheet.create({
   description: {
     color: '#94a3b8',
     lineHeight: 21,
+  },
+  backendRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  backendButton: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: '#172033',
+    borderWidth: 1,
+    borderColor: '#23314d',
+  },
+  backendButtonActive: {
+    backgroundColor: '#f59e0b',
+    borderColor: '#fbbf24',
+  },
+  backendButtonText: {
+    color: '#cbd5e1',
+    fontWeight: '700',
+  },
+  backendButtonTextActive: {
+    color: '#111827',
+  },
+  modelCard: {
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: '#07101d',
+    borderWidth: 1,
+    borderColor: '#1f2d45',
+    gap: 12,
+  },
+  modelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  modelHeaderText: {
+    flex: 1,
+    gap: 4,
+  },
+  modelName: {
+    color: '#f8fafc',
+    fontWeight: '800',
+  },
+  modelIdentifier: {
+    color: '#94a3b8',
+    fontSize: 11,
+  },
+  modelPhase: {
+    color: '#fbbf24',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  modelFacts: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  modelFact: {
+    color: '#cbd5e1',
+    fontSize: 12,
+  },
+  progressContainer: {
+    gap: 7,
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#1e293b',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#f59e0b',
+  },
+  progressText: {
+    color: '#cbd5e1',
+    fontSize: 12,
+  },
+  modelDetail: {
+    color: '#fca5a5',
+    lineHeight: 19,
+  },
+  modelActions: {
+    gap: 10,
+  },
+  destructiveButton: {
+    backgroundColor: '#7f1d1d',
+    paddingVertical: 13,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  destructiveButtonText: {
+    color: '#fee2e2',
+    fontWeight: '800',
+  },
+  linkButton: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  linkButtonText: {
+    color: '#93c5fd',
+    fontWeight: '700',
   },
   input: {
     borderWidth: 1,

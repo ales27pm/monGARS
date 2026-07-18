@@ -127,6 +127,27 @@ const checks = [
       'Packet capture and tunnel diagnostics are unavailable on iOS until the native module is restored.',
   },
   {
+    label: 'Core ML inference native module',
+    path: 'ios/CoreMLInference/CoreMLInferenceModule.swift',
+    required: true,
+    advice:
+      'The on-device backend needs its Swift bridge before it can load or run the model.',
+  },
+  {
+    label: 'Core ML inference Objective-C bridge',
+    path: 'ios/CoreMLInference/CoreMLInferenceModuleBridge.m',
+    required: true,
+    advice:
+      'React Native cannot expose the Swift Core ML module without its extern bridge.',
+  },
+  {
+    label: 'Local MonGARSCoreML package',
+    path: 'ios/MonGARSCoreML/Package.swift',
+    required: true,
+    advice:
+      'Restore the local Swift package that owns model download, tokenization, and generation.',
+  },
+  {
     label: 'iOS packet tunnel provider',
     path: 'ios/DiagnosticsExtension/PacketCaptureProvider.swift',
     required: false,
@@ -146,6 +167,31 @@ const checks = [
     required: false,
     advice:
       'The Xcode project exists, but DiagnosticsModule.swift is not part of the app target yet.',
+  },
+  {
+    label: 'iOS project registers Core ML inference',
+    custom: () =>
+      iosProjectText.includes('CoreMLInferenceModule.swift in Sources') &&
+      iosProjectText.includes('MonGARSCoreML in Frameworks'),
+    required: true,
+    advice:
+      'Add the Core ML bridge and MonGARSCoreML package product to the app target.',
+  },
+  {
+    label: 'iOS 18 deployment target for stateful Core ML',
+    custom: () =>
+      iosProjectText.includes('IPHONEOS_DEPLOYMENT_TARGET = 18.0;') &&
+      !iosProjectText.includes('IPHONEOS_DEPLOYMENT_TARGET = 13.4;'),
+    required: true,
+    advice:
+      'The pinned stateful ML Program requires iOS 18 or newer.',
+  },
+  {
+    label: 'iOS frameworks use the active SDK',
+    custom: () => !iosProjectText.includes('Platforms/iPhoneOS.platform/Developer/SDKs/'),
+    required: true,
+    advice:
+      'Replace versioned SDK paths with SDKROOT so new Xcode releases can resolve frameworks.',
   },
   {
     label: 'iOS project registers packet tunnel extension',

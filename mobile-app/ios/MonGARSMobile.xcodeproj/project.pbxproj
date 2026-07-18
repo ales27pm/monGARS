@@ -20,6 +20,9 @@
 		A1B2C3D40100000000000002 /* VoiceModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000012 /* VoiceModuleBridge.m */; };
 		A1B2C3D40100000000000003 /* DiagnosticsModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000021 /* DiagnosticsModule.swift */; };
 		A1B2C3D40100000000000004 /* DiagnosticsModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */; };
+		B2C3D4E50100000000000001 /* CoreMLInferenceModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E50100000000000011 /* CoreMLInferenceModule.swift */; };
+		B2C3D4E50100000000000002 /* CoreMLInferenceModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E50100000000000012 /* CoreMLInferenceModuleBridge.m */; };
+		B2C3D4E50100000000000003 /* MonGARSCoreML in Frameworks */ = {isa = PBXBuildFile; productRef = B2C3D4E50100000000000021 /* MonGARSCoreML */; };
 		A35443688A15083D7056EA3E /* PacketCaptureProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47386103F40FDE4896199EDC /* PacketCaptureProvider.swift */; };
 		C46C622534F7B8EFF418A74A /* PacketCapture.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */; };
 /* End PBXBuildFile section */
@@ -68,7 +71,7 @@
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = MonGARSMobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		19F6CBCC0A4E27FBF8BF4A61 /* libPods-MonGARSMobile-MonGARSMobileTests.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-MonGARSMobile-MonGARSMobileTests.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B4392A12AC88292D35C810B /* Pods-MonGARSMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-MonGARSMobile.debug.xcconfig"; path = "Target Support Files/Pods-MonGARSMobile/Pods-MonGARSMobile.debug.xcconfig"; sourceTree = "<group>"; };
-		45D86789369CFD7CFCBF354A /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		45D86789369CFD7CFCBF354A /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		47386103F40FDE4896199EDC /* PacketCaptureProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PacketCaptureProvider.swift; sourceTree = "<group>"; };
 		514678FFA359A5CD900D3A41 /* PacketCapture.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PacketCapture.entitlements; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-MonGARSMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-MonGARSMobile.release.xcconfig"; path = "Target Support Files/Pods-MonGARSMobile/Pods-MonGARSMobile.release.xcconfig"; sourceTree = "<group>"; };
@@ -81,10 +84,12 @@
 		A1B2C3D40100000000000012 /* VoiceModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = VoiceModuleBridge.m; sourceTree = "<group>"; };
 		A1B2C3D40100000000000021 /* DiagnosticsModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsModule.swift; sourceTree = "<group>"; };
 		A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DiagnosticsModuleBridge.m; sourceTree = "<group>"; };
+		B2C3D4E50100000000000011 /* CoreMLInferenceModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMLInferenceModule.swift; sourceTree = "<group>"; };
+		B2C3D4E50100000000000012 /* CoreMLInferenceModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CoreMLInferenceModuleBridge.m; sourceTree = "<group>"; };
 		B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PacketCapture.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFD9EBF9BEB8D67035698044 /* MonGARSMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = MonGARSMobile.entitlements; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
-		EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/NetworkExtension.framework; sourceTree = DEVELOPER_DIR; };
+		EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +105,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B2C3D4E50100000000000003 /* MonGARSCoreML in Frameworks */,
 				0C80B921A6F3F58F76C31292 /* libPods-MonGARSMobile.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -178,6 +184,7 @@
 		83CBB9F61A601CBA00E9B192 = {
 			isa = PBXGroup;
 			children = (
+				B2C3D4E50100000000000010 /* CoreMLInference */,
 				A1B2C3D40100000000000020 /* Diagnostics */,
 				D48EE345861AF114946E6222 /* DiagnosticsExtension */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
@@ -219,6 +226,15 @@
 				A1B2C3D40100000000000022 /* DiagnosticsModuleBridge.m */,
 			);
 			path = Diagnostics;
+			sourceTree = "<group>";
+		};
+		B2C3D4E50100000000000010 /* CoreMLInference */ = {
+			isa = PBXGroup;
+			children = (
+				B2C3D4E50100000000000011 /* CoreMLInferenceModule.swift */,
+				B2C3D4E50100000000000012 /* CoreMLInferenceModuleBridge.m */,
+			);
+			path = CoreMLInference;
 			sourceTree = "<group>";
 		};
 		BBD78D7AC51CEA395F1C20DB /* Pods */ = {
@@ -286,6 +302,9 @@
 				CF832381C6B6C7507B075E71 /* PBXTargetDependency */,
 			);
 			name = MonGARSMobile;
+			packageProductDependencies = (
+				B2C3D4E50100000000000021 /* MonGARSCoreML */,
+			);
 			productName = MonGARSMobile;
 			productReference = 13B07F961A680F5B00A75B9A /* MonGARSMobile.app */;
 			productType = "com.apple.product-type.application";
@@ -333,6 +352,9 @@
 				Base,
 			);
 			mainGroup = 83CBB9F61A601CBA00E9B192;
+			packageReferences = (
+				B2C3D4E50100000000000020 /* XCLocalSwiftPackageReference "MonGARSCoreML" */,
+			);
 			productRefGroup = 83CBBA001A601CBA00E9B192 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -515,6 +537,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
+				B2C3D4E50100000000000001 /* CoreMLInferenceModule.swift in Sources */,
+				B2C3D4E50100000000000002 /* CoreMLInferenceModuleBridge.m in Sources */,
 				A1B2C3D40100000000000003 /* DiagnosticsModule.swift in Sources */,
 				A1B2C3D40100000000000004 /* DiagnosticsModuleBridge.m in Sources */,
 				13B07FC11A68108700A75B9A /* main.m in Sources */,
@@ -547,6 +571,21 @@
 		};
 /* End PBXTargetDependency section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		B2C3D4E50100000000000020 /* XCLocalSwiftPackageReference "MonGARSCoreML" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = MonGARSCoreML;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B2C3D4E50100000000000021 /* MonGARSCoreML */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B2C3D4E50100000000000020 /* XCLocalSwiftPackageReference "MonGARSCoreML" */;
+			productName = MonGARSCoreML;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 /* Begin XCBuildConfiguration section */
 		00E356F61AD99517003FC87E /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -558,7 +597,7 @@
 					"$(inherited)",
 				);
 				INFOPLIST_FILE = MonGARSMobileTests/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -582,7 +621,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COPY_PHASE_STRIP = NO;
 				INFOPLIST_FILE = MonGARSMobileTests/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -609,6 +648,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = MonGARSMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -636,6 +676,7 @@
 				CODE_SIGN_ENTITLEMENTS = MonGARSMobile/MonGARSMobile.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = MonGARSMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -661,7 +702,7 @@
 				CODE_SIGN_ENTITLEMENTS = DiagnosticsExtension/PacketCapture.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = DiagnosticsExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -728,7 +769,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					/usr/lib/swift,
 					"$(inherited)",
@@ -794,7 +835,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					/usr/lib/swift,
 					"$(inherited)",
@@ -826,7 +867,7 @@
 				CODE_SIGN_ENTITLEMENTS = DiagnosticsExtension/PacketCapture.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = DiagnosticsExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

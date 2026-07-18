@@ -25,6 +25,7 @@ import Composer from '../components/Composer';
 import MessageBubble from '../components/MessageBubble';
 import { settings } from '../services/config';
 import { useChatStore } from '../store/chatStore';
+import { useInferenceStore } from '../store/inferenceStore';
 import type { Message } from '../types';
 import { buildJsonExport, buildMarkdownExport } from '../utils/conversation';
 
@@ -90,7 +91,15 @@ const ChatScreen: React.FC = () => {
     clearError,
     clearNotice,
     retryRealtime,
+    cancelGeneration,
   } = useChatStore();
+  const {
+    backend,
+    status: localStatus,
+    progress: localProgress,
+    generation: localGeneration,
+    lastResult: localResult,
+  } = useInferenceStore();
 
   const renderHeaderActions = useCallback(
     () => (
@@ -117,9 +126,12 @@ const ChatScreen: React.FC = () => {
 
   useEffect(() => {
     initialize().catch((err) => console.warn('[ChatScreen] init failed', err));
-  }, [initialize, session?.token, session?.username]);
+  }, [backend, initialize, session?.token, session?.username]);
 
   useEffect(() => {
+    if (backend === 'on-device') {
+      return;
+    }
     const timer = setTimeout(() => {
       requestQuickActions(draft).catch((suggestionError) => {
         console.warn('[ChatScreen] suggestions failed', suggestionError);
@@ -127,18 +139,27 @@ const ChatScreen: React.FC = () => {
     }, 220);
 
     return () => clearTimeout(timer);
-  }, [draft, requestQuickActions, mode]);
+  }, [backend, draft, requestQuickActions, mode]);
+
+  const activeMessages = useMemo(
+    () =>
+      messages.filter(
+        (message) =>
+          (message.metadata?.inferenceBackend ?? 'server') === backend,
+      ),
+    [backend, messages],
+  );
 
   const filteredMessages = useMemo(() => {
     const query = deferredSearchQuery.trim().toLowerCase();
     if (!query) {
-      return messages;
+      return activeMessages;
     }
 
-    return messages.filter((message) =>
+    return activeMessages.filter((message) =>
       message.content.toLowerCase().includes(query),
     );
-  }, [deferredSearchQuery, messages]);
+  }, [activeMessages, deferredSearchQuery]);
 
   const renderMessage: ListRenderItem<Message> = useCallback(
     ({ item }) => (
@@ -151,7 +172,7 @@ const ChatScreen: React.FC = () => {
   );
 
   const handleShare = async (format: 'markdown' | 'json') => {
-    if (!messages.length) {
+    if (!activeMessages.length) {
       return;
     }
 
@@ -159,8 +180,8 @@ const ChatScreen: React.FC = () => {
       title: 'monGARS export',
       message:
         format === 'json'
-          ? buildJsonExport(messages)
-          : buildMarkdownExport(messages),
+          ? buildJsonExport(activeMessages)
+          : buildMarkdownExport(activeMessages),
     });
   };
 
@@ -169,10 +190,17 @@ const ChatScreen: React.FC = () => {
   };
 
   const showReconnect =
+    backend === 'server' &&
     session &&
     (connection.status === 'error' ||
       connection.status === 'offline' ||
       connection.status === 'auth-required');
+  const localReady =
+    localStatus.phase === 'ready' || localStatus.phase === 'generating';
+  const activeStatus =
+    backend === 'on-device' ? localStatus.phase : connection.status;
+  const localTokensPerSecond =
+    localGeneration?.tokensPerSecond ?? localResult?.tokensPerSecond ?? 0;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -184,49 +212,86 @@ const ChatScreen: React.FC = () => {
         <View style={styles.heroCard}>
           <View style={styles.heroTop}>
             <View>
-              <Text style={styles.eyebrow}>Operator Console</Text>
+              <Text style={styles.eyebrow}>
+                {backend === 'on-device'
+                  ? 'Core ML · sur l appareil'
+                  : 'Operator Console · serveur'}
+              </Text>
               <Text style={styles.heroTitle}>monGARS mobile</Text>
               <Text style={styles.heroSubtitle}>
-                Chat natif, synchro temps reel, recherche et export.
+                {backend === 'on-device'
+                  ? 'Le prompt et la reponse restent sur cet iPhone.'
+                  : 'Chat natif, synchro temps reel, recherche et export.'}
               </Text>
             </View>
             <View
               style={[
                 styles.statusPill,
-                connection.status === 'online'
+                ['online', 'ready', 'generating'].includes(activeStatus)
                   ? styles.statusOnline
-                  : connection.status === 'connecting'
+                  : [
+                        'connecting',
+                        'downloading',
+                        'verifying',
+                        'compiling',
+                        'loading',
+                      ].includes(activeStatus)
                     ? styles.statusConnecting
                     : styles.statusOffline,
               ]}
             >
-              <Text style={styles.statusPillText}>{connection.status}</Text>
+              <Text style={styles.statusPillText}>{activeStatus}</Text>
             </View>
           </View>
           <View style={styles.metricsRow}>
             <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Session</Text>
+              <Text style={styles.metricLabel}>
+                {backend === 'on-device' ? 'Modele' : 'Session'}
+              </Text>
               <Text style={styles.metricValue}>
-                {session?.username ?? 'Aucune'}
+                {backend === 'on-device'
+                  ? (localStatus.displayName ?? 'Core ML')
+                  : (session?.username ?? 'Aucune')}
               </Text>
             </View>
             <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Dernier message</Text>
+              <Text style={styles.metricLabel}>
+                {backend === 'on-device' ? 'Contexte' : 'Dernier message'}
+              </Text>
               <Text style={styles.metricValue}>
-                {connection.lastMessageAt
-                  ? connection.lastMessageAt.toLocaleTimeString()
-                  : '—'}
+                {backend === 'on-device'
+                  ? localStatus.contextLength
+                    ? `${localStatus.contextLength} jetons`
+                    : '—'
+                  : connection.lastMessageAt
+                    ? connection.lastMessageAt.toLocaleTimeString()
+                    : '—'}
               </Text>
             </View>
             <View style={styles.metricCard}>
-              <Text style={styles.metricLabel}>Latence</Text>
+              <Text style={styles.metricLabel}>
+                {backend === 'on-device' ? 'Debit' : 'Latence'}
+              </Text>
               <Text style={styles.metricValue}>
-                {connection.latencyMs ? `${connection.latencyMs} ms` : '—'}
+                {backend === 'on-device'
+                  ? localTokensPerSecond > 0
+                    ? `${localTokensPerSecond.toFixed(1)} j/s`
+                    : '—'
+                  : connection.latencyMs
+                    ? `${connection.latencyMs} ms`
+                    : '—'}
               </Text>
             </View>
           </View>
           <Text style={styles.connectionDetail}>
-            {connection.detail ?? 'En attente de connexion.'}
+            {backend === 'on-device'
+              ? localProgress
+                ? `${localProgress.detail ?? 'Preparation du modele'} · ${Math.round(
+                    localProgress.fractionCompleted * 100,
+                  )}%`
+                : (localStatus.detail ??
+                  'Backend local selectionne; aucun appel au serveur de chat.')
+              : (connection.detail ?? 'En attente de connexion.')}
           </Text>
           {showReconnect ? (
             <Pressable style={styles.reconnectButton} onPress={retryRealtime}>
@@ -294,7 +359,7 @@ const ChatScreen: React.FC = () => {
             </View>
           </View>
 
-          {historyLoading ? (
+          {backend === 'server' && historyLoading ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator color="#f59e0b" />
               <Text style={styles.loadingText}>
@@ -303,7 +368,17 @@ const ChatScreen: React.FC = () => {
             </View>
           ) : null}
 
-          {!session ? (
+          {backend === 'on-device' && !localReady ? (
+            <EmptyState
+              title="Modele local requis"
+              description={
+                localStatus.detail ??
+                'Telechargez et verifiez le modele Core ML dans les parametres.'
+              }
+              buttonLabel="Gerer le modele"
+              onButtonPress={() => navigation.navigate('Settings' as never)}
+            />
+          ) : backend === 'server' && !session ? (
             <EmptyState
               title="Connexion requise"
               description="Ouvrez les parametres pour recuperer un jeton et demarrer la conversation native."
@@ -332,14 +407,21 @@ const ChatScreen: React.FC = () => {
         <View style={styles.composerCard}>
           <Text style={styles.sectionTitle}>Composer</Text>
           <Composer
+            backend={backend}
             mode={mode}
             onModeChange={(nextMode) => {
-              if (nextMode === 'embed' && !settings.embedServiceUrl) {
+              if (
+                nextMode === 'embed' &&
+                (backend === 'on-device' || !settings.embedServiceUrl)
+              ) {
                 clearNotice();
                 useChatStore.setState({
                   notice: {
                     tone: 'warning',
-                    message: 'Service d embedding indisponible.',
+                    message:
+                      backend === 'on-device'
+                        ? 'Les embeddings exigent le backend serveur.'
+                        : 'Service d embedding indisponible.',
                   },
                 });
                 return;
@@ -350,6 +432,11 @@ const ChatScreen: React.FC = () => {
             onDraftChange={setDraft}
             quickActions={quickActions}
             sending={loading}
+            canSend={backend === 'on-device' ? localReady : Boolean(session)}
+            embeddingAvailable={
+              backend === 'server' && Boolean(settings.embedServiceUrl)
+            }
+            onCancel={backend === 'on-device' ? cancelGeneration : undefined}
           />
         </View>
       </ScrollView>

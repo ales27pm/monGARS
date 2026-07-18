@@ -1,5 +1,6 @@
 import { act } from '@testing-library/react-native';
 import { useChatStore } from '../src/store/chatStore';
+import { useInferenceStore } from '../src/store/inferenceStore';
 
 jest.mock('../src/services/chatService', () => ({
   fetchConversationHistory: jest.fn(),
@@ -68,6 +69,13 @@ describe('chatStore', () => {
       logout: useChatStore.getState().logout,
     });
     useChatStore.persist?.clearStorage?.();
+    useInferenceStore.setState({
+      backend: 'server',
+      activeRequestId: null,
+      generation: null,
+      lastResult: null,
+      error: null,
+    });
   });
 
   it('loads conversation history when a session is present', async () => {
@@ -163,5 +171,59 @@ describe('chatStore', () => {
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toContain('Vecteurs: 1');
     expect(requestEmbedding).toHaveBeenCalledWith('embed me');
+  });
+
+  it('streams an on-device reply without a session or server fallback', async () => {
+    const generate = jest.fn(async () => {
+      useInferenceStore.setState({
+        generation: {
+          requestId: 'local-1',
+          text: 'Salut depuis Core ML',
+          generatedTokens: 5,
+          tokensPerSecond: 3.5,
+        },
+      });
+      return {
+        requestId: 'local-1',
+        text: 'Salut depuis Core ML',
+        promptTokens: 24,
+        generatedTokens: 5,
+        duration: 1.4,
+        tokensPerSecond: 3.5,
+        finishReason: 'eos',
+        modelId: 'example/qwen-coreml',
+      };
+    });
+    useInferenceStore.setState({
+      backend: 'on-device',
+      generate,
+    });
+
+    await act(async () => {
+      await useChatStore.getState().sendMessage('Bonjour local', 'chat');
+    });
+
+    const { messages, loading } = useChatStore.getState();
+    expect(loading).toBe(false);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      metadata: { inferenceBackend: 'on-device' },
+    });
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: 'Salut depuis Core ML',
+      metadata: {
+        source: 'on-device',
+        modelId: 'example/qwen-coreml',
+        generatedTokens: 5,
+        finishReason: 'eos',
+      },
+    });
+    expect(generate).toHaveBeenCalledWith({
+      messages: [{ role: 'user', content: 'Bonjour local' }],
+    });
+    expect(postConversationMessage).not.toHaveBeenCalled();
+    expect(requestEmbedding).not.toHaveBeenCalled();
   });
 });

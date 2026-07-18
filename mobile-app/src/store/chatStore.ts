@@ -9,9 +9,11 @@ import {
   requestEmbedding,
 } from '../services/chatService';
 import { createRealtimeClient } from '../services/realtimeService';
+import { useInferenceStore } from './inferenceStore';
 import type {
   ChatMode,
   ConnectionSnapshot,
+  InferenceBackend,
   Message,
   QuickAction,
   UserSession,
@@ -43,8 +45,10 @@ type ChatState = {
   connection: ConnectionSnapshot;
   realtimeSuppression: string[];
   initialize: () => Promise<void>;
+  setInferenceBackend: (backend: InferenceBackend) => Promise<void>;
   setSession: (session: UserSession | null) => Promise<void>;
   sendMessage: (content: string, mode?: ChatMode) => Promise<void>;
+  cancelGeneration: () => Promise<void>;
   refreshHistory: () => Promise<void>;
   requestQuickActions: (prompt: string) => Promise<void>;
   setMode: (mode: ChatMode) => void;
@@ -65,7 +69,16 @@ const DEFAULT_CONNECTION: ConnectionSnapshot = {
   reconnectAttempt: 0,
 };
 
+const LOCAL_CONNECTION: ConnectionSnapshot = {
+  ...DEFAULT_CONNECTION,
+  detail: 'Inference locale active — aucun serveur contacte',
+};
+
 let realtimeClient: ReturnType<typeof createRealtimeClient> | null = null;
+
+function isServerMessage(message: Message): boolean {
+  return (message.metadata?.inferenceBackend ?? 'server') === 'server';
+}
 
 function isDuplicateRealtimePair(
   messages: Message[],
@@ -74,10 +87,12 @@ function isDuplicateRealtimePair(
 ) {
   const lastUser = [...messages]
     .reverse()
-    .find((message) => message.role === 'user');
+    .find((message) => message.role === 'user' && isServerMessage(message));
   const lastAssistant = [...messages]
     .reverse()
-    .find((message) => message.role === 'assistant');
+    .find(
+      (message) => message.role === 'assistant' && isServerMessage(message),
+    );
   return (
     lastUser?.content.trim() === query.trim() &&
     lastAssistant?.content.trim() === response.trim()
@@ -109,6 +124,7 @@ function upsertRealtimeMessages(
       metadata: {
         mode: 'chat',
         source: 'realtime',
+        inferenceBackend: 'server',
       },
     },
     {
@@ -119,6 +135,7 @@ function upsertRealtimeMessages(
       metadata: {
         mode: 'chat',
         source: 'realtime',
+        inferenceBackend: 'server',
       },
     },
   ];
@@ -136,6 +153,9 @@ function ensureRealtime(
 
   realtimeClient = createRealtimeClient({
     onStatus: (status) => {
+      if (useInferenceStore.getState().backend !== 'server') {
+        return;
+      }
       set((state) => ({
         connection: {
           ...state.connection,
@@ -161,15 +181,21 @@ function ensureRealtime(
       }));
     },
     onHistory: (items) => {
-      if (get().messages.length > 0) {
+      if (get().messages.some(isServerMessage)) {
         return;
       }
 
-      set({
-        messages: mapHistoryToMessages(items),
-      });
+      set((state) => ({
+        messages: [
+          ...state.messages.filter((message) => !isServerMessage(message)),
+          ...mapHistoryToMessages(items),
+        ],
+      }));
     },
     onMessage: (item) => {
+      if (useInferenceStore.getState().backend !== 'server') {
+        return;
+      }
       const fingerprint = buildRealtimeFingerprint(item);
       set(
         produce<ChatState>((draft) => {
@@ -214,6 +240,18 @@ export const useChatStore = create<ChatState>()(
       connection: DEFAULT_CONNECTION,
       realtimeSuppression: [],
       initialize: async () => {
+        const inference = useInferenceStore.getState();
+        if (inference.backend === 'on-device') {
+          realtimeClient?.close('on-device');
+          set({
+            connection: LOCAL_CONNECTION,
+            mode: 'chat',
+            quickActions: [...DEFAULT_QUICK_ACTIONS],
+          });
+          await inference.initialize();
+          return;
+        }
+
         const session = get().session;
         if (!session) {
           set({
@@ -225,26 +263,65 @@ export const useChatStore = create<ChatState>()(
         await get().refreshHistory();
         await ensureRealtime(set, get).open(session);
       },
+      setInferenceBackend: async (backend) => {
+        useInferenceStore.getState().setBackend(backend);
+        if (backend === 'on-device') {
+          realtimeClient?.close('on-device');
+          set({
+            mode: 'chat',
+            connection: LOCAL_CONNECTION,
+            quickActions: [...DEFAULT_QUICK_ACTIONS],
+            error: null,
+            notice: {
+              tone: 'info',
+              message: 'Inference Core ML sur l iPhone activee.',
+            },
+          });
+        } else {
+          set({
+            connection: get().session
+              ? {
+                  ...DEFAULT_CONNECTION,
+                  status: 'connecting',
+                  detail: 'Initialisation de la session…',
+                }
+              : DEFAULT_CONNECTION,
+            error: null,
+            notice: {
+              tone: 'info',
+              message: 'Backend serveur actif.',
+            },
+          });
+        }
+        await get().initialize();
+      },
       setSession: async (session) => {
         if (!session) {
           realtimeClient?.close('logout');
-          set({
+          set((state) => ({
             session: null,
-            messages: [],
+            messages: state.messages.filter(
+              (message) => !isServerMessage(message),
+            ),
             error: null,
             notice: {
               tone: 'info',
               message: 'Session fermee.',
             },
-            connection: DEFAULT_CONNECTION,
+            connection:
+              useInferenceStore.getState().backend === 'on-device'
+                ? LOCAL_CONNECTION
+                : DEFAULT_CONNECTION,
             realtimeSuppression: [],
-          });
+          }));
           return;
         }
 
-        set({
+        set((state) => ({
           session,
-          messages: [],
+          messages: state.messages.filter(
+            (message) => !isServerMessage(message),
+          ),
           error: null,
           notice: {
             tone: 'success',
@@ -256,7 +333,7 @@ export const useChatStore = create<ChatState>()(
             detail: 'Initialisation de la session…',
           },
           realtimeSuppression: [],
-        });
+        }));
 
         await get().initialize();
       },
@@ -266,8 +343,24 @@ export const useChatStore = create<ChatState>()(
           return;
         }
 
+        const inference = useInferenceStore.getState();
+        const backend = inference.backend;
+        const activeMode = mode ?? get().mode;
         const session = get().session;
-        if (!session) {
+        if (backend === 'on-device' && activeMode === 'embed') {
+          const error = 'Les embeddings restent disponibles sur le serveur.';
+          set({
+            error,
+            mode: 'chat',
+            notice: {
+              tone: 'warning',
+              message: error,
+            },
+          });
+          throw new Error(error);
+        }
+
+        if (backend === 'server' && !session) {
           const error = 'Session absente.';
           set({
             error,
@@ -279,7 +372,6 @@ export const useChatStore = create<ChatState>()(
           throw new Error(error);
         }
 
-        const activeMode = mode ?? get().mode;
         const userMessage: Message = {
           id: buildMessageId('user'),
           role: 'user',
@@ -287,7 +379,13 @@ export const useChatStore = create<ChatState>()(
           createdAt: new Date(),
           metadata: {
             mode: activeMode,
-            source: activeMode === 'embed' ? 'embedding' : 'chat',
+            source:
+              backend === 'on-device'
+                ? 'on-device'
+                : activeMode === 'embed'
+                  ? 'embedding'
+                  : 'chat',
+            inferenceBackend: backend,
           },
         };
 
@@ -301,12 +399,127 @@ export const useChatStore = create<ChatState>()(
               message:
                 activeMode === 'embed'
                   ? 'Generation d embedding…'
-                  : 'Generation de reponse…',
+                  : backend === 'on-device'
+                    ? 'Generation privee sur l iPhone…'
+                    : 'Generation de reponse…',
             };
           }),
         );
 
         try {
+          if (backend === 'on-device') {
+            const assistantID = buildMessageId('on-device-assistant');
+            set(
+              produce<ChatState>((draft) => {
+                draft.messages.push({
+                  id: assistantID,
+                  role: 'assistant',
+                  content: '',
+                  createdAt: new Date(),
+                  metadata: {
+                    mode: 'chat',
+                    source: 'on-device',
+                    inferenceBackend: 'on-device',
+                  },
+                });
+              }),
+            );
+
+            const unsubscribe = useInferenceStore.subscribe(
+              (state, previousState) => {
+                if (state.generation?.text === previousState.generation?.text) {
+                  return;
+                }
+                set(
+                  produce<ChatState>((draft) => {
+                    const assistant = draft.messages.find(
+                      (message) => message.id === assistantID,
+                    );
+                    if (assistant) {
+                      assistant.content = state.generation?.text ?? '';
+                    }
+                  }),
+                );
+              },
+            );
+
+            try {
+              const localMessages = get()
+                .messages.filter(
+                  (message) =>
+                    message.metadata?.inferenceBackend === 'on-device' &&
+                    (message.role === 'user' || message.role === 'assistant') &&
+                    message.content.trim().length > 0,
+                )
+                .map((message) => ({
+                  role: message.role as 'user' | 'assistant',
+                  content: message.content,
+                }));
+              const result = await useInferenceStore.getState().generate({
+                messages: localMessages,
+              });
+
+              set(
+                produce<ChatState>((draft) => {
+                  const assistant = draft.messages.find(
+                    (message) => message.id === assistantID,
+                  );
+                  if (assistant) {
+                    assistant.content = result.text;
+                    assistant.metadata = {
+                      mode: 'chat',
+                      source: 'on-device',
+                      inferenceBackend: 'on-device',
+                      modelId: result.modelId,
+                      promptTokens: result.promptTokens ?? undefined,
+                      generatedTokens: result.generatedTokens,
+                      tokensPerSecond: result.tokensPerSecond,
+                      finishReason: result.finishReason,
+                      processingTime: result.duration,
+                    };
+                  }
+                  draft.loading = false;
+                  draft.notice = {
+                    tone:
+                      result.finishReason === 'cancelled' ? 'info' : 'success',
+                    message:
+                      result.finishReason === 'cancelled'
+                        ? 'Generation locale arretee.'
+                        : 'Reponse generee sur l iPhone.',
+                  };
+                }),
+              );
+            } catch (localError) {
+              const partial =
+                useInferenceStore.getState().generation?.text.trim() ?? '';
+              set(
+                produce<ChatState>((draft) => {
+                  const index = draft.messages.findIndex(
+                    (message) => message.id === assistantID,
+                  );
+                  if (index === -1) {
+                    return;
+                  }
+                  if (partial) {
+                    draft.messages[index].content = partial;
+                    draft.messages[index].metadata = {
+                      mode: 'chat',
+                      source: 'on-device',
+                      inferenceBackend: 'on-device',
+                      finishReason: 'error',
+                    };
+                  } else {
+                    draft.messages.splice(index, 1);
+                  }
+                }),
+              );
+              throw localError;
+            } finally {
+              unsubscribe();
+            }
+            return;
+          }
+
           if (activeMode === 'embed') {
             const embedding = await requestEmbedding(trimmed);
             set(
@@ -319,6 +532,7 @@ export const useChatStore = create<ChatState>()(
                   metadata: {
                     mode: 'embed',
                     source: 'embedding',
+                    inferenceBackend: 'server',
                     embedding: {
                       backend: embedding.backend,
                       model: embedding.model,
@@ -338,6 +552,9 @@ export const useChatStore = create<ChatState>()(
             return;
           }
 
+          if (!session) {
+            throw new Error('Session absente.');
+          }
           const response = await postConversationMessage(session, trimmed);
           const fingerprint = buildRealtimeFingerprint({
             query: trimmed,
@@ -355,6 +572,7 @@ export const useChatStore = create<ChatState>()(
                 metadata: {
                   mode: 'chat',
                   source: 'chat',
+                  inferenceBackend: 'server',
                   confidence: response.confidence,
                   processingTime: response.processingTime,
                   speechTurn: response.speechTurn,
@@ -382,7 +600,21 @@ export const useChatStore = create<ChatState>()(
           throw error;
         }
       },
+      cancelGeneration: async () => {
+        const cancelled = await useInferenceStore.getState().cancelGeneration();
+        if (cancelled) {
+          set({
+            notice: {
+              tone: 'info',
+              message: 'Annulation de la generation locale…',
+            },
+          });
+        }
+      },
       refreshHistory: async () => {
+        if (useInferenceStore.getState().backend !== 'server') {
+          return;
+        }
         const session = get().session;
         if (!session) {
           return;
@@ -395,8 +627,11 @@ export const useChatStore = create<ChatState>()(
 
         try {
           const history = await fetchConversationHistory(session);
-          set({
-            messages: mapHistoryToMessages(history),
+          set((state) => ({
+            messages: [
+              ...state.messages.filter((message) => !isServerMessage(message)),
+              ...mapHistoryToMessages(history),
+            ],
             historyLoading: false,
             notice: history.length
               ? {
@@ -407,7 +642,7 @@ export const useChatStore = create<ChatState>()(
                   tone: 'info',
                   message: 'Aucun historique disponible.',
                 },
-          });
+          }));
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Historique indisponible.';
@@ -423,7 +658,12 @@ export const useChatStore = create<ChatState>()(
       },
       requestQuickActions: async (prompt) => {
         const session = get().session;
-        if (!session || prompt.trim().length < 3 || get().mode !== 'chat') {
+        if (
+          useInferenceStore.getState().backend !== 'server' ||
+          !session ||
+          prompt.trim().length < 3 ||
+          get().mode !== 'chat'
+        ) {
           if (get().quickActions !== DEFAULT_QUICK_ACTIONS) {
             set({
               quickActions: [...DEFAULT_QUICK_ACTIONS],
@@ -445,6 +685,19 @@ export const useChatStore = create<ChatState>()(
         }
       },
       setMode: (mode) => {
+        if (
+          mode === 'embed' &&
+          useInferenceStore.getState().backend === 'on-device'
+        ) {
+          set({
+            mode: 'chat',
+            notice: {
+              tone: 'warning',
+              message: 'Les embeddings exigent le backend serveur.',
+            },
+          });
+          return;
+        }
         set({
           mode,
           notice: {
@@ -455,6 +708,9 @@ export const useChatStore = create<ChatState>()(
         });
       },
       retryRealtime: () => {
+        if (useInferenceStore.getState().backend !== 'server') {
+          return;
+        }
         const session = get().session;
         if (!session) {
           return;
@@ -485,7 +741,7 @@ export const useChatStore = create<ChatState>()(
           return value;
         },
       }),
-      version: 3,
+      version: 4,
       migrate: (persistedState) => {
         if (!persistedState) {
           return persistedState as ChatState;
@@ -509,6 +765,10 @@ export const useChatStore = create<ChatState>()(
             createdAt: message.createdAt
               ? new Date(message.createdAt)
               : new Date(),
+            metadata: {
+              ...message.metadata,
+              inferenceBackend: message.metadata?.inferenceBackend ?? 'server',
+            },
           })) as Message[],
           mode: state.mode ?? 'chat',
           quickActions: orderQuickActions(state.quickActions),
@@ -516,7 +776,12 @@ export const useChatStore = create<ChatState>()(
       },
       partialize: (state) => ({
         session: state.session,
-        messages: state.messages,
+        messages: state.messages.filter(
+          (message) =>
+            message.metadata?.source !== 'on-device' ||
+            message.role !== 'assistant' ||
+            Boolean(message.metadata.finishReason),
+        ),
         mode: state.mode,
         quickActions: state.quickActions,
       }),

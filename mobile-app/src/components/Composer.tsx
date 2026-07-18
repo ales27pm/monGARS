@@ -10,15 +10,19 @@ import {
 import { useVoiceAssistant } from '../hooks/useVoiceAssistant';
 import { voiceModuleAvailable } from '../native/voice';
 import { settings } from '../services/config';
-import type { ChatMode, QuickAction } from '../types';
+import type { ChatMode, InferenceBackend, QuickAction } from '../types';
 
 type Props = {
+  backend: InferenceBackend;
   mode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
   onSend: (text: string) => Promise<void>;
   onDraftChange: (text: string) => void;
   quickActions: QuickAction[];
   sending: boolean;
+  canSend: boolean;
+  embeddingAvailable: boolean;
+  onCancel?: () => Promise<void>;
 };
 
 const QUICK_ACTION_PRESETS: Record<QuickAction, string> = {
@@ -34,12 +38,16 @@ const QUICK_ACTION_LABELS: Record<QuickAction, string> = {
 };
 
 const Composer: React.FC<Props> = ({
+  backend,
   mode,
   onModeChange,
   onSend,
   onDraftChange,
   quickActions,
   sending,
+  canSend,
+  embeddingAvailable,
+  onCancel,
 }) => {
   const [text, setText] = useState('');
   const [voiceAutoSend, setVoiceAutoSend] = useState(false);
@@ -48,7 +56,7 @@ const Composer: React.FC<Props> = ({
       const nextText = [text, finalText].filter(Boolean).join(' ').trim();
       setText(nextText);
       onDraftChange(nextText);
-      if (voiceAutoSend && nextText) {
+      if (voiceAutoSend && nextText && canSend && !sending) {
         try {
           await onSend(nextText);
           setText('');
@@ -67,7 +75,7 @@ const Composer: React.FC<Props> = ({
 
   const handleSubmit = async (value = text) => {
     const nextValue = value.trim();
-    if (!nextValue) {
+    if (!nextValue || !canSend || sending) {
       return;
     }
 
@@ -103,9 +111,11 @@ const Composer: React.FC<Props> = ({
         <Pressable
           accessibilityRole="button"
           onPress={() => onModeChange('embed')}
+          disabled={!embeddingAvailable}
           style={[
             styles.modeButton,
             mode === 'embed' && styles.modeButtonActive,
+            !embeddingAvailable && styles.controlDisabled,
           ]}
         >
           <Text
@@ -119,6 +129,7 @@ const Composer: React.FC<Props> = ({
       <TextInput
         accessibilityLabel="Prompt"
         multiline
+        editable={!sending}
         style={styles.input}
         value={transcript.length > 0 ? `${text}\n${transcript}` : text}
         onChangeText={handleTextChange}
@@ -134,7 +145,9 @@ const Composer: React.FC<Props> = ({
         <Text style={styles.helper}>
           {mode === 'embed'
             ? 'Renvoie un resume de vecteurs.'
-            : 'Reponse LLM avec synchro temps reel.'}
+            : backend === 'on-device'
+              ? 'Qwen3 Core ML genere sans envoyer le prompt au serveur.'
+              : 'Reponse LLM avec synchro temps reel.'}
         </Text>
         <Text style={styles.counter}>{text.trim().length}/1000</Text>
       </View>
@@ -143,8 +156,12 @@ const Composer: React.FC<Props> = ({
         {quickActions.map((action) => (
           <Pressable
             key={action}
+            disabled={sending || !canSend}
             onPress={() => handleQuickAction(action)}
-            style={styles.quickAction}
+            style={[
+              styles.quickAction,
+              (sending || !canSend) && styles.controlDisabled,
+            ]}
           >
             <Text style={styles.quickActionText}>
               {QUICK_ACTION_LABELS[action]}
@@ -197,12 +214,32 @@ const Composer: React.FC<Props> = ({
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"
-          disabled={sending}
-          onPress={() => handleSubmit()}
-          style={[styles.sendButton, sending && styles.sendButtonDisabled]}
+          disabled={!canSend || (sending && !onCancel)}
+          onPress={() => {
+            if (sending && onCancel) {
+              onCancel().catch((error) => {
+                console.warn('[Composer] cancel failed', error);
+              });
+              return;
+            }
+            handleSubmit().catch((error) => {
+              console.warn('[Composer] send failed', error);
+            });
+          }}
+          style={[
+            styles.sendButton,
+            (!canSend || (sending && !onCancel)) && styles.sendButtonDisabled,
+            sending && onCancel && styles.cancelButton,
+          ]}
         >
           <Text style={styles.sendButtonText}>
-            {sending ? 'Envoi…' : mode === 'embed' ? 'Generer' : 'Envoyer'}
+            {sending && onCancel
+              ? 'Arreter'
+              : sending
+                ? 'Envoi…'
+                : mode === 'embed'
+                  ? 'Generer'
+                  : 'Envoyer'}
           </Text>
         </Pressable>
       </View>
@@ -238,6 +275,9 @@ const styles = StyleSheet.create({
   },
   modeTextActive: {
     color: '#111827',
+  },
+  controlDisabled: {
+    opacity: 0.45,
   },
   input: {
     minHeight: 132,
@@ -355,6 +395,9 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     opacity: 0.6,
+  },
+  cancelButton: {
+    backgroundColor: '#b91c1c',
   },
   sendButtonText: {
     color: '#fff7ed',

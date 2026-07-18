@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "start": "react-native start --reset-cache",
-    "ios": "RCT_NEW_ARCH_ENABLED=1 arch -x86_64 xcrun simctl list && react-native run-ios --scheme MonGARSMobile",
+    "ios": "RCT_NEW_ARCH_ENABLED=1 react-native run-ios --scheme MonGARSMobile",
     "android": "ORG_GRADLE_PROJECT_newArchEnabled=true react-native run-android",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .ts,.tsx src",
-    "test": "node --localstorage-file=.jest-localstorage ./node_modules/jest/bin/jest.js --runInBand",
+    "test": "jest --runInBand",
     "typecheck": "tsc --noEmit",
     "doctor:native": "node ./scripts/native-preflight.mjs",
     "pod-install": "./scripts/pod-install.sh"

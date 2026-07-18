@@ -37,7 +37,14 @@ function renderHighlighted(content: string, highlight?: string) {
 const MessageBubble: React.FC<Props> = ({ message, highlight }) => {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
-  const roleLabel = isUser ? 'Operateur' : isSystem ? 'Systeme' : 'monGARS';
+  const isOnDevice = message.metadata?.inferenceBackend === 'on-device';
+  const roleLabel = isUser
+    ? 'Operateur'
+    : isSystem
+      ? 'Systeme'
+      : isOnDevice
+        ? 'monGARS · iPhone'
+        : 'monGARS';
 
   return (
     <View
@@ -60,6 +67,15 @@ const MessageBubble: React.FC<Props> = ({ message, highlight }) => {
         <Text style={styles.meta}>
           Confiance {message.metadata.confidence.toFixed(2)} · Temps{' '}
           {message.metadata.processingTime?.toFixed(2) ?? '0.00'}s
+        </Text>
+      ) : null}
+      {isOnDevice && message.metadata?.generatedTokens !== undefined ? (
+        <Text style={styles.meta}>
+          Core ML · {message.metadata.generatedTokens} jetons ·{' '}
+          {message.metadata.tokensPerSecond?.toFixed(1) ?? '0.0'} j/s
+          {message.metadata.finishReason
+            ? ` · ${message.metadata.finishReason}`
+            : ''}
         </Text>
       ) : null}
     </View>

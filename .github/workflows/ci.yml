@@ -340,6 +340,12 @@ jobs:
         working-directory: mobile-app
         run: npm run typecheck
 
+      - name: Validate native project wiring
+        env:
+          CI: "true"
+        working-directory: mobile-app
+        run: npm run doctor:native
+
       - name: Run Jest
         env:
           CI: "true"
