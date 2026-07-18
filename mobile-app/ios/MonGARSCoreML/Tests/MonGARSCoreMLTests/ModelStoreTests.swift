@@ -2,8 +2,20 @@ import Foundation
 import XCTest
 @testable import MonGARSCoreML
 
-#if canImport(CryptoKit)
 final class ModelStoreTests: XCTestCase {
+  func testVerificationSessionOnlyReusesExplicitCryptographicSuccess() {
+    var session = ModelStore.VerificationSession()
+
+    XCTAssertTrue(session.requiresCryptographicVerification)
+
+    session.recordCryptographicVerification()
+    XCTAssertFalse(session.requiresCryptographicVerification)
+
+    session.invalidate()
+    XCTAssertTrue(session.requiresCryptographicVerification)
+  }
+
+  #if canImport(CryptoKit)
   func testSHA256DetectsSameSizeSameModificationDateRewrite() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -37,5 +49,5 @@ final class ModelStoreTests: XCTestCase {
     XCTAssertEqual(attributes[.modificationDate] as? Date, fixedModificationDate)
     XCTAssertNotEqual(originalHash, rewrittenHash)
   }
+  #endif
 }
-#endif

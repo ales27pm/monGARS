@@ -142,7 +142,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
         promise.resolve(payload)
       } catch {
         await publishCurrentStatus()
-        if CoreMLInferenceModule.isCancellation(error) {
+        if InferenceError.isCancellation(error) {
           promise.reject(
             code: "coreml_cancelled",
             message: "Preparation du modele annulee.",
@@ -210,7 +210,7 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
         )
         await publishCurrentStatus()
       } catch {
-        if CoreMLInferenceModule.isCancellation(error) {
+        if InferenceError.isCancellation(error) {
           let latest = await accumulator.snapshot()
           emit(
             .complete,
@@ -696,10 +696,16 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
         self.pendingOperation = nil
       }
 
-      let interruptedOperation = activeOperation
-      activeOperation = nil
-      interruptedOperation?.task?.cancel()
-      launchLocked(cleanup)
+      guard let activeOperation else {
+        launchLocked(cleanup)
+        return
+      }
+
+      // Keep the interrupted operation registered until its task exits. Its
+      // finish callback will then launch cleanup, preserving the same
+      // serialization guarantee used by unload/delete control operations.
+      pendingOperation = cleanup
+      activeOperation.task?.cancel()
     }
   }
 
@@ -899,14 +905,6 @@ final class CoreMLInferenceModule: RCTEventEmitter, @unchecked Sendable {
   private static func nullable(_ value: String?) -> Any {
     guard let value else { return NSNull() }
     return value
-  }
-
-  private static func isCancellation(_ error: Error) -> Bool {
-    if error is CancellationError { return true }
-    guard let inferenceError = error as? InferenceError else { return false }
-    if case .preparationCancelled = inferenceError { return true }
-    if case .generationCancelled = inferenceError { return true }
-    return false
   }
 
   private static func bridgeErrorCode(_ error: Error) -> String {

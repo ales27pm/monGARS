@@ -110,7 +110,7 @@ function pbxProperty(body, property) {
   return match?.[1]?.trim().replace(/^"|"$/g, '') ?? null;
 }
 
-function nativeTargetBody(targetName) {
+function applicationTargetBody(targetName) {
   const targets = pbxSection('PBXNativeTarget');
   const targetID = pbxObjectID(targets, targetName);
   if (!targetID) {
@@ -127,7 +127,7 @@ function nativeTargetBody(targetName) {
 }
 
 function applicationTargetBuildPhaseID(phaseName) {
-  const targetBody = nativeTargetBody(iosApplicationTargetName);
+  const targetBody = applicationTargetBody(iosApplicationTargetName);
   if (!targetBody) {
     return null;
   }
@@ -161,8 +161,8 @@ function buildConfigurationsForList(configurationListID) {
     .map((body) => ({ body, name: pbxProperty(body, 'name') }));
 }
 
-function targetBuildConfigurations(targetName) {
-  const body = nativeTargetBody(targetName);
+function applicationBuildConfigurations() {
+  const body = applicationTargetBody(iosApplicationTargetName);
   const listID = body.match(/buildConfigurationList\s*=\s*([A-F0-9]{24})/)?.[1];
   return listID ? buildConfigurationsForList(listID) : [];
 }
@@ -187,19 +187,41 @@ function numericDeploymentTarget(value) {
     : null;
 }
 
-function deploymentTargetAssignment(text) {
+function sdkSelectorMatches(selectors, sdkFamily) {
+  const sdkSelectors = [
+    ...selectors.matchAll(/\[\s*sdk\s*=\s*([^\]]+)\]/gi),
+  ].map(([, selector]) => selector.trim().toLowerCase());
+  if (sdkSelectors.length === 0) {
+    return true;
+  }
+
+  return sdkSelectors.every((selector) => {
+    if (selector.startsWith(sdkFamily)) {
+      return true;
+    }
+    const pattern = `^${escapeRegExp(selector).replace(/\\\*/g, '.*')}$`;
+    const matcher = new RegExp(pattern, 'i');
+    return matcher.test(sdkFamily) || matcher.test(`${sdkFamily}18.0`);
+  });
+}
+
+function deploymentTargetAssignment(text, sdkFamily = 'iphoneos') {
   const assignments = [
     ...text.matchAll(
-      /IPHONEOS_DEPLOYMENT_TARGET(?:\[[^\]]+\])?\s*=\s*([^;\n]+);?/g,
+      /"?IPHONEOS_DEPLOYMENT_TARGET((?:\[[^\]]+\])*)"?\s*=\s*([^;\n]+);?/g,
     ),
   ];
-  for (const [, value] of assignments.reverse()) {
+  let resolved = null;
+  for (const [, selectors, value] of assignments) {
+    if (!sdkSelectorMatches(selectors, sdkFamily)) {
+      continue;
+    }
     const parsed = numericDeploymentTarget(value);
     if (parsed !== null) {
-      return parsed;
+      resolved = parsed;
     }
   }
-  return null;
+  return resolved;
 }
 
 function resolveFileReference(referenceID) {
@@ -284,6 +306,8 @@ function xcodebuildDeploymentTargets(configurations) {
         iosApplicationTargetName,
         '-configuration',
         configuration.name,
+        '-sdk',
+        'iphoneos',
         '-disableAutomaticPackageResolution',
         '-showBuildSettings',
       ],
@@ -304,10 +328,10 @@ function xcodebuildDeploymentTargets(configurations) {
   return values;
 }
 
-function allDeploymentTargetsAreAtLeast(minimumMajorVersion) {
-  const targetConfigurations = targetBuildConfigurations(
-    iosApplicationTargetName,
-  );
+// MonGARSMobile is the only target that links MonGARSCoreML. Unit-test and
+// packet-tunnel targets have independent deployment contracts.
+function applicationDeploymentTargetsAreAtLeast(minimumMajorVersion) {
+  const targetConfigurations = applicationBuildConfigurations();
   if (targetConfigurations.length === 0) {
     return false;
   }
@@ -481,10 +505,11 @@ const checks = [
       'Add the Core ML bridge and MonGARSCoreML package product to the app target.',
   },
   {
-    label: 'iOS 18 deployment target for stateful Core ML',
-    custom: () => allDeploymentTargetsAreAtLeast(18),
+    label: 'MonGARSMobile iOS 18 deployment target for stateful Core ML',
+    custom: () => applicationDeploymentTargetsAreAtLeast(18),
     required: true,
-    advice: 'The pinned stateful ML Program requires iOS 18 or newer.',
+    advice:
+      'The MonGARSMobile app target that links the pinned stateful ML Program requires iOS 18 or newer.',
   },
   {
     label: 'iOS frameworks use the active SDK',

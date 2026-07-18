@@ -18,7 +18,7 @@ describe('App', () => {
     ).toBeTruthy();
   });
 
-  it('does not replace persisted local history with the unavailable-model empty state', () => {
+  it('does not replace persisted local history with the unavailable-model empty state', async () => {
     useInferenceStore.setState({
       backend: 'on-device',
       status: {
@@ -51,7 +51,9 @@ describe('App', () => {
       ],
     });
 
-    const { getByPlaceholderText, getByText, queryByText } = render(<App />);
+    const { findByText, getByPlaceholderText, getByText, queryByText } = render(
+      <App />,
+    );
 
     expect(getByText('Conversation')).toBeTruthy();
     expect(getByText('Conversation locale conservée')).toBeTruthy();
@@ -62,7 +64,9 @@ describe('App', () => {
       'aucune-correspondance',
     );
 
-    expect(getByText('Aucun message ne correspond au filtre.')).toBeTruthy();
+    expect(
+      await findByText('Aucun message ne correspond au filtre.'),
+    ).toBeTruthy();
     expect(queryByText('Modele local requis')).toBeNull();
   });
 });

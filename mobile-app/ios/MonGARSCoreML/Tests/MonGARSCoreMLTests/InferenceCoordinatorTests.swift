@@ -1,29 +1,30 @@
-#if canImport(CoreML)
 import XCTest
 @testable import MonGARSCoreML
 
-@available(iOS 18.0, macOS 15.0, *)
-final class InferenceCoordinatorTests: XCTestCase {
-  func testCancellationClassifierDoesNotMaskRealErrorInCancelledTask() async {
-    let task = Task { () -> Bool in
+final class InferenceErrorTests: XCTestCase {
+  func testCancellationClassifierIgnoresAmbientTaskCancellation() async {
+    let task = Task { () -> (taskWasCancelled: Bool, classified: Bool) in
       withUnsafeCurrentTask { $0?.cancel() }
-      return InferenceCoordinator.isCancellation(
-        InferenceError.invalidModel("Echec Core ML reel.")
+      return (
+        Task.isCancelled,
+        InferenceError.isCancellation(
+          InferenceError.invalidModel("Echec Core ML reel.")
+        )
       )
     }
 
-    let classifiedAsCancellation = await task.value
-    XCTAssertFalse(classifiedAsCancellation)
+    let result = await task.value
+    XCTAssertTrue(result.taskWasCancelled)
+    XCTAssertFalse(result.classified)
   }
 
   func testCancellationClassifierRecognizesCancellationErrors() {
-    XCTAssertTrue(InferenceCoordinator.isCancellation(CancellationError()))
+    XCTAssertTrue(InferenceError.isCancellation(CancellationError()))
     XCTAssertTrue(
-      InferenceCoordinator.isCancellation(InferenceError.preparationCancelled)
+      InferenceError.isCancellation(InferenceError.preparationCancelled)
     )
     XCTAssertTrue(
-      InferenceCoordinator.isCancellation(InferenceError.generationCancelled)
+      InferenceError.isCancellation(InferenceError.generationCancelled)
     )
   }
 }
-#endif

@@ -6,6 +6,22 @@ import CryptoKit
 #endif
 
 final class ModelStore {
+  struct VerificationSession {
+    private(set) var hasVerifiedRepository = false
+
+    var requiresCryptographicVerification: Bool {
+      !hasVerifiedRepository
+    }
+
+    mutating func recordCryptographicVerification() {
+      hasVerifiedRepository = true
+    }
+
+    mutating func invalidate() {
+      hasVerifiedRepository = false
+    }
+  }
+
   private struct VerificationMarker: Codable {
     let modelID: String
     let revision: String
@@ -16,6 +32,9 @@ final class ModelStore {
   private let fileManager: FileManager
   private let rootDirectory: URL
   private let hub: HubApi
+  // This proof is deliberately process-local. It is established only by a
+  // full manifest SHA-256 pass and is never reconstructed from file metadata.
+  private var verificationSession = VerificationSession()
 
   private static let manifestFingerprint = MonGARSModelManifest.expectedFiles
     .map { "\($0.path)|\($0.bytes)|\($0.sha256)" }
@@ -66,6 +85,7 @@ final class ModelStore {
       let data = try? Data(contentsOf: markerURL),
       let marker = try? JSONDecoder().decode(VerificationMarker.self, from: data)
     else {
+      verificationSession.invalidate()
       return false
     }
     guard
@@ -73,10 +93,11 @@ final class ModelStore {
       marker.revision == MonGARSModelManifest.revision,
       marker.manifestFingerprint == Self.manifestFingerprint
     else {
+      verificationSession.invalidate()
       return false
     }
 
-    return MonGARSModelManifest.expectedFiles.allSatisfy { expected in
+    let hasExpectedArtifacts = MonGARSModelManifest.expectedFiles.allSatisfy { expected in
       let url = repositoryDirectory.appendingPathComponent(expected.path)
       guard
         let attributes = try? fileManager.attributesOfItem(atPath: url.path),
@@ -86,6 +107,10 @@ final class ModelStore {
       }
       return size.int64Value == expected.bytes
     }
+    if !hasExpectedArtifacts {
+      verificationSession.invalidate()
+    }
+    return hasExpectedArtifacts
   }
 
   func ensureVerified(
@@ -93,10 +118,12 @@ final class ModelStore {
   ) async throws {
     guard isInstalled() else { throw InferenceError.modelNotInstalled }
     try applyBackupExclusion(to: repositoryDirectory)
+    guard verificationSession.requiresCryptographicVerification else { return }
 
     do {
       try await verify(snapshot: repositoryDirectory, progress: progress)
       try Task.checkCancellation()
+      verificationSession.recordCryptographicVerification()
     } catch {
       if
         let inferenceError = error as? InferenceError,
@@ -131,6 +158,9 @@ final class ModelStore {
     }
 
     for attempt in 0..<2 {
+      // Hub.snapshot may create or replace artifacts. Any previously verified
+      // in-process repository therefore stops being trusted before it runs.
+      verificationSession.invalidate()
       progress(
         ModelProgress(
           phase: .downloading,
@@ -162,6 +192,7 @@ final class ModelStore {
         try Task.checkCancellation()
         try applyBackupExclusion(to: snapshot)
         try writeVerificationMarker()
+        verificationSession.recordCryptographicVerification()
         return snapshot
       } catch let error as InferenceError {
         guard case let .integrityFailure(path) = error else { throw error }
@@ -174,6 +205,7 @@ final class ModelStore {
   }
 
   func deleteModel() throws {
+    verificationSession.invalidate()
     if fileManager.fileExists(atPath: repositoryDirectory.path) {
       try fileManager.removeItem(at: repositoryDirectory)
     }
@@ -290,6 +322,7 @@ final class ModelStore {
   }
 
   private func purgeArtifact(at relativePath: String) throws {
+    verificationSession.invalidate()
     let artifact = repositoryDirectory.appendingPathComponent(relativePath)
     if fileManager.fileExists(atPath: artifact.path) {
       try fileManager.removeItem(at: artifact)

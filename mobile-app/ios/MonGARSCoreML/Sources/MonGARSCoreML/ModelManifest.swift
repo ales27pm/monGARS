@@ -91,7 +91,6 @@ public enum MonGARSModelManifest {
   ]
 
   public static let eosTokenIDs: Set<Int> = [151_643, 151_645]
-  public static let chatMessageEndTokenID = 151_645
 
   public static let systemPrompt = """
     Tu es monGARS, un assistant personnel local, fiable et direct. Reponds dans la langue de \
