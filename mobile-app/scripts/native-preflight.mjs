@@ -57,6 +57,110 @@ const iosProjectPath = path.join(iosXcodeProjectPath, 'project.pbxproj');
 const iosProjectText = existsSync(iosProjectPath)
   ? readFileSync(iosProjectPath, 'utf8')
   : '';
+const iosInfoPlistPath = path.join(
+  projectRoot,
+  'ios',
+  'MonGARSMobile',
+  'Info.plist',
+);
+const iosInfoPlistText = existsSync(iosInfoPlistPath)
+  ? readFileSync(iosInfoPlistPath, 'utf8')
+  : '';
+const iosAgentPermissionProviderPath = path.join(
+  projectRoot,
+  'ios',
+  'AgentTools',
+  'Sources',
+  'MonGARSAgentTools',
+  'IOSAgentPermissionProvider.swift',
+);
+const iosAgentPermissionProviderText = existsSync(
+  iosAgentPermissionProviderPath,
+)
+  ? readFileSync(iosAgentPermissionProviderPath, 'utf8')
+  : '';
+const iosCoreMLBridgeSourcePath = path.join(
+  projectRoot,
+  'ios',
+  'CoreMLInference',
+  'CoreMLInferenceModule.swift',
+);
+const iosCoreMLBridgeSourceText = existsSync(iosCoreMLBridgeSourcePath)
+  ? readFileSync(iosCoreMLBridgeSourcePath, 'utf8')
+  : '';
+const iosCoreMLExternBridgePath = path.join(
+  projectRoot,
+  'ios',
+  'CoreMLInference',
+  'CoreMLInferenceModuleBridge.m',
+);
+const iosCoreMLExternBridgeText = existsSync(iosCoreMLExternBridgePath)
+  ? readFileSync(iosCoreMLExternBridgePath, 'utf8')
+  : '';
+const iosAppIntentsSourcePath = path.join(
+  projectRoot,
+  'ios',
+  'AppIntents',
+  'MonGARSAppIntents.swift',
+);
+const iosAppIntentsSourceText = existsSync(iosAppIntentsSourcePath)
+  ? readFileSync(iosAppIntentsSourcePath, 'utf8')
+  : '';
+const iosAppShortcutsSourcePath = path.join(
+  projectRoot,
+  'ios',
+  'AppIntents',
+  'MonGARSAppShortcuts.swift',
+);
+const iosAppShortcutsSourceText = existsSync(iosAppShortcutsSourcePath)
+  ? readFileSync(iosAppShortcutsSourcePath, 'utf8')
+  : '';
+const iosAppIntentStorePath = path.join(
+  projectRoot,
+  'ios',
+  'AgentTools',
+  'Sources',
+  'MonGARSAgentTools',
+  'AppIntentHandoffStore.swift',
+);
+const iosAppIntentStoreText = existsSync(iosAppIntentStorePath)
+  ? readFileSync(iosAppIntentStorePath, 'utf8')
+  : '';
+const appIntentFacadePath = path.join(
+  projectRoot,
+  'src',
+  'native',
+  'appIntents.ts',
+);
+const appIntentFacadeText = existsSync(appIntentFacadePath)
+  ? readFileSync(appIntentFacadePath, 'utf8')
+  : '';
+const appIntentHandoffPath = path.join(
+  projectRoot,
+  'src',
+  'agent',
+  'appIntentHandoff.ts',
+);
+const appIntentHandoffText = existsSync(appIntentHandoffPath)
+  ? readFileSync(appIntentHandoffPath, 'utf8')
+  : '';
+const chatStorePath = path.join(projectRoot, 'src', 'store', 'chatStore.ts');
+const chatStoreText = existsSync(chatStorePath)
+  ? readFileSync(chatStorePath, 'utf8')
+  : '';
+const outlookFacadePath = path.join(projectRoot, 'src', 'native', 'outlook.ts');
+const outlookFacadeText = existsSync(outlookFacadePath)
+  ? readFileSync(outlookFacadePath, 'utf8')
+  : '';
+const iosEntitlementsPath = path.join(
+  projectRoot,
+  'ios',
+  'MonGARSMobile',
+  'MonGARSMobile.entitlements',
+);
+const iosEntitlementsText = existsSync(iosEntitlementsPath)
+  ? readFileSync(iosEntitlementsPath, 'utf8')
+  : '';
 const hostHasXcodebuild =
   spawnSync('xcodebuild', ['-version'], { stdio: 'ignore' }).status === 0;
 const iosApplicationTargetName = 'MonGARSMobile';
@@ -96,6 +200,12 @@ function pbxObjectBody(section, objectID) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function textBetween(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  return start >= 0 && end > start ? source.slice(start, end) : '';
 }
 
 function pbxObjectID(section, comment) {
@@ -468,6 +578,77 @@ const checks = [
       'Restore the local Swift package that owns model download, tokenization, and generation.',
   },
   {
+    label: 'Local MonGARSAgentTools package',
+    path: 'ios/AgentTools/Package.swift',
+    required: true,
+    advice:
+      'Restore the local Swift package that implements the canonical iOS host tools.',
+  },
+  {
+    label: 'Foreground monGARS App Intents',
+    path: 'ios/AppIntents/MonGARSAppIntents.swift',
+    required: true,
+    advice:
+      'Restore the bounded foreground App Intents that stage requests without headless model or tool execution.',
+  },
+  {
+    label: 'monGARS App Shortcuts provider',
+    path: 'ios/AppIntents/MonGARSAppShortcuts.swift',
+    required: true,
+    advice:
+      'Restore the AppShortcutsProvider so Siri, Spotlight, and Shortcuts can discover the safe intent surface.',
+  },
+  {
+    label: 'App Intent React Native facade',
+    path: 'src/native/appIntents.ts',
+    required: true,
+    advice:
+      'Restore the typed foreground handoff facade; App Intent payloads must never fall back to network execution.',
+  },
+  {
+    label: 'Structured agent React Native facade',
+    path: 'src/native/agent.ts',
+    required: true,
+    advice:
+      'Restore the typed agent bridge so approval, permission, and trigger results remain fail-closed.',
+  },
+  {
+    label: 'Outlook React Native facade',
+    path: 'src/native/outlook.ts',
+    required: true,
+    advice:
+      'Restore the typed owner-scoped Outlook bridge before enabling Microsoft Graph tools.',
+  },
+  {
+    label: 'Outlook runtime client-ID bridge',
+    custom: () =>
+      iosCoreMLBridgeSourceText.includes(
+        '@objc func configureOutlookClientID(',
+      ) &&
+      iosCoreMLExternBridgeText.includes(
+        'RCT_EXTERN_METHOD(configureOutlookClientID:',
+      ) &&
+      outlookFacadeText.includes('configureOutlookClientID(') &&
+      outlookFacadeText.includes('configureNativeOutlookClientId'),
+    required: true,
+    advice:
+      'Keep the validated public Microsoft client-ID Settings fallback wired across Swift, Objective-C, and TypeScript.',
+  },
+  {
+    label: 'AlarmKit Live Activity source',
+    path: 'ios/MonGARSAlarmWidget/MonGARSAlarmWidgetBundle.swift',
+    required: true,
+    advice:
+      'Restore the AlarmKit widget source used by countdown and snooze presentation.',
+  },
+  {
+    label: 'AlarmKit Live Activity Info.plist',
+    path: 'ios/MonGARSAlarmWidget/Info.plist',
+    required: true,
+    advice:
+      'Restore the embedded WidgetKit extension metadata for AlarmKit presentation.',
+  },
+  {
     label: 'iOS packet tunnel provider',
     path: 'ios/DiagnosticsExtension/PacketCaptureProvider.swift',
     required: false,
@@ -505,6 +686,293 @@ const checks = [
       'Add the Core ML bridge and MonGARSCoreML package product to the app target.',
   },
   {
+    label: 'iOS project registers agent host tools',
+    custom: () =>
+      applicationBuildPhaseContains('PBXFrameworksBuildPhase', 'Frameworks', [
+        'MonGARSAgentTools in Frameworks',
+      ]) &&
+      iosProjectText.includes(
+        'XCLocalSwiftPackageReference "MonGARSAgentTools"',
+      ) &&
+      iosProjectText.includes('relativePath = AgentTools;'),
+    required: true,
+    advice:
+      'Add the MonGARSAgentTools local package product to the application target.',
+  },
+  {
+    label: 'iOS project registers foreground App Intents',
+    custom: () =>
+      applicationBuildPhaseContains('PBXSourcesBuildPhase', 'Sources', [
+        'MonGARSAppIntents.swift in Sources',
+        'MonGARSAppShortcuts.swift in Sources',
+      ]) &&
+      iosCoreMLBridgeSourceText.includes(
+        '@objc func getPendingAppIntentHandoff(',
+      ) &&
+      iosCoreMLBridgeSourceText.includes(
+        '@objc func acknowledgeAppIntentHandoff(',
+      ) &&
+      iosCoreMLExternBridgeText.includes(
+        'RCT_EXTERN_METHOD(getPendingAppIntentHandoff:',
+      ) &&
+      iosCoreMLExternBridgeText.includes(
+        'RCT_EXTERN_METHOD(acknowledgeAppIntentHandoff:',
+      ) &&
+      iosEntitlementsText.includes('group.com.mongars.mobile'),
+    required: true,
+    advice:
+      'Compile both App Intent sources in MonGARSMobile and keep their protected app-group handoff linked through the native bridge.',
+  },
+  {
+    label: 'iOS app packages its privacy manifest',
+    custom: () =>
+      existsSync(
+        path.join(projectRoot, 'ios', 'MonGARSMobile', 'PrivacyInfo.xcprivacy'),
+      ) &&
+      applicationBuildPhaseContains('PBXResourcesBuildPhase', 'Resources', [
+        'PrivacyInfo.xcprivacy in Resources',
+      ]),
+    required: true,
+    advice:
+      'Add PrivacyInfo.xcprivacy to the MonGARSMobile Resources build phase so archives include it.',
+  },
+  {
+    label: 'iOS app entitlement file reference resolves canonically',
+    custom: () =>
+      iosProjectText.includes(
+        'path = MonGARSMobile/MonGARSMobile.entitlements;',
+      ),
+    required: true,
+    advice:
+      'Point the MonGARSMobile entitlement PBX file reference at MonGARSMobile/MonGARSMobile.entitlements.',
+  },
+  {
+    label:
+      'App Intent profile binding is explicit and read-only lookup is masked',
+    custom: () => {
+      const pendingLookup = textBetween(
+        iosCoreMLBridgeSourceText,
+        'func getPendingAppIntentHandoff(',
+        'func acknowledgeAppIntentHandoff(',
+      );
+      return (
+        iosCoreMLBridgeSourceText.includes(
+          '@objc func setActiveAppIntentProfile(',
+        ) &&
+        iosCoreMLExternBridgeText.includes(
+          'RCT_EXTERN_METHOD(setActiveAppIntentProfile:',
+        ) &&
+        pendingLookup.includes('profileMatches') &&
+        pendingLookup.includes('? handoff.kind.rawValue : "masked"') &&
+        !pendingLookup.includes('setActiveProfile(') &&
+        appIntentFacadeText.includes('profileMatches: boolean') &&
+        appIntentFacadeText.includes("| 'masked'") &&
+        appIntentFacadeText.includes(
+          'signal ne doit révéler ni kind ni input',
+        ) &&
+        iosAppIntentStoreText.includes('kind: .masked') &&
+        iosAppIntentStoreText.includes('record.kind != .masked') &&
+        !iosAppIntentsSourceText.includes('"kind": record.kind.rawValue') &&
+        appIntentHandoffText.includes('Action liée à un autre profil') &&
+        chatStoreText.includes('setActiveNativeAppIntentProfile(') &&
+        chatStoreText.includes('!pending.profileMatches') &&
+        chatStoreText.includes('discardNativeAppIntentHandoff(')
+      );
+    },
+    required: true,
+    advice:
+      'Bind the active owner explicitly during app/session initialization; pending reads must only compare the captured opaque profile and mask mismatched content.',
+  },
+  {
+    label: 'Memory App Intents use one-shot exact native tools without a model',
+    custom: () =>
+      iosAppIntentStoreText.includes('consumeExactMemoryAction(') &&
+      iosCoreMLBridgeSourceText.includes(
+        '@objc func executeAppIntentMemoryAction(',
+      ) &&
+      iosCoreMLBridgeSourceText.includes('? "memory.recall" : "memory.save"') &&
+      iosCoreMLBridgeSourceText.includes('"kind": .string("fact")') &&
+      iosCoreMLBridgeSourceText.includes(
+        'app_intent_memory_add_commit_uncertain',
+      ) &&
+      iosCoreMLExternBridgeText.includes(
+        'RCT_EXTERN_METHOD(executeAppIntentMemoryAction:',
+      ) &&
+      appIntentFacadeText.includes('executeNativeAppIntentMemoryAction') &&
+      chatStoreText.includes('executeNativeAppIntentMemoryAction({') &&
+      appIntentHandoffText.includes(
+        'Memory App Intents never enter a language-model prompt.',
+      ) &&
+      !appIntentHandoffText.includes('Use only memory.'),
+    required: true,
+    advice:
+      'Keep memory search/add outside the language model: atomically consume the exact owner-bound protected record, derive only memory.recall or memory.save arguments natively, and never auto-retry the one-shot mutation.',
+  },
+  {
+    label: 'Stored-trigger App Intents bind preview to execution',
+    custom: () =>
+      chatStoreText.includes('resolvedTrigger') &&
+      chatStoreText.includes('previewedTrigger.id') &&
+      chatStoreText.includes(
+        'sameResolvedTrigger(previewedTrigger, currentTrigger)',
+      ) &&
+      chatStoreText.includes(
+        'Object.assign(reservation, appIntentAgentScope',
+      ) &&
+      appIntentHandoffText.includes('Requête exacte :'),
+    required: true,
+    advice:
+      'Resolve and display the exact owner-scoped trigger prompt before confirmation, re-resolve its UUID, compare the full snapshot, and bind the deterministic tool scope before acknowledgement.',
+  },
+  {
+    label: 'iOS App Intents require immediate foreground execution',
+    custom: () => {
+      const intentCount = [
+        ...iosAppIntentsSourceText.matchAll(
+          /struct\s+MonGARS\w+Intent:\s+AppIntent\s*\{/g,
+        ),
+      ].length;
+      const legacyForegroundCount = [
+        ...iosAppIntentsSourceText.matchAll(
+          /static\s+let\s+openAppWhenRun\s*=\s*true/g,
+        ),
+      ].length;
+      const ios26ForegroundCount = [
+        ...iosAppIntentsSourceText.matchAll(
+          /static\s+var\s+supportedModes:\s*IntentModes\s*\{\s*\[\.foreground\(\.immediate\)\]\s*\}/g,
+        ),
+      ].length;
+      return (
+        intentCount === 5 &&
+        legacyForegroundCount === intentCount &&
+        ios26ForegroundCount === intentCount &&
+        !iosAppIntentsSourceText.includes(
+          'static var supportedModes: IntentModes = .foreground',
+        )
+      );
+    },
+    required: true,
+    advice:
+      'Every App Intent must open monGARS immediately: keep openAppWhenRun for current deployment SDKs and foreground(.immediate) for iOS 26 builds.',
+  },
+  {
+    label: 'iOS App Intents stage one bounded handoff only',
+    custom: () =>
+      iosAppIntentsSourceText.includes('MonGARSAppIntentHandoffStore.shared') &&
+      iosAppIntentsSourceText.includes('store.enqueue(') &&
+      [
+        'IOSAgentToolExecutor',
+        'AgentExecutor',
+        'URLSession',
+        'runAgent(',
+        '.execute(',
+      ].every((forbidden) => !iosAppIntentsSourceText.includes(forbidden)),
+    required: true,
+    advice:
+      'App Intent perform methods may only stage the protected foreground handoff; never run models, tools, or network requests there.',
+  },
+  {
+    label: 'iOS App Shortcuts expose the five safe intents',
+    custom: () =>
+      iosAppShortcutsSourceText.includes(
+        'struct MonGARSAppShortcuts: AppShortcutsProvider',
+      ) &&
+      [
+        'MonGARSAskIntent()',
+        'MonGARSSearchMemoryIntent()',
+        'MonGARSAddMemoryIntent()',
+        'MonGARSRunTriggerIntent()',
+        'MonGARSDiagnosticsIntent()',
+      ].every((intent) => iosAppShortcutsSourceText.includes(intent)) &&
+      [...iosAppShortcutsSourceText.matchAll(/AppShortcut\(/g)].length === 5 &&
+      [...iosAppShortcutsSourceText.matchAll(/\\\(\.applicationName\)/g)]
+        .length >= 5,
+    required: true,
+    advice:
+      'Keep exactly five discoverable shortcuts—ask, local-memory search/add, stored trigger, and passive diagnostics—and include the app name in phrases.',
+  },
+  {
+    label: 'iOS project embeds AlarmKit Live Activity extension',
+    custom: () =>
+      iosProjectText.includes('MonGARSAlarmWidgetBundle.swift in Sources') &&
+      iosProjectText.includes(
+        'MonGARSAlarmWidget.appex in Embed App Extensions',
+      ) &&
+      iosProjectText.includes(
+        'productType = "com.apple.product-type.app-extension";',
+      ),
+    required: true,
+    advice:
+      'Register and embed the MonGARSAlarmWidget target in the application target.',
+  },
+  {
+    label: 'iOS agent permission usage descriptions',
+    custom: () =>
+      [
+        'NSAlarmKitUsageDescription',
+        'NSCalendarsFullAccessUsageDescription',
+        'NSCameraUsageDescription',
+        'NSContactsUsageDescription',
+        'NSHealthShareUsageDescription',
+        'NSLocationWhenInUseUsageDescription',
+        'NSMotionUsageDescription',
+        'NSPhotoLibraryUsageDescription',
+        'NSRemindersFullAccessUsageDescription',
+      ].every((key) => iosInfoPlistText.includes(`<key>${key}</key>`)),
+    required: true,
+    advice:
+      'Declare every Apple-framework permission used by the canonical agent tools in Info.plist.',
+  },
+  {
+    label: 'iOS EventKit request usage descriptions',
+    custom: () =>
+      (!iosAgentPermissionProviderText.includes(
+        'requestFullAccessToEvents()',
+      ) ||
+        iosInfoPlistText.includes(
+          '<key>NSCalendarsFullAccessUsageDescription</key>',
+        )) &&
+      (!iosAgentPermissionProviderText.includes(
+        'requestWriteOnlyAccessToEvents()',
+      ) ||
+        iosInfoPlistText.includes(
+          '<key>NSCalendarsWriteOnlyAccessUsageDescription</key>',
+        )),
+    required: true,
+    advice:
+      'Keep the EventKit permission request APIs and their exact Info.plist usage-description keys in sync.',
+  },
+  {
+    label: 'iOS Microsoft OAuth Info.plist wiring',
+    custom: () =>
+      iosInfoPlistText.includes('<key>MONGARSMicrosoftClientID</key>') &&
+      iosInfoPlistText.includes(
+        '<string>$(MONGARS_MICROSOFT_CLIENT_ID)</string>',
+      ) &&
+      iosInfoPlistText.includes('<key>CFBundleURLTypes</key>') &&
+      iosInfoPlistText.includes(
+        '<string>msauth.$(PRODUCT_BUNDLE_IDENTIFIER)</string>',
+      ),
+    required: true,
+    advice:
+      'Wire the public Microsoft client ID build setting and bundle-derived msauth callback scheme in the app Info.plist.',
+  },
+  {
+    label: 'iOS app build configurations declare Microsoft client ID',
+    custom: () => {
+      const configurations = applicationBuildConfigurations();
+      return (
+        configurations.length > 0 &&
+        configurations.every(({ body }) =>
+          body.includes('MONGARS_MICROSOFT_CLIENT_ID ='),
+        )
+      );
+    },
+    required: true,
+    advice:
+      'Declare MONGARS_MICROSOFT_CLIENT_ID in every app build configuration. The checked-in value may stay empty; override the target setting locally or pass it to xcodebuild.',
+  },
+  {
     label: 'MonGARSMobile iOS 18 deployment target for stateful Core ML',
     custom: () => applicationDeploymentTargetsAreAtLeast(18),
     required: true,
@@ -534,6 +1002,16 @@ const checks = [
     required: false,
     advice:
       'Add app entitlements for packet-tunnel and shared app-group access before enabling diagnostics on-device.',
+  },
+  {
+    label: 'iOS agent managed capabilities',
+    custom: () =>
+      ['com.apple.developer.healthkit', 'com.apple.developer.weatherkit'].every(
+        (key) => iosEntitlementsText.includes(`<key>${key}</key>`),
+      ),
+    required: true,
+    advice:
+      'Enable HealthKit and WeatherKit for the App ID and keep the signed provisioning profile aligned with the entitlements file.',
   },
   {
     label: 'iOS packet tunnel entitlements',

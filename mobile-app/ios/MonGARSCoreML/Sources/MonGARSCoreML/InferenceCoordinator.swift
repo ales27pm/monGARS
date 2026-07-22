@@ -85,6 +85,7 @@ public actor InferenceCoordinator {
   public func generate(
     messages: [ChatMessage],
     options: GenerationOptions,
+    systemPrompt: String? = nil,
     progress: @escaping @Sendable (ModelProgress) -> Void = { _ in },
     onUpdate: @escaping @Sendable (GenerationUpdate) async -> Void
   ) async throws -> GenerationResult {
@@ -105,7 +106,8 @@ public actor InferenceCoordinator {
       let prompt = try PromptBuilder.build(
         messages: messages,
         tokenizer: tokenizer,
-        maxNewTokens: options.maxNewTokens
+        maxNewTokens: options.maxNewTokens,
+        systemPrompt: systemPrompt
       )
       phase = .generating
       lastError = nil

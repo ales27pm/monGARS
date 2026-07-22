@@ -34,9 +34,12 @@ from modules.neurons.registry import MANIFEST_FILENAME, AdapterRecord, load_mani
 from monGARS.config import LLMQuantization, get_settings
 from monGARS.mlops._unsloth_bootstrap import (
     UNSLOTH_DISABLED_REASON as _BOOTSTRAP_UNSLOTH_DISABLED_REASON,
-    UNSLOTH_IMPORT_ERROR as _BOOTSTRAP_UNSLOTH_IMPORT_ERROR,
-    get_unsloth_module,
 )
+from monGARS.mlops._unsloth_bootstrap import (
+    UNSLOTH_IMPORT_ERROR as _BOOTSTRAP_UNSLOTH_IMPORT_ERROR,
+)
+from monGARS.mlops._unsloth_bootstrap import get_unsloth_module
+from monGARS.mlops.chat_templates import ensure_dolphin_chat_template
 
 from .inference_utils import (
     CHATML_BEGIN_OF_TEXT,
@@ -78,6 +81,33 @@ class GuardRejectionError(RuntimeError):
         message = str(payload.get("message") or "Request blocked by guardrail")
         super().__init__(message)
         self.payload = dict(payload)
+
+
+_GENERATION_GUARD_ISSUER = object()
+
+
+class _PreGenerationGuardPass:
+    """One-shot internal capability proving an upstream guard succeeded."""
+
+    __slots__ = ("_consumed", "_issuer", "_lock")
+
+    def __init__(self, issuer: object) -> None:
+        self._issuer = issuer
+        self._consumed = False
+        self._lock = threading.Lock()
+
+    def consume(self, issuer: object) -> bool:
+        with self._lock:
+            if self._issuer is not issuer or self._consumed:
+                return False
+            self._consumed = True
+            return True
+
+
+def _issue_pre_generation_guard_pass() -> _PreGenerationGuardPass:
+    """Issue an opaque pass for the next internal generation boundary."""
+
+    return _PreGenerationGuardPass(_GENERATION_GUARD_ISSUER)
 
 
 _UNSLOTH_STATE: dict[str, Any] | None = None
@@ -145,9 +175,15 @@ def initialize_unsloth(force: bool = False) -> dict[str, Any]:
         return state
 
 
-STREAM_CHUNK_SIZE = 64
-
 T = TypeVar("T")
+
+_STREAM_END = object()
+
+
+def _next_stream_item(iterator: Iterator[Any]) -> Any:
+    """Read one blocking provider-stream item without leaking StopIteration."""
+
+    return next(iterator, _STREAM_END)
 
 
 tracer = trace.get_tracer(__name__)
@@ -214,6 +250,10 @@ _RESPONSE_CACHE = AsyncTTLCache()
 
 class LLMRuntimeError(RuntimeError):
     """Raised when the unified runtime fails to serve a request."""
+
+
+class StreamingUnavailableError(LLMRuntimeError):
+    """Raised when a provider cannot offer genuine incremental generation."""
 
 
 class ModelUnavailableError(LLMRuntimeError):
@@ -391,6 +431,7 @@ class UnifiedLLMRuntime:
             tokenizer = AutoTokenizer.from_pretrained(
                 str(self._model_dir), trust_remote_code=True
             )
+        tokenizer = ensure_dolphin_chat_template(tokenizer)
         generator_kwargs: dict[str, Any] = {
             "torch_dtype": (
                 torch.bfloat16 if hasattr(torch, "bfloat16") else torch.float16
@@ -479,19 +520,91 @@ class UnifiedLLMRuntime:
             raise ValueError("prompt must be a non-empty string")
         self._ensure_components()
 
+        return self._generate_from_rendered_prompt(prompt, kwargs)
+
+    def generate_chat(
+        self, messages: Sequence[Mapping[str, str]], **kwargs: Any
+    ) -> str:
+        """Render structured messages with the tokenizer's native template."""
+
+        normalized = self._normalize_chat_messages(messages)
+        self._ensure_components()
+        assert self._tokenizer is not None
+        apply_chat_template = getattr(self._tokenizer, "apply_chat_template", None)
+        if not callable(apply_chat_template):
+            raise LLMRuntimeError(
+                "The local tokenizer does not provide a native chat template"
+            )
+        try:
+            prompt = apply_chat_template(
+                normalized,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except Exception as exc:
+            raise LLMRuntimeError(
+                "Failed to render the tokenizer chat template"
+            ) from exc
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise LLMRuntimeError("Tokenizer chat template returned an empty prompt")
+        return self._generate_from_rendered_prompt(prompt, kwargs)
+
+    @staticmethod
+    def _normalize_chat_messages(
+        messages: Sequence[Mapping[str, str]],
+    ) -> list[dict[str, str]]:
+        normalized: list[dict[str, str]] = []
+        previous_role: str | None = None
+        system_seen = False
+        for message in messages:
+            role = str(message.get("role", "")).strip().lower()
+            content = str(message.get("content", "")).strip().replace("<|", "<\u200b|")
+            if role not in {"system", "user", "assistant", "tool"}:
+                raise ValueError(f"unsupported chat role: {role or 'missing'}")
+            if not content:
+                continue
+            if role == "system":
+                if normalized or system_seen:
+                    raise ValueError(
+                        "system message must appear exactly once at the start"
+                    )
+                system_seen = True
+            elif role == "user":
+                if previous_role not in {None, "system", "assistant"}:
+                    raise ValueError("invalid user message sequence")
+            elif role == "assistant":
+                if previous_role not in {"user", "tool"}:
+                    raise ValueError("invalid assistant message sequence")
+            elif previous_role not in {"assistant", "tool"}:
+                raise ValueError("invalid tool message sequence")
+            normalized.append({"role": role, "content": content})
+            previous_role = role
+        if not normalized or not any(item["role"] == "user" for item in normalized):
+            raise ValueError("messages must contain a non-empty user message")
+        return normalized
+
+    def _generate_from_rendered_prompt(
+        self, prompt: str, overrides: Mapping[str, Any]
+    ) -> str:
+        """Generate and decode only tokens produced after the input prompt."""
+
         def _execute() -> str:
             assert self._tokenizer is not None
             assert self._generator is not None
             inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
-            generation_kwargs = self._build_generation_kwargs(kwargs)
+            generation_kwargs = self._build_generation_kwargs(overrides)
             tokens_in = int(inputs["input_ids"].shape[-1])
             with self._generation_lock:
                 with torch.inference_mode():
                     output = self._generator.generate(**inputs, **generation_kwargs)
             sequences = output.sequences if hasattr(output, "sequences") else output
             tokens = sequences[0]
-            text = self._tokenizer.decode(tokens, skip_special_tokens=True)
-            tokens_out = max(0, int(tokens.shape[-1]) - tokens_in)
+            generated_tokens = tokens[tokens_in:]
+            text = self._tokenizer.decode(
+                generated_tokens,
+                skip_special_tokens=True,
+            )
+            tokens_out = int(generated_tokens.shape[-1])
             logger.info(
                 "llm.generate",
                 extra={
@@ -1196,7 +1309,7 @@ class LLMIntegration:
     def _render_chatml_segment(
         cls, role_token: str, content: str, *, terminate: bool = True
     ) -> str:
-        normalized = cls._normalise_chatml_content(content)
+        normalized = cls._normalise_chatml_content(content).replace("<|", "<\u200b|")
         segment = f"{role_token}\n\n{normalized}" if normalized else f"{role_token}\n\n"
         if terminate:
             segment += cls._CHATML_END_TOKEN
@@ -1260,6 +1373,98 @@ class LLMIntegration:
             return candidate
         system_prompt = self._default_system_prompt
         return self._build_chatml_prompt(candidate, system_prompt=system_prompt)
+
+    def _provider_messages_from_prompt(self, prompt: str) -> list[dict[str, str]]:
+        """Convert the legacy internal prompt envelope to provider messages.
+
+        Ray still consumes the historical string prompt contract.  Local chat
+        providers must receive role-structured messages so they can apply their
+        own model template exactly once.
+        """
+
+        candidate = self._translate_legacy_chatml(prompt)
+        role_pattern = re.compile(r"<\|(system|user|assistant|tool)\|>")
+        matches = list(role_pattern.finditer(candidate))
+        if matches:
+            prefix = candidate[: matches[0].start()].strip()
+            if prefix and prefix != CHATML_BEGIN_OF_TEXT:
+                raise self.LocalProviderError(
+                    "Local chat prompt has content outside role boundaries"
+                )
+            parsed: list[tuple[str, str]] = []
+            messages: list[dict[str, str]] = []
+            for index, match in enumerate(matches):
+                end = (
+                    matches[index + 1].start()
+                    if index + 1 < len(matches)
+                    else len(candidate)
+                )
+                content = candidate[match.end() : end].strip()
+                end_token_count = content.count(self._CHATML_END_TOKEN)
+                if end_token_count:
+                    if end_token_count != 1 or not content.endswith(
+                        self._CHATML_END_TOKEN
+                    ):
+                        raise self.LocalProviderError(
+                            "Local chat prompt has malformed role boundaries"
+                        )
+                    content = content[: -len(self._CHATML_END_TOKEN)].rstrip()
+                parsed.append((match.group(1), content))
+
+            previous_role: str | None = None
+            system_seen = False
+            user_seen = False
+            for index, (role, content) in enumerate(parsed):
+                if role == "system":
+                    if index != 0 or system_seen or not content:
+                        raise self.LocalProviderError(
+                            "Local chat prompt has an invalid system role"
+                        )
+                    system_seen = True
+                elif role == "user":
+                    if (
+                        previous_role not in {None, "system", "assistant"}
+                        or not content
+                    ):
+                        raise self.LocalProviderError(
+                            "Local chat prompt has an invalid user role sequence"
+                        )
+                    user_seen = True
+                elif role == "assistant":
+                    if previous_role not in {"user", "tool"}:
+                        raise self.LocalProviderError(
+                            "Local chat prompt has an invalid assistant role sequence"
+                        )
+                    if not content and index != len(parsed) - 1:
+                        raise self.LocalProviderError(
+                            "Local chat prompt has an early assistant generation stub"
+                        )
+                else:  # tool
+                    if previous_role not in {"assistant", "tool"} or not content:
+                        raise self.LocalProviderError(
+                            "Local chat prompt has an invalid tool role sequence"
+                        )
+                previous_role = role
+                if content:
+                    messages.append({"role": role, "content": content})
+            if user_seen:
+                if not any(message["role"] == "system" for message in messages):
+                    messages.insert(
+                        0,
+                        {"role": "system", "content": self._default_system_prompt},
+                    )
+                return messages
+            raise self.LocalProviderError(
+                "Local chat prompt does not contain a non-empty user message"
+            )
+
+        content = prompt.strip()
+        if not content:
+            raise self.LocalProviderError("Local chat prompt is empty")
+        return [
+            {"role": "system", "content": self._default_system_prompt},
+            {"role": "user", "content": content},
+        ]
 
     async def _ensure_adapter_metadata(self) -> dict[str, str] | None:
         """Load manifest metadata if it changed since the last call."""
@@ -1440,12 +1645,12 @@ class LLMIntegration:
             await self._ensure_local_models()
             model_definition = self._model_manager.get_model_definition(task_type)
             client = self._resolve_ollama_client()
+            messages = self._provider_messages_from_prompt(prompt)
 
             if client is not None and hasattr(client, "chat"):
                 fallback_reason = "ollama_error"
 
                 async def _ollama_request() -> dict[str, Any]:
-                    messages = [{"role": "user", "content": prompt}]
                     options = self._slot_generation_kwargs(model_definition)
                     return await asyncio.to_thread(
                         client.chat,
@@ -1482,6 +1687,7 @@ class LLMIntegration:
                 task_type,
                 reason=fallback_reason,
                 definition=model_definition,
+                messages=messages,
             )
             if fallback_response is None:
                 raise self.LocalProviderError("Slot fallback unavailable")
@@ -1503,12 +1709,94 @@ class LLMIntegration:
                 "Local provider raised an unexpected error"
             ) from exc
 
+    async def _stream_ollama_provider(
+        self, prompt: str, task_type: str
+    ) -> AsyncIterator[str]:
+        """Yield genuine deltas from Ollama's streaming chat API."""
+
+        if self.use_ray:
+            raise StreamingUnavailableError(
+                "Ray streaming is not configured; use non-streaming generation"
+            )
+
+        await self._ensure_local_models()
+        model_definition = self._model_manager.get_model_definition(task_type)
+        client = self._resolve_ollama_client()
+        if client is None or not hasattr(client, "chat"):
+            raise StreamingUnavailableError(
+                "Ollama streaming is unavailable; use non-streaming generation"
+            )
+
+        messages = self._provider_messages_from_prompt(prompt)
+        options = self._slot_generation_kwargs(model_definition)
+
+        async def _ollama_stream_request() -> Any:
+            return await asyncio.to_thread(
+                client.chat,
+                model=model_definition.name,
+                messages=messages,
+                options=options,
+                stream=True,
+            )
+
+        try:
+            stream = await self._ollama_cb.call(_ollama_stream_request)
+        except CircuitBreakerOpenError as exc:
+            raise StreamingUnavailableError(
+                "Ollama streaming circuit breaker is open"
+            ) from exc
+        except Exception as exc:
+            raise LLMRuntimeError("Ollama streaming request failed") from exc
+
+        if isinstance(stream, Mapping) or isinstance(stream, (str, bytes)):
+            raise StreamingUnavailableError(
+                "Ollama did not return an incremental response stream"
+            )
+
+        emitted = False
+        if hasattr(stream, "__aiter__"):
+            async for item in stream:
+                normalized = self._normalize_local_response(item)
+                if normalized is None:
+                    continue
+                delta = str(normalized["message"]["content"])
+                if delta:
+                    emitted = True
+                    yield delta
+        else:
+            try:
+                iterator = iter(stream)
+            except TypeError as exc:
+                raise StreamingUnavailableError(
+                    "Ollama returned a non-iterable streaming response"
+                ) from exc
+            while True:
+                try:
+                    item = await asyncio.to_thread(_next_stream_item, iterator)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    raise LLMRuntimeError("Ollama stream interrupted") from exc
+                if item is _STREAM_END:
+                    break
+                normalized = self._normalize_local_response(item)
+                if normalized is None:
+                    continue
+                delta = str(normalized["message"]["content"])
+                if delta:
+                    emitted = True
+                    yield delta
+
+        if not emitted:
+            raise StreamingUnavailableError("Ollama returned an empty response stream")
+
     async def _generate_with_model_slot(
         self,
         prompt: str,
         task_type: str,
         *,
         definition: ModelDefinition | None = None,
+        messages: Sequence[Mapping[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Generate a response using the unified LLM runtime."""
 
@@ -1517,9 +1805,17 @@ class LLMIntegration:
         )
         runtime = UnifiedLLMRuntime.instance(self._settings)
         slot_generation_kwargs = self._slot_generation_kwargs(model_definition)
+        provider_messages = list(
+            messages or self._provider_messages_from_prompt(prompt)
+        )
 
         def _run_generation() -> dict[str, Any]:
-            text = runtime.generate(prompt, **slot_generation_kwargs)
+            generate_chat = getattr(runtime, "generate_chat", None)
+            if not callable(generate_chat):  # pragma: no cover - compatibility adapter
+                raise LLMRuntimeError(
+                    "Slot runtime does not support tokenizer-native chat messages"
+                )
+            text = generate_chat(provider_messages, **slot_generation_kwargs)
             return {"message": {"content": text}}
 
         return await asyncio.to_thread(_run_generation)
@@ -1531,6 +1827,7 @@ class LLMIntegration:
         *,
         reason: str,
         definition: ModelDefinition | None = None,
+        messages: Sequence[Mapping[str, str]] | None = None,
     ) -> dict[str, Any] | None:
         """Fallback to the slot-managed runtime when Ollama is unavailable."""
 
@@ -1540,7 +1837,10 @@ class LLMIntegration:
         )
         try:
             return await self._generate_with_model_slot(
-                prompt, task_type, definition=definition
+                prompt,
+                task_type,
+                definition=definition,
+                messages=messages,
             )
         except Exception:  # pragma: no cover - defensive logging
             logger.exception(
@@ -1604,8 +1904,19 @@ class LLMIntegration:
         *,
         response_hints: dict[str, Any] | None = None,
         formatted_prompt: str | None = None,
+        context: Mapping[str, Any] | None = None,
+        _guard_pass: object | None = None,
     ) -> dict[str, Any]:
         """Generate a response for ``prompt`` using the configured LLM stack."""
+
+        guard_context = dict(context) if isinstance(context, Mapping) else {}
+        if _guard_pass is None:
+            if guard_result := pre_generation_guard(prompt, guard_context):
+                raise GuardRejectionError(guard_result)
+        elif not isinstance(
+            _guard_pass, _PreGenerationGuardPass
+        ) or not _guard_pass.consume(_GENERATION_GUARD_ISSUER):
+            raise RuntimeError("invalid or reused pre-generation guard pass")
 
         adapter_metadata: dict[str, str] | None
         if self.use_ray:
@@ -2184,16 +2495,40 @@ class LLMIntegration:
             return error
         return str(error)
 
-    async def chat(self, user_id: str, prompt: str, stream: bool = True) -> str | None:
+    async def chat(
+        self,
+        user_id: str,
+        prompt: str,
+        stream: bool = True,
+        *,
+        context: Mapping[str, Any] | None = None,
+    ) -> str | None:
         """Generate chat responses and publish UI streaming events."""
 
+        guard_context = dict(context) if isinstance(context, Mapping) else {}
+        guard_context["user_id"] = user_id
+        raw_allowed_actions = guard_context.get("allowed_actions", [])
+        if not isinstance(raw_allowed_actions, Sequence) or isinstance(
+            raw_allowed_actions, (str, bytes)
+        ):
+            raw_allowed_actions = []
+        allowed_actions = [
+            str(action).strip().lower()
+            for action in raw_allowed_actions
+            if isinstance(action, str) and action.strip()
+        ]
+        if "personal_data_access" not in allowed_actions:
+            allowed_actions.append("personal_data_access")
+        guard_context["allowed_actions"] = allowed_actions
         logger.info(
             "llm.chat.start",
             extra={"user_id": user_id, "stream": stream},
         )
         try:
             if stream:
-                async for piece in self._stream_inference(prompt):
+                async for piece in self._stream_inference(
+                    prompt, context=guard_context
+                ):
                     if not piece:
                         continue
                     await event_bus().publish(
@@ -2212,7 +2547,7 @@ class LLMIntegration:
                 )
                 return None
 
-            text = await self._inference(prompt)
+            text = await self._inference(prompt, context=guard_context)
             await event_bus().publish(
                 make_event(
                     "ai_model.response_complete",
@@ -2249,18 +2584,31 @@ class LLMIntegration:
             raise
 
     async def _stream_inference(
-        self, prompt: str, task_type: str = "general"
+        self,
+        prompt: str,
+        task_type: str = "general",
+        *,
+        context: Mapping[str, Any] | None = None,
     ) -> AsyncIterator[str]:
-        """Yield response fragments for the given prompt."""
+        """Yield provider-produced token deltas or fail explicitly."""
 
-        response = await self.generate_response(prompt, task_type=task_type)
-        text = response.get("text", "") if isinstance(response, dict) else ""
-        if text:
-            for start in range(0, len(text), STREAM_CHUNK_SIZE):
-                yield text[slice(start, start + STREAM_CHUNK_SIZE)]
+        guard_context = dict(context) if isinstance(context, Mapping) else {}
+        if guard_result := pre_generation_guard(prompt, guard_context):
+            raise GuardRejectionError(guard_result)
+        active_prompt = self._ensure_chatml_prompt(prompt, None)
+        async for delta in self._stream_ollama_provider(active_prompt, task_type):
+            yield delta
 
-    async def _inference(self, prompt: str, task_type: str = "general") -> str:
+    async def _inference(
+        self,
+        prompt: str,
+        task_type: str = "general",
+        *,
+        context: Mapping[str, Any] | None = None,
+    ) -> str:
         """Return the full response text for the prompt."""
 
-        response = await self.generate_response(prompt, task_type=task_type)
+        response = await self.generate_response(
+            prompt, task_type=task_type, context=context
+        )
         return "" if not isinstance(response, dict) else str(response.get("text", ""))

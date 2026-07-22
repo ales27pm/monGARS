@@ -27,4 +27,9 @@ final class InferenceErrorTests: XCTestCase {
       InferenceError.isCancellation(InferenceError.generationCancelled)
     )
   }
+
+  func testIntegrityFailureIsRecoverableByModelPreparation() {
+    XCTAssertTrue(InferenceError.integrityFailure("weight.bin").isRecoverable)
+    XCTAssertFalse(InferenceError.invalidModel("schema").isRecoverable)
+  }
 }

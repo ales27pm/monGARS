@@ -599,6 +599,14 @@ class Settings(BaseSettings):
         default=DEFAULT_EMBEDDING_BACKEND,
         description="Embedding backend provider used for semantic vector generation.",
     )
+    embedding_model_revision: str = Field(
+        default="unversioned",
+        min_length=1,
+        description=(
+            "Pinned revision or content identifier included in semantic embedding "
+            "identity; change it whenever model weights or pooling semantics change."
+        ),
+    )
     ollama_host: AnyUrl | None = Field(
         default=None,
         description=(
@@ -697,7 +705,7 @@ class Settings(BaseSettings):
     llm2vec_vector_dimensions: int = Field(
         default=3072,
         ge=1,
-        description="Embedding dimensionality expected from LLM2Vec fallbacks and pgvector schema.",
+        description="Embedding dimensionality required from the backend and pgvector schema.",
     )
     llm2vec_context_limit: int = Field(
         default=3,

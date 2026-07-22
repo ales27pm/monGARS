@@ -12,6 +12,7 @@ CHATML_BEGIN_OF_TEXT = "<|begin_of_text|>"
 CHATML_START_HEADER = "<|start_header_id|>"
 CHATML_END_HEADER = "<|end_header_id|>"
 CHATML_END_OF_TURN = "<|eot_id|>"
+_ESCAPED_CHATML_PREFIX = "<\u200b|"
 
 _ROLE_ALTERNATIVES: dict[str, tuple[str, ...]] = {
     "system": ("<system>", "[system]"),
@@ -32,6 +33,12 @@ class ChatPrompt:
 
 def _normalise_text(value: str) -> str:
     return value.strip() if value else ""
+
+
+def _escape_chatml_control_tokens(value: str) -> str:
+    """Keep user-controlled text from creating synthetic role boundaries."""
+
+    return value.replace("<|", _ESCAPED_CHATML_PREFIX)
 
 
 def _coerce_text(value: object | None) -> str:
@@ -60,7 +67,7 @@ def _coerce_history_pairs(
 
 def _render_chatml_segment(role: str, content: str, *, terminate: bool = True) -> str:
     normalized_role = role.strip().lower() or "user"
-    normalized_content = _normalise_text(content)
+    normalized_content = _escape_chatml_control_tokens(_normalise_text(content))
     segment = (
         f"{CHATML_START_HEADER}{normalized_role}{CHATML_END_HEADER}\n\n"
         f"{normalized_content}"

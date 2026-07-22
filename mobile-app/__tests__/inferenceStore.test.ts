@@ -122,6 +122,7 @@ describe('inferenceStore', () => {
       requestId: null,
       code: 'COREML_TEMPORARY_FAILURE',
       message: 'Erreur transitoire',
+      recoverable: true,
     });
     expect(useInferenceStore.getState().error).toBe('Erreur transitoire');
 
@@ -453,10 +454,15 @@ describe('inferenceStore', () => {
       requestId: null,
       code: 'COREML_INVALID_EVENT',
       message: 'Événement natif invalide.',
+      recoverable: false,
     });
     acknowledgement.resolve({ requestId: 'request-1' });
 
-    await expect(generation).rejects.toThrow('Événement natif invalide.');
+    await expect(generation).rejects.toMatchObject({
+      message: 'Événement natif invalide.',
+      code: 'COREML_INVALID_EVENT',
+      recoverable: false,
+    });
     expect(useInferenceStore.getState()).toMatchObject({
       activeRequestId: null,
       error: 'Événement natif invalide.',

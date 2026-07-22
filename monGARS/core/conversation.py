@@ -16,15 +16,18 @@ from monGARS.core.inference_utils import (
     estimate_token_count,
 )
 from monGARS.core.llm_integration import (
+    GuardRejectionError,
     LLMIntegration,
     LLMRuntimeError,
     UnifiedLLMRuntime,
+    _issue_pre_generation_guard_pass,
 )
 from monGARS.core.mains_virtuelles import ImageCaptioning
 from monGARS.core.mimicry import MimicryModule
 from monGARS.core.neuro_symbolic.advanced_reasoner import AdvancedReasoner
 from monGARS.core.persistence import PersistenceRepository, VectorMatch
 from monGARS.core.personality import PersonalityEngine
+from monGARS.core.security import pre_generation_guard
 from monGARS.core.services import MemoryService, SpeakerService
 
 from ..init_db import Interaction
@@ -495,8 +498,29 @@ class ConversationalModule:
         query: str,
         session_id: str | None = None,
         image_data: bytes | None = None,
+        *,
+        guard_context: Mapping[str, Any] | None = None,
     ) -> dict:
         start = datetime.now(UTC)
+        security_context = (
+            dict(guard_context) if isinstance(guard_context, Mapping) else {}
+        )
+        security_context["user_id"] = user_id
+        raw_allowed_actions = security_context.get("allowed_actions", [])
+        if not isinstance(raw_allowed_actions, Sequence) or isinstance(
+            raw_allowed_actions, (str, bytes)
+        ):
+            raw_allowed_actions = []
+        allowed_actions = [
+            str(action).strip().lower()
+            for action in raw_allowed_actions
+            if isinstance(action, str) and action.strip()
+        ]
+        if "personal_data_access" not in allowed_actions:
+            allowed_actions.append("personal_data_access")
+        security_context["allowed_actions"] = allowed_actions
+        if guard_result := pre_generation_guard(query, security_context):
+            raise GuardRejectionError(guard_result)
         history_items = await self.memory.history(user_id, limit=5)
         history_pairs = [
             (m.query, m.response)
@@ -598,11 +622,23 @@ class ConversationalModule:
         use_adapter = bool(llm_adapter and hasattr(llm_adapter, "generate_response"))
         if use_adapter:
             try:
+                generation_kwargs: dict[str, Any] = {
+                    "task_type": task_type,
+                    "response_hints": response_hints,
+                    "formatted_prompt": prompt_bundle.chatml,
+                }
+                uses_guarded_llm_boundary = (
+                    isinstance(llm_adapter, LLMIntegration)
+                    and getattr(type(llm_adapter), "generate_response", None)
+                    is LLMIntegration.generate_response
+                )
+                if uses_guarded_llm_boundary:
+                    generation_kwargs["context"] = security_context
+                    generation_kwargs["_guard_pass"] = (
+                        _issue_pre_generation_guard_pass()
+                    )
                 response_mapping = await llm_adapter.generate_response(  # type: ignore[attr-defined]
-                    prompt_bundle.text,
-                    task_type=task_type,
-                    response_hints=response_hints,
-                    formatted_prompt=prompt_bundle.chatml,
+                    prompt_bundle.text, **generation_kwargs
                 )
             except LLMRuntimeError:
                 logger.exception("conversation.runtime.generate_failed")

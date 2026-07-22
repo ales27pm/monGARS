@@ -56,7 +56,9 @@ export type MessageMetadata = {
     | 'embedding'
     | 'realtime'
     | 'system'
-    | 'on-device';
+    | 'on-device'
+    | 'agent'
+    | 'app-intent';
   inferenceBackend?: InferenceBackend;
   modelId?: string | null;
   promptTokens?: number;

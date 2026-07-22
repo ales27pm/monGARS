@@ -101,9 +101,10 @@ function errorMessage(error: unknown): string {
 function nativeEventError(event: CoreMLErrorEvent): Error {
   const error = new Error(event.message);
   error.name = 'CoreMLNativeError';
-  if (event.code) {
-    Object.assign(error, { code: event.code });
-  }
+  Object.assign(error, {
+    ...(event.code ? { code: event.code } : {}),
+    recoverable: event.recoverable,
+  });
   return error;
 }
 

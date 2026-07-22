@@ -12,6 +12,7 @@ from monGARS.core.inference_utils import (
     CHATML_END_HEADER,
     CHATML_START_HEADER,
 )
+from monGARS.core.llm_integration import GuardRejectionError
 from monGARS.core.persistence import VectorMatch
 
 
@@ -244,6 +245,80 @@ def _build_conversational_module(
     )
     module.evolution_engine = _FakeEvolutionEngine()
     return module, llm_instance, persistence
+
+
+@pytest.mark.asyncio
+async def test_conversation_guard_runs_before_history_or_model_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module([])
+    monkeypatch.setattr(
+        conversation_module,
+        "pre_generation_guard",
+        lambda _prompt, _context: {
+            "error": "approval_required",
+            "token_ref": "approval-ref",
+            "message": "approval required",
+        },
+    )
+
+    with pytest.raises(GuardRejectionError):
+        await module.generate_response(
+            "alice",
+            "private prompt",
+            guard_context={
+                "user_id": "alice",
+                "allowed_actions": ["personal_data_access"],
+            },
+        )
+
+    assert llm.calls == []
+    assert persistence.vector_queries == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_approval_resume_is_one_shot_before_provider(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from monGARS.core import operator_approvals as approvals_module
+    from monGARS.core.pii_detection import PIIEntity
+
+    monkeypatch.setattr(
+        approvals_module,
+        "_DEFAULT_APPROVALS_PATH",
+        tmp_path / "conversation-approvals.json",
+    )
+    monkeypatch.setattr(approvals_module, "_GLOBAL_REGISTRY", None)
+    monkeypatch.setattr(
+        "monGARS.core.pii_detection.detect_pii",
+        lambda _prompt: [
+            PIIEntity(type="email", value="alice@example.com", start=11, end=28)
+        ],
+    )
+    module, llm, _persistence = _build_conversational_module([])
+    prompt = "My email is alice@example.com"
+
+    with pytest.raises(GuardRejectionError) as blocked:
+        await module.generate_response("alice", prompt)
+    token_ref = blocked.value.payload["token_ref"]
+    registry = approvals_module.get_operator_approval_registry()
+    registry.approve(token_ref, operator="ops")
+
+    response = await module.generate_response(
+        "alice",
+        prompt,
+        guard_context={"user_id": "mallory", "token_ref": token_ref},
+    )
+
+    assert response["text"]
+    assert len(llm.calls) == 1
+    with pytest.raises(GuardRejectionError):
+        await module.generate_response(
+            "alice", prompt, guard_context={"token_ref": token_ref}
+        )
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio

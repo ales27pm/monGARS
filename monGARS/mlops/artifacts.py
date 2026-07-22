@@ -30,7 +30,7 @@ def _ensure_dolphin_chat_template(tokenizer):
     if not hasattr(tokenizer, "chat_template"):
         return tokenizer
     try:
-        if getattr(tokenizer, "chat_template", None) != DOLPHIN_CHAT_TEMPLATE:
+        if not getattr(tokenizer, "chat_template", None):
             tokenizer.chat_template = DOLPHIN_CHAT_TEMPLATE
     except Exception:
         pass

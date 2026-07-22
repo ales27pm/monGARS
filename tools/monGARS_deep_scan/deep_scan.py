@@ -16,6 +16,7 @@ try:
     from .dataset.qc_filter import QCFilter
     from .extractors import (
         code_py,
+        code_swift,
         configs_yaml,
         dockerfiles,
         html_jsx,
@@ -46,6 +47,7 @@ except Exception:  # pragma: no cover - fallback path for script execution
         ).ProvenanceTracker
         QCFilter = importlib.import_module(f"{package_name}.dataset.qc_filter").QCFilter
         code_py = importlib.import_module(f"{package_name}.extractors.code_py")
+        code_swift = importlib.import_module(f"{package_name}.extractors.code_swift")
         configs_yaml = importlib.import_module(
             f"{package_name}.extractors.configs_yaml"
         )
@@ -78,6 +80,7 @@ DEFAULT_EXTENSIONS = {
     ".htm",
     ".jsx",
     ".tsx",
+    ".swift",
 }
 
 EXCLUDE_DIRECTORIES = {
@@ -205,6 +208,7 @@ EXTRACTOR_MAP: Dict[str, Callable[[Path, str], List[ExtractionRecord]]] = {
     ".htm": html_jsx.extract,
     ".jsx": html_jsx.extract,
     ".tsx": html_jsx.extract,
+    ".swift": code_swift.extract,
 }
 
 

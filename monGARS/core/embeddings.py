@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import importlib
 import importlib.util
+import json
 import logging
 import math
 import sys
@@ -41,7 +42,7 @@ from monGARS.core.inference_utils import (
     prepare_tokenizer_inputs,
     render_chat_prompt_from_text,
 )
-from monGARS.core.llm_integration import LLMRuntimeError, UnifiedLLMRuntime
+from monGARS.core.llm_integration import UnifiedLLMRuntime
 
 try:  # pragma: no cover - optional heavy dependency
     import torch
@@ -68,27 +69,77 @@ def _exception_tuple(*candidates: object) -> tuple[type[BaseException], ...]:
 
 @dataclass(slots=True)
 class EmbeddingBatch:
-    """Container describing an embedding request outcome."""
+    """Validated vectors plus the exact backend identity that produced them."""
 
     vectors: list[list[float]]
     used_fallback: bool
+    identity: EmbeddingIdentity | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingIdentity:
+    """Stable semantic-index identity for one embedding model revision."""
+
+    backend: str
+    model: str
+    revision: str
+    dimension: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.backend, str) or not self.backend.strip():
+            raise ValueError("embedding identity backend must not be empty")
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise ValueError("embedding identity model must not be empty")
+        if not isinstance(self.revision, str) or not self.revision.strip():
+            raise ValueError("embedding identity revision must not be empty")
+        if (
+            not isinstance(self.dimension, int)
+            or isinstance(self.dimension, bool)
+            or self.dimension <= 0
+        ):
+            raise ValueError("embedding identity dimension must be positive")
+        object.__setattr__(self, "backend", self.backend.strip())
+        object.__setattr__(self, "model", self.model.strip())
+        object.__setattr__(self, "revision", self.revision.strip())
+
+    @property
+    def cache_key(self) -> tuple[str, str, str, int]:
+        """Return the immutable identity tuple used to partition vector caches."""
+
+        return (self.backend, self.model, self.revision, self.dimension)
+
+    @property
+    def storage_key(self) -> str:
+        """Return a non-secret durable key for database vector partitioning."""
+
+        canonical = json.dumps(
+            self.cache_key,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
 
 
 class EmbeddingBackendError(RuntimeError):
     """Raised when the embedding backend cannot produce vectors."""
 
 
-_TRANSFORMERS_COMPONENT_CACHE: dict[tuple[str, str], tuple[Any, Any, Any, int]] = {}
+class _SentenceTransformersUnavailable(ImportError):
+    """Internal signal that selects the configured Transformers implementation."""
+
+
+_TRANSFORMERS_COMPONENT_CACHE: dict[tuple[str, str, str], tuple[Any, Any, Any, int]] = (
+    {}
+)
 _TRANSFORMERS_COMPONENT_LOCK = threading.Lock()
 
 
-_SENTENCE_TRANSFORMER_CACHE: dict[str, Any] = {}
+_SENTENCE_TRANSFORMER_CACHE: dict[tuple[str, str], Any] = {}
 _SENTENCE_TRANSFORMER_LOCK = threading.Lock()
 
 
 _KNOWN_MANAGER_EXCEPTIONS = _exception_tuple(
     EmbeddingBackendError,
-    LLMRuntimeError,
     RuntimeError,
     OSError,
     ConnectionError,
@@ -134,6 +185,15 @@ def _resolve_transformers_device(
     return torch.device("cpu")
 
 
+def _resolved_model_revision(settings: Settings) -> str | None:
+    """Return a loadable pinned revision, excluding the documented sentinel."""
+
+    value = str(getattr(settings, "embedding_model_revision", None) or "").strip()
+    if not value or value.casefold() == "unversioned":
+        return None
+    return value
+
+
 def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, int]:
     model_id = str(getattr(settings, "transformers_embedding_model", "").strip())
     if not model_id:
@@ -147,7 +207,8 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
         raise EmbeddingBackendError("PyTorch is required for transformers embeddings")
 
     device = _resolve_transformers_device(settings)
-    cache_key = (model_id, str(device))
+    revision = _resolved_model_revision(settings)
+    cache_key = (model_id, revision or "", str(device))
 
     with _TRANSFORMERS_COMPONENT_LOCK:
         cached = _TRANSFORMERS_COMPONENT_CACHE.get(cache_key)
@@ -155,7 +216,8 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
             return cached
 
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer_options = {"revision": revision} if revision is not None else {}
+        tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_options)
     except Exception as exc:  # pragma: no cover - network/config errors are rare
         logger.exception(
             "llm2vec.transformers.tokenizer_load_failed",
@@ -196,6 +258,7 @@ def _ensure_transformers_components(settings: Settings) -> tuple[Any, Any, Any, 
                 model_id,
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
+                **({"revision": revision} if revision is not None else {}),
             )
             break
         except Exception as exc:  # pragma: no cover - network/config errors are rare
@@ -351,8 +414,13 @@ def _encode_with_sentence_transformers(
 ) -> np.ndarray:
     spec = importlib.util.find_spec("sentence_transformers")
     if spec is None:
-        raise ImportError("sentence_transformers not installed")
-    module = importlib.import_module("sentence_transformers")
+        raise _SentenceTransformersUnavailable("sentence_transformers not installed")
+    try:
+        module = importlib.import_module("sentence_transformers")
+    except ImportError as exc:
+        raise _SentenceTransformersUnavailable(
+            "sentence_transformers could not be imported"
+        ) from exc
     model_cls = getattr(module, "SentenceTransformer", None)
     if model_cls is None:
         raise EmbeddingBackendError(
@@ -361,11 +429,14 @@ def _encode_with_sentence_transformers(
     model_name = getattr(settings, "transformers_embedding_model", None)
     if not model_name:
         raise EmbeddingBackendError("transformers_embedding_model must be configured")
+    revision = _resolved_model_revision(settings)
+    cache_key = (str(model_name), revision or "")
     with _SENTENCE_TRANSFORMER_LOCK:
-        model = _SENTENCE_TRANSFORMER_CACHE.get(model_name)
+        model = _SENTENCE_TRANSFORMER_CACHE.get(cache_key)
         if model is None:
-            model = model_cls(model_name)
-            _SENTENCE_TRANSFORMER_CACHE[model_name] = model
+            model_options = {"revision": revision} if revision is not None else {}
+            model = model_cls(model_name, **model_options)
+            _SENTENCE_TRANSFORMER_CACHE[cache_key] = model
     formatted = _format_instruction_texts(texts, instruction)
     embeddings = model.encode(
         formatted, convert_to_numpy=True, normalize_embeddings=False
@@ -374,7 +445,7 @@ def _encode_with_sentence_transformers(
 
 
 class LLM2VecEmbedder:
-    """Generate embeddings using the configured backend with deterministic fallbacks."""
+    """Generate identity-bound embeddings without synthetic vector fallbacks."""
 
     def __init__(
         self,
@@ -389,7 +460,10 @@ class LLM2VecEmbedder:
             self._settings, "embedding_backend", DEFAULT_EMBEDDING_BACKEND
         )
         self._backend = normalise_embedding_backend(configured_backend, logger=logger)
-        self._runtime = runtime or UnifiedLLMRuntime.instance(self._settings)
+        # Retain the explicit dependency for API compatibility, but never silently
+        # substitute it for a failed configured backend: different models do not
+        # share a semantic vector space even when their dimensions happen to match.
+        self._runtime = runtime
         self._vector_dimensions = max(
             1, int(getattr(self._settings, "llm2vec_vector_dimensions", 4096))
         )
@@ -399,9 +473,10 @@ class LLM2VecEmbedder:
         self._cache_size = max(
             1, int(getattr(self._settings, "llm2vec_cache_size", 128))
         )
-        self._cache: OrderedDict[tuple[str, tuple[str, ...]], EmbeddingBatch] = (
-            OrderedDict()
-        )
+        self._cache: OrderedDict[
+            tuple[tuple[str, str, str, int], str, tuple[str, ...]],
+            EmbeddingBatch,
+        ] = OrderedDict()
         self._cache_lock = asyncio.Lock()
         concurrency = max(1, int(getattr(self._settings, "llm2vec_max_concurrency", 4)))
         self._semaphore = asyncio.Semaphore(concurrency)
@@ -414,6 +489,8 @@ class LLM2VecEmbedder:
         self._dolphin_client = None
         self._dolphin_client_lock = asyncio.Lock()
         self._dolphin_dimension: int | None = None
+        self._dolphin_identity: EmbeddingIdentity | None = None
+        self._active_identity = self._configured_identity()
 
     @property
     def backend(self) -> str:
@@ -421,58 +498,188 @@ class LLM2VecEmbedder:
 
         return self._backend
 
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        """Return the identity associated with current and cached vectors."""
+
+        return self._active_identity
+
+    def _configured_identity(self) -> EmbeddingIdentity:
+        revision = str(
+            getattr(self._settings, "embedding_model_revision", None) or "unversioned"
+        ).strip()
+        dimension = self._expected_dimension()
+
+        if self._backend == "transformers":
+            model = str(
+                getattr(self._settings, "transformers_embedding_model", "")
+            ).strip()
+            revision = str(
+                getattr(self._settings, "transformers_embedding_revision", None)
+                or revision
+            ).strip()
+        elif self._backend == "ollama":
+            model = str(getattr(self._settings, "ollama_embedding_model", "")).strip()
+            revision = str(
+                getattr(self._settings, "ollama_embedding_revision", None) or revision
+            ).strip()
+        elif self._backend == "dolphin-x1-llm2vec":
+            model = str(
+                getattr(self._settings, "dolphin_x1_llm2vec_service_url", "")
+            ).strip()
+            revision = str(
+                getattr(
+                    self._settings,
+                    "dolphin_x1_llm2vec_service_revision",
+                    None,
+                )
+                or revision
+            ).strip()
+        else:
+            manager = self._neuron_manager
+            base_model = str(
+                getattr(
+                    manager,
+                    "base_model_path",
+                    getattr(self._settings, "llm2vec_base_model", ""),
+                )
+            ).strip()
+            encoder = str(
+                getattr(
+                    manager,
+                    "encoder_path",
+                    getattr(self._settings, "llm2vec_encoder", ""),
+                )
+                or ""
+            ).strip()
+            model = f"{base_model}+adapter:{encoder}" if encoder else base_model
+            revision = str(
+                getattr(self._settings, "llm2vec_revision", None) or revision
+            ).strip()
+
+        try:
+            return EmbeddingIdentity(
+                backend=self._backend,
+                model=model,
+                revision=revision,
+                dimension=dimension,
+            )
+        except ValueError as exc:
+            raise EmbeddingBackendError(
+                "Embedding backend identity is incomplete"
+            ) from exc
+
+    def _expected_dimension(self) -> int:
+        if self._backend == "ollama":
+            return max(
+                1,
+                int(
+                    getattr(
+                        self._settings,
+                        "ollama_embedding_dimensions",
+                        self._vector_dimensions,
+                    )
+                ),
+            )
+        return self._vector_dimensions
+
+    async def _activate_identity(self, identity: EmbeddingIdentity) -> None:
+        """Invalidate cached vectors before adopting a different vector space."""
+
+        async with self._cache_lock:
+            if self._active_identity != identity:
+                self._cache.clear()
+                self._active_identity = identity
+
+    @staticmethod
+    def _cache_key(
+        identity: EmbeddingIdentity,
+        prompt: str,
+        texts: Sequence[str],
+    ) -> tuple[tuple[str, str, str, int], str, tuple[str, ...]]:
+        return (identity.cache_key, prompt, tuple(texts))
+
     async def encode_batch(
         self, texts: Sequence[str], *, instruction: str | None = None
     ) -> EmbeddingBatch:
-        """Return embeddings for ``texts`` using the selected backend."""
+        """Return validated vectors from exactly one model identity.
+
+        Provider failure, malformed output, or identity drift aborts the whole
+        request. Callers may fall back to lexical retrieval, but this layer never
+        fabricates or mixes vectors from another semantic space.
+        """
 
         prompt = instruction
         if prompt is None and self._backend != "transformers":
             prompt = getattr(self._settings, "llm2vec_instruction", None)
         resolved_prompt = str(prompt or "")
         cleaned = [str(text) for text in texts]
-        cache_key = (resolved_prompt, tuple(cleaned))
-        cached = await self._get_cached_batch(cache_key)
-        if cached is not None:
-            return cached
+
+        if self._backend != "dolphin-x1-llm2vec":
+            await self._activate_identity(self._configured_identity())
+
+        # The service can change its model behind a stable URL. Bypass the local
+        # cache so every Dolphin response can prove its model identity.
+        cache_enabled = self._backend != "dolphin-x1-llm2vec"
+        cache_key = self._cache_key(
+            self._active_identity,
+            resolved_prompt,
+            cleaned,
+        )
+        if cache_enabled:
+            cached = await self._get_cached_batch(cache_key)
+            if cached is not None:
+                return cached
         if not cleaned:
-            batch = EmbeddingBatch(vectors=[], used_fallback=False)
-            await self._set_cached_batch(cache_key, batch)
+            batch = EmbeddingBatch(
+                vectors=[],
+                used_fallback=False,
+                identity=self._active_identity,
+            )
+            if cache_enabled:
+                await self._set_cached_batch(cache_key, batch)
             return batch
 
-        if all(not candidate.strip() for candidate in cleaned):
-            fallback = [
-                self._fallback_vector(resolved_prompt, candidate)
-                for candidate in cleaned
-            ]
-            batch = EmbeddingBatch(vectors=fallback, used_fallback=True)
-            await self._set_cached_batch(cache_key, batch)
-            return batch
+        if any(not candidate.strip() for candidate in cleaned):
+            raise EmbeddingBackendError("Cannot embed blank text")
 
         vectors: list[list[float]] = []
-        used_fallback = False
+        batch_identity: EmbeddingIdentity | None = None
         for start in range(0, len(cleaned), self._batch_size):
             chunk = cleaned[slice(start, start + self._batch_size)]
             try:
-                chunk_vectors, chunk_fallback = await self._dispatch_backend(
+                chunk_vectors, chunk_identity = await self._dispatch_backend(
                     chunk, resolved_prompt
                 )
             except EmbeddingBackendError:
                 raise
-            except Exception:  # pragma: no cover - defensive logging
+            except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception(
                     "llm2vec.backend.chunk_failed",
                     extra={"backend": self._backend, "size": len(chunk)},
                 )
-                chunk_vectors = [
-                    self._fallback_vector(resolved_prompt, text) for text in chunk
-                ]
-                chunk_fallback = True
+                raise EmbeddingBackendError("Embedding backend failed") from exc
+            if batch_identity is None:
+                batch_identity = chunk_identity
+            elif batch_identity != chunk_identity:
+                raise EmbeddingBackendError(
+                    "Embedding identity changed during batch generation"
+                )
             vectors.extend(chunk_vectors)
-            used_fallback = used_fallback or chunk_fallback
 
-        batch = EmbeddingBatch(vectors=vectors, used_fallback=used_fallback)
-        await self._set_cached_batch(cache_key, batch)
+        if batch_identity is None or len(vectors) != len(cleaned):
+            raise EmbeddingBackendError(
+                "Embedding backend returned an invalid vector count"
+            )
+        await self._activate_identity(batch_identity)
+        batch = EmbeddingBatch(
+            vectors=vectors,
+            used_fallback=False,
+            identity=batch_identity,
+        )
+        if cache_enabled:
+            cache_key = self._cache_key(batch_identity, resolved_prompt, cleaned)
+            await self._set_cached_batch(cache_key, batch)
         return batch
 
     async def embed_text(
@@ -485,7 +692,8 @@ class LLM2VecEmbedder:
         return vector, batch.used_fallback
 
     async def _get_cached_batch(
-        self, cache_key: tuple[str, tuple[str, ...]]
+        self,
+        cache_key: tuple[tuple[str, str, str, int], str, tuple[str, ...]],
     ) -> EmbeddingBatch | None:
         async with self._cache_lock:
             cached = self._cache.get(cache_key)
@@ -494,34 +702,18 @@ class LLM2VecEmbedder:
             return cached
 
     async def _set_cached_batch(
-        self, cache_key: tuple[str, tuple[str, ...]], batch: EmbeddingBatch
+        self,
+        cache_key: tuple[tuple[str, str, str, int], str, tuple[str, ...]],
+        batch: EmbeddingBatch,
     ) -> None:
         async with self._cache_lock:
             self._cache[cache_key] = batch
             while len(self._cache) > self._cache_size:
                 self._cache.popitem(last=False)
 
-    def _fallback_vector(self, instruction: str, text: str) -> list[float]:
-        seed = f"{instruction}\u0000{text}".encode("utf-8", "ignore")
-        digest = hashlib.sha256(seed).digest()
-        required = self._vector_dimensions
-        values: list[float] = []
-        buffer = digest
-        index = 0
-        while len(values) < required:
-            if index >= len(buffer):
-                buffer = hashlib.sha256(buffer).digest()
-                index = 0
-            byte = buffer[index]
-            index += 1
-            scaled = (byte / 255.0) * 2.0 - 1.0
-            values.append(scaled)
-        norm = math.sqrt(sum(component * component for component in values)) or 1.0
-        return [component / norm for component in values]
-
     async def _dispatch_backend(
         self, chunk: Sequence[str], prompt: str
-    ) -> tuple[list[list[float]], bool]:
+    ) -> tuple[list[list[float]], EmbeddingIdentity]:
         backend = self._backend
         if backend == "dolphin-x1-llm2vec":
             return await self._encode_with_dolphin_service(chunk, prompt)
@@ -533,25 +725,29 @@ class LLM2VecEmbedder:
 
     async def _encode_with_neuron_manager(
         self, chunk: Sequence[str], prompt: str
-    ) -> tuple[list[list[float]], bool]:
+    ) -> tuple[list[list[float]], EmbeddingIdentity]:
         rendered = self._render_chatml_batch(chunk, prompt)
         manager = await self._ensure_neuron_manager()
-        if manager is None or not self._manager_ready(manager):
-            return self._fallback_vectors(prompt, chunk), True
+        if not self._manager_ready(manager):
+            raise EmbeddingBackendError("Embedding backend is not ready")
 
         try:
             async with self._semaphore:
+                encoder = getattr(manager, "encode_strict", None)
+                if not callable(encoder):
+                    encoder = manager.encode
                 vectors = await asyncio.to_thread(
-                    manager.encode,
+                    encoder,
                     rendered,
                     prompt,
                 )
         except _KNOWN_MANAGER_EXCEPTIONS as exc:
             raise EmbeddingBackendError("Embedding backend unavailable") from exc
 
-        return self._normalise_vectors(vectors, chunk, prompt)
+        identity = self._configured_identity()
+        return self._normalise_vectors(vectors, chunk, identity), identity
 
-    async def _ensure_neuron_manager(self) -> Any | None:
+    async def _ensure_neuron_manager(self) -> Any:
         if self._neuron_manager is not None:
             return self._neuron_manager
 
@@ -564,12 +760,18 @@ class LLM2VecEmbedder:
             )
             try:
                 manager = factory()
-            except Exception as exc:  # pragma: no cover - defensive fallback
-                logger.warning(
+            except Exception as exc:  # pragma: no cover - defensive failure path
+                logger.error(
                     "llm2vec.manager.initialisation_failed",
                     extra={"error": str(exc)},
                 )
-                manager = self._runtime_manager()
+                raise EmbeddingBackendError(
+                    "Failed to initialise embedding backend"
+                ) from exc
+            if manager is None:
+                raise EmbeddingBackendError(
+                    "Embedding backend factory returned no manager"
+                )
             self._neuron_manager = manager
         return self._neuron_manager
 
@@ -582,14 +784,18 @@ class LLM2VecEmbedder:
         if manager_cls is None:
             raise RuntimeError("NeuronManager class unavailable")
 
+        model_revision = _resolved_model_revision(self._settings)
         llm2vec_options = {
             "device_map": getattr(self._settings, "llm2vec_device_map", None),
             "torch_dtype": getattr(self._settings, "llm2vec_torch_dtype", None),
             "tokenizer_name": getattr(self._settings, "llm2vec_tokenizer_name", None),
             "tokenizer_revision": getattr(
                 self._settings, "llm2vec_tokenizer_revision", None
+            )
+            or model_revision,
+            "revision": (
+                getattr(self._settings, "llm2vec_revision", None) or model_revision
             ),
-            "revision": getattr(self._settings, "llm2vec_revision", None),
             "loader": getattr(self._settings, "llm2vec_loader", None),
             "trust_remote_code": getattr(
                 self._settings, "llm2vec_trust_remote_code", None
@@ -610,77 +816,69 @@ class LLM2VecEmbedder:
             encode_options=encode_options,
         )
 
-    def _runtime_manager(self) -> Any:
-        runtime = self._runtime
-
-        class _RuntimeManager:
-            def is_ready(self) -> bool:
-                return True
-
-            def encode(
-                self, texts: Sequence[str], instruction: str
-            ) -> list[list[float]]:
-                del instruction
-                return runtime.embed(list(texts))
-
-        return _RuntimeManager()
-
     def _normalise_vectors(
         self,
         vectors: Sequence[Sequence[float]] | Any,
         chunk: Sequence[str],
-        prompt: str,
-        *,
-        expected_dimension: int | None = None,
-    ) -> tuple[list[list[float]], bool]:
+        identity: EmbeddingIdentity,
+    ) -> list[list[float]]:
+        self._validate_identity(identity)
         if hasattr(vectors, "tolist"):
             vectors = vectors.tolist()
         if not isinstance(vectors, Sequence) or isinstance(vectors, (str, bytes)):
-            return self._fallback_vectors(prompt, chunk), True
+            raise EmbeddingBackendError(
+                "Embedding backend returned a non-sequence response"
+            )
         if len(vectors) != len(chunk):
-            return self._fallback_vectors(prompt, chunk), True
+            raise EmbeddingBackendError(
+                "Embedding backend returned an invalid vector count"
+            )
 
         processed: list[list[float]] = []
-        for raw, original in zip(vectors, chunk, strict=True):
-            vector = self._coerce_vector(raw, expected_dimension)
-            if vector is None:
-                return self._fallback_vectors(prompt, chunk), True
-            processed.append(vector)
-        return processed, False
+        for raw in vectors:
+            processed.append(self._coerce_vector(raw, identity.dimension))
+        return processed
+
+    def _validate_identity(self, identity: EmbeddingIdentity) -> None:
+        if identity.backend != self._backend:
+            raise EmbeddingBackendError(
+                "Embedding backend identity does not match configured backend"
+            )
+        expected_dimension = self._expected_dimension()
+        if identity.dimension != expected_dimension:
+            raise EmbeddingBackendError(
+                "Embedding identity dimension does not match configured dimension "
+                f"({identity.dimension} != {expected_dimension})"
+            )
 
     def _coerce_vector(
-        self, vector: Sequence[float] | Any, expected_dimension: int | None
-    ) -> list[float] | None:
+        self, vector: Sequence[float] | Any, expected_dimension: int
+    ) -> list[float]:
         if hasattr(vector, "tolist"):
             vector = vector.tolist()
         if not isinstance(vector, Sequence) or isinstance(vector, (str, bytes)):
-            return None
+            raise EmbeddingBackendError(
+                "Embedding backend returned a non-sequence vector"
+            )
         converted: list[float] = []
         for component in vector:
             try:
                 value = float(component)
-            except (TypeError, ValueError):
-                return None
-            if math.isnan(value) or math.isinf(value):
-                return None
+            except (TypeError, ValueError) as exc:
+                raise EmbeddingBackendError(
+                    "Embedding vector contains a non-numeric component"
+                ) from exc
+            if not math.isfinite(value):
+                raise EmbeddingBackendError(
+                    "Embedding vector contains a non-finite component"
+                )
             converted.append(value)
-        return self._resize_vector(converted, expected_dimension)
-
-    def _resize_vector(
-        self, vector: Sequence[float], expected_dimension: int | None
-    ) -> list[float]:
-        dimension = expected_dimension or self._vector_dimensions
-        if len(vector) > dimension:
-            return list(vector[:dimension])
-        if len(vector) < dimension:
-            padding = [0.0] * (dimension - len(vector))
-            return list(vector) + padding
-        return list(vector)
-
-    def _fallback_vectors(
-        self, instruction: str, texts: Sequence[str]
-    ) -> list[list[float]]:
-        return [self._fallback_vector(instruction, text) for text in texts]
+        if len(converted) != expected_dimension:
+            raise EmbeddingBackendError(
+                "Embedding vector dimension does not match model identity "
+                f"({len(converted)} != {expected_dimension})"
+            )
+        return converted
 
     def _render_chatml_batch(self, chunk: Sequence[str], prompt: str) -> list[str]:
         system_prompt = prompt or getattr(self._settings, "llm2vec_instruction", "")
@@ -704,7 +902,7 @@ class LLM2VecEmbedder:
 
     async def _encode_with_transformers_backend(
         self, chunk: Sequence[str], prompt: str
-    ) -> tuple[list[list[float]], bool]:
+    ) -> tuple[list[list[float]], EmbeddingIdentity]:
         def _run_transformers():
             return _encode_with_transformers(
                 list(chunk), prompt, self._settings, normalise=False
@@ -717,26 +915,32 @@ class LLM2VecEmbedder:
 
         try:
             matrix = await asyncio.to_thread(_run_sentence_transformers)
-        except ImportError:
+        except _SentenceTransformersUnavailable:
             logger.info("llm2vec.transformers.sentence_transformers_missing")
             matrix = await asyncio.to_thread(_run_transformers)
         except EmbeddingBackendError:
             raise
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning(
+        except Exception as exc:  # pragma: no cover - provider-specific failure
+            logger.error(
                 "llm2vec.transformers.sentence_transformers_failed",
                 extra={"error": str(exc)},
             )
-            matrix = await asyncio.to_thread(_run_transformers)
+            raise EmbeddingBackendError(
+                "Sentence Transformers embedding backend failed"
+            ) from exc
 
-        return self._normalise_vectors(matrix, chunk, prompt)
+        identity = self._configured_identity()
+        return self._normalise_vectors(matrix, chunk, identity), identity
 
     async def _encode_with_dolphin_service(
         self, chunk: Sequence[str], prompt: str
-    ) -> tuple[list[list[float]], bool]:
+    ) -> tuple[list[list[float]], EmbeddingIdentity]:
+        del prompt
         module = self._ensure_httpx_module()
         module, client = await self._ensure_dolphin_client(module)
         try:
+            # Exactly one provider request is made per chunk. The response must
+            # carry vectors that agree with health/config identity metadata.
             response = await client.post("/embed", json={"texts": list(chunk)})
             response.raise_for_status()
             payload = response.json()
@@ -745,26 +949,20 @@ class LLM2VecEmbedder:
                 "llm2vec.dolphin.request_failed",
                 extra={"error": str(exc)},
             )
-            return self._fallback_vectors(prompt, chunk), True
+            raise EmbeddingBackendError(
+                "Dolphin embedding service unavailable"
+            ) from exc
 
-        embeddings = None
-        dimension = None
-        if isinstance(payload, Mapping):
-            embeddings = payload.get("embeddings")
-            raw_dimension = payload.get("dimension")
-            if isinstance(raw_dimension, int) and raw_dimension > 0:
-                dimension = raw_dimension
-                self._dolphin_dimension = raw_dimension
-
-        if not isinstance(embeddings, Sequence):
-            return self._fallback_vectors(prompt, chunk), True
-
-        return self._normalise_vectors(
-            embeddings,
-            chunk,
-            prompt,
-            expected_dimension=dimension or self._dolphin_dimension,
+        if not isinstance(payload, Mapping):
+            raise EmbeddingBackendError(
+                "Dolphin embedding service returned an invalid payload"
+            )
+        identity = self._dolphin_identity_from_payload(
+            payload,
+            base=self._dolphin_identity,
         )
+        embeddings = payload.get("embeddings")
+        return self._normalise_vectors(embeddings, chunk, identity), identity
 
     def _ensure_httpx_module(self):  # noqa: ANN201 - dynamic import helper
         existing = sys.modules.get("httpx")
@@ -776,6 +974,52 @@ class LLM2VecEmbedder:
                 "httpx is required for dolphin service embeddings"
             )
         return importlib.import_module("httpx")
+
+    def _dolphin_identity_from_payload(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        base: EmbeddingIdentity | None,
+    ) -> EmbeddingIdentity:
+        configured = base or self._configured_identity()
+
+        raw_dimension = payload.get("dimension")
+        if isinstance(raw_dimension, int) and not isinstance(raw_dimension, bool):
+            if raw_dimension <= 0:
+                raise EmbeddingBackendError(
+                    "Dolphin embedding identity has an invalid dimension"
+                )
+            dimension = raw_dimension
+        else:
+            raise EmbeddingBackendError(
+                "Dolphin embedding identity has an invalid dimension"
+            )
+
+        raw_model = payload.get("model") or payload.get("model_id")
+        if not isinstance(raw_model, str) or not raw_model.strip():
+            raise EmbeddingBackendError(
+                "Dolphin embedding identity is missing its model"
+            )
+        model = raw_model.strip()
+        revision = str(
+            payload.get("revision")
+            or payload.get("model_revision")
+            or configured.revision
+        ).strip()
+        try:
+            identity = EmbeddingIdentity(
+                backend=self._backend,
+                model=model,
+                revision=revision,
+                dimension=dimension,
+            )
+        except ValueError as exc:
+            raise EmbeddingBackendError(
+                "Dolphin embedding identity is incomplete"
+            ) from exc
+        self._validate_identity(identity)
+        self._dolphin_dimension = identity.dimension
+        return identity
 
     async def _ensure_dolphin_client(self, module):  # noqa: ANN201 - runtime type
         if self._dolphin_client is not None:
@@ -803,16 +1047,21 @@ class LLM2VecEmbedder:
             response = await client.get("/health")
             response.raise_for_status()
             payload = response.json()
-            if isinstance(payload, Mapping):
-                dimension = payload.get("dimension")
-                if isinstance(dimension, int) and dimension > 0:
-                    self._dolphin_dimension = dimension
+            if not isinstance(payload, Mapping):
+                raise EmbeddingBackendError(
+                    "Dolphin health endpoint returned an invalid payload"
+                )
+            self._dolphin_identity = self._dolphin_identity_from_payload(
+                payload,
+                base=None,
+            )
             self._dolphin_client = client
         return module, client
 
     async def _encode_with_ollama(
         self, chunk: Sequence[str], prompt: str
-    ) -> tuple[list[list[float]], bool]:
+    ) -> tuple[list[list[float]], EmbeddingIdentity]:
+        del prompt
         module = self._ensure_ollama_module()
         client = await self._ensure_ollama_client(module)
         model = getattr(self._settings, "ollama_embedding_model", None)
@@ -829,19 +1078,18 @@ class LLM2VecEmbedder:
                 "llm2vec.ollama.request_failed",
                 extra={"error": str(exc)},
             )
-            return self._fallback_vectors(prompt, chunk), True
+            raise EmbeddingBackendError("Ollama embedding backend unavailable") from exc
 
-        embeddings = None
-        if isinstance(response, Mapping):
-            embeddings = response.get("embeddings")
-        if not isinstance(embeddings, Sequence):
-            return self._fallback_vectors(prompt, chunk), True
-
-        dimensions = getattr(
-            self._settings, "ollama_embedding_dimensions", self._vector_dimensions
-        )
-        return self._normalise_vectors(
-            embeddings, chunk, prompt, expected_dimension=int(dimensions)
+        if not isinstance(response, Mapping):
+            raise EmbeddingBackendError("Ollama returned an invalid embedding payload")
+        identity = self._configured_identity()
+        return (
+            self._normalise_vectors(
+                response.get("embeddings"),
+                chunk,
+                identity,
+            ),
+            identity,
         )
 
     def _ensure_ollama_module(self):  # noqa: ANN201 - dynamic import helper
@@ -987,10 +1235,22 @@ class DolphinX1Embedder:
         return self._max_length
 
     def encode(self, texts: Sequence[str]) -> list[list[float]]:
-        """Return embeddings for ``texts`` using Dolphin-X1 mean pooling."""
+        """Return native-dimension Dolphin-X1 mean-pooled embeddings."""
 
         if not texts:
             return []
+        if any(not str(text).strip() for text in texts):
+            raise EmbeddingBackendError("Cannot embed blank text")
+
+        try:
+            return self._encode_validated(texts)
+        except EmbeddingBackendError:
+            raise
+        except Exception as exc:
+            raise EmbeddingBackendError("Dolphin-X1 embedding backend failed") from exc
+
+    def _encode_validated(self, texts: Sequence[str]) -> list[list[float]]:
+        """Execute model inference after public input validation."""
 
         torch_module, model, tokenizer = self._ensure_model_components()
         device = self.device
@@ -1040,16 +1300,13 @@ class DolphinX1Embedder:
 
             masked_hidden = final_hidden * mask
             token_counts = mask.sum(dim=1).clamp_min(1.0)
-            pooled = torch_module.nan_to_num(
-                masked_hidden.sum(dim=1) / token_counts,
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0,
-            )
+            pooled = masked_hidden.sum(dim=1) / token_counts
 
             for vector in pooled:
                 results.append(self._prepare_output_vector(vector, torch_module))
 
+        if len(results) != len(texts):
+            raise EmbeddingBackendError("Dolphin-X1 returned an invalid vector count")
         return results
 
     def _ensure_model_components(self):  # noqa: ANN201 - runtime torch types
@@ -1093,18 +1350,18 @@ class DolphinX1Embedder:
         if vector.device.type != "cpu":
             vector = vector.cpu()
 
-        components = vector.shape[-1]
-        if components > self._target_dimension:
-            vector = vector[: self._target_dimension]
-        elif components < self._target_dimension:
-            pad = torch_module.zeros(
-                self._target_dimension - components,
-                dtype=vector.dtype,
-                device=vector.device,
+        components = int(vector.shape[-1])
+        if components != self._target_dimension:
+            raise EmbeddingBackendError(
+                "Dolphin-X1 embedding dimension does not match configured identity "
+                f"({components} != {self._target_dimension})"
             )
-            vector = torch_module.cat((vector, pad), dim=0)
-
-        return vector.tolist()
+        values = [float(component) for component in vector.tolist()]
+        if not values or any(not math.isfinite(component) for component in values):
+            raise EmbeddingBackendError(
+                "Dolphin-X1 returned an empty or non-finite embedding"
+            )
+        return values
 
     def _load_torch(self):  # noqa: ANN201 - runtime torch module
         if self._torch_module is not None:
@@ -1229,6 +1486,7 @@ def get_dolphin3_embedder() -> DolphinX1Embedder:
 __all__ = [
     "EmbeddingBackendError",
     "EmbeddingBatch",
+    "EmbeddingIdentity",
     "DolphinX1Embedder",
     "Dolphin3Embedder",
     "LLM2VecEmbedder",

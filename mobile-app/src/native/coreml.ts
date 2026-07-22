@@ -23,6 +23,7 @@ export type CoreMLPrepareOptions = Record<string, never>;
 
 export type CoreMLGenerationRequest = {
   messages: CoreMLChatMessage[];
+  systemPrompt?: string;
   options?: CoreMLGenerationOptions;
 };
 
@@ -57,6 +58,7 @@ export type CoreMLErrorEvent = {
   requestId: string | null;
   code: string | null;
   message: string;
+  recoverable: boolean;
 };
 
 type NativeCoreMLInferenceModule = {
@@ -253,7 +255,7 @@ function normalizeGenerationResult(value: unknown): CoreMLGenerationResult {
   };
 }
 
-function normalizeErrorEvent(value: unknown): CoreMLErrorEvent {
+export function normalizeCoreMLErrorEvent(value: unknown): CoreMLErrorEvent {
   const record = asRecord(value);
   return {
     requestId: nullableString(record.requestId),
@@ -262,6 +264,7 @@ function normalizeErrorEvent(value: unknown): CoreMLErrorEvent {
       nullableString(record.message) ??
       nullableString(record.detail) ??
       "Erreur inconnue du moteur d'inférence Core ML.",
+    recoverable: record.recoverable === true,
   };
 }
 
@@ -313,6 +316,7 @@ export function subscribeToCoreMLEvents(
       requestId: null,
       code: 'COREML_INVALID_EVENT',
       message: error instanceof Error ? error.message : String(error),
+      recoverable: false,
     });
   };
 
@@ -338,7 +342,7 @@ export function subscribeToCoreMLEvents(
       }
     }),
     emitter.addListener(COREML_EVENTS.error, (value: unknown) => {
-      listeners.onError?.(normalizeErrorEvent(value));
+      listeners.onError?.(normalizeCoreMLErrorEvent(value));
     }),
   ];
 

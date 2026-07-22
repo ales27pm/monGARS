@@ -38,6 +38,7 @@ def test_render_project_wrapper_includes_expected_sections(
     assert "os.makedirs" in rendered
     assert "prompt_length =" in rendered
     assert "def embed(self, texts: Iterable[str])" in rendered
+    assert 'if not getattr(tokenizer, "chat_template", None):' in rendered
 
 
 def test_write_wrapper_bundle_writes_all_files(

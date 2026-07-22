@@ -26,8 +26,11 @@ try:  # pragma: no cover - optional dependency in lightweight envs
 except ModuleNotFoundError:  # pragma: no cover - tests run without pgvector
     Vector = None  # type: ignore[assignment]
 
+VECTOR_DIMENSIONS = 3072
+PGVECTOR_IVFFLAT_MAX_DIMENSIONS = 2000
+
 if Vector is not None:  # pragma: no branch - evaluated once at import
-    _VECTOR = JSON().with_variant(Vector(3072), "postgresql")
+    _VECTOR = JSON().with_variant(Vector(VECTOR_DIMENSIONS), "postgresql")
 else:
     _VECTOR = _JSON
 
@@ -47,9 +50,12 @@ class ConversationHistory(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
     vector: Mapped[list[float] | None] = mapped_column(_VECTOR, default=list)
+    embedding_identity: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     _vector_index = None
-    if Vector is not None:  # pragma: no branch - evaluated at import
+    if (
+        Vector is not None and VECTOR_DIMENSIONS <= PGVECTOR_IVFFLAT_MAX_DIMENSIONS
+    ):  # pragma: no branch - evaluated at import
         _vector_index = Index(
             "ix_conversation_history_vector_cosine",
             "vector",
@@ -63,6 +69,12 @@ class ConversationHistory(Base):
             None,
             (
                 Index("idx_user_timestamp", "user_id", "timestamp"),
+                Index(
+                    "idx_user_embedding_identity_timestamp",
+                    "user_id",
+                    "embedding_identity",
+                    "timestamp",
+                ),
                 _vector_index,
             ),
         )
