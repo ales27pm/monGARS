@@ -1,12 +1,14 @@
-import hashlib
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from monGARS.api.web_api import app
+from monGARS.api.dependencies import get_approval_db_session
+from monGARS.api.schemas import ChatRequest
+from monGARS.api.web_api import _build_guard_context, app
 from monGARS.core import operator_approvals as approvals_module
-from monGARS.core.operator_approvals import verify_approval_token
+from monGARS.core.operator_approvals import log_blocked_attempt
+from monGARS.core.pii_detection import PIIEntity
 from monGARS.core.security import SecurityManager, pre_generation_guard
 
 
@@ -27,34 +29,26 @@ def test_pii_block_and_operator_approval_flow() -> None:
     assert guard_response["error"] == "approval_required"
 
     token_ref = guard_response["token_ref"]
-    approval_token = guard_response["approval_token"]
-    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-
-    assert not verify_approval_token(
-        user_id="user-1",
-        token_ref=token_ref,
-        approval_token=approval_token,
-        prompt_hash=prompt_hash,
-    )
+    assert "approval_token" not in guard_response
 
     client = TestClient(app)
     sec_manager = SecurityManager()
     operator_token = sec_manager.create_access_token({"sub": "ops", "role": "operator"})
     response = client.post(
         "/llm/security/approve",
-        params={"token": approval_token, "operator_id": "ops"},
+        params={"token": token_ref, "operator_id": "ops"},
         headers={"Authorization": f"Bearer {operator_token}"},
     )
     assert response.status_code == 200
     body = response.json()
     assert body == {"status": "approved", "token_ref": token_ref}
 
-    assert verify_approval_token(
-        user_id="user-1",
-        token_ref=token_ref,
-        approval_token=approval_token,
-        prompt_hash=prompt_hash,
-    )
+    assert pre_generation_guard(prompt, {**context, "token_ref": token_ref}) is None
+
+    replay = pre_generation_guard(prompt, {**context, "token_ref": token_ref})
+    assert replay is not None
+    assert replay["error"] == "approval_required"
+    assert replay["token_ref"] != token_ref
 
 
 def test_security_approve_requires_authentication() -> None:
@@ -64,3 +58,78 @@ def test_security_approve_requires_authentication() -> None:
         params={"token": "dummy-token", "operator_id": "ops"},
     )
     assert response.status_code == 401
+
+
+def test_chat_caller_cannot_downgrade_baseline_pii_action() -> None:
+    context = _build_guard_context(
+        ChatRequest(message="hello", allowed_actions=["code"]),
+        {"sub": "alice"},
+    )
+
+    assert context["allowed_actions"] == ["code", "personal_data_access"]
+
+
+def test_security_approve_persists_only_the_opaque_reference() -> None:
+    class FakeQuery:
+        def __init__(self, session: "FakeSession") -> None:
+            self.session = session
+
+        def filter_by(self, **filters: str) -> "FakeQuery":
+            self.session.filters = filters
+            return self
+
+        def first(self):
+            return None
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.filters: dict[str, str] = {}
+            self.added = []
+
+        def query(self, _model):
+            return FakeQuery(self)
+
+        def add(self, record) -> None:
+            self.added.append(record)
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+    registry = approvals_module.get_operator_approval_registry()
+    token_ref, compatibility_proof = log_blocked_attempt(
+        user_id="user-1",
+        prompt_hash="deadbeef",
+        pii_entities=[
+            PIIEntity(type="email", value="user@example.com", start=0, end=16)
+        ],
+        required_action="approval",
+        registry=registry,
+    )
+
+    fake_session = FakeSession()
+
+    def _database_override():
+        yield fake_session
+
+    app.dependency_overrides[get_approval_db_session] = _database_override
+    try:
+        client = TestClient(app)
+        sec_manager = SecurityManager()
+        operator_token = sec_manager.create_access_token(
+            {"sub": "ops", "role": "operator"}
+        )
+        response = client.post(
+            "/llm/security/approve",
+            params={"token": compatibility_proof, "operator_id": "ops"},
+            headers={"Authorization": f"Bearer {operator_token}"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_approval_db_session, None)
+
+    assert response.status_code == 200
+    assert fake_session.filters == {"approval_token": token_ref}
+    assert len(fake_session.added) == 1
+    assert fake_session.added[0].approval_token == token_ref

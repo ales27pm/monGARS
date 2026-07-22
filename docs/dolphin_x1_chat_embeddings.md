@@ -100,6 +100,20 @@ embeddings so the assistant and the vector index stay aligned.
   the vectors directly into pgvector or other index stores without additional
   adapters.【F:scripts/run_llm2vec_service.py†L308-L360】
 
+### Semantic index integrity
+
+- Runtime embedding batches carry an identity made from backend, model,
+  revision, and dimension. Set `EMBEDDING_MODEL_REVISION` to a pinned revision
+  or content digest and change it whenever weights or pooling semantics change.
+- Vector caches are partitioned by that identity. The remote Dolphin path is
+  intentionally not response-cached because the service may replace a model
+  behind the same URL; each `/embed` response must prove its current identity.
+- Embedding failures, malformed counts, non-finite values, and dimension
+  mismatches do not produce substitute vectors. Conversation records still save
+  without a vector, and semantic lookup returns no vector matches so the caller
+  can retain its lexical or chronological fallback. Existing vectors are never
+  padded or truncated into a different model's vector space.
+
 ## Optional llama.cpp / GGUF Export
 - If you need a lighter-weight embedding daemon, call the pipeline with
   `EXPORT_GGUF=1`. The exporter converts the merged Dolphin-X1-8B weights into a GGUF file,

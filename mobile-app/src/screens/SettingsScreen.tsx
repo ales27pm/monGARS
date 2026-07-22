@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,9 +12,17 @@ import {
   View,
 } from 'react-native';
 import Diagnostics from '../native/diagnostics';
+import {
+  configureNativeOutlookClientId,
+  connectNativeOutlook,
+  disconnectNativeOutlook,
+  getNativeOutlookConnectionStatus,
+  nativeOutlookModuleAvailable,
+  type NativeOutlookConnectionStatus,
+} from '../native/outlook';
 import { authenticate } from '../services/authService';
 import { settings } from '../services/config';
-import { useChatStore } from '../store/chatStore';
+import { getLocalConversationOwner, useChatStore } from '../store/chatStore';
 import { useInferenceStore } from '../store/inferenceStore';
 
 const MODEL_DOWNLOAD_BYTES = 1_825_812_981;
@@ -32,6 +40,12 @@ const SettingsScreen: React.FC = () => {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
+  const [outlookBusy, setOutlookBusy] = useState(false);
+  const [outlookStatus, setOutlookStatus] =
+    useState<NativeOutlookConnectionStatus | null>(null);
+  const [outlookClientId, setOutlookClientId] = useState('');
+  const [outlookError, setOutlookError] = useState<string | null>(null);
+  const outlookRequestVersion = useRef(0);
   const {
     session,
     connection,
@@ -50,12 +64,45 @@ const SettingsScreen: React.FC = () => {
     prepareModel,
     deleteModel,
   } = useInferenceStore();
+  const outlookOwnerId = session ? getLocalConversationOwner(session) : null;
 
   useEffect(() => {
     initializeInference().catch((error) => {
       console.warn('[Settings] Core ML status failed', error);
     });
   }, [initializeInference]);
+
+  useEffect(() => {
+    const requestVersion = ++outlookRequestVersion.current;
+    setOutlookStatus(null);
+    setOutlookClientId('');
+    setOutlookError(null);
+    setOutlookBusy(false);
+    if (!nativeOutlookModuleAvailable || !outlookOwnerId) {
+      return;
+    }
+    getNativeOutlookConnectionStatus(outlookOwnerId)
+      .then((status) => {
+        if (outlookRequestVersion.current === requestVersion) {
+          setOutlookStatus(status);
+          setOutlookError(null);
+        }
+      })
+      .catch((error) => {
+        if (outlookRequestVersion.current === requestVersion) {
+          setOutlookError(
+            error instanceof Error
+              ? error.message
+              : 'Statut Outlook indisponible.',
+          );
+        }
+      });
+    return () => {
+      if (outlookRequestVersion.current === requestVersion) {
+        outlookRequestVersion.current += 1;
+      }
+    };
+  }, [outlookOwnerId]);
 
   const handleLogin = async () => {
     setBusy(true);
@@ -77,7 +124,128 @@ const SettingsScreen: React.FC = () => {
 
   const handleLogout = async () => {
     await logout();
-    Alert.alert('Session fermee', 'Le jeton local a ete supprime.');
+    Alert.alert('Session fermee', 'Le jeton en memoire a ete supprime.');
+  };
+
+  const connectOutlook = async () => {
+    if (!outlookOwnerId) {
+      setOutlookError('Connectez-vous à monGARS avant de connecter Outlook.');
+      return;
+    }
+    const ownerId = outlookOwnerId;
+    const requestVersion = ++outlookRequestVersion.current;
+    setOutlookBusy(true);
+    setOutlookError(null);
+    try {
+      const status = await connectNativeOutlook(ownerId);
+      if (
+        outlookRequestVersion.current !== requestVersion ||
+        getLocalConversationOwner(useChatStore.getState().session) !== ownerId
+      ) {
+        return;
+      }
+      setOutlookStatus(status);
+      Alert.alert(
+        'Outlook connecté',
+        `Compte actif: ${status.account ?? 'Microsoft'}.`,
+      );
+    } catch (error) {
+      if (outlookRequestVersion.current !== requestVersion) {
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Connexion Outlook impossible.';
+      setOutlookError(message);
+      Alert.alert('Connexion Outlook impossible', message);
+    } finally {
+      if (outlookRequestVersion.current === requestVersion) {
+        setOutlookBusy(false);
+      }
+    }
+  };
+
+  const configureOutlook = async () => {
+    if (!outlookOwnerId) {
+      setOutlookError('Connectez-vous à monGARS avant de configurer Outlook.');
+      return;
+    }
+    const ownerId = outlookOwnerId;
+    const requestVersion = ++outlookRequestVersion.current;
+    setOutlookBusy(true);
+    setOutlookError(null);
+    try {
+      const status = await configureNativeOutlookClientId(
+        ownerId,
+        outlookClientId,
+      );
+      if (
+        outlookRequestVersion.current !== requestVersion ||
+        getLocalConversationOwner(useChatStore.getState().session) !== ownerId
+      ) {
+        return;
+      }
+      setOutlookStatus(status);
+      setOutlookClientId('');
+      Alert.alert(
+        'Outlook configuré',
+        "L'identifiant public Microsoft a été enregistré sur cet appareil.",
+      );
+    } catch (error) {
+      if (outlookRequestVersion.current !== requestVersion) {
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Configuration Outlook impossible.';
+      setOutlookError(message);
+      Alert.alert('Configuration Outlook impossible', message);
+    } finally {
+      if (outlookRequestVersion.current === requestVersion) {
+        setOutlookBusy(false);
+      }
+    }
+  };
+
+  const disconnectOutlook = async () => {
+    if (!outlookOwnerId) {
+      setOutlookError('Connectez-vous à monGARS avant de déconnecter Outlook.');
+      return;
+    }
+    const ownerId = outlookOwnerId;
+    const requestVersion = ++outlookRequestVersion.current;
+    setOutlookBusy(true);
+    setOutlookError(null);
+    try {
+      const status = await disconnectNativeOutlook(ownerId);
+      if (
+        outlookRequestVersion.current !== requestVersion ||
+        getLocalConversationOwner(useChatStore.getState().session) !== ownerId
+      ) {
+        return;
+      }
+      setOutlookStatus(status);
+      Alert.alert(
+        'Outlook déconnecté',
+        'Les jetons Microsoft ont été supprimés du trousseau iOS.',
+      );
+    } catch (error) {
+      if (outlookRequestVersion.current !== requestVersion) {
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Déconnexion Outlook impossible.';
+      setOutlookError(message);
+      Alert.alert('Déconnexion Outlook impossible', message);
+    } finally {
+      if (outlookRequestVersion.current === requestVersion) {
+        setOutlookBusy(false);
+      }
+    }
   };
 
   const enableDiagnostics = async () => {
@@ -309,7 +477,7 @@ const SettingsScreen: React.FC = () => {
               style={styles.linkButton}
               onPress={() =>
                 Linking.openURL(
-                  'https://huggingface.co/ales27pm/Dolphin3.0-CoreML/tree/main/Dolphin3.0-Llama3.2-3B-stateful-int4.mlpackage',
+                  'https://huggingface.co/ales27pm/Dolphin3.0-CoreML/tree/95671cf9a2f56d2a381816ae264cd9aae335d96f/Dolphin3.0-Llama3.2-3B-stateful-int4.mlpackage',
                 )
               }
             >
@@ -318,8 +486,8 @@ const SettingsScreen: React.FC = () => {
           </View>
           <Text style={styles.footerText}>
             Artefact stateful INT4 epingle et verifie par SHA-256. Source
-            Dolphin/Llama 3.2 sous licence communautaire Llama; embeddings
-            toujours cote serveur.
+            Dolphin/Llama 3.2 sous licence communautaire Llama. Built with
+            Llama. Embeddings toujours cote serveur.
           </Text>
         </View>
       </View>
@@ -327,8 +495,8 @@ const SettingsScreen: React.FC = () => {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Authentification</Text>
         <Text style={styles.description}>
-          Cette application native utilise le meme JWT que le webapp Django,
-          mais se connecte directement aux endpoints FastAPI.
+          Le jeton de session reste uniquement en memoire et doit etre obtenu de
+          nouveau apres le redemarrage de l application.
         </Text>
         <TextInput
           accessibilityLabel="Nom d utilisateur"
@@ -366,9 +534,6 @@ const SettingsScreen: React.FC = () => {
             <Text style={styles.sessionText}>
               Etat temps reel: {connection.status}
             </Text>
-            <Text style={styles.sessionToken}>
-              JWT: {session.token.slice(0, 18)}…
-            </Text>
             <Pressable style={styles.secondaryButton} onPress={handleLogout}>
               <Text style={styles.secondaryButtonText}>Se deconnecter</Text>
             </Pressable>
@@ -396,6 +561,118 @@ const SettingsScreen: React.FC = () => {
             {settings.embedServiceUrl ?? 'Non configure'}
           </Text>
         </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Outlook · Microsoft Graph</Text>
+        <Text style={styles.description}>
+          Connexion OAuth 2.0 avec PKCE, sans secret client. Les jetons ne sont
+          jamais transmis à React Native et restent dans le trousseau iOS.
+        </Text>
+        {!session ? (
+          <Text style={styles.warningText}>
+            Connectez-vous à monGARS avant de connecter un compte Outlook.
+          </Text>
+        ) : !nativeOutlookModuleAvailable ? (
+          <Text style={styles.warningText}>
+            Module Outlook natif indisponible sur cette plateforme.
+          </Text>
+        ) : outlookStatus ? (
+          <View style={styles.sessionCard}>
+            <Text style={styles.sessionTitle}>
+              {outlookStatus.configured ? 'Configuré' : 'Non configuré'} ·{' '}
+              {outlookStatus.connected ? 'Connecté' : 'Non connecté'}
+            </Text>
+            {outlookStatus.account ? (
+              <Text style={styles.sessionText}>
+                Compte: {outlookStatus.account}
+              </Text>
+            ) : null}
+            <Text selectable style={styles.outlookDetail}>
+              Redirection: {outlookStatus.redirectUri}
+            </Text>
+            <Text style={styles.outlookDetail}>{outlookStatus.detail}</Text>
+            <Text style={styles.outlookDetail}>
+              Autorisations: {outlookStatus.requiredScopes.join(', ')}
+            </Text>
+            {!outlookStatus.configured ? (
+              <View>
+                <Text style={styles.outlookDetail}>
+                  Saisissez l’ID d’application (client) public de votre
+                  inscription Microsoft Entra. Aucun secret client n’est
+                  accepté.
+                </Text>
+                <TextInput
+                  accessibilityLabel="ID client Microsoft"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!outlookBusy}
+                  placeholder="00000000-0000-0000-0000-000000000000"
+                  placeholderTextColor="#64748b"
+                  style={styles.input}
+                  value={outlookClientId}
+                  onChangeText={setOutlookClientId}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Enregistrer l’ID client Microsoft"
+                  disabled={outlookBusy || !outlookClientId.trim()}
+                  style={[
+                    styles.primaryButton,
+                    (outlookBusy || !outlookClientId.trim()) &&
+                      styles.buttonDisabled,
+                  ]}
+                  onPress={configureOutlook}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {outlookBusy
+                      ? 'Enregistrement…'
+                      : 'Enregistrer l’ID client'}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : outlookStatus.connected ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Déconnecter Outlook"
+                disabled={outlookBusy}
+                style={[
+                  styles.secondaryButton,
+                  outlookBusy && styles.buttonDisabled,
+                ]}
+                onPress={disconnectOutlook}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  {outlookBusy ? 'Déconnexion…' : 'Déconnecter Outlook'}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Connecter Outlook"
+                disabled={outlookBusy || !outlookStatus.configured}
+                style={[
+                  styles.primaryButton,
+                  (outlookBusy || !outlookStatus.configured) &&
+                    styles.buttonDisabled,
+                ]}
+                onPress={connectOutlook}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {outlookBusy ? 'Connexion…' : 'Connecter Outlook'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        ) : (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color="#38bdf8" />
+            <Text style={styles.description}>Lecture du statut Outlook…</Text>
+          </View>
+        )}
+        {outlookError ? (
+          <Text style={styles.warningText}>{outlookError}</Text>
+        ) : null}
       </View>
 
       <View style={styles.card}>
@@ -592,9 +869,19 @@ const styles = StyleSheet.create({
   sessionText: {
     color: '#e2e8f0',
   },
-  sessionToken: {
-    color: '#93c5fd',
-    fontFamily: 'Courier',
+  outlookDetail: {
+    color: '#94a3b8',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  warningText: {
+    color: '#fca5a5',
+    lineHeight: 19,
   },
   configRow: {
     gap: 6,

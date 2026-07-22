@@ -12,6 +12,7 @@ from monGARS.core.inference_utils import (
     CHATML_END_HEADER,
     CHATML_START_HEADER,
 )
+from monGARS.core.llm_integration import GuardRejectionError, LLMIntegration
 from monGARS.core.persistence import VectorMatch
 
 
@@ -87,6 +88,31 @@ class _ErrorLLMIntegration(_FakeLLMIntegration):
             "source": "error",
             "adapter_version": "baseline",
         }
+
+
+class _BoundaryLLMIntegration(LLMIntegration):
+    """Minimal real boundary that keeps the production generate_response method."""
+
+    def __init__(self) -> None:
+        self.use_ray = False
+        self._current_adapter_version = "baseline"
+        self._default_system_prompt = "You are Dolphin."
+        self.provider_prompts: list[str] = []
+
+    def infer_task_type(self, prompt: str, default: str = "general") -> str:
+        return default
+
+    def prompt_token_limit(self, task_type: str = "general") -> int | None:
+        return 4096
+
+    def generation_token_target(self, task_type: str = "general") -> int | None:
+        return 512
+
+    async def _call_local_provider(
+        self, prompt: str, task_type: str
+    ) -> dict[str, object]:
+        self.provider_prompts.append(prompt)
+        return {"message": {"content": "boundary-response"}}
 
 
 class _FakeCuriosityEngine:
@@ -244,6 +270,172 @@ def _build_conversational_module(
     )
     module.evolution_engine = _FakeEvolutionEngine()
     return module, llm_instance, persistence
+
+
+@pytest.mark.asyncio
+async def test_conversation_guard_checks_recalled_history_before_model_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    module, llm, persistence = _build_conversational_module([])
+    module.memory._history = [
+        SimpleNamespace(
+            query="How can you reach me?",
+            response="Use alice@example.com",
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+    ]
+    guarded_prompts: list[str] = []
+
+    def guard(prompt: str, _context: object) -> dict[str, str] | None:
+        guarded_prompts.append(prompt)
+        if "alice@example.com" not in prompt:
+            return None
+        return {
+            "error": "approval_required",
+            "token_ref": "approval-ref",
+            "message": "approval required",
+        }
+
+    monkeypatch.setattr(
+        conversation_module,
+        "pre_generation_guard",
+        guard,
+    )
+
+    with pytest.raises(GuardRejectionError):
+        await module.generate_response(
+            "alice",
+            "Summarize my history",
+            guard_context={
+                "user_id": "alice",
+                "allowed_actions": ["personal_data_access"],
+            },
+        )
+
+    assert llm.calls == []
+    assert len(guarded_prompts) == 1
+    assert "Summarize my history" in guarded_prompts[0]
+    assert "alice@example.com" in guarded_prompts[0]
+    assert persistence.vector_queries == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_guard_checks_semantic_context_before_model_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 1, raising=False
+    )
+    match = VectorMatch(
+        record=SimpleNamespace(
+            id=77,
+            query="Billing contact",
+            response="Call 514-555-0101",
+            timestamp=datetime(2024, 2, 2, tzinfo=timezone.utc),
+        ),
+        distance=0.2,
+    )
+    module, llm, _persistence = _build_conversational_module([match])
+
+    def guard(prompt: str, _context: object) -> dict[str, str] | None:
+        if "514-555-0101" not in prompt:
+            return None
+        return {
+            "error": "approval_required",
+            "token_ref": "approval-ref",
+            "message": "approval required",
+        }
+
+    monkeypatch.setattr(conversation_module, "pre_generation_guard", guard)
+
+    with pytest.raises(GuardRejectionError):
+        await module.generate_response("alice", "Summarize the billing notes")
+
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_guard_pass_matches_normalized_provider_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from monGARS.core import conversation as conversation_module
+
+    monkeypatch.setattr(
+        conversation_module.settings, "llm2vec_context_limit", 0, raising=False
+    )
+    llm = _BoundaryLLMIntegration()
+    module = ConversationalModule(
+        llm=llm,
+        reasoner=_FakeReasoner(),
+        curiosity=_FakeCuriosityEngine(),
+        dynamic=_FakeDynamic(),
+        mimicry=_FakeMimicry(),
+        personality=_FakePersonalityEngine(),
+        captioner=_FakeCaptioner(),
+        memory=_FakeMemoryService(),
+        speaker=_FakeSpeakerService(),
+        persistence=_FakePersistenceRepository([]),
+    )
+    module.evolution_engine = _FakeEvolutionEngine()
+
+    response = await module.generate_response(
+        "alice", "Verify the normalized guard boundary"
+    )
+
+    assert response["text"].startswith("boundary-response")
+    assert len(llm.provider_prompts) == 1
+    assert "<|user|>" in llm.provider_prompts[0]
+    assert CHATML_START_HEADER not in llm.provider_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_conversation_approval_resume_is_one_shot_before_provider(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from monGARS.core import operator_approvals as approvals_module
+    from monGARS.core.pii_detection import PIIEntity
+
+    monkeypatch.setattr(
+        approvals_module,
+        "_DEFAULT_APPROVALS_PATH",
+        tmp_path / "conversation-approvals.json",
+    )
+    monkeypatch.setattr(approvals_module, "_GLOBAL_REGISTRY", None)
+    monkeypatch.setattr(
+        "monGARS.core.pii_detection.detect_pii",
+        lambda _prompt: [
+            PIIEntity(type="email", value="alice@example.com", start=11, end=28)
+        ],
+    )
+    module, llm, persistence = _build_conversational_module([])
+    prompt = "My email is alice@example.com"
+
+    with pytest.raises(GuardRejectionError) as blocked:
+        await module.generate_response("alice", prompt)
+    token_ref = blocked.value.payload["token_ref"]
+    registry = approvals_module.get_operator_approval_registry()
+    registry.approve(token_ref, operator="ops")
+
+    response = await module.generate_response(
+        "alice",
+        prompt,
+        guard_context={"user_id": "mallory", "token_ref": token_ref},
+    )
+
+    assert response["text"]
+    assert len(llm.calls) == 1
+    assert len(persistence.saved) == 1
+    assert persistence.saved[0][1] == prompt
+    assert module.memory.store_calls == [("alice", prompt, response["text"])]
+    with pytest.raises(GuardRejectionError):
+        await module.generate_response(
+            "alice", prompt, guard_context={"token_ref": token_ref}
+        )
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio

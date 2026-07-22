@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -28,7 +29,12 @@ from ..init_db import (
     UserPreferences,
     async_session_factory,
 )
-from .embeddings import EmbeddingBackendError, LLM2VecEmbedder, get_llm2vec_embedder
+from .embeddings import (
+    EmbeddingBackendError,
+    EmbeddingIdentity,
+    LLM2VecEmbedder,
+    get_llm2vec_embedder,
+)
 from .inference_utils import render_chat_prompt_from_text
 
 try:  # pragma: no cover - optional dependency
@@ -78,6 +84,8 @@ class PersistenceRepository:
         else:
             self._embedder = None
         self._vector_support_native: bool | None = None
+        self._embedding_identity: EmbeddingIdentity | None = None
+        self._embedding_identity_lock = asyncio.Lock()
 
     async def _execute_with_retry(
         self,
@@ -144,27 +152,107 @@ class PersistenceRepository:
     async def _history_embedding_vector(
         self, query: str | None, response: str | None
     ) -> list[float] | None:
+        """Return one identity-validated vector or fail closed with ``None``."""
+
         if self._embedder is None:
             return None
         payload = self._compose_history_payload(query, response)
         if not payload.strip():
             return None
         try:
-            vector, used_fallback = await self._embedder.embed_text(
-                payload, instruction=self._settings.llm2vec_instruction
-            )
+            encode_batch = getattr(self._embedder, "encode_batch", None)
+            if callable(encode_batch):
+                batch = await encode_batch(
+                    [payload],
+                    instruction=self._settings.llm2vec_instruction,
+                )
+                if len(batch.vectors) != 1:
+                    raise EmbeddingBackendError(
+                        "Embedding backend returned an invalid vector count"
+                    )
+                vector = batch.vectors[0]
+                used_fallback = bool(batch.used_fallback)
+                identity = batch.identity
+            else:  # pragma: no cover - compatibility for external embedders
+                vector, used_fallback = await self._embedder.embed_text(
+                    payload,
+                    instruction=self._settings.llm2vec_instruction,
+                )
+                identity = getattr(self._embedder, "embedding_identity", None)
         except EmbeddingBackendError:
             logger.error(
                 "persistence.embedding.backend_unavailable",
                 extra={"payload_length": len(payload)},
             )
             return None
-        if used_fallback:
-            logger.warning(
-                "persistence.embedding.used_fallback",
+        except Exception:
+            logger.exception(
+                "persistence.embedding.backend_failed",
                 extra={"payload_length": len(payload)},
             )
-        return vector
+            return None
+        if used_fallback:
+            logger.warning(
+                "persistence.embedding.synthetic_vector_rejected",
+                extra={"payload_length": len(payload)},
+            )
+            return None
+        if not isinstance(identity, EmbeddingIdentity):
+            logger.warning(
+                "persistence.embedding.identity_missing",
+                extra={"payload_length": len(payload)},
+            )
+            return None
+        configured_dimension = int(self._settings.llm2vec_vector_dimensions)
+        if identity.dimension != configured_dimension:
+            logger.warning(
+                "persistence.embedding.schema_dimension_mismatch",
+                extra={
+                    "identity_dimension": identity.dimension,
+                    "schema_dimension": configured_dimension,
+                },
+            )
+            return None
+        validated_vector = self._normalise_vector(vector)
+        if validated_vector is None:
+            logger.warning(
+                "persistence.embedding.vector_invalid",
+                extra={
+                    "payload_length": len(payload),
+                    "identity_dimension": identity.dimension,
+                },
+            )
+            return None
+        if len(validated_vector) != identity.dimension:
+            logger.warning(
+                "persistence.embedding.identity_dimension_mismatch",
+                extra={
+                    "payload_length": len(payload),
+                    "identity_dimension": identity.dimension,
+                    "vector_dimension": len(validated_vector),
+                },
+            )
+            return None
+        async with self._embedding_identity_lock:
+            if (
+                self._embedding_identity is not None
+                and self._embedding_identity != identity
+            ):
+                logger.error(
+                    "persistence.embedding.identity_changed",
+                    extra={
+                        "previous": self._embedding_identity.cache_key,
+                        "current": identity.cache_key,
+                    },
+                )
+                return None
+            self._embedding_identity = identity
+        return validated_vector
+
+    def _embedding_storage_key(self, vector: list[float] | None) -> str | None:
+        if vector is None or self._embedding_identity is None:
+            return None
+        return self._embedding_identity.storage_key
 
     @staticmethod
     def _vector_search_supported(session) -> bool:
@@ -177,23 +265,30 @@ class PersistenceRepository:
         return hasattr(comparator, "cosine_distance")
 
     def _normalise_vector(self, vector: Sequence[float] | None) -> list[float] | None:
+        """Validate the pgvector shape without padding or truncating values."""
+
         if vector is None:
             return None
         if hasattr(vector, "tolist"):
             vector = vector.tolist()  # type: ignore[assignment]
-        values = list(vector)
+        if isinstance(vector, (str, bytes)):
+            return None
+        try:
+            values = list(vector)
+        except TypeError:
+            return None
         if not values:
             return None
         try:
             floats = [float(component) for component in values]
         except (TypeError, ValueError):
             return None
+        if any(not math.isfinite(component) for component in floats):
+            return None
 
         dimensions = int(self._settings.llm2vec_vector_dimensions)
-        if len(floats) > dimensions:
-            floats = floats[:dimensions]
-        elif len(floats) < dimensions:
-            floats.extend(0.0 for _ in range(dimensions - len(floats)))
+        if len(floats) != dimensions:
+            return None
         return floats
 
     @staticmethod
@@ -233,6 +328,7 @@ class PersistenceRepository:
             resolved_history_response,
         )
         prepared_vector = self._normalise_vector(embedding_vector)
+        embedding_identity = self._embedding_storage_key(prepared_vector)
 
         async def operation(session) -> None:
             async with session.begin():
@@ -244,6 +340,7 @@ class PersistenceRepository:
                             query=resolved_history_query,
                             response=resolved_history_response,
                             vector=prepared_vector,
+                            embedding_identity=embedding_identity,
                         )
                     )
 
@@ -254,6 +351,7 @@ class PersistenceRepository:
     ) -> None:
         embedding_vector = await self._history_embedding_vector(query, response)
         prepared_vector = self._normalise_vector(embedding_vector)
+        embedding_identity = self._embedding_storage_key(prepared_vector)
 
         async def operation(session) -> None:
             async with session.begin():
@@ -263,6 +361,7 @@ class PersistenceRepository:
                         query=query,
                         response=response,
                         vector=prepared_vector,
+                        embedding_identity=embedding_identity,
                     )
                 )
 
@@ -295,6 +394,9 @@ class PersistenceRepository:
         prepared_vector = self._normalise_vector(query_vector)
         if prepared_vector is None:
             return []
+        embedding_identity = self._embedding_storage_key(prepared_vector)
+        if embedding_identity is None:
+            return []
 
         async def operation(session):
             native_supported = self._vector_support_native
@@ -310,6 +412,7 @@ class PersistenceRepository:
                     select(ConversationHistory, distance_metric.label("distance"))
                     .where(ConversationHistory.user_id == user_id)
                     .where(ConversationHistory.vector.isnot(None))
+                    .where(ConversationHistory.embedding_identity == embedding_identity)
                     .order_by(distance_metric)
                     .limit(limit)
                 )
@@ -339,6 +442,7 @@ class PersistenceRepository:
                 select(ConversationHistory)
                 .where(ConversationHistory.user_id == user_id)
                 .where(ConversationHistory.vector.isnot(None))
+                .where(ConversationHistory.embedding_identity == embedding_identity)
                 .order_by(desc(ConversationHistory.timestamp))
                 .limit(fallback_window)
             )

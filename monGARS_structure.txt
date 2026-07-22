@@ -2,6 +2,9 @@ monGARS/
 ├── AGENTS.md
 ├── README.md
 ├── ROADMAP.md
+├── alembic_migrations/
+│   └── versions/
+│       └── 20260721_01_add_embedding_identity.py
 ├── configs/
 │   ├── AGENTS.md
 │   ├── agents/
@@ -19,8 +22,22 @@ monGARS/
 │   │   └── README.md
 │   ├── codebase_status_report.md
 │   ├── implementation_status.md
+│   ├── lumen_agent_runtime_port.md
 │   ├── testing.md
 │   └── ... (runbooks, SDK guides, RAG governance)
+├── mobile-app/
+│   ├── src/
+│   │   ├── agent/                 (53-tool mirror, routing, policy, handoffs)
+│   │   ├── native/                (Core ML, agent, App Intents, Outlook bridges)
+│   │   ├── screens/               (chat approvals, shortcuts, triggers, OAuth)
+│   │   └── store/                 (owner-scoped local agent state)
+│   ├── ios/
+│   │   ├── AgentTools/            (Apple, AlarmKit, Graph, web, memory, RAG)
+│   │   ├── AppIntents/            (foreground Siri and Shortcuts surfaces)
+│   │   ├── MonGARSAlarmWidget/    (AlarmKit Live Activity extension)
+│   │   ├── MonGARSCoreML/         (pinned model, planner, structured kernel)
+│   │   └── MonGARSMobile.xcodeproj/
+│   └── __tests__/                 (bridge, policy, store, and UI contracts)
 ├── monGARS/
 │   ├── AGENTS.md
 │   ├── api/
@@ -56,6 +73,11 @@ monGARS/
 │   ├── manage_agents.py
 │   ├── docker_menu.py
 │   └── provision_models.py
+├── tools/
+│   └── monGARS_deep_scan/
+│       ├── agent_manifest_pipeline.py
+│       └── extractors/
+│           └── code_swift.py
 ├── sdks/
 │   ├── python/
 │   │   └── README.md

@@ -26,6 +26,7 @@ audiences, and calls out the live sources of truth inside the repository.
 | [architecture/module_interactions.md](architecture/module_interactions.md) | Diagrams and component-level walkthroughs for the FastAPI, cognition, and UI layers. |
 | [conversation_workflow.md](conversation_workflow.md) | End-to-end chat pipeline tracing OAuth, memory enrichment, adaptive response synthesis, and WebSocket streaming. |
 | [model_management.md](model_management.md) | Manifest structure, model lifecycle, and adapter provisioning hooks in `monGARS/core/model_manager.py`. |
+| [lumen_agent_runtime_port.md](lumen_agent_runtime_port.md) | Structured 53-tool iOS agent kernel, approval lifecycle, Core ML/Hugging Face boundary, and validation contract. |
 | [repo_memory_alignment.md](repo_memory_alignment.md) | Mapping between repository modules and persisted state in Hippocampus/SQLModel. |
 
 ## Developer Essentials

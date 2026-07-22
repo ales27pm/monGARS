@@ -1,5 +1,9 @@
 import { act } from '@testing-library/react-native';
-import { useChatStore } from '../src/store/chatStore';
+import {
+  getLocalConversationOwner,
+  isConversationMessageVisible,
+  useChatStore,
+} from '../src/store/chatStore';
 import { useInferenceStore } from '../src/store/inferenceStore';
 import type {
   CoreMLGenerationRequest,
@@ -74,6 +78,10 @@ describe('chatStore', () => {
         reconnectAttempt: 0,
       },
       realtimeSuppression: [],
+      pendingAgentApproval: null,
+      pendingAgentPermission: null,
+      pendingAgentTrigger: null,
+      activeAgentRunId: null,
       initialize: useChatStore.getState().initialize,
       setSession: useChatStore.getState().setSession,
       sendMessage: useChatStore.getState().sendMessage,
@@ -103,6 +111,18 @@ describe('chatStore', () => {
       lastResult: null,
       error: null,
     });
+  });
+
+  it('keeps case-distinct authenticated owners isolated', () => {
+    expect(getLocalConversationOwner({ username: 'Alice', token: 'one' })).toBe(
+      'account:Alice',
+    );
+    expect(getLocalConversationOwner({ username: 'alice', token: 'two' })).toBe(
+      'account:alice',
+    );
+    expect(
+      getLocalConversationOwner({ username: 'Alice', token: 'one' }),
+    ).not.toBe(getLocalConversationOwner({ username: 'alice', token: 'two' }));
   });
 
   it('loads conversation history when a session is present', async () => {
@@ -140,6 +160,26 @@ describe('chatStore', () => {
     });
 
     expect(useChatStore.getState().error).toBe('Session absente.');
+  });
+
+  it('never serializes the in-memory session or bearer token', () => {
+    const partialize = useChatStore.persist.getOptions().partialize;
+    if (!partialize) {
+      throw new Error('Partialisation chat manquante');
+    }
+    const secretToken = 'secret-jwt-that-must-never-reach-storage';
+    useChatStore.setState({
+      session: { username: 'Alice', token: secretToken },
+    });
+
+    const serialized = JSON.stringify({
+      state: partialize(useChatStore.getState()),
+      version: useChatStore.persist.getOptions().version,
+    });
+
+    expect(serialized).not.toContain(secretToken);
+    expect(JSON.parse(serialized).state).not.toHaveProperty('session');
+    expect(useChatStore.persist.getOptions().version).toBe(7);
   });
 
   it('stores a chat reply and suppresses the next realtime echo', async () => {
@@ -398,7 +438,7 @@ describe('chatStore', () => {
       expect(createRealtimeClient).not.toHaveBeenCalled();
       expect(useChatStore.getState().connection).toMatchObject({
         status: 'offline',
-        detail: expect.stringContaining('Inference locale active'),
+        detail: expect.stringContaining('Modèle et chat locaux'),
       });
     } finally {
       hasHydrated.mockRestore();
@@ -444,14 +484,14 @@ describe('chatStore', () => {
       useChatStore
         .getState()
         .messages.filter(
-          (message) => message.metadata?.localOwnerId === 'account:alice',
+          (message) => message.metadata?.localOwnerId === 'account:Alice',
         ),
     ).toHaveLength(2);
     expect(
       useChatStore
         .getState()
         .messages.filter(
-          (message) => message.metadata?.localOwnerId === 'account:bob',
+          (message) => message.metadata?.localOwnerId === 'account:Bob',
         ),
     ).toHaveLength(2);
   });
@@ -831,7 +871,7 @@ describe('chatStore', () => {
     );
   });
 
-  it('assigns legacy v4 local turns to the persisted session owner', async () => {
+  it('strips a v5 token and migrates its lower-case local owner', async () => {
     const migrate = useChatStore.persist.getOptions().migrate;
     if (!migrate) {
       throw new Error('Migration chat manquante');
@@ -849,6 +889,7 @@ describe('chatStore', () => {
             metadata: {
               inferenceBackend: 'on-device',
               source: 'on-device',
+              localOwnerId: 'account:alice',
             },
           },
           {
@@ -866,27 +907,147 @@ describe('chatStore', () => {
         mode: 'chat',
         quickActions: ['code', 'summarize', 'explain'],
       },
-      4,
+      5,
     )) as {
+      session: unknown;
       messages: Array<{
-        metadata?: { localOwnerId?: string };
+        metadata?: {
+          localOwnerId?: string;
+          localOwnerScopeVersion?: number;
+        };
       }>;
     };
 
+    expect(migrated.session).toBeNull();
+    expect(JSON.stringify(migrated)).not.toContain('alice-token');
     expect(migrated.messages).toHaveLength(2);
     expect(migrated.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           metadata: expect.objectContaining({
-            localOwnerId: 'account:alice',
+            localOwnerId: 'account:Alice',
           }),
         }),
       ]),
     );
     expect(
       migrated.messages.every(
-        (message) => message.metadata?.localOwnerId === 'account:alice',
+        (message) =>
+          message.metadata?.localOwnerId === 'account:Alice' &&
+          message.metadata.localOwnerScopeVersion === 2,
       ),
     ).toBe(true);
+  });
+
+  it('claims a logged-out v5 owner once without weakening case isolation', async () => {
+    const migrate = useChatStore.persist.getOptions().migrate;
+    if (!migrate) {
+      throw new Error('Migration chat manquante');
+    }
+
+    const migrated = await migrate(
+      {
+        session: null,
+        messages: [
+          {
+            id: 'logged-out-v5-message',
+            role: 'assistant',
+            content: 'Historique local Alice',
+            createdAt: new Date().toISOString(),
+            metadata: {
+              inferenceBackend: 'on-device',
+              source: 'on-device',
+              localOwnerId: 'account:alice',
+              finishReason: 'eos',
+            },
+          },
+        ],
+        mode: 'chat',
+        quickActions: ['code', 'summarize', 'explain'],
+      },
+      5,
+    );
+    useChatStore.setState(
+      migrated as Partial<ReturnType<typeof useChatStore.getState>>,
+    );
+
+    await act(async () => {
+      await useChatStore.getState().setSession({
+        username: 'Alice',
+        token: 'alice-token',
+      });
+    });
+
+    expect(useChatStore.getState().messages[0].metadata).toEqual(
+      expect.objectContaining({
+        localOwnerId: 'account:Alice',
+        localOwnerScopeVersion: 2,
+      }),
+    );
+
+    await act(async () => {
+      await useChatStore.getState().setSession({
+        username: 'alice',
+        token: 'lowercase-token',
+      });
+    });
+
+    expect(useChatStore.getState().messages[0].metadata?.localOwnerId).toBe(
+      'account:Alice',
+    );
+  });
+
+  it('does not reclaim a case-isolated v6 owner through the legacy alias', async () => {
+    const migrate = useChatStore.persist.getOptions().migrate;
+    if (!migrate) {
+      throw new Error('Migration chat manquante');
+    }
+
+    const migrated = await migrate(
+      {
+        session: null,
+        messages: [
+          {
+            id: 'v6-lowercase-account-message',
+            role: 'assistant',
+            content: 'Donnée du compte minuscule',
+            createdAt: new Date().toISOString(),
+            metadata: {
+              inferenceBackend: 'on-device',
+              source: 'on-device',
+              localOwnerId: 'account:alice',
+              finishReason: 'eos',
+            },
+          },
+        ],
+        mode: 'chat',
+        quickActions: ['code', 'summarize', 'explain'],
+      },
+      6,
+    );
+    useChatStore.setState(
+      migrated as Partial<ReturnType<typeof useChatStore.getState>>,
+    );
+
+    await act(async () => {
+      await useChatStore.getState().setSession({
+        username: 'Alice',
+        token: 'uppercase-token',
+      });
+    });
+
+    expect(useChatStore.getState().messages[0].metadata).toEqual(
+      expect.objectContaining({
+        localOwnerId: 'account:alice',
+        localOwnerScopeVersion: 2,
+      }),
+    );
+    expect(
+      useChatStore
+        .getState()
+        .messages.filter((message) =>
+          isConversationMessageVisible(message, 'on-device', 'account:Alice'),
+        ),
+    ).toHaveLength(0);
   });
 });

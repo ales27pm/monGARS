@@ -73,7 +73,10 @@ The system is intentionally modular:
   absent.
 - **React Native app (`mobile-app/`)** now carries the primary operator chat
   experience with native auth, history hydration, ticketed WebSocket sync,
-  diagnostics, export, and voice-entry workflows.
+  diagnostics, export, voice entry, and a pinned Core ML agent. The local agent
+  routes 22 intents through a strict 53-tool catalog with foreground permission
+  gates, exact expiring approvals, owner-scoped memory/RAG/triggers, AlarmKit,
+  and optional owner-bound Microsoft Graph OAuth.
 - **Django webapp (`webapp/`)** remains available as the progressive-enhancement
   fallback and server-rendered operator surface during the migration.
 - **Persistence & cache layers** span PostgreSQL, Redis, disk snapshots, and an
@@ -130,7 +133,7 @@ slide decks or ops runbooks.
 | FastAPI service | `monGARS/api` | Authentication, REST/WebSocket endpoints, dependency wiring |
 | Cognition core | `monGARS/core` | Memory, reasoning, LLM integration, adaptive response generation |
 | Evolution modules | `modules/` | Adapter training, diagnostics, research tooling |
-| React Native UI | `mobile-app/` | Primary operator client with native chat, diagnostics, and export flows |
+| React Native UI | `mobile-app/` | Primary operator client with server chat plus the structured on-device Core ML agent and iOS host tools |
 | Django UI | `webapp/` | Progressive fallback operator console and auth proxy |
 | Persistence | `init_db.py`, `monGARS/core/persistence.py` | SQLModel schemas, Hippocampus caching, Redis/disk tiers |
 | Tooling | `tasks.py`, `build_*.sh`, `docker_menu.py`, `docker-compose.yml`, `k8s/` | Automation, orchestration, deployment manifests |
@@ -168,7 +171,9 @@ npm run pod-install
   and iOS entitlement files needed for feature parity. `pod-install` now uses a
   repo-local Bundler/CocoaPods toolchain under `mobile-app/.bundle/`, seeds
   `ios/.xcode.env.local` automatically, and expects `xcodebuild` to be
-  available on macOS.
+  available on macOS. Use Xcode 26 to compile and device-test AlarmKit; see the
+  [Lumen agent runtime port](docs/lumen_agent_runtime_port.md) for the model,
+  approval, permission, migration, and release-validation contracts.
 
 ### Multi-stage training & export pipeline
 - Use [`mongars_multistage_pipeline.py`](mongars_multistage_pipeline.py) to
@@ -403,6 +408,7 @@ entries for quick access. Keep the documentation set dynamic by running
 | System diagrams and component walkthrough | [docs/architecture/module_interactions.md](docs/architecture/module_interactions.md) |
 | Conversation pipeline deep dive | [docs/conversation_workflow.md](docs/conversation_workflow.md) |
 | Model configuration & provisioning | [docs/model_management.md](docs/model_management.md) |
+| Lumen-derived iOS agent and tool runtime | [docs/lumen_agent_runtime_port.md](docs/lumen_agent_runtime_port.md) |
 | Repository vs. memory mapping | [docs/repo_memory_alignment.md](docs/repo_memory_alignment.md) |
 
 ### Operations & Delivery

@@ -5,7 +5,8 @@ enum PromptBuilder {
   static func build(
     messages: [ChatMessage],
     tokenizer: any Tokenizer,
-    maxNewTokens: Int
+    maxNewTokens: Int,
+    systemPrompt: String? = nil
   ) throws -> [Int] {
     try Task.checkCancellation()
     let maximumPromptTokens = max(
@@ -18,12 +19,18 @@ enum PromptBuilder {
           && !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       }
       .suffix(10)
+      .map { message in
+        ChatMessage(
+          role: message.role,
+          content: sanitizedPromptContent(message.content)
+        )
+      }
 
     guard !history.isEmpty else { throw InferenceError.emptyPrompt }
 
     let system = ChatMessage(
       role: "system",
-      content: MonGARSModelManifest.systemPrompt
+      content: sanitizedPromptContent(resolvedSystemPrompt(systemPrompt))
     )
     var selected = [system] + Array(history)
     var encoded = try encode(selected, tokenizer: tokenizer)
@@ -67,6 +74,44 @@ enum PromptBuilder {
 
     guard !encoded.isEmpty else { throw InferenceError.emptyPrompt }
     return encoded
+  }
+
+  static func resolvedSystemPrompt(_ override: String?) -> String {
+    guard let override else { return MonGARSModelManifest.systemPrompt }
+    let trimmed = override.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? MonGARSModelManifest.systemPrompt : trimmed
+  }
+
+  /// Neutralizes the ChatML and Dolphin tool-protocol delimiters that the
+  /// tokenizer treats as control syntax. Only the app may add those delimiters;
+  /// message and system-prompt contents remain plain data.
+  static func sanitizedPromptContent(_ value: String) -> String {
+    var result = value
+    while
+      let start = result.range(of: "<|"),
+      let end = result.range(
+        of: "|>",
+        range: start.upperBound..<result.endIndex
+      )
+    {
+      result.replaceSubrange(
+        start.lowerBound..<end.upperBound,
+        with: "[special_token]"
+      )
+    }
+
+    let toolDelimiters = [
+      ("<tool_call>", "[tool_call]"),
+      ("</tool_call>", "[/tool_call]"),
+      ("<tool_response>", "[tool_response]"),
+      ("</tool_response>", "[/tool_response]"),
+      ("<tools>", "[tools]"),
+      ("</tools>", "[/tools]"),
+    ]
+    for (delimiter, replacement) in toolDelimiters {
+      result = result.replacingOccurrences(of: delimiter, with: replacement)
+    }
+    return result
   }
 
   static func boundaryAwareSuffixPrompt(

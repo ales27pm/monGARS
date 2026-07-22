@@ -80,7 +80,11 @@ from monGARS.core.operator_approvals import get_operator_approval_registry
 from monGARS.core.peer import PeerCommunicator
 from monGARS.core.persistence import PersistenceRepository
 from monGARS.core.personality import PersonalityEngine
-from monGARS.core.security import SecurityManager, validate_user_input
+from monGARS.core.security import (
+    SecurityManager,
+    pre_generation_guard,
+    validate_user_input,
+)
 from monGARS.core.ui_events import BackendUnavailable, event_bus, make_event
 from monGARS.db import OperatorApproval
 from monGARS.telemetry import (
@@ -623,8 +627,11 @@ def _build_guard_context(
         for action in allowed or []
         if isinstance(action, str) and action.strip()
     ]
-    if not normalised:
-        normalised = ["personal_data_access"]
+    # Chat content is always processed as user data. A caller-controlled
+    # ``allowed_actions`` list may add capabilities, but must not downgrade the
+    # baseline PII approval policy by omitting this action.
+    if "personal_data_access" not in normalised:
+        normalised.append("personal_data_access")
     context: dict[str, Any] = {
         "user_id": current_user.get("sub") or current_user.get("id"),
         "allowed_actions": normalised,
@@ -939,9 +946,29 @@ async def chat(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     try:
-        result = await conv.generate_response(
-            user_id, data["query"], session_id=chat.session_id
-        )
+        guard_context = _build_guard_context(chat, current_user)
+        if isinstance(conv, ConversationalModule):
+            result = await conv.generate_response(
+                user_id,
+                data["query"],
+                session_id=chat.session_id,
+                guard_context=guard_context,
+            )
+        else:
+            # Dependency overrides predating the guard-context contract still
+            # receive the same protection at the route boundary.
+            if guard_result := pre_generation_guard(data["query"], guard_context):
+                raise GuardRejectionError(guard_result)
+            result = await conv.generate_response(
+                user_id,
+                data["query"],
+                session_id=chat.session_id,
+            )
+    except GuardRejectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=exc.payload,
+        ) from exc
     except PromptTooLargeError as exc:
         logger.warning(
             "web_api.chat_prompt_too_large",
@@ -1135,7 +1162,7 @@ async def approve_request(
         )
 
     registry = get_operator_approval_registry()
-    request_entry = registry.find_by_token(token_value)
+    request_entry = registry.get(token_value) or registry.find_by_token(token_value)
     if request_entry is None:
         logger.warning(
             "web_api.approval.invalid_token",
@@ -1151,13 +1178,19 @@ async def approve_request(
             detail="already_approved",
         )
 
-    registry.approve(request_entry.request_id, operator=operator_id)
+    try:
+        registry.approve(request_entry.request_id, operator=operator_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="approval_not_pending",
+        ) from exc
     token_ref = request_entry.request_id
 
     if db is not None:
         try:
             approval = (
-                db.query(OperatorApproval).filter_by(approval_token=token_value).first()
+                db.query(OperatorApproval).filter_by(approval_token=token_ref).first()
             )
             if approval is None:
                 approval = OperatorApproval(
@@ -1165,7 +1198,10 @@ async def approve_request(
                     user_id=str(request_entry.payload.get("user_id", "anonymous")),
                     prompt_hash=str(request_entry.payload.get("prompt_hash", ""))[:8],
                     pii_entities=request_entry.payload.get("pii_entities", []),
-                    approval_token=token_value,
+                    # The compatibility proof may have been supplied as
+                    # ``token_value``. Persist only the opaque request
+                    # reference so the raw proof cannot leak through SQL.
+                    approval_token=token_ref,
                 )
                 db.add(approval)
             approval.approved_at = datetime.now(UTC)
@@ -1199,6 +1235,7 @@ async def chat_endpoint(
     prompt = data["query"]
     max_tokens = getattr(settings.model, "max_new_tokens", None)
     guard_context = _build_guard_context(chat, current_user)
+    ray_attempt_possible = _ray_backend_available()
     ray_result = await _invoke_ray_chat(
         prompt,
         max_new_tokens=max_tokens,
@@ -1215,8 +1252,27 @@ async def chat_endpoint(
                 "web_api.llm_chat_ray_error",
                 extra={"user": _redact_user_id(user_id), "error": ray_result},
             )
+            if guard_context.get("token_ref"):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=(
+                        "Remote generation failed after approval validation; "
+                        "retry to obtain a new approval reference"
+                    ),
+                )
         else:
             return _chat_response_from_payload(ray_result)
+    elif ray_attempt_possible and guard_context.get("token_ref"):
+        # A remote transport failure is ambiguous: the actor may have consumed
+        # the one-shot approval before the response was lost. Replaying the
+        # same reference locally would either fail or weaken one-shot semantics.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Remote generation outcome is unknown after approval validation; "
+                "retry to obtain a new approval reference"
+            ),
+        )
 
     try:
         local_payload = await _generate_local_llm_payload(

@@ -79,12 +79,12 @@ public struct GenerationOptions: Sendable, Equatable {
     maxNewTokens: Int = MonGARSModelManifest.defaultMaxNewTokens,
     temperature: Float = 0.6,
     topK: Int = 20,
-    topP: Float = 0.95,
+    topP: Float = 0.9,
     repetitionPenalty: Float = 1.08,
     doSample: Bool = true
   ) {
     let finiteTemperature = temperature.isFinite ? temperature : 0.6
-    let finiteTopP = topP.isFinite ? topP : 0.95
+    let finiteTopP = topP.isFinite ? topP : 0.9
     let finiteRepetitionPenalty = repetitionPenalty.isFinite
       ? repetitionPenalty
       : 1.08
@@ -226,6 +226,18 @@ public enum InferenceError: LocalizedError, Sendable {
       return "Preparation du modele local annulee."
     case .generationCancelled:
       return "Generation locale annulee."
+    }
+  }
+
+  public var isRecoverable: Bool {
+    switch self {
+    case .unsupportedOS, .simulatorUnsupported, .invalidModel:
+      return false
+    case .insufficientDisk, .modelNotInstalled, .integrityFailure,
+      .thermalCritical, .emptyPrompt, .promptTooLong,
+      .invalidGenerationOptions, .operationInProgress,
+      .preparationCancelled, .generationCancelled:
+      return true
     }
   }
 }

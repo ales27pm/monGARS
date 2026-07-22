@@ -75,6 +75,14 @@ final class ManifestAndSamplerTests: XCTestCase {
     XCTAssertEqual(options.repetitionPenalty, 2)
   }
 
+  func testGenerationDefaultsMatchPinnedGenerationConfig() {
+    let options = GenerationOptions()
+
+    XCTAssertEqual(options.temperature, 0.6)
+    XCTAssertEqual(options.topP, 0.9)
+    XCTAssertTrue(options.doSample)
+  }
+
   func testGenerationOptionsReplaceNonFiniteValues() {
     let options = GenerationOptions(
       temperature: .nan,
@@ -82,7 +90,7 @@ final class ManifestAndSamplerTests: XCTestCase {
       repetitionPenalty: -.infinity
     )
     XCTAssertEqual(options.temperature, 0.6)
-    XCTAssertEqual(options.topP, 0.95)
+    XCTAssertEqual(options.topP, 0.9)
     XCTAssertEqual(options.repetitionPenalty, 1.08)
   }
 

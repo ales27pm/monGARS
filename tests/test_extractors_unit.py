@@ -3,8 +3,11 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from tools.monGARS_deep_scan.extractors import (
     code_py,
+    code_swift,
     configs_yaml,
     dockerfiles,
     html_jsx,
@@ -94,3 +97,125 @@ def test_html_dialog_and_paragraph():
     records = html_jsx.extract(Path("template.html"), text)
     assert any(r.dataset == "embeddings" for r in records)
     assert any(r.dataset == "sft" for r in records)
+
+
+def test_swift_extracts_prompt_dialog_docs_and_tool_contract():
+    text = textwrap.dedent(
+        '''
+        /// This documented runtime contract stays long enough to become a
+        /// provenance-backed embedding record for the local iOS agent kernel.
+        struct AgentKernel {}
+
+        let systemPrompt = """
+        User: Find the nearest pharmacy.
+        Assistant: I will use the local maps search after checking location access.
+        """
+
+        let tool = ToolDefinition(
+          id: "maps.search",
+          name: "Search Nearby",
+          category: .location,
+          description: "Find nearby places without using general web search.",
+          icon: "map",
+          tint: "teal",
+          requiresApproval: false,
+          permissionKey: "NSLocationWhenInUseUsageDescription"
+        )
+        '''
+    )
+
+    records = code_swift.extract(Path("AgentKernel.swift"), text)
+
+    assert any(r.dataset == "embeddings" for r in records)
+    assert any(
+        r.dataset == "sft" and r.type_label == "swift_prompt_dialog" for r in records
+    )
+    tool = next(r for r in records if r.type_label == "swift_tool_definition")
+    assert tool.output == {
+        "id": "maps.search",
+        "name": "Search Nearby",
+        "description": "Find nearby places without using general web search.",
+        "requires_approval": False,
+        "source_language": "swift",
+    }
+    assert tool.start_line > 1
+
+
+def test_swift_extracts_compact_agent_tool_catalog_entries():
+    text = """
+    static let all = [
+      tool("calendar.create", "Create Event", "Add an event.", .productivity,
+           [arg("title"), arg("startsInMinutes", .number)], .calendar,
+           .high, true, false),
+      tool("weather", "Current Weather", "Read current conditions.", .location,
+           [arg("location", required: false)], .location,
+           .low, false, true, 4_000),
+    ]
+    """
+
+    records = code_swift.extract(Path("AgentToolCatalog.swift"), text)
+    tools = [
+        record.output
+        for record in records
+        if record.type_label == "swift_agent_tool_definition"
+    ]
+    assert [tool["id"] for tool in tools] == ["calendar.create", "weather"]
+    assert tools[0]["display_name"] == "Create Event"
+    assert tools[0]["category"] == "productivity"
+    assert tools[0]["permission"] == "calendar"
+    assert tools[0]["requires_approval"] is True
+    assert tools[0]["supports_background_execution"] is False
+    assert tools[0]["maximum_output_characters"] == 2_400
+    assert tools[0]["arguments"] == [
+        {
+            "name": "title",
+            "type": "string",
+            "required": True,
+            "allowed_values": None,
+        },
+        {
+            "name": "startsInMinutes",
+            "type": "number",
+            "required": True,
+            "allowed_values": None,
+        },
+    ]
+    assert tools[0]["json_schema"] == {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "startsInMinutes": {"type": "number"},
+        },
+        "required": ["title", "startsInMinutes"],
+        "additionalProperties": False,
+    }
+
+    assert tools[1]["display_name"] == "Current Weather"
+    assert tools[1]["requires_approval"] is False
+    assert tools[1]["supports_background_execution"] is True
+    assert tools[1]["maximum_output_characters"] == 4_000
+    assert tools[1]["json_schema"]["required"] == []
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        (
+            'tool("invalid.computed", computedName, "Description", .knowledge, '
+            "[], nil, .low, false, false)"
+        ),
+        'tool("invalid.unterminated", "Name", "Description", .knowledge, [',
+    ],
+)
+def test_swift_strict_tool_extraction_rejects_malformed_literal_calls(
+    malformed: str,
+) -> None:
+    valid = (
+        'tool("valid.tool", "Name", "Description", .knowledge, '
+        "[], nil, .low, false, false)"
+    )
+
+    with pytest.raises(code_swift.SwiftToolExtractionError):
+        code_swift.extract_agent_tool_definitions(
+            Path("AgentToolCatalog.swift"), f"{valid}\n{malformed}", strict=True
+        )

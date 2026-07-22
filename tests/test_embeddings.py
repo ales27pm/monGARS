@@ -2,13 +2,16 @@
 
 import math
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from monGARS.config import Settings
+from monGARS.core import embeddings as embeddings_module
 from monGARS.core.embeddings import (
     DolphinX1Embedder,
     EmbeddingBackendError,
+    EmbeddingIdentity,
     LLM2VecEmbedder,
 )
 from monGARS.core.inference_utils import (
@@ -34,7 +37,7 @@ class _RecordingManager:
 
     def encode(self, texts: list[str], prompt: str) -> list[list[float]]:
         self.calls.append(list(texts))
-        base_vector = [float(len(self.calls)), 42.0, 84.0, 168.0]
+        base_vector = [float(len(self.calls)), 42.0, 84.0]
         return [base_vector for _ in texts]
 
 
@@ -202,7 +205,7 @@ class _FakeHTTPXModule:
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
+async def test_encode_batch_chunks_requests_with_exact_dimensions() -> None:
     settings = Settings(
         llm2vec_max_batch_size=2,
         llm2vec_max_concurrency=1,
@@ -220,6 +223,12 @@ async def test_encode_batch_chunks_requests_and_normalises_dimensions() -> None:
 
     assert len(result.vectors) == len(payloads)
     assert all(len(vector) == 3 for vector in result.vectors)
+    assert result.identity == EmbeddingIdentity(
+        backend="huggingface",
+        model=settings.llm2vec_base_model,
+        revision=settings.embedding_model_revision,
+        dimension=3,
+    )
     expected_batches = [payloads[:2], payloads[2:4], payloads[4:]]
     assert len(manager.calls) == len(expected_batches)
     for recorded_batch, expected_texts in zip(
@@ -263,6 +272,7 @@ async def test_encode_batch_returns_cached_result(
 
     assert second.vectors == first.vectors
     assert second.used_fallback is first.used_fallback
+    assert second.identity == first.identity
 
 
 @pytest.mark.asyncio
@@ -283,7 +293,7 @@ async def test_embed_text_raises_on_backend_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_generates_deterministic_fallback_vectors() -> None:
+async def test_encode_batch_rejects_invalid_vectors_without_fallback() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
@@ -297,16 +307,8 @@ async def test_encode_batch_generates_deterministic_fallback_vectors() -> None:
     )
 
     payloads = ["alpha", "beta"]
-    first = await embedder.encode_batch(payloads)
-    second = await embedder.encode_batch(payloads)
-
-    assert first.used_fallback is True
-    assert len(first.vectors) == len(payloads)
-    assert first.vectors == second.vectors
-    assert {len(vector) for vector in first.vectors} == {5}
-    for vector in first.vectors:
-        magnitude = _vector_norm(vector)
-        assert magnitude == pytest.approx(1.0)
+    with pytest.raises(EmbeddingBackendError, match="dimension"):
+        await embedder.encode_batch(payloads)
 
 
 @pytest.mark.asyncio
@@ -322,6 +324,7 @@ async def test_dolphin_service_backend_requests_embeddings(
                     [1.0, 2.0, 3.0],
                     [4.0, 5.0, 6.0],
                 ],
+                "model": "stub",
                 "dimension": 3,
             },
             200,
@@ -345,6 +348,12 @@ async def test_dolphin_service_backend_requests_embeddings(
 
     assert batch.used_fallback is False
     assert batch.vectors == [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+    assert batch.identity == EmbeddingIdentity(
+        backend="dolphin-x1-llm2vec",
+        model="stub",
+        revision="unversioned",
+        dimension=3,
+    )
 
     assert module.created_clients  # client instantiated lazily
     client = module.created_clients[0]
@@ -353,13 +362,20 @@ async def test_dolphin_service_backend_requests_embeddings(
 
 
 @pytest.mark.asyncio
-async def test_dolphin_service_backend_falls_back_on_invalid_vectors(
+async def test_dolphin_service_backend_rejects_invalid_vectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _FakeHTTPXModule()
     module.health_queue.append(({"status": "ok", "model": "stub", "dimension": 3}, 200))
     module.post_queue.append(
-        ({"embeddings": [["not", "numbers"]], "dimension": 3}, 200)
+        (
+            {
+                "embeddings": [["not", "numbers"]],
+                "model": "stub",
+                "dimension": 3,
+            },
+            200,
+        )
     )
     monkeypatch.setitem(sys.modules, "httpx", module)
 
@@ -373,21 +389,97 @@ async def test_dolphin_service_backend_falls_back_on_invalid_vectors(
     )
     embedder = LLM2VecEmbedder(settings=settings)
 
-    batch = await embedder.encode_batch(["needs fallback"])
-    assert batch.used_fallback is True
-    assert len(batch.vectors) == 1
-    assert len(batch.vectors[0]) == 3
+    with pytest.raises(EmbeddingBackendError, match="non-numeric"):
+        await embedder.encode_batch(["invalid vector"])
 
-    # Subsequent calls return the cached fallback without additional HTTP calls.
-    cached = await embedder.encode_batch(["needs fallback"])
-    assert cached.vectors == batch.vectors
-    assert module.created_clients  # ensure the same client is reused
+    assert module.created_clients
     client = module.created_clients[0]
-    assert client.post_calls == [("/embed", {"texts": ["needs fallback"]})]
+    assert client.post_calls == [("/embed", {"texts": ["invalid vector"]})]
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_skips_backend_for_blank_inputs() -> None:
+async def test_dolphin_service_rejects_health_dimension_mismatch_before_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _FakeHTTPXModule()
+    module.health_queue.append(({"status": "ok", "model": "stub", "dimension": 4}, 200))
+    monkeypatch.setitem(sys.modules, "httpx", module)
+    settings = Settings(
+        embedding_backend="dolphin-x1-llm2vec",
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+    )
+    embedder = LLM2VecEmbedder(settings=settings)
+
+    with pytest.raises(EmbeddingBackendError, match="4 != 3"):
+        await embedder.encode_batch(["dimension mismatch"])
+
+    client = module.created_clients[0]
+    assert client.post_calls == []
+
+
+@pytest.mark.asyncio
+async def test_dolphin_service_does_not_reuse_cache_across_identity_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _FakeHTTPXModule()
+    module.health_queue.append(
+        (
+            {
+                "status": "ok",
+                "model": "model-a",
+                "revision": "rev-a",
+                "dimension": 3,
+            },
+            200,
+        )
+    )
+    module.post_queue.extend(
+        [
+            (
+                {
+                    "embeddings": [[1.0, 2.0, 3.0]],
+                    "model": "model-a",
+                    "revision": "rev-a",
+                    "dimension": 3,
+                },
+                200,
+            ),
+            (
+                {
+                    "embeddings": [[4.0, 5.0, 6.0]],
+                    "model": "model-b",
+                    "revision": "rev-b",
+                    "dimension": 3,
+                },
+                200,
+            ),
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "httpx", module)
+    settings = Settings(
+        embedding_backend="dolphin-x1-llm2vec",
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+    )
+    embedder = LLM2VecEmbedder(settings=settings)
+
+    first = await embedder.encode_batch(["same payload"])
+    second = await embedder.encode_batch(["same payload"])
+
+    assert first.identity is not None
+    assert second.identity is not None
+    assert first.identity.cache_key != second.identity.cache_key
+    assert first.vectors != second.vectors
+    client = module.created_clients[0]
+    assert client.post_calls == [
+        ("/embed", {"texts": ["same payload"]}),
+        ("/embed", {"texts": ["same payload"]}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_encode_batch_rejects_blank_inputs_without_vectors() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
@@ -401,15 +493,13 @@ async def test_encode_batch_skips_backend_for_blank_inputs() -> None:
     )
 
     payloads = ["", "   "]
-    batch = await embedder.encode_batch(payloads)
-
-    assert batch.used_fallback is True
+    with pytest.raises(EmbeddingBackendError, match="blank"):
+        await embedder.encode_batch(payloads)
     assert manager.calls == []
-    assert all(len(vector) == 4 for vector in batch.vectors)
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_uses_fallback_when_manager_not_ready() -> None:
+async def test_encode_batch_fails_when_manager_not_ready() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
@@ -422,11 +512,9 @@ async def test_encode_batch_uses_fallback_when_manager_not_ready() -> None:
         settings=settings, neuron_manager_factory=lambda: manager
     )
 
-    batch = await embedder.encode_batch(["alpha", "beta"])
-
-    assert batch.used_fallback is True
+    with pytest.raises(EmbeddingBackendError, match="not ready"):
+        await embedder.encode_batch(["alpha", "beta"])
     assert manager.calls == 0
-    assert all(len(vector) == 3 for vector in batch.vectors)
 
 
 @pytest.mark.asyncio
@@ -460,7 +548,7 @@ async def test_encode_batch_returns_vectors_from_ready_manager() -> None:
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_records_chatml_for_fallback_vectors(
+async def test_encode_batch_renders_chatml_before_fail_closed_not_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(
@@ -506,16 +594,12 @@ async def test_encode_batch_records_chatml_for_fallback_vectors(
     )
 
     payloads = ["first payload", "second payload"]
-    batch = await embedder.encode_batch(payloads)
+    with pytest.raises(EmbeddingBackendError, match="not ready"):
+        await embedder.encode_batch(payloads)
 
-    assert batch.used_fallback is True
     assert manager.calls == 0
-    assert len(captured) % len(payloads) == 0
-    block_count = len(captured) // len(payloads)
-    blocks = [
-        captured[slice(index * len(payloads), (index + 1) * len(payloads))]
-        for index in range(block_count)
-    ]
+    assert len(captured) == len(payloads)
+    blocks = [captured]
 
     for idx, original_text in enumerate(payloads):
         previous_chatml: str | None = None
@@ -542,32 +626,105 @@ async def test_encode_batch_records_chatml_for_fallback_vectors(
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_fallback_depends_on_instruction_context() -> None:
+async def test_encode_batch_cache_is_partitioned_by_model_revision() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
-        llm2vec_vector_dimensions=5,
+        llm2vec_vector_dimensions=3,
+        embedding_model_revision="rev-a",
         SECRET_KEY="test",  # noqa: S106 - test configuration only
         debug=True,
     )
-    manager = _PartialManager()
+    manager = _RecordingManager()
     embedder = LLM2VecEmbedder(
         settings=settings, neuron_manager_factory=lambda: manager
     )
 
     payload = ["shared-text"]
-    without_instruction = await embedder.encode_batch(payload)
-    with_instruction = await embedder.encode_batch(
-        payload, instruction="represent for troubleshooting"
-    )
+    first = await embedder.encode_batch(payload)
+    settings.embedding_model_revision = "rev-b"
+    second = await embedder.encode_batch(payload)
 
-    assert without_instruction.used_fallback is True
-    assert with_instruction.used_fallback is True
-    assert without_instruction.vectors[0] != with_instruction.vectors[0]
+    assert first.identity is not None
+    assert second.identity is not None
+    assert first.identity.revision == "rev-a"
+    assert second.identity.revision == "rev-b"
+    assert len(manager.calls) == 2
+
+
+def test_sentence_transformer_load_is_pinned_and_revision_partitioned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[tuple[str, str | None]] = []
+
+    class _FakeSentenceTransformer:
+        def __init__(self, model_name: str, *, revision: str | None = None) -> None:
+            created.append((model_name, revision))
+
+        def encode(self, *_args, **_kwargs):
+            return [[1.0, 2.0, 3.0]]
+
+    fake_module = SimpleNamespace(SentenceTransformer=_FakeSentenceTransformer)
+    monkeypatch.setattr(
+        embeddings_module.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "sentence_transformers" else None,
+    )
+    monkeypatch.setattr(
+        embeddings_module.importlib,
+        "import_module",
+        lambda name: (
+            fake_module
+            if name == "sentence_transformers"
+            else pytest.fail(f"unexpected import: {name}")
+        ),
+    )
+    embeddings_module._SENTENCE_TRANSFORMER_CACHE.clear()
+    first = Settings(
+        transformers_embedding_model="example/model",
+        embedding_model_revision="commit-a",
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+    )
+    second = first.model_copy(update={"embedding_model_revision": "commit-b"})
+
+    embeddings_module._encode_with_sentence_transformers(["one"], None, first)
+    embeddings_module._encode_with_sentence_transformers(["one"], None, first)
+    embeddings_module._encode_with_sentence_transformers(["one"], None, second)
+
+    assert created == [
+        ("example/model", "commit-a"),
+        ("example/model", "commit-b"),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
+async def test_encode_batch_cache_is_partitioned_by_active_encoder() -> None:
+    settings = Settings(
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+    )
+    manager = _RecordingManager()
+    manager.base_model_path = "base-model"
+    manager.encoder_path = "encoder-a"
+    embedder = LLM2VecEmbedder(
+        settings=settings,
+        neuron_manager_factory=lambda: manager,
+    )
+
+    first = await embedder.encode_batch(["shared-text"])
+    manager.encoder_path = "encoder-b"
+    second = await embedder.encode_batch(["shared-text"])
+
+    assert first.identity is not None
+    assert second.identity is not None
+    assert first.identity.model.endswith("encoder-a")
+    assert second.identity.model.endswith("encoder-b")
+    assert len(manager.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+async def test_encode_batch_rejects_non_finite_values(value: float) -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
@@ -576,62 +733,77 @@ async def test_encode_batch_fallback_triggers_on_non_finite_values() -> None:
         debug=True,
     )
     manager = _NonFiniteManager()
+    manager.return_value = value
     embedder = LLM2VecEmbedder(
         settings=settings, neuron_manager_factory=lambda: manager
     )
 
-    # Test fallback for NaN values
-    batch = await embedder.encode_batch(["alpha"])
-
-    assert batch.used_fallback is True
-    assert len(batch.vectors) == 1
-    assert len(batch.vectors[0]) == 3
-    magnitude = _vector_norm(batch.vectors[0])
-    assert magnitude == pytest.approx(1.0)
-
-    # Test fallback for positive infinity values
-    manager.return_value = float("inf")
-    batch_inf = await embedder.encode_batch(["alpha"])
-
-    assert batch_inf.used_fallback is True
-    assert len(batch_inf.vectors) == 1
-    assert len(batch_inf.vectors[0]) == 3
-    magnitude_inf = _vector_norm(batch_inf.vectors[0])
-    assert magnitude_inf == pytest.approx(1.0)
-
-    # Test fallback for negative infinity values
-    manager.return_value = float("-inf")
-    batch_ninf = await embedder.encode_batch(["alpha"])
-
-    assert batch_ninf.used_fallback is True
-    assert len(batch_ninf.vectors) == 1
-    assert len(batch_ninf.vectors[0]) == 3
-    magnitude_ninf = _vector_norm(batch_ninf.vectors[0])
-    assert magnitude_ninf == pytest.approx(1.0)
+    with pytest.raises(EmbeddingBackendError, match="non-finite"):
+        await embedder.encode_batch(["alpha"])
 
 
 @pytest.mark.asyncio
-async def test_encode_batch_fallback_matches_internal_generator() -> None:
+async def test_encode_batch_rejects_dimension_mismatch_without_resize() -> None:
     settings = Settings(
         llm2vec_max_batch_size=4,
         llm2vec_max_concurrency=1,
-        llm2vec_vector_dimensions=5,
+        llm2vec_vector_dimensions=3,
         SECRET_KEY="test",  # noqa: S106 - test configuration only
         debug=True,
     )
+    manager = _DeterministicManager([[1.0, 2.0, 3.0, 4.0]])
     embedder = LLM2VecEmbedder(
-        settings=settings, neuron_manager_factory=_NotReadyManager
+        settings=settings,
+        neuron_manager_factory=lambda: manager,
     )
-    prompt = "Fallback instruction"
-    payload = "payload"
 
-    batch = await embedder.encode_batch([payload], instruction=prompt)
+    with pytest.raises(EmbeddingBackendError, match="4 != 3"):
+        await embedder.encode_batch(["payload"])
 
-    assert batch.used_fallback is True
-    assert len(batch.vectors) == 1
-    expected_vector = embedder._fallback_vector(prompt, payload)
-    assert batch.vectors[0] == expected_vector
-    assert len(expected_vector) == settings.llm2vec_vector_dimensions
+
+@pytest.mark.asyncio
+async def test_encode_batch_rejects_vector_count_mismatch() -> None:
+    settings = Settings(
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+    )
+    manager = _DeterministicManager([[1.0, 2.0, 3.0]])
+    embedder = LLM2VecEmbedder(
+        settings=settings,
+        neuron_manager_factory=lambda: manager,
+    )
+
+    with pytest.raises(EmbeddingBackendError, match="invalid vector count"):
+        await embedder.encode_batch(["first", "second"])
+
+
+@pytest.mark.asyncio
+async def test_encode_batch_rejects_identity_change_between_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        llm2vec_max_batch_size=1,
+        llm2vec_vector_dimensions=3,
+        SECRET_KEY="test",  # noqa: S106 - test configuration only
+    )
+    embedder = LLM2VecEmbedder(
+        settings=settings,
+        neuron_manager_factory=_RecordingManager,
+    )
+    identities = iter(
+        [
+            EmbeddingIdentity("huggingface", "model", "rev-a", 3),
+            EmbeddingIdentity("huggingface", "model", "rev-b", 3),
+        ]
+    )
+
+    async def _dispatch(_chunk, _prompt):
+        return [[1.0, 2.0, 3.0]], next(identities)
+
+    monkeypatch.setattr(embedder, "_dispatch_backend", _dispatch)
+
+    with pytest.raises(EmbeddingBackendError, match="identity changed"):
+        await embedder.encode_batch(["first", "second"])
 
 
 @pytest.mark.asyncio
@@ -680,7 +852,7 @@ def dolphin_x1_tiny_embedder() -> DolphinX1Embedder:
         device="cpu",
         batch_size=2,
         max_length=64,
-        target_dimension=3072,
+        target_dimension=16,
         torch_dtype="float32",
     )
 
@@ -694,7 +866,7 @@ def dolphin_x1_tiny_embedder() -> DolphinX1Embedder:
     return embedder
 
 
-def test_dolphin_x1_embedder_respects_configured_dimension(
+def test_dolphin_x1_embedder_preserves_native_configured_dimension(
     dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
     vectors = dolphin_x1_tiny_embedder.encode(["alpha", "beta"])
@@ -704,15 +876,9 @@ def test_dolphin_x1_embedder_respects_configured_dimension(
         dolphin_x1_tiny_embedder.vector_dimension
     }
 
-    torch_module, model, _ = dolphin_x1_tiny_embedder._ensure_model_components()
+    _, model, _ = dolphin_x1_tiny_embedder._ensure_model_components()
     hidden_size = getattr(getattr(model, "config", None), "hidden_size", None)
-    if (
-        isinstance(hidden_size, int)
-        and hidden_size < dolphin_x1_tiny_embedder.vector_dimension
-    ):
-        tail_index = hidden_size
-        for vector in vectors:
-            assert all(abs(component) < 1e-6 for component in vector[tail_index:])
+    assert hidden_size == dolphin_x1_tiny_embedder.vector_dimension
 
 
 def test_dolphin_x1_embedder_matches_manual_mean_pool(
@@ -764,24 +930,13 @@ def test_dolphin_x1_embedder_matches_manual_mean_pool(
         mask_tensor = mask.to(final_hidden.dtype)
     mask_tensor = mask_tensor.unsqueeze(-1)
 
-    pooled = torch_module.nan_to_num(
-        (final_hidden * mask_tensor).sum(dim=1) / mask_tensor.sum(dim=1).clamp_min(1.0),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
+    pooled = (
+        (final_hidden * mask_tensor).sum(dim=1) / mask_tensor.sum(dim=1).clamp_min(1.0)
     )[0]
     manual_vector = pooled.detach().to(torch_module.float32)
     if manual_vector.device.type != "cpu":
         manual_vector = manual_vector.cpu()
-    if manual_vector.shape[-1] > dolphin_x1_tiny_embedder.vector_dimension:
-        manual_vector = manual_vector[: dolphin_x1_tiny_embedder.vector_dimension]
-    elif manual_vector.shape[-1] < dolphin_x1_tiny_embedder.vector_dimension:
-        pad = torch_module.zeros(
-            dolphin_x1_tiny_embedder.vector_dimension - manual_vector.shape[-1],
-            dtype=manual_vector.dtype,
-            device=manual_vector.device,
-        )
-        manual_vector = torch_module.cat((manual_vector, pad), dim=0)
+    assert manual_vector.shape[-1] == dolphin_x1_tiny_embedder.vector_dimension
 
     assert reference_vector == pytest.approx(manual_vector.tolist(), abs=1e-5)
 
@@ -832,7 +987,7 @@ def test_dolphin_x1_embedder_batch_determinism(
             assert all(math.isfinite(component) for component in first_vector)
 
 
-def test_dolphin_x1_embedder_normalises_empty_inputs(
+def test_dolphin_x1_embedder_rejects_blank_inputs(
     dolphin_x1_tiny_embedder: DolphinX1Embedder,
 ) -> None:
     payloads = [
@@ -848,13 +1003,27 @@ def test_dolphin_x1_embedder_normalises_empty_inputs(
         " \t\n\u2003\u2009\u202f",  # combination of whitespace
     ]
 
-    vectors = dolphin_x1_tiny_embedder.encode(payloads)
+    with pytest.raises(EmbeddingBackendError, match="blank"):
+        dolphin_x1_tiny_embedder.encode(payloads)
 
-    assert len(vectors) == len(payloads)
-    for vector in vectors:
-        assert len(vector) == dolphin_x1_tiny_embedder.vector_dimension
-        assert all(math.isfinite(component) for component in vector)
-        norm = _vector_norm(vector)
-        assert norm >= 0.0
-        # Ensure the prompt normalisation keeps vectors non-zero for downstream cosine similarity.
-        assert norm > 0.0
+
+def test_dolphin_x1_embedder_rejects_dimension_mismatch() -> None:
+    torch_module = pytest.importorskip("torch")
+    embedder = DolphinX1Embedder(settings=Settings(), target_dimension=3)
+
+    with pytest.raises(EmbeddingBackendError, match="2 != 3"):
+        embedder._prepare_output_vector(
+            torch_module.tensor([1.0, 2.0]),
+            torch_module,
+        )
+
+
+def test_dolphin_x1_embedder_rejects_non_finite_output() -> None:
+    torch_module = pytest.importorskip("torch")
+    embedder = DolphinX1Embedder(settings=Settings(), target_dimension=3)
+
+    with pytest.raises(EmbeddingBackendError, match="non-finite"):
+        embedder._prepare_output_vector(
+            torch_module.tensor([1.0, float("nan"), 3.0]),
+            torch_module,
+        )

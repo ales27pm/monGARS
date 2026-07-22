@@ -1,6 +1,7 @@
 import hashlib
+import hmac
 import logging
-import time
+import secrets
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
@@ -202,18 +203,21 @@ class Credentials:
 
 
 def generate_approval_token(user_id: str, request_id: str) -> str:
-    """Generate cryptographically secure approval token"""
-    payload = f"{user_id}:{request_id}:{time.time()}"
-    return hashlib.sha256((payload + settings.SECRET_KEY).encode()).hexdigest()
+    """Generate a random, server-authenticated compatibility proof."""
+
+    if not user_id or not request_id:
+        raise ValueError("user_id and request_id must not be empty")
+    secret_key = str(settings.SECRET_KEY or "").encode("utf-8")
+    if not secret_key:  # pragma: no cover - settings validation normally catches this
+        raise RuntimeError("SECRET_KEY must be configured")
+    payload = f"{user_id}:{request_id}:".encode("utf-8") + secrets.token_bytes(32)
+    return hmac.new(secret_key, payload, hashlib.sha256).hexdigest()
 
 
 def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
     """Check prompts for PII and enforce operator approval when required."""
 
-    from monGARS.core.operator_approvals import (
-        log_blocked_attempt,
-        verify_approval_token,
-    )
+    from monGARS.core.operator_approvals import consume_approval, log_blocked_attempt
     from monGARS.core.pii_detection import detect_pii
 
     pii_entities = detect_pii(prompt)
@@ -221,56 +225,54 @@ def pre_generation_guard(prompt: str, context: dict) -> Optional[dict]:
         return None
 
     allowed_actions = [
-        str(action)
+        str(action).strip().lower()
         for action in context.get("allowed_actions", [])
-        if isinstance(action, str)
+        if isinstance(action, str) and action.strip()
     ]
     sensitive_actions = [
         "personal_data_access",
         "financial_operation",
         "identity_verification",
     ]
-    has_sensitive_action = any(
-        action in allowed_actions for action in sensitive_actions
+    requested_sensitive_actions = sorted(
+        set(allowed_actions).intersection(sensitive_actions)
     )
-    if not has_sensitive_action:
+    if not requested_sensitive_actions:
         return None
+    required_action = "|".join(requested_sensitive_actions)
 
-    fingerprint = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+    fingerprint = hashlib.sha256(prompt.encode()).hexdigest()
     user_id = str(context.get("user_id") or "anonymous")
     token_ref = str(context.get("token_ref") or context.get("approval_token_ref") or "")
     approval_token = context.get("approval_token")
 
-    if approval_token and token_ref:
-        if verify_approval_token(
+    if token_ref:
+        if consume_approval(
             user_id=user_id,
             token_ref=token_ref,
-            approval_token=str(approval_token),
             prompt_hash=fingerprint,
+            required_action=required_action,
+            approval_token=(str(approval_token) if approval_token else None),
         ):
             return None
-        log.warning(
-            "security.guard.invalid_approval_token",
-            extra={"user_id": user_id, "token_ref": token_ref},
-        )
+        log.warning("security.guard.invalid_approval_token")
 
     # fmt: off
-    audit_ref, approval_payload = log_blocked_attempt(
+    audit_ref, _approval_proof = log_blocked_attempt(
         user_id=context.get("user_id", "anonymous"),
         prompt_hash=fingerprint,
         pii_entities=pii_entities,
-        required_action="approval",
+        required_action=required_action,
         context=context,
     )
     # fmt: on
     message = "This request requires human approval due to sensitive data"
-    if approval_token and token_ref:
-        message = "Invalid approval token provided"
+    if token_ref:
+        message = "Invalid, expired, or already consumed approval provided"
 
     return {
         "error": "approval_required",
         "token_ref": audit_ref,
         "blocked_entities": [entity.type for entity in pii_entities],
-        "approval_token": approval_payload,
         "message": message,
     }

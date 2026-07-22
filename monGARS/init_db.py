@@ -170,6 +170,7 @@ __all__ = [
     "UserPersonality",
     "UserPreferences",
     "async_session_factory",
+    "dispose_database",
     "reset_database",
 ]
 
@@ -280,6 +281,22 @@ async def async_session_factory() -> AsyncIterator[AsyncSession]:
             yield proxy
         finally:
             await proxy.close()
+
+
+async def dispose_database() -> None:
+    """Release pooled database resources and allow the engine to be reused."""
+
+    global _initialized
+    lock = _get_loop_lock()
+    async with lock:
+        if _using_async_engine:
+            assert _async_engine is not None
+            await _async_engine.dispose()
+        else:
+            assert _sync_engine is not None
+            await asyncio.to_thread(_sync_engine.dispose)
+        _initialized = False
+    _init_locks.clear()
 
 
 async def reset_database() -> None:

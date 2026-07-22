@@ -22,7 +22,24 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>Microsoft OAuth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>msauth.$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			</array>
+		</dict>
+	</array>
+	<key>MONGARSMicrosoftClientID</key>
+	<string>$(MONGARS_MICROSOFT_CLIENT_ID)</string>
 	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -32,20 +49,40 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>MonGARS utilise AlarmKit uniquement pour les alarmes et minuteries que vous confirmez.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>MonGARS accede au calendrier pour afficher ou creer les evenements que vous demandez.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>MonGARS ouvre la camera lorsque vous confirmez une demande de capture.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>MonGARS recherche vos contacts uniquement pour les actions que vous demandez.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>MonGARS lit un resume local de vos donnees Sante lorsque vous le demandez.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>MonGARS utilise la localisation pour lire le SSID Wi-Fi pendant les diagnostics reseau.</string>
+	<string>MonGARS utilise la localisation pour la meteo, les cartes et les diagnostics que vous demandez.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MonGARS accede a votre reseau local pour joindre les services de developpement et executer les diagnostics.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MonGARS utilise le microphone pour la dictee vocale dans le chat.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>MonGARS lit votre activite de mouvement recente uniquement lorsque vous le demandez.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>MonGARS recherche et indexe uniquement les metadonnees des photos que vous autorisez.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>MonGARS accede aux rappels pour afficher ou creer les rappels que vous demandez.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>MonGARS utilise la reconnaissance vocale pour transcrire vos messages.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

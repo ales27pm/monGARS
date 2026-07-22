@@ -33,14 +33,19 @@ operator can review it from the Django console or offline tooling.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import hmac
 import json
 import logging
+import os
+import tempfile
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 from monGARS.core.security import generate_approval_token
@@ -51,10 +56,81 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ApprovalPolicy = Callable[[Mapping[str, Any]], bool]
+SECURITY_APPROVAL_TTL_SECONDS = 10 * 60
+SECURITY_APPROVAL_SOURCE = "security.guardrail"
+_VALID_APPROVAL_STATUSES = {
+    "approved",
+    "consumed",
+    "expired",
+    "pending",
+    "rejected",
+    "revoked",
+}
 
 
 def _utcnow_isoformat() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _utcnow() -> datetime:
+    """Return the current UTC instant through the testable clock hook."""
+
+    value = datetime.fromisoformat(_utcnow_isoformat())
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _redact_context(value: Any) -> Any:
+    """Remove credential-like fields before persisting an audit snapshot."""
+
+    sensitive_keys = {
+        "access_token",
+        "api_key",
+        "approval_token",
+        "authorization",
+        "client_secret",
+        "cookie",
+        "id_token",
+        "password",
+        "private_key",
+        "refresh_token",
+        "secret",
+        "session_token",
+        "token",
+        "x_api_key",
+    }
+    if isinstance(value, Mapping):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            string_key = str(key)
+            normalized_key = string_key.lower().replace("-", "_")
+            is_sensitive = normalized_key in sensitive_keys or normalized_key.endswith(
+                ("_password", "_secret", "_token", "_api_key", "_private_key")
+            )
+            redacted[string_key] = (
+                "[REDACTED]" if is_sensitive else _redact_context(item)
+            )
+        return redacted
+    if isinstance(value, (list, tuple, set)):
+        return [_redact_context(item) for item in value]
+    return value
 
 
 def _normalise_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -96,6 +172,13 @@ class ApprovalRequest:
     created_at: str = field(default_factory=_utcnow_isoformat)
     approved_by: str | None = None
     approved_at: str | None = None
+    expires_at: str | None = None
+    consumed_by: str | None = None
+    consumed_at: str | None = None
+    rejected_by: str | None = None
+    rejected_at: str | None = None
+    revoked_by: str | None = None
+    revoked_at: str | None = None
     notes: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -108,23 +191,59 @@ class ApprovalRequest:
             "created_at": self.created_at,
             "approved_by": self.approved_by,
             "approved_at": self.approved_at,
+            "expires_at": self.expires_at,
+            "consumed_by": self.consumed_by,
+            "consumed_at": self.consumed_at,
+            "rejected_by": self.rejected_by,
+            "rejected_at": self.rejected_at,
+            "revoked_by": self.revoked_by,
+            "revoked_at": self.revoked_at,
             "notes": self.notes,
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ApprovalRequest":
+        if not isinstance(data, Mapping):
+            raise ValueError("approval request must be a mapping")
+        raw_payload = data.get("payload", {})
+        if not isinstance(raw_payload, Mapping):
+            raise ValueError("approval request payload must be a mapping")
+        status = str(data.get("status") or "pending").strip().lower()
+        if status not in _VALID_APPROVAL_STATUSES:
+            raise ValueError(f"unsupported approval status: {status!r}")
         return cls(
             request_id=str(data.get("id") or data.get("request_id") or uuid4().hex),
             source=str(data.get("source") or "unknown"),
-            payload=_normalise_payload(data.get("payload", {})),
+            payload=_normalise_payload(raw_payload),
             fingerprint=str(data.get("fingerprint") or uuid4().hex),
-            status=str(data.get("status") or "pending"),
+            status=status,
             created_at=str(data.get("created_at") or _utcnow_isoformat()),
             approved_by=(
                 str(data.get("approved_by")) if data.get("approved_by") else None
             ),
             approved_at=(
                 str(data.get("approved_at")) if data.get("approved_at") else None
+            ),
+            expires_at=(
+                str(data.get("expires_at")) if data.get("expires_at") else None
+            ),
+            consumed_by=(
+                str(data.get("consumed_by")) if data.get("consumed_by") else None
+            ),
+            consumed_at=(
+                str(data.get("consumed_at")) if data.get("consumed_at") else None
+            ),
+            rejected_by=(
+                str(data.get("rejected_by")) if data.get("rejected_by") else None
+            ),
+            rejected_at=(
+                str(data.get("rejected_at")) if data.get("rejected_at") else None
+            ),
+            revoked_by=(
+                str(data.get("revoked_by")) if data.get("revoked_by") else None
+            ),
+            revoked_at=(
+                str(data.get("revoked_at")) if data.get("revoked_at") else None
             ),
             notes=str(data.get("notes")) if data.get("notes") else None,
         )
@@ -135,7 +254,22 @@ class ApprovalRequest:
 
     @property
     def is_approved(self) -> bool:
-        return self.status.lower() == "approved"
+        return self.status.lower() == "approved" and not self.is_expired
+
+    @property
+    def is_expired(self) -> bool:
+        if self.expires_at is None:
+            # Security approvals created by older builds were unbounded. They
+            # cannot be safely grandfathered into the new one-shot workflow.
+            return self.source == SECURITY_APPROVAL_SOURCE
+        expiry = _parse_timestamp(self.expires_at)
+        # A malformed persisted timestamp must never turn a bounded approval
+        # into an unlimited one.
+        return expiry is None or expiry <= _utcnow()
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status.lower() in {"consumed", "rejected", "revoked", "expired"}
 
 
 class OperatorApprovalRegistry:
@@ -143,9 +277,37 @@ class OperatorApprovalRegistry:
 
     def __init__(self, storage_path: str | Path) -> None:
         self._path = Path(storage_path)
+        self._lock_path = self._path.with_name(f".{self._path.name}.lock")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._requests: dict[str, ApprovalRequest] = {}
+        self._load()
+
+    @contextmanager
+    def _storage_lock(self) -> Iterator[None]:
+        """Serialize read-modify-write cycles across registry instances."""
+
+        descriptor = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+    @staticmethod
+    def _copy_request(request: ApprovalRequest) -> ApprovalRequest:
+        """Return a detached record that cannot mutate registry state."""
+
+        return ApprovalRequest.from_dict(request.to_dict())
+
+    def _reload(self) -> None:
+        """Refresh the in-memory view after acquiring the storage lock."""
+
+        self._requests = {}
         self._load()
 
     def _load(self) -> None:
@@ -154,23 +316,82 @@ class OperatorApprovalRegistry:
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except Exception:
+            logger.warning(
+                "operator_approvals.registry_load_failed",
+                extra={"path": str(self._path)},
+                exc_info=True,
+            )
             return
-        for item in raw.get("requests", []):
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("requests"), list):
+            logger.warning(
+                "operator_approvals.registry_invalid_shape",
+                extra={"path": str(self._path)},
+            )
+            return
+        for index, item in enumerate(raw["requests"]):
             try:
                 request = ApprovalRequest.from_dict(item)
             except Exception:
+                logger.warning(
+                    "operator_approvals.registry_item_ignored",
+                    extra={"path": str(self._path), "item_index": index},
+                )
                 continue
             self._requests[request.request_id] = request
 
     def _persist(self) -> None:
         payload = {"requests": [req.to_dict() for req in self._requests.values()]}
-        self._path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self._path.parent,
+                prefix=f".{self._path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary_path.chmod(0o600)
+            os.replace(temporary_path, self._path)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    logger.warning(
+                        "operator_approvals.temporary_cleanup_failed",
+                        extra={"path": str(temporary_path)},
+                        exc_info=True,
+                    )
+
+    def _snapshot_requests(self) -> dict[str, ApprovalRequest]:
+        """Clone registry state before a security-relevant persistent mutation."""
+
+        return {
+            request_id: ApprovalRequest.from_dict(request.to_dict())
+            for request_id, request in self._requests.items()
+        }
+
+    def _persist_or_restore(self, snapshot: dict[str, ApprovalRequest]) -> None:
+        """Keep in-memory authorization state aligned with durable state."""
+
+        try:
+            self._persist()
+        except BaseException:
+            self._requests = snapshot
+            raise
 
     def _find_by_fingerprint(self, fingerprint: str) -> ApprovalRequest | None:
-        for request in self._requests.values():
-            if request.fingerprint == fingerprint:
+        for request in reversed(tuple(self._requests.values())):
+            if (
+                request.fingerprint == fingerprint
+                and not request.is_terminal
+                and not request.is_expired
+            ):
                 return request
         return None
 
@@ -180,31 +401,49 @@ class OperatorApprovalRegistry:
         source: str,
         payload: Mapping[str, Any],
         policy: ApprovalPolicy | None = None,
+        expires_in_seconds: int | None = None,
     ) -> ApprovalRequest:
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("source must not be empty")
+        if not isinstance(payload, Mapping):
+            raise TypeError("payload must be a mapping")
+        if expires_in_seconds is not None and expires_in_seconds <= 0:
+            raise ValueError("expires_in_seconds must be positive")
+        source = source.strip()
         normalised = _normalise_payload(payload)
         fingerprint = _fingerprint(source, normalised)
         with self._lock:
-            existing = self._find_by_fingerprint(fingerprint)
-            if existing is not None:
-                if (
-                    policy is not None
-                    and existing.is_pending
-                    and policy(existing.payload)
-                ):
-                    self._mark_approved(existing, approver="auto-policy")
-                return existing
+            with self._storage_lock():
+                self._reload()
+                existing = self._find_by_fingerprint(fingerprint)
+                if existing is not None:
+                    if (
+                        policy is not None
+                        and existing.is_pending
+                        and policy(_normalise_payload(existing.payload))
+                    ):
+                        snapshot = self._snapshot_requests()
+                        self._mark_approved(existing, approver="auto-policy")
+                        self._persist_or_restore(snapshot)
+                    return self._copy_request(existing)
 
-            request = ApprovalRequest(
-                request_id=uuid4().hex,
-                source=source,
-                payload=normalised,
-                fingerprint=fingerprint,
-            )
-            if policy is not None and policy(normalised):
-                self._mark_approved(request, approver="auto-policy")
-            self._requests[request.request_id] = request
-            self._persist()
-            return request
+                request = ApprovalRequest(
+                    request_id=uuid4().hex,
+                    source=source,
+                    payload=normalised,
+                    fingerprint=fingerprint,
+                    expires_at=(
+                        (_utcnow() + timedelta(seconds=expires_in_seconds)).isoformat()
+                        if expires_in_seconds is not None
+                        else None
+                    ),
+                )
+                if policy is not None and policy(_normalise_payload(normalised)):
+                    self._mark_approved(request, approver="auto-policy")
+                snapshot = self._snapshot_requests()
+                self._requests[request.request_id] = request
+                self._persist_or_restore(snapshot)
+                return self._copy_request(request)
 
     def require_approval(
         self,
@@ -223,30 +462,191 @@ class OperatorApprovalRegistry:
         operator: str,
         notes: str | None = None,
     ) -> ApprovalRequest:
+        if not isinstance(operator, str) or not operator.strip():
+            raise ValueError("operator must not be empty")
+        operator = operator.strip()
         with self._lock:
-            request = self._requests.get(request_id)
-            if request is None:
-                raise KeyError(f"Approval request {request_id!r} not found")
-            self._mark_approved(request, approver=operator, notes=notes)
-            self._persist()
-            return request
+            with self._storage_lock():
+                self._reload()
+                request = self._requests.get(request_id)
+                if request is None:
+                    raise KeyError(f"Approval request {request_id!r} not found")
+                if request.is_expired:
+                    snapshot = self._snapshot_requests()
+                    request.status = "expired"
+                    self._persist_or_restore(snapshot)
+                    raise ValueError("Approval request has expired")
+                if not request.is_pending:
+                    raise ValueError(
+                        f"Approval request cannot be approved from {request.status!r}"
+                    )
+                snapshot = self._snapshot_requests()
+                self._mark_approved(request, approver=operator, notes=notes)
+                self._persist_or_restore(snapshot)
+                return self._copy_request(request)
+
+    def reject(
+        self,
+        request_id: str,
+        *,
+        operator: str,
+        notes: str | None = None,
+    ) -> ApprovalRequest:
+        """Reject a pending request so it can never authorize execution."""
+
+        if not isinstance(operator, str) or not operator.strip():
+            raise ValueError("operator must not be empty")
+        operator = operator.strip()
+        with self._lock:
+            with self._storage_lock():
+                self._reload()
+                request = self._requests.get(request_id)
+                if request is None:
+                    raise KeyError(f"Approval request {request_id!r} not found")
+                if not request.is_pending or request.is_expired:
+                    raise ValueError(
+                        f"Approval request cannot be rejected from {request.status!r}"
+                    )
+                snapshot = self._snapshot_requests()
+                request.status = "rejected"
+                request.rejected_by = operator
+                request.rejected_at = _utcnow_isoformat()
+                request.notes = notes
+                self._persist_or_restore(snapshot)
+                return self._copy_request(request)
+
+    def revoke(
+        self,
+        request_id: str,
+        *,
+        operator: str,
+        notes: str | None = None,
+    ) -> ApprovalRequest:
+        """Revoke a previously approved, unconsumed request."""
+
+        if not isinstance(operator, str) or not operator.strip():
+            raise ValueError("operator must not be empty")
+        operator = operator.strip()
+        with self._lock:
+            with self._storage_lock():
+                self._reload()
+                request = self._requests.get(request_id)
+                if request is None:
+                    raise KeyError(f"Approval request {request_id!r} not found")
+                if not request.is_approved:
+                    raise ValueError(
+                        f"Approval request cannot be revoked from {request.status!r}"
+                    )
+                snapshot = self._snapshot_requests()
+                request.status = "revoked"
+                request.revoked_by = operator
+                request.revoked_at = _utcnow_isoformat()
+                request.notes = notes
+                self._persist_or_restore(snapshot)
+                return self._copy_request(request)
+
+    def consume(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        prompt_hash: str,
+        required_action: str | None = None,
+        approval_token: str | None = None,
+    ) -> bool:
+        """Atomically consume one approval bound to owner, prompt, and action."""
+
+        if (
+            not isinstance(user_id, str)
+            or not user_id
+            or not isinstance(prompt_hash, str)
+            or not prompt_hash
+        ):
+            return False
+        with self._lock:
+            with self._storage_lock():
+                self._reload()
+                request = self._requests.get(request_id)
+                if request is None or not request.is_approved:
+                    return False
+                recorded_user = str(request.payload.get("user_id") or "")
+                recorded_prompt = str(request.payload.get("prompt_hash") or "")
+                if not hmac.compare_digest(recorded_user, user_id):
+                    return False
+                if not hmac.compare_digest(recorded_prompt, prompt_hash):
+                    return False
+                recorded_action = str(request.payload.get("required_action") or "")
+                if recorded_action or required_action is not None:
+                    if not isinstance(required_action, str) or not required_action:
+                        return False
+                    if not hmac.compare_digest(recorded_action, required_action):
+                        return False
+                if approval_token:
+                    digest = str(request.payload.get("approval_token_hash") or "")
+                    legacy_token = str(request.payload.get("approval_token") or "")
+                    token_valid = (
+                        bool(digest)
+                        and hmac.compare_digest(digest, _token_digest(approval_token))
+                    ) or (
+                        bool(legacy_token)
+                        and hmac.compare_digest(legacy_token, approval_token)
+                    )
+                    if not token_valid:
+                        return False
+                snapshot = self._snapshot_requests()
+                request.status = "consumed"
+                request.consumed_by = user_id
+                request.consumed_at = _utcnow_isoformat()
+                self._persist_or_restore(snapshot)
+                return True
 
     def get(self, request_id: str) -> ApprovalRequest | None:
         """Return the request associated with ``request_id`` if it exists."""
 
         with self._lock:
-            return self._requests.get(request_id)
+            with self._storage_lock():
+                self._reload()
+                request = self._requests.get(request_id)
+                return self._copy_request(request) if request is not None else None
+
+    def bind_token_digest(self, request_id: str, approval_token: str) -> None:
+        """Rotate the compatibility proof without persisting the raw secret."""
+
+        if not approval_token:
+            raise ValueError("approval_token must not be empty")
+        with self._lock:
+            with self._storage_lock():
+                self._reload()
+                request = self._requests.get(request_id)
+                if request is None:
+                    raise KeyError(f"Approval request {request_id!r} not found")
+                snapshot = self._snapshot_requests()
+                request.payload.pop("approval_token", None)
+                request.payload["approval_token_hash"] = _token_digest(approval_token)
+                self._persist_or_restore(snapshot)
 
     def find_by_token(self, approval_token: str) -> ApprovalRequest | None:
         """Locate a request matching ``approval_token`` if present."""
 
         if not approval_token:
             return None
+        candidate_digest = _token_digest(approval_token)
         with self._lock:
-            for request in self._requests.values():
-                stored_token = str(request.payload.get("approval_token") or "")
-                if stored_token and hmac.compare_digest(stored_token, approval_token):
-                    return request
+            with self._storage_lock():
+                self._reload()
+                for request in self._requests.values():
+                    stored_token = str(request.payload.get("approval_token") or "")
+                    stored_digest = str(
+                        request.payload.get("approval_token_hash") or ""
+                    )
+                    if (
+                        stored_digest
+                        and hmac.compare_digest(stored_digest, candidate_digest)
+                    ) or (
+                        stored_token
+                        and hmac.compare_digest(stored_token, approval_token)
+                    ):
+                        return self._copy_request(request)
         return None
 
     def _mark_approved(
@@ -262,15 +662,19 @@ class OperatorApprovalRegistry:
         request.notes = notes
 
     def pending(self, *, source: str | None = None) -> Iterable[ApprovalRequest]:
-        for request in self._requests.values():
-            if not request.is_pending:
-                continue
-            if source is not None and request.source != source:
-                continue
-            yield request
+        with self._lock:
+            with self._storage_lock():
+                self._reload()
+                return tuple(
+                    self._copy_request(request)
+                    for request in self._requests.values()
+                    if request.is_pending
+                    and not request.is_expired
+                    and (source is None or request.source == source)
+                )
 
 
-_AUDIT_SOURCE = "security.guardrail"
+_AUDIT_SOURCE = SECURITY_APPROVAL_SOURCE
 _DEFAULT_APPROVALS_PATH = Path("models/encoders/operator_approvals.json")
 _GLOBAL_REGISTRY: OperatorApprovalRegistry | None = None
 _GLOBAL_REGISTRY_LOCK = threading.Lock()
@@ -311,7 +715,6 @@ def log_blocked_attempt(
     serialized_entities = [
         {
             "type": entity.type,
-            "value_preview": entity.value[:64],
             "start": entity.start,
             "end": entity.end,
         }
@@ -323,32 +726,26 @@ def log_blocked_attempt(
         "prompt_hash": prompt_hash,
         "required_action": required_action,
         "pii_entities": serialized_entities,
-        "context_snapshot": _normalise_payload(context or {}),
+        "context_snapshot": _normalise_payload(_redact_context(context or {})),
         "blocked_at": _utcnow_isoformat(),
     }
 
     approval_registry = registry or _default_registry()
-    request = approval_registry.submit(source=_AUDIT_SOURCE, payload=payload)
+    request = approval_registry.submit(
+        source=_AUDIT_SOURCE,
+        payload=payload,
+        expires_in_seconds=SECURITY_APPROVAL_TTL_SECONDS,
+    )
 
-    existing_token = str(request.payload.get("approval_token") or "")
-    if existing_token:
-        approval_token = existing_token
-        token_assigned = False
-    else:
-        approval_token = generate_approval_token(user_id, request.request_id)
-        request.payload["approval_token"] = approval_token
-        token_assigned = True
-
-    if token_assigned:
-        approval_registry._persist()
+    # Store only a digest. The raw proof exists solely for compatibility with
+    # older operator clients and is never returned by the public guardrail.
+    approval_token = generate_approval_token(user_id, request.request_id)
+    approval_registry.bind_token_digest(request.request_id, approval_token)
 
     logger.info(
         "operator_approvals.blocked_request_logged",
         extra={
             "source": _AUDIT_SOURCE,
-            "request_id": request.request_id,
-            "user_id": user_id,
-            "prompt_hash": prompt_hash,
             "blocked_entity_types": sorted({e["type"] for e in serialized_entities}),
         },
     )
@@ -372,8 +769,18 @@ def verify_approval_token(
     request = approval_registry.get(token_ref)
     if request is None or not request.is_approved:
         return False
-    stored_token = str(request.payload.get("approval_token") or "")
-    if not stored_token or not hmac.compare_digest(stored_token, approval_token):
+    recorded_user = str(request.payload.get("user_id") or "")
+    if not recorded_user or not hmac.compare_digest(recorded_user, user_id):
+        return False
+    stored_digest = str(request.payload.get("approval_token_hash") or "")
+    legacy_token = str(request.payload.get("approval_token") or "")
+    if not (
+        (
+            stored_digest
+            and hmac.compare_digest(stored_digest, _token_digest(approval_token))
+        )
+        or (legacy_token and hmac.compare_digest(legacy_token, approval_token))
+    ):
         return False
     if prompt_hash:
         recorded = str(request.payload.get("prompt_hash", ""))
@@ -382,10 +789,35 @@ def verify_approval_token(
     return True
 
 
+def consume_approval(
+    *,
+    user_id: str,
+    token_ref: str,
+    prompt_hash: str,
+    required_action: str | None = None,
+    approval_token: str | None = None,
+    registry: OperatorApprovalRegistry | None = None,
+) -> bool:
+    """Consume an approved request exactly once for its bound prompt owner."""
+
+    if not user_id or not token_ref or not prompt_hash:
+        return False
+    approval_registry = registry or _default_registry()
+    return approval_registry.consume(
+        token_ref,
+        user_id=user_id,
+        prompt_hash=prompt_hash,
+        required_action=required_action,
+        approval_token=approval_token,
+    )
+
+
 __all__ = [
     "ApprovalRequest",
     "OperatorApprovalRegistry",
     "ApprovalPolicy",
+    "SECURITY_APPROVAL_TTL_SECONDS",
+    "consume_approval",
     "log_blocked_attempt",
     "generate_approval_token",
     "verify_approval_token",

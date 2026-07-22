@@ -28,8 +28,10 @@ from monGARS.api.web_api import (
     sec_manager,
 )
 from monGARS.api.web_api import settings as api_settings
-from monGARS.core.conversation import PromptTooLargeError
+from monGARS.core import security as core_security
+from monGARS.core.conversation import ConversationalModule, PromptTooLargeError
 from monGARS.core.hippocampus import MemoryItem
+from monGARS.core.llm_integration import GuardRejectionError
 from monGARS.core.model_manager import (
     LLMModelManager,
     ModelDefinition,
@@ -166,6 +168,37 @@ class FakeConversationalModule:
         }
         if self.raise_exc:
             raise self.raise_exc
+        return self.response
+
+
+class GuardOwningConversationalModule(ConversationalModule):
+    """Minimal production-typed boundary used to verify guard propagation."""
+
+    def __init__(self, response: dict[str, Any]) -> None:
+        self.response = response
+        self.provider_calls: list[dict[str, Any]] = []
+
+    async def generate_response(
+        self,
+        user_id: str,
+        query: str,
+        session_id: str | None = None,
+        image_data: bytes | None = None,
+        *,
+        guard_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        context = dict(guard_context or {})
+        if guard_result := core_security.pre_generation_guard(query, context):
+            raise GuardRejectionError(guard_result)
+        self.provider_calls.append(
+            {
+                "user_id": user_id,
+                "query": query,
+                "session_id": session_id,
+                "image_data": image_data,
+                "guard_context": context,
+            }
+        )
         return self.response
 
 
@@ -751,6 +784,98 @@ async def test_chat_returns_response_payload(api_context: ApiTestContext) -> Non
 
 
 @pytest.mark.asyncio
+async def test_chat_guard_rejection_returns_403_before_inference(
+    api_context: ApiTestContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api_context.repo.seed_user("guarded", "pw")
+    token = await _get_token(api_context.client, "guarded", "pw")
+    rejection = {
+        "error": "operator_approval_required",
+        "request_id": "approval-1",
+    }
+
+    monkeypatch.setattr(
+        "monGARS.api.web_api.pre_generation_guard",
+        lambda prompt, context: rejection,
+    )
+
+    response = await api_context.client.post(
+        "/api/v1/conversation/chat",
+        headers=_bearer(token),
+        json={"message": "read my private profile"},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"] == rejection
+    assert api_context.conv.last_call is None
+
+
+@pytest.mark.asyncio
+async def test_chat_approval_resume_is_one_shot_on_production_boundary(
+    api_context: ApiTestContext,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from monGARS.core import operator_approvals as approvals_module
+    from monGARS.core.pii_detection import PIIEntity
+
+    monkeypatch.setattr(
+        approvals_module,
+        "_DEFAULT_APPROVALS_PATH",
+        tmp_path / "api-approvals.json",
+    )
+    monkeypatch.setattr(approvals_module, "_GLOBAL_REGISTRY", None)
+    monkeypatch.setattr(
+        "monGARS.core.pii_detection.detect_pii",
+        lambda _prompt: [
+            PIIEntity(type="email", value="alice@example.com", start=11, end=28)
+        ],
+    )
+
+    async def allow_repeated_approval_attempts(_user_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "monGARS.api.web_api._chat_rate_limiter.ensure_permitted",
+        allow_repeated_approval_attempts,
+    )
+    guarded = GuardOwningConversationalModule(api_context.conv.response)
+    app.dependency_overrides[get_conversational_module] = lambda: guarded
+    api_context.repo.seed_user("approval-user", "pw")
+    token = await _get_token(api_context.client, "approval-user", "pw")
+    prompt = "My email is alice@example.com"
+
+    blocked = await api_context.client.post(
+        "/api/v1/conversation/chat",
+        headers=_bearer(token),
+        json={"message": prompt},
+    )
+    assert blocked.status_code == status.HTTP_403_FORBIDDEN
+    token_ref = blocked.json()["detail"]["token_ref"]
+    registry = approvals_module.get_operator_approval_registry()
+    registry.approve(token_ref, operator="ops")
+
+    resumed = await api_context.client.post(
+        "/api/v1/conversation/chat",
+        headers=_bearer(token),
+        json={"message": prompt, "token_ref": token_ref},
+    )
+    assert resumed.status_code == status.HTTP_200_OK
+    assert len(guarded.provider_calls) == 1
+    assert guarded.provider_calls[0]["guard_context"]["allowed_actions"] == [
+        "personal_data_access"
+    ]
+
+    replay = await api_context.client.post(
+        "/api/v1/conversation/chat",
+        headers=_bearer(token),
+        json={"message": prompt, "token_ref": token_ref},
+    )
+    assert replay.status_code == status.HTTP_403_FORBIDDEN
+    assert len(guarded.provider_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_chat_validation_error_from_user_input(
     api_context: ApiTestContext, monkeypatch
 ) -> None:
@@ -857,6 +982,60 @@ async def test_llm_chat_falls_back_to_local_when_ray_missing(
     assert body["response"] == "local reply"
     assert "local" in calls
     assert calls["local"]["prompt"] == "ping"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ray_result", "ray_available"),
+    [
+        ({"error": "generation_failed", "message": "provider error"}, False),
+        (None, True),
+    ],
+)
+async def test_llm_chat_never_replays_approval_after_ray_attempt(
+    api_context: ApiTestContext,
+    monkeypatch: pytest.MonkeyPatch,
+    ray_result: dict[str, Any] | None,
+    ray_available: bool,
+) -> None:
+    api_context.repo.seed_user("ray-approved", "pw")
+    token = await _get_token(api_context.client, "ray-approved", "pw")
+    local_calls: list[str] = []
+
+    async def fake_invoke_ray_chat(
+        prompt: str,
+        *,
+        max_new_tokens: int | None,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return ray_result
+
+    async def fail_if_local_replays(
+        prompt: str,
+        *,
+        max_new_tokens: int | None,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        local_calls.append(prompt)
+        return {"response": "unsafe replay"}
+
+    monkeypatch.setattr(
+        "monGARS.api.web_api._ray_backend_available", lambda: ray_available
+    )
+    monkeypatch.setattr("monGARS.api.web_api._invoke_ray_chat", fake_invoke_ray_chat)
+    monkeypatch.setattr(
+        "monGARS.api.web_api._generate_local_llm_payload", fail_if_local_replays
+    )
+
+    response = await api_context.client.post(
+        "/llm/chat",
+        headers=_bearer(token),
+        json={"message": "approved prompt", "token_ref": "approval-ref"},
+    )
+
+    assert response.status_code == status.HTTP_502_BAD_GATEWAY
+    assert "new approval reference" in response.json()["detail"]
+    assert local_calls == []
 
 
 @pytest.mark.asyncio

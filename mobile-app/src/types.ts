@@ -56,7 +56,9 @@ export type MessageMetadata = {
     | 'embedding'
     | 'realtime'
     | 'system'
-    | 'on-device';
+    | 'on-device'
+    | 'agent'
+    | 'app-intent';
   inferenceBackend?: InferenceBackend;
   modelId?: string | null;
   promptTokens?: number;
@@ -64,6 +66,7 @@ export type MessageMetadata = {
   tokensPerSecond?: number;
   finishReason?: string | null;
   localOwnerId?: string;
+  localOwnerScopeVersion?: 1 | 2;
   confidence?: number;
   processingTime?: number;
   speechTurn?: SpeechTurn | null;

@@ -98,6 +98,19 @@ def test_neuron_manager_uses_fallback_when_model_unavailable() -> None:
     assert vectors[0] == manager.encode(["bonjour"], instruction="salut")[0]
 
 
+def test_neuron_manager_strict_encode_rejects_unavailable_model() -> None:
+    manager = NeuronManager(
+        base_model_path="does/not/matter",
+        fallback_dimensions=12,
+        llm2vec_factory=lambda *_: None,
+    )
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        manager.encode_strict(["bonjour"], instruction="salut")
+
+    assert manager._fallback_cache == {}
+
+
 def test_neuron_manager_loads_and_encodes_with_custom_factory() -> None:
     manager = NeuronManager(
         base_model_path="base/model",
@@ -222,6 +235,9 @@ def test_encode_fallback_on_model_error() -> None:
         assert len(vector) == 6
         magnitude = math.sqrt(sum(component**2 for component in vector))
         assert math.isclose(magnitude, 1.0, rel_tol=1e-6)
+
+    with pytest.raises(RuntimeError, match="encoding failed"):
+        manager.encode_strict(["hello"], instruction="test")
 
 
 def test_invalid_configuration_raises() -> None:

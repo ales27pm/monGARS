@@ -11,6 +11,7 @@
 		0C80B921A6F3F58F76C31292 /* libPods-MonGARSMobile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-MonGARSMobile.a */; };
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		13B07FC21A68108700A75B9A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		3DB6B506DCA957B6CFCBC67D /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */; };
 		48D9F814ECF1A3367EB0407E /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 45D86789369CFD7CFCBF354A /* Foundation.framework */; };
@@ -23,6 +24,12 @@
 		B2C3D4E50100000000000001 /* CoreMLInferenceModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E50100000000000011 /* CoreMLInferenceModule.swift */; };
 		B2C3D4E50100000000000002 /* CoreMLInferenceModuleBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E50100000000000012 /* CoreMLInferenceModuleBridge.m */; };
 		B2C3D4E50100000000000003 /* MonGARSCoreML in Frameworks */ = {isa = PBXBuildFile; productRef = B2C3D4E50100000000000021 /* MonGARSCoreML */; };
+		C3D4E5F60100000000000003 /* MonGARSAgentTools in Frameworks */ = {isa = PBXBuildFile; productRef = C3D4E5F60100000000000021 /* MonGARSAgentTools */; };
+		D4E5F6070100000000000001 /* MonGARSAlarmWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6070100000000000011 /* MonGARSAlarmWidgetBundle.swift */; };
+		D4E5F6070100000000000002 /* MonGARSAlarmSupport in Frameworks */ = {isa = PBXBuildFile; productRef = D4E5F6070100000000000021 /* MonGARSAlarmSupport */; };
+		D4E5F6070100000000000003 /* MonGARSAlarmWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = D4E5F6070100000000000012 /* MonGARSAlarmWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		E5F6A7080100000000000001 /* MonGARSAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F6A7080100000000000011 /* MonGARSAppIntents.swift */; };
+		E5F6A7080100000000000002 /* MonGARSAppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F6A7080100000000000012 /* MonGARSAppShortcuts.swift */; };
 		A35443688A15083D7056EA3E /* PacketCaptureProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47386103F40FDE4896199EDC /* PacketCaptureProvider.swift */; };
 		C46C622534F7B8EFF418A74A /* PacketCapture.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */; };
 /* End PBXBuildFile section */
@@ -42,6 +49,13 @@
 			remoteGlobalIDString = 487596C0885FDA4DE4756105;
 			remoteInfo = PacketCapture;
 		};
+		D4E5F6070100000000000031 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D4E5F6070100000000000030;
+			remoteInfo = MonGARSAlarmWidget;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -52,6 +66,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				C46C622534F7B8EFF418A74A /* PacketCapture.appex in Embed App Extensions */,
+				D4E5F6070100000000000003 /* MonGARSAlarmWidget.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -87,7 +102,12 @@
 		B2C3D4E50100000000000011 /* CoreMLInferenceModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMLInferenceModule.swift; sourceTree = "<group>"; };
 		B2C3D4E50100000000000012 /* CoreMLInferenceModuleBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CoreMLInferenceModuleBridge.m; sourceTree = "<group>"; };
 		B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PacketCapture.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		CFD9EBF9BEB8D67035698044 /* MonGARSMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = MonGARSMobile.entitlements; sourceTree = "<group>"; };
+		CFD9EBF9BEB8D67035698044 /* MonGARSMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = MonGARSMobile/MonGARSMobile.entitlements; sourceTree = "<group>"; };
+		D4E5F6070100000000000011 /* MonGARSAlarmWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonGARSAlarmWidgetBundle.swift; sourceTree = "<group>"; };
+		D4E5F6070100000000000012 /* MonGARSAlarmWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MonGARSAlarmWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D4E5F6070100000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		E5F6A7080100000000000011 /* MonGARSAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonGARSAppIntents.swift; sourceTree = "<group>"; };
+		E5F6A7080100000000000012 /* MonGARSAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonGARSAppShortcuts.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		EF3E176EAF71120B8A7ADC06 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
@@ -105,6 +125,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C3D4E5F60100000000000003 /* MonGARSAgentTools in Frameworks */,
 				B2C3D4E50100000000000003 /* MonGARSCoreML in Frameworks */,
 				0C80B921A6F3F58F76C31292 /* libPods-MonGARSMobile.a in Frameworks */,
 			);
@@ -116,6 +137,14 @@
 			files = (
 				48D9F814ECF1A3367EB0407E /* Foundation.framework in Frameworks */,
 				3DB6B506DCA957B6CFCBC67D /* NetworkExtension.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D4E5F6070100000000000040 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D4E5F6070100000000000002 /* MonGARSAlarmSupport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -184,7 +213,9 @@
 		83CBB9F61A601CBA00E9B192 = {
 			isa = PBXGroup;
 			children = (
+				E5F6A7080100000000000010 /* AppIntents */,
 				B2C3D4E50100000000000010 /* CoreMLInference */,
+				D4E5F6070100000000000010 /* MonGARSAlarmWidget */,
 				A1B2C3D40100000000000020 /* Diagnostics */,
 				D48EE345861AF114946E6222 /* DiagnosticsExtension */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
@@ -206,6 +237,7 @@
 				13B07F961A680F5B00A75B9A /* MonGARSMobile.app */,
 				00E356EE1AD99517003FC87E /* MonGARSMobileTests.xctest */,
 				B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */,
+				D4E5F6070100000000000012 /* MonGARSAlarmWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -259,6 +291,24 @@
 			path = DiagnosticsExtension;
 			sourceTree = "<group>";
 		};
+		D4E5F6070100000000000010 /* MonGARSAlarmWidget */ = {
+			isa = PBXGroup;
+			children = (
+				D4E5F6070100000000000011 /* MonGARSAlarmWidgetBundle.swift */,
+				D4E5F6070100000000000013 /* Info.plist */,
+			);
+			path = MonGARSAlarmWidget;
+			sourceTree = "<group>";
+		};
+		E5F6A7080100000000000010 /* AppIntents */ = {
+			isa = PBXGroup;
+			children = (
+				E5F6A7080100000000000011 /* MonGARSAppIntents.swift */,
+				E5F6A7080100000000000012 /* MonGARSAppShortcuts.swift */,
+			);
+			path = AppIntents;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -300,10 +350,12 @@
 			);
 			dependencies = (
 				CF832381C6B6C7507B075E71 /* PBXTargetDependency */,
+				D4E5F6070100000000000032 /* PBXTargetDependency */,
 			);
 			name = MonGARSMobile;
 			packageProductDependencies = (
 				B2C3D4E50100000000000021 /* MonGARSCoreML */,
+				C3D4E5F60100000000000021 /* MonGARSAgentTools */,
 			);
 			productName = MonGARSMobile;
 			productReference = 13B07F961A680F5B00A75B9A /* MonGARSMobile.app */;
@@ -326,6 +378,26 @@
 			productReference = B9418DEDAF73B18E84E27FCC /* PacketCapture.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		D4E5F6070100000000000030 /* MonGARSAlarmWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D4E5F6070100000000000050 /* Build configuration list for PBXNativeTarget "MonGARSAlarmWidget" */;
+			buildPhases = (
+				D4E5F6070100000000000041 /* Sources */,
+				D4E5F6070100000000000040 /* Frameworks */,
+				D4E5F6070100000000000042 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MonGARSAlarmWidget;
+			packageProductDependencies = (
+				D4E5F6070100000000000021 /* MonGARSAlarmSupport */,
+			);
+			productName = MonGARSAlarmWidget;
+			productReference = D4E5F6070100000000000012 /* MonGARSAlarmWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -341,6 +413,9 @@
 					13B07F861A680F5B00A75B9A = {
 						LastSwiftMigration = 1120;
 					};
+					D4E5F6070100000000000030 = {
+						CreatedOnToolsVersion = 26.0;
+					};
 				};
 			};
 			buildConfigurationList = 83CBB9FA1A601CBA00E9B192 /* Build configuration list for PBXProject "MonGARSMobile" */;
@@ -354,6 +429,7 @@
 			mainGroup = 83CBB9F61A601CBA00E9B192;
 			packageReferences = (
 				B2C3D4E50100000000000020 /* XCLocalSwiftPackageReference "MonGARSCoreML" */,
+				C3D4E5F60100000000000020 /* XCLocalSwiftPackageReference "MonGARSAgentTools" */,
 			);
 			productRefGroup = 83CBBA001A601CBA00E9B192 /* Products */;
 			projectDirPath = "";
@@ -362,6 +438,7 @@
 				13B07F861A680F5B00A75B9A /* MonGARSMobile */,
 				00E356ED1AD99517003FC87E /* MonGARSMobileTests */,
 				487596C0885FDA4DE4756105 /* PacketCapture */,
+				D4E5F6070100000000000030 /* MonGARSAlarmWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -380,10 +457,18 @@
 			files = (
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
+				13B07FC21A68108700A75B9A /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		94710CF7FFDD6C033CCB7897 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D4E5F6070100000000000042 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -537,6 +622,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
+				E5F6A7080100000000000001 /* MonGARSAppIntents.swift in Sources */,
+				E5F6A7080100000000000002 /* MonGARSAppShortcuts.swift in Sources */,
 				B2C3D4E50100000000000001 /* CoreMLInferenceModule.swift in Sources */,
 				B2C3D4E50100000000000002 /* CoreMLInferenceModuleBridge.m in Sources */,
 				A1B2C3D40100000000000003 /* DiagnosticsModule.swift in Sources */,
@@ -555,6 +642,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D4E5F6070100000000000041 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D4E5F6070100000000000001 /* MonGARSAlarmWidgetBundle.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -569,12 +664,22 @@
 			target = 487596C0885FDA4DE4756105 /* PacketCapture */;
 			targetProxy = A69B119B9F7BAE9FF7A8B5E3 /* PBXContainerItemProxy */;
 		};
+		D4E5F6070100000000000032 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MonGARSAlarmWidget;
+			target = D4E5F6070100000000000030 /* MonGARSAlarmWidget */;
+			targetProxy = D4E5F6070100000000000031 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCLocalSwiftPackageReference section */
 		B2C3D4E50100000000000020 /* XCLocalSwiftPackageReference "MonGARSCoreML" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = MonGARSCoreML;
+		};
+		C3D4E5F60100000000000020 /* XCLocalSwiftPackageReference "MonGARSAgentTools" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = AgentTools;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -583,6 +688,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B2C3D4E50100000000000020 /* XCLocalSwiftPackageReference "MonGARSCoreML" */;
 			productName = MonGARSCoreML;
+		};
+		C3D4E5F60100000000000021 /* MonGARSAgentTools */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3D4E5F60100000000000020 /* XCLocalSwiftPackageReference "MonGARSAgentTools" */;
+			productName = MonGARSAgentTools;
+		};
+		D4E5F6070100000000000021 /* MonGARSAlarmSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3D4E5F60100000000000020 /* XCLocalSwiftPackageReference "MonGARSAgentTools" */;
+			productName = MonGARSAlarmSupport;
 		};
 /* End XCSwiftPackageProductDependency section */
 
@@ -654,6 +769,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				MONGARS_MICROSOFT_CLIENT_ID = "";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -682,6 +798,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				MONGARS_MICROSOFT_CLIENT_ID = "";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -884,6 +1001,56 @@
 			};
 			name = Debug;
 		};
+		D4E5F6070100000000000051 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MonGARSAlarmWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.AlarmWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D4E5F6070100000000000052 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MonGARSAlarmWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongars.mobile.AlarmWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -919,6 +1086,15 @@
 			buildConfigurations = (
 				F89F627DAC11A5CBF67A7B7E /* Debug */,
 				7024CD2AEDDA56DF5D096D1B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D4E5F6070100000000000050 /* Build configuration list for PBXNativeTarget "MonGARSAlarmWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D4E5F6070100000000000051 /* Debug */,
+				D4E5F6070100000000000052 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

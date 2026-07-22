@@ -532,6 +532,38 @@ class NeuronManager:
     ) -> list[list[float]]:
         """Encode texts with LLM2Vec, supporting per-text instructions and overrides."""
 
+        return self._encode(
+            texts,
+            instruction,
+            allow_fallback=True,
+            encode_kwargs=encode_kwargs,
+        )
+
+    def encode_strict(
+        self,
+        texts: Sequence[str] | Sequence[Sequence[str]],
+        instruction: str | Sequence[str] | None = "",
+        **encode_kwargs: Any,
+    ) -> list[list[float]]:
+        """Encode without synthetic vectors, for semantic-index persistence."""
+
+        return self._encode(
+            texts,
+            instruction,
+            allow_fallback=False,
+            encode_kwargs=encode_kwargs,
+        )
+
+    def _encode(
+        self,
+        texts: Sequence[str] | Sequence[Sequence[str]],
+        instruction: str | Sequence[str] | None,
+        *,
+        allow_fallback: bool,
+        encode_kwargs: dict[str, Any],
+    ) -> list[list[float]]:
+        """Implement permissive and fail-closed encoding policies."""
+
         if isinstance(texts, (str, bytes)):
             raise TypeError("texts must be a sequence of strings, not a single string")
 
@@ -545,6 +577,8 @@ class NeuronManager:
             self._load_encoder()
 
         if not self.model:
+            if not allow_fallback:
+                raise RuntimeError("LLM2Vec embedding model is unavailable")
             logger.debug("Using fallback embeddings for %d texts", len(prompts))
             return [self._fallback_vector(inst, text) for inst, text in prompts]
 
@@ -562,6 +596,8 @@ class NeuronManager:
             else:
                 encoded = self.model.encode(formatted_texts, **options)
         except Exception as exc:  # pragma: no cover - inference failures are rare
+            if not allow_fallback:
+                raise RuntimeError("LLM2Vec encoding failed") from exc
             logger.warning(
                 "LLM2Vec encoding failed; falling back to deterministic vectors: %s",
                 exc,
@@ -572,6 +608,8 @@ class NeuronManager:
         try:
             return self._normalise_embeddings(encoded, expected=len(prompts))
         except Exception as exc:  # pragma: no cover - defensive fallback
+            if not allow_fallback:
+                raise RuntimeError("LLM2Vec returned invalid embeddings") from exc
             logger.warning(
                 "LLM2Vec returned invalid embeddings; using fallback: %s", exc
             )

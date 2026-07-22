@@ -24,9 +24,20 @@ import { useNavigation } from '@react-navigation/native';
 import Composer from '../components/Composer';
 import MessageBubble from '../components/MessageBubble';
 import { settings } from '../services/config';
-import { getLocalConversationOwner, useChatStore } from '../store/chatStore';
+import {
+  getLocalConversationOwner,
+  isConversationMessageVisible,
+  useChatStore,
+} from '../store/chatStore';
 import { useInferenceStore } from '../store/inferenceStore';
 import type { Message } from '../types';
+import { summarizeAgentApprovalArguments } from '../agent/approvalSummary';
+import {
+  appIntentHandoffPreview,
+  appIntentHandoffTitle,
+} from '../agent/appIntentHandoff';
+import { subscribeToAgentTriggerResume } from '../services/agentTriggerResume';
+import { subscribeToAppIntentResume } from '../services/appIntentResume';
 import { buildJsonExport, buildMarkdownExport } from '../utils/conversation';
 
 const EmptyState: React.FC<{
@@ -84,8 +95,22 @@ const ChatScreen: React.FC = () => {
     mode,
     quickActions,
     connection,
+    pendingAgentApproval,
+    pendingAgentPermission,
+    pendingAgentTrigger,
+    pendingAppIntentHandoff,
     initialize,
+    refreshPendingAgentTrigger,
+    refreshPendingAppIntentHandoff,
     sendMessage,
+    approvePendingAgent,
+    rejectPendingAgent,
+    requestPendingAgentPermission,
+    dismissPendingAgentPermission,
+    runPendingAgentTrigger,
+    dismissPendingAgentTrigger,
+    runPendingAppIntentHandoff,
+    dismissPendingAppIntentHandoff,
     requestQuickActions,
     setMode,
     clearError,
@@ -128,6 +153,16 @@ const ChatScreen: React.FC = () => {
     initialize().catch((err) => console.warn('[ChatScreen] init failed', err));
   }, [initialize, session?.token, session?.username]);
 
+  useEffect(
+    () => subscribeToAgentTriggerResume(refreshPendingAgentTrigger),
+    [refreshPendingAgentTrigger],
+  );
+
+  useEffect(
+    () => subscribeToAppIntentResume(refreshPendingAppIntentHandoff),
+    [refreshPendingAppIntentHandoff],
+  );
+
   useEffect(() => {
     if (backend === 'on-device') {
       return;
@@ -143,13 +178,9 @@ const ChatScreen: React.FC = () => {
 
   const activeMessages = useMemo(() => {
     const localOwnerId = getLocalConversationOwner(session);
-    return messages.filter((message) => {
-      const messageBackend = message.metadata?.inferenceBackend ?? 'server';
-      return backend === 'server'
-        ? messageBackend === 'server'
-        : messageBackend === 'on-device' &&
-            message.metadata?.localOwnerId === localOwnerId;
-    });
+    return messages.filter((message) =>
+      isConversationMessageVisible(message, backend, localOwnerId),
+    );
   }, [backend, messages, session]);
 
   const filteredMessages = useMemo(() => {
@@ -203,6 +234,13 @@ const ChatScreen: React.FC = () => {
     backend === 'on-device' ? localStatus.phase : connection.status;
   const localTokensPerSecond =
     localGeneration?.tokensPerSecond ?? localResult?.tokensPerSecond ?? 0;
+  const pendingApprovalSummary = useMemo(
+    () =>
+      pendingAgentApproval
+        ? summarizeAgentApprovalArguments(pendingAgentApproval.arguments)
+        : [],
+    [pendingAgentApproval],
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -222,7 +260,7 @@ const ChatScreen: React.FC = () => {
               <Text style={styles.heroTitle}>monGARS mobile</Text>
               <Text style={styles.heroSubtitle}>
                 {backend === 'on-device'
-                  ? 'Le prompt et la reponse restent sur cet iPhone.'
+                  ? 'Modèle et chat locaux; les outils choisis peuvent joindre leur fournisseur.'
                   : 'Chat natif, synchro temps reel, recherche et export.'}
               </Text>
             </View>
@@ -314,6 +352,265 @@ const ChatScreen: React.FC = () => {
             <Text style={styles.bannerTitle}>Etat</Text>
             <Text style={styles.bannerText}>{notice.message}</Text>
           </Pressable>
+        ) : null}
+
+        {pendingAppIntentHandoff ? (
+          <View style={styles.shortcutCard}>
+            <Text style={styles.shortcutEyebrow}>
+              Siri · Raccourcis · {pendingAppIntentHandoff.profileLabel}
+            </Text>
+            <Text selectable style={styles.shortcutDetail}>
+              Profil actif : {pendingAppIntentHandoff.ownerId}
+            </Text>
+            <Text style={styles.approvalTitle}>
+              {appIntentHandoffTitle(pendingAppIntentHandoff)}
+            </Text>
+            <Text selectable style={styles.shortcutInput}>
+              {appIntentHandoffPreview(
+                pendingAppIntentHandoff,
+                pendingAppIntentHandoff.resolvedTrigger,
+              )}
+            </Text>
+            <Text style={styles.shortcutDetail}>
+              {!pendingAppIntentHandoff.profileMatches
+                ? 'Le contenu et le type restent masqués pour le profil actif; vous pouvez seulement ignorer cette demande exacte.'
+                : pendingAppIntentHandoff.kind === 'runTrigger' &&
+                    !pendingAppIntentHandoff.resolvedTrigger
+                  ? 'Aucune requête exacte ne peut être prévisualisée; l’exécution reste bloquée.'
+                  : pendingAppIntentHandoff.kind === 'diagnostics'
+                    ? 'Cette action ouvre seulement l écran passif dans l app.'
+                    : backend === 'on-device'
+                      ? 'Rien ne sera exécuté avant votre confirmation au premier plan.'
+                      : 'La mémoire reste locale; les requêtes de modèle exigent le backend local.'}
+            </Text>
+            <View style={styles.approvalActions}>
+              {pendingAppIntentHandoff.profileMatches &&
+              (pendingAppIntentHandoff.kind !== 'runTrigger' ||
+                pendingAppIntentHandoff.resolvedTrigger) ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirmer l action Siri ou Raccourcis"
+                  disabled={loading}
+                  style={[
+                    styles.approvalButton,
+                    styles.approveButton,
+                    loading ? styles.disabledButton : null,
+                  ]}
+                  onPress={() => {
+                    runPendingAppIntentHandoff()
+                      .then((destination) => {
+                        if (destination === 'diagnostics') {
+                          navigation.navigate('Diagnostics' as never);
+                        }
+                      })
+                      .catch((handoffError) =>
+                        console.warn(
+                          '[ChatScreen] App Intent handoff failed',
+                          handoffError,
+                        ),
+                      );
+                  }}
+                >
+                  <Text style={styles.approveButtonText}>
+                    {pendingAppIntentHandoff.kind === 'diagnostics'
+                      ? 'Ouvrir'
+                      : 'Exécuter'}
+                  </Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Ignorer l action Siri ou Raccourcis"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.rejectButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={dismissPendingAppIntentHandoff}
+              >
+                <Text style={styles.rejectButtonText}>Ignorer</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {backend === 'on-device' && pendingAgentTrigger ? (
+          <View style={styles.triggerCard}>
+            <Text style={styles.triggerEyebrow}>Requête planifiée</Text>
+            <Text style={styles.approvalTitle}>
+              {pendingAgentTrigger.title}
+            </Text>
+            <Text style={styles.approvalText}>
+              Prompt exact qui sera transmis à l agent :
+            </Text>
+            <Text selectable style={styles.triggerPrompt}>
+              {pendingAgentTrigger.prompt}
+            </Text>
+            <Text style={styles.approvalText}>
+              {pendingAgentTrigger.repeats
+                ? 'Déclencheur récurrent. Le lancement reste manuel.'
+                : 'Déclencheur ponctuel. Aucun agent ne part sans votre action.'}
+            </Text>
+            <View style={styles.approvalActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Lancer la requête planifiée"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.approveButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={() => {
+                  runPendingAgentTrigger().catch((triggerError) =>
+                    console.warn(
+                      '[ChatScreen] scheduled agent failed',
+                      triggerError,
+                    ),
+                  );
+                }}
+              >
+                <Text style={styles.approveButtonText}>Lancer</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Ignorer la requête planifiée"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.rejectButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={dismissPendingAgentTrigger}
+              >
+                <Text style={styles.rejectButtonText}>Ignorer</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {backend === 'on-device' && pendingAgentApproval ? (
+          <View style={styles.approvalCard}>
+            <Text style={styles.approvalEyebrow}>
+              Approbation locale requise
+            </Text>
+            <Text style={styles.approvalTitle}>
+              {pendingAgentApproval.displayName}
+            </Text>
+            <Text style={styles.approvalText}>
+              L outil « {pendingAgentApproval.toolId} » ne sera pas exécuté
+              avant votre approbation explicite. Risque :{' '}
+              {pendingAgentApproval.risk}.
+            </Text>
+            <View style={styles.approvalArguments}>
+              {pendingApprovalSummary.length ? (
+                pendingApprovalSummary.map((argument) => (
+                  <View key={argument.key} style={styles.approvalArgumentRow}>
+                    <Text style={styles.approvalArgumentKey}>
+                      {argument.key}
+                    </Text>
+                    <Text selectable style={styles.approvalArgumentValue}>
+                      {argument.value}
+                    </Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.approvalArgumentValue}>Aucun argument</Text>
+              )}
+            </View>
+            <View style={styles.approvalActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Approuver l action locale"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.approveButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={() => {
+                  approvePendingAgent().catch((approvalError) =>
+                    console.warn(
+                      '[ChatScreen] agent approval failed',
+                      approvalError,
+                    ),
+                  );
+                }}
+              >
+                <Text style={styles.approveButtonText}>Approuver</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Rejeter l action locale"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.rejectButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={() => {
+                  rejectPendingAgent().catch((rejectionError) =>
+                    console.warn(
+                      '[ChatScreen] agent rejection failed',
+                      rejectionError,
+                    ),
+                  );
+                }}
+              >
+                <Text style={styles.rejectButtonText}>Rejeter</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {backend === 'on-device' && pendingAgentPermission ? (
+          <View style={styles.approvalCard}>
+            <Text style={styles.approvalEyebrow}>Autorisation iOS requise</Text>
+            <Text style={styles.approvalTitle}>
+              {pendingAgentPermission.permission}
+            </Text>
+            <Text style={styles.approvalText}>
+              iOS doit afficher sa demande d accès avant que l agent puisse
+              utiliser cette capacité. Refuser ou fermer la demande n exécute
+              aucun outil.
+            </Text>
+            <View style={styles.approvalActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Demander l autorisation iOS"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.approveButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={() => {
+                  requestPendingAgentPermission().catch((permissionError) =>
+                    console.warn(
+                      '[ChatScreen] agent permission failed',
+                      permissionError,
+                    ),
+                  );
+                }}
+              >
+                <Text style={styles.approveButtonText}>Continuer dans iOS</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Annuler la demande d autorisation"
+                disabled={loading}
+                style={[
+                  styles.approvalButton,
+                  styles.rejectButton,
+                  loading ? styles.disabledButton : null,
+                ]}
+                onPress={dismissPendingAgentPermission}
+              >
+                <Text style={styles.rejectButtonText}>Annuler</Text>
+              </Pressable>
+            </View>
+          </View>
         ) : null}
 
         <View style={styles.searchCard}>
@@ -436,7 +733,11 @@ const ChatScreen: React.FC = () => {
             onDraftChange={setDraft}
             quickActions={quickActions}
             sending={loading}
-            canSend={backend === 'on-device' ? localReady : Boolean(session)}
+            canSend={
+              backend === 'on-device'
+                ? localReady && !pendingAgentApproval && !pendingAgentPermission
+                : Boolean(session)
+            }
             embeddingAvailable={
               backend === 'server' && Boolean(settings.embedServiceUrl)
             }
@@ -561,6 +862,118 @@ const styles = StyleSheet.create({
   },
   bannerText: {
     color: '#e2e8f0',
+  },
+  approvalCard: {
+    borderRadius: 22,
+    padding: 18,
+    backgroundColor: '#2a1b08',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    gap: 10,
+  },
+  triggerCard: {
+    borderRadius: 22,
+    padding: 18,
+    backgroundColor: '#10233a',
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    gap: 10,
+  },
+  shortcutCard: {
+    borderRadius: 22,
+    padding: 18,
+    backgroundColor: '#172139',
+    borderWidth: 1,
+    borderColor: '#a78bfa',
+    gap: 10,
+  },
+  shortcutEyebrow: {
+    color: '#c4b5fd',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  shortcutInput: {
+    color: '#ede9fe',
+    lineHeight: 21,
+  },
+  shortcutDetail: {
+    color: '#ddd6fe',
+    lineHeight: 21,
+  },
+  triggerEyebrow: {
+    color: '#7dd3fc',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  triggerPrompt: {
+    color: '#e0f2fe',
+    lineHeight: 21,
+  },
+  approvalEyebrow: {
+    color: '#fbbf24',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  approvalTitle: {
+    color: '#fff7ed',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  approvalText: {
+    color: '#fed7aa',
+    lineHeight: 21,
+  },
+  approvalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  approvalArguments: {
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: '#170f05',
+    gap: 8,
+  },
+  approvalArgumentRow: {
+    gap: 2,
+  },
+  approvalArgumentKey: {
+    color: '#fbbf24',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  approvalArgumentValue: {
+    color: '#fff7ed',
+    lineHeight: 20,
+  },
+  approvalButton: {
+    flex: 1,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  approveButton: {
+    backgroundColor: '#f59e0b',
+  },
+  rejectButton: {
+    backgroundColor: '#3f1d1d',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+  },
+  approveButtonText: {
+    color: '#111827',
+    fontWeight: '800',
+  },
+  rejectButtonText: {
+    color: '#fecaca',
+    fontWeight: '800',
+  },
+  disabledButton: {
+    opacity: 0.55,
   },
   searchCard: {
     borderRadius: 24,
