@@ -154,6 +154,7 @@ type ChatState = {
 };
 
 const DEFAULT_QUICK_ACTIONS: QuickAction[] = ['code', 'summarize', 'explain'];
+const LOCAL_OWNER_SCOPE_VERSION = 2 as const;
 
 const DEFAULT_CONNECTION: ConnectionSnapshot = {
   status: 'offline',
@@ -263,6 +264,39 @@ export function getLocalConversationOwner(session: UserSession | null): string {
   return username ? `account:${username}` : 'guest';
 }
 
+function getLegacyLocalConversationOwner(session: UserSession): string {
+  return `account:${session.username.trim().toLowerCase()}`;
+}
+
+function claimLegacyLocalMessages(
+  messages: Message[],
+  session: UserSession,
+): Message[] {
+  const canonicalOwnerId = getLocalConversationOwner(session);
+  const legacyOwnerId = getLegacyLocalConversationOwner(session);
+  let changed = false;
+  const claimed = messages.map((message) => {
+    const metadata = message.metadata;
+    if (
+      metadata?.inferenceBackend !== 'on-device' ||
+      metadata.localOwnerScopeVersion !== 1 ||
+      metadata.localOwnerId !== legacyOwnerId
+    ) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      metadata: {
+        ...metadata,
+        localOwnerId: canonicalOwnerId,
+        localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
+      },
+    };
+  });
+  return changed ? claimed : messages;
+}
+
 function isServerMessage(message: Message): boolean {
   return (message.metadata?.inferenceBackend ?? 'server') === 'server';
 }
@@ -321,6 +355,7 @@ function localAgentMessage(ownerId: string, content: string): Message {
       source: 'agent',
       inferenceBackend: 'on-device',
       localOwnerId: ownerId,
+      localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
       modelId: 'ales27pm/Dolphin3.0-CoreML',
       finishReason: 'agent',
     },
@@ -338,6 +373,7 @@ function localAppIntentUserMessage(ownerId: string, content: string): Message {
       source: 'app-intent',
       inferenceBackend: 'on-device',
       localOwnerId: ownerId,
+      localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
     },
   };
 }
@@ -356,6 +392,7 @@ function localAppIntentResultMessage(
       source: 'app-intent',
       inferenceBackend: 'on-device',
       localOwnerId: ownerId,
+      localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
       finishReason: 'local-tool',
     },
   };
@@ -1041,6 +1078,15 @@ export const useChatStore = create<ChatState>()(
           appIntentFetchVersion += 1;
           const pendingApproval = get().pendingAgentApproval;
           const nextOwnerId = getLocalConversationOwner(session);
+          if (session) {
+            // v5 persisted the exact lower-case owner on each local message.
+            // Claim only records tagged as pre-canonical during hydration, then
+            // mark them current so a later case-distinct login cannot re-key
+            // newly created data through the legacy alias.
+            set((state) => ({
+              messages: claimLegacyLocalMessages(state.messages, session),
+            }));
+          }
           if (pendingApproval && pendingApproval.ownerId !== nextOwnerId) {
             await rejectNativeAgent(approvalBinding(pendingApproval)).catch(
               () => {
@@ -1319,7 +1365,12 @@ export const useChatStore = create<ChatState>()(
                   ? 'embedding'
                   : 'chat',
             inferenceBackend: backend,
-            ...(backend === 'on-device' ? { localOwnerId } : {}),
+            ...(backend === 'on-device'
+              ? {
+                  localOwnerId,
+                  localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
+                }
+              : {}),
           },
         };
 
@@ -1422,6 +1473,7 @@ export const useChatStore = create<ChatState>()(
                     source: 'on-device',
                     inferenceBackend: 'on-device',
                     localOwnerId,
+                    localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
                   },
                 });
               }),
@@ -1475,6 +1527,7 @@ export const useChatStore = create<ChatState>()(
                       source: 'on-device',
                       inferenceBackend: 'on-device',
                       localOwnerId,
+                      localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
                       modelId: result.modelId,
                       promptTokens: result.promptTokens ?? undefined,
                       generatedTokens: result.generatedTokens,
@@ -1520,6 +1573,7 @@ export const useChatStore = create<ChatState>()(
                       source: 'on-device',
                       inferenceBackend: 'on-device',
                       localOwnerId,
+                      localOwnerScopeVersion: LOCAL_OWNER_SCOPE_VERSION,
                       finishReason: 'error',
                     };
                   } else {
@@ -2535,8 +2589,8 @@ export const useChatStore = create<ChatState>()(
           return value;
         },
       }),
-      version: 6,
-      migrate: (persistedState) => {
+      version: 7,
+      migrate: (persistedState, persistedVersion) => {
         if (!persistedState) {
           return persistedState as ChatState;
         }
@@ -2551,8 +2605,15 @@ export const useChatStore = create<ChatState>()(
             ? state.session.username.trim()
             : '';
         const legacyLocalOwnerId = legacyUsername
+          ? getLegacyLocalConversationOwner({
+              username: legacyUsername,
+              token: '',
+            })
+          : 'guest';
+        const canonicalLocalOwnerId = legacyUsername
           ? getLocalConversationOwner({ username: legacyUsername, token: '' })
           : 'guest';
+        const usesLegacyLowerCaseOwners = persistedVersion <= 5;
 
         return {
           // Authentication is process-memory-only. Explicitly overwrite any
@@ -2561,6 +2622,13 @@ export const useChatStore = create<ChatState>()(
           messages: (state.messages ?? []).map((message) => {
             const inferenceBackend =
               message.metadata?.inferenceBackend ?? 'server';
+            const storedOwnerId =
+              message.metadata?.localOwnerId ?? legacyLocalOwnerId;
+            const canClaimPersistedOwner =
+              inferenceBackend === 'on-device' &&
+              usesLegacyLowerCaseOwners &&
+              Boolean(legacyUsername) &&
+              storedOwnerId === legacyLocalOwnerId;
             return {
               ...message,
               createdAt: message.createdAt
@@ -2571,8 +2639,15 @@ export const useChatStore = create<ChatState>()(
                 inferenceBackend,
                 ...(inferenceBackend === 'on-device'
                   ? {
-                      localOwnerId:
-                        message.metadata?.localOwnerId ?? legacyLocalOwnerId,
+                      localOwnerId: canClaimPersistedOwner
+                        ? canonicalLocalOwnerId
+                        : storedOwnerId,
+                      localOwnerScopeVersion: canClaimPersistedOwner
+                        ? LOCAL_OWNER_SCOPE_VERSION
+                        : (message.metadata?.localOwnerScopeVersion ??
+                          (usesLegacyLowerCaseOwners
+                            ? 1
+                            : LOCAL_OWNER_SCOPE_VERSION)),
                     }
                   : {}),
               },

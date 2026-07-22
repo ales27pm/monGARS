@@ -27,6 +27,7 @@ from monGARS.core.mimicry import MimicryModule
 from monGARS.core.neuro_symbolic.advanced_reasoner import AdvancedReasoner
 from monGARS.core.persistence import PersistenceRepository, VectorMatch
 from monGARS.core.personality import PersonalityEngine
+from monGARS.core.pii_detection import detect_pii
 from monGARS.core.security import pre_generation_guard
 from monGARS.core.services import MemoryService, SpeakerService
 
@@ -519,8 +520,6 @@ class ConversationalModule:
         if "personal_data_access" not in allowed_actions:
             allowed_actions.append("personal_data_access")
         security_context["allowed_actions"] = allowed_actions
-        if guard_result := pre_generation_guard(query, security_context):
-            raise GuardRejectionError(guard_result)
         history_items = await self.memory.history(user_id, limit=5)
         history_pairs = [
             (m.query, m.response)
@@ -529,21 +528,35 @@ class ConversationalModule:
         ]
 
         original_query = query
-        query_with_image = await self._handle_image(query, image_data)
-        augmented_query = await self._augment_with_curiosity(
-            query_with_image, history_pairs
-        )
-        refined_prompt, reasoning_metadata = await self._refine_query(
-            augmented_query, user_id
-        )
-
         task_type = self._determine_task_type(original_query)
-
-        semantic_context = await self._semantic_context_matches(
-            user_id=user_id,
-            query=augmented_query,
-            history_pairs=history_pairs,
-        )
+        pre_enrichment_parts = [query]
+        for history_query, history_response in history_pairs:
+            pre_enrichment_parts.extend(
+                [str(history_query or ""), str(history_response or "")]
+            )
+        pre_enrichment_text = "\n".join(pre_enrichment_parts)
+        query_with_image = query
+        augmented_query = query
+        if detect_pii(pre_enrichment_text):
+            # Curiosity, captioning, reasoning, and semantic search can invoke
+            # model or network-backed components. Keep sensitive turns on the
+            # deterministic composition path until the final prompt is approved.
+            refined_prompt = query
+            reasoning_metadata: Mapping[str, Any] = {}
+            semantic_context: list[dict[str, object]] = []
+        else:
+            query_with_image = await self._handle_image(query, image_data)
+            augmented_query = await self._augment_with_curiosity(
+                query_with_image, history_pairs
+            )
+            refined_prompt, reasoning_metadata = await self._refine_query(
+                augmented_query, user_id
+            )
+            semantic_context = await self._semantic_context_matches(
+                user_id=user_id,
+                query=augmented_query,
+                history_pairs=history_pairs,
+            )
         trimmed_history = list(history_pairs)
         trimmed_semantic = list(semantic_context)
         prompt_bundle = self._compose_prompt(
@@ -617,9 +630,30 @@ class ConversationalModule:
             history_pairs = trimmed_history
             semantic_context = trimmed_semantic
 
-        llm_out: dict[str, Any]
         llm_adapter = getattr(self, "llm", None)
         use_adapter = bool(llm_adapter and hasattr(llm_adapter, "generate_response"))
+        uses_guarded_llm_boundary = bool(
+            use_adapter
+            and isinstance(llm_adapter, LLMIntegration)
+            and getattr(type(llm_adapter), "generate_response", None)
+            is LLMIntegration.generate_response
+        )
+        if uses_guarded_llm_boundary:
+            guarded_prompt = llm_adapter.prepare_generation_prompt(
+                prompt_bundle.text, prompt_bundle.chatml
+            )
+        elif use_adapter:
+            guarded_prompt = prompt_bundle.chatml
+        else:
+            guarded_prompt = prompt_bundle.text
+
+        # Guard only the final, token-budgeted provider value so recalled
+        # history, semantic context, system instructions, and the exact prompt
+        # authorized by the one-shot pass share one approval fingerprint.
+        if guard_result := pre_generation_guard(guarded_prompt, security_context):
+            raise GuardRejectionError(guard_result)
+
+        llm_out: dict[str, Any]
         if use_adapter:
             try:
                 generation_kwargs: dict[str, Any] = {
@@ -627,15 +661,10 @@ class ConversationalModule:
                     "response_hints": response_hints,
                     "formatted_prompt": prompt_bundle.chatml,
                 }
-                uses_guarded_llm_boundary = (
-                    isinstance(llm_adapter, LLMIntegration)
-                    and getattr(type(llm_adapter), "generate_response", None)
-                    is LLMIntegration.generate_response
-                )
                 if uses_guarded_llm_boundary:
                     generation_kwargs["context"] = security_context
                     generation_kwargs["_guard_pass"] = (
-                        _issue_pre_generation_guard_pass()
+                        _issue_pre_generation_guard_pass(guarded_prompt)
                     )
                 response_mapping = await llm_adapter.generate_response(  # type: ignore[attr-defined]
                     prompt_bundle.text, **generation_kwargs

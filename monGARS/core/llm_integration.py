@@ -87,27 +87,29 @@ _GENERATION_GUARD_ISSUER = object()
 
 
 class _PreGenerationGuardPass:
-    """One-shot internal capability proving an upstream guard succeeded."""
+    """One-shot capability proving the exact provider prompt was guarded."""
 
-    __slots__ = ("_consumed", "_issuer", "_lock")
+    __slots__ = ("_consumed", "_issuer", "_lock", "_prompt_digest")
 
-    def __init__(self, issuer: object) -> None:
+    def __init__(self, issuer: object, prompt: str) -> None:
         self._issuer = issuer
+        self._prompt_digest = hashlib.sha256(prompt.encode("utf-8")).digest()
         self._consumed = False
         self._lock = threading.Lock()
 
-    def consume(self, issuer: object) -> bool:
+    def consume(self, issuer: object, prompt: str) -> bool:
+        prompt_digest = hashlib.sha256(prompt.encode("utf-8")).digest()
         with self._lock:
             if self._issuer is not issuer or self._consumed:
                 return False
             self._consumed = True
-            return True
+            return prompt_digest == self._prompt_digest
 
 
-def _issue_pre_generation_guard_pass() -> _PreGenerationGuardPass:
-    """Issue an opaque pass for the next internal generation boundary."""
+def _issue_pre_generation_guard_pass(prompt: str) -> _PreGenerationGuardPass:
+    """Issue an opaque pass bound to the next provider-bound prompt."""
 
-    return _PreGenerationGuardPass(_GENERATION_GUARD_ISSUER)
+    return _PreGenerationGuardPass(_GENERATION_GUARD_ISSUER, prompt)
 
 
 _UNSLOTH_STATE: dict[str, Any] | None = None
@@ -1374,6 +1376,13 @@ class LLMIntegration:
         system_prompt = self._default_system_prompt
         return self._build_chatml_prompt(candidate, system_prompt=system_prompt)
 
+    def prepare_generation_prompt(
+        self, prompt: str, formatted_prompt: str | None = None
+    ) -> str:
+        """Return the exact normalized prompt dispatched to a provider."""
+
+        return self._ensure_chatml_prompt(prompt, formatted_prompt)
+
     def _provider_messages_from_prompt(self, prompt: str) -> list[dict[str, str]]:
         """Convert the legacy internal prompt envelope to provider messages.
 
@@ -1910,12 +1919,13 @@ class LLMIntegration:
         """Generate a response for ``prompt`` using the configured LLM stack."""
 
         guard_context = dict(context) if isinstance(context, Mapping) else {}
+        active_prompt = self.prepare_generation_prompt(prompt, formatted_prompt)
         if _guard_pass is None:
-            if guard_result := pre_generation_guard(prompt, guard_context):
+            if guard_result := pre_generation_guard(active_prompt, guard_context):
                 raise GuardRejectionError(guard_result)
         elif not isinstance(
             _guard_pass, _PreGenerationGuardPass
-        ) or not _guard_pass.consume(_GENERATION_GUARD_ISSUER):
+        ) or not _guard_pass.consume(_GENERATION_GUARD_ISSUER, active_prompt):
             raise RuntimeError("invalid or reused pre-generation guard pass")
 
         adapter_metadata: dict[str, str] | None
@@ -1927,7 +1937,6 @@ class LLMIntegration:
             adapter_metadata = None
             if self._current_adapter_version != "baseline":
                 self._update_adapter_version(None)
-        active_prompt = self._ensure_chatml_prompt(prompt, formatted_prompt)
         cache_key = self._cache_key(task_type, active_prompt)
         cached_response = await _RESPONSE_CACHE.get(cache_key)
         if cached_response:

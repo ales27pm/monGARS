@@ -1,6 +1,7 @@
 import { act } from '@testing-library/react-native';
 import {
   getLocalConversationOwner,
+  isConversationMessageVisible,
   useChatStore,
 } from '../src/store/chatStore';
 import { useInferenceStore } from '../src/store/inferenceStore';
@@ -178,7 +179,7 @@ describe('chatStore', () => {
 
     expect(serialized).not.toContain(secretToken);
     expect(JSON.parse(serialized).state).not.toHaveProperty('session');
-    expect(useChatStore.persist.getOptions().version).toBe(6);
+    expect(useChatStore.persist.getOptions().version).toBe(7);
   });
 
   it('stores a chat reply and suppresses the next realtime echo', async () => {
@@ -870,7 +871,7 @@ describe('chatStore', () => {
     );
   });
 
-  it('strips a legacy persisted token while retaining its local owner attribution', async () => {
+  it('strips a v5 token and migrates its lower-case local owner', async () => {
     const migrate = useChatStore.persist.getOptions().migrate;
     if (!migrate) {
       throw new Error('Migration chat manquante');
@@ -888,6 +889,7 @@ describe('chatStore', () => {
             metadata: {
               inferenceBackend: 'on-device',
               source: 'on-device',
+              localOwnerId: 'account:alice',
             },
           },
           {
@@ -909,7 +911,10 @@ describe('chatStore', () => {
     )) as {
       session: unknown;
       messages: Array<{
-        metadata?: { localOwnerId?: string };
+        metadata?: {
+          localOwnerId?: string;
+          localOwnerScopeVersion?: number;
+        };
       }>;
     };
 
@@ -927,8 +932,122 @@ describe('chatStore', () => {
     );
     expect(
       migrated.messages.every(
-        (message) => message.metadata?.localOwnerId === 'account:Alice',
+        (message) =>
+          message.metadata?.localOwnerId === 'account:Alice' &&
+          message.metadata.localOwnerScopeVersion === 2,
       ),
     ).toBe(true);
+  });
+
+  it('claims a logged-out v5 owner once without weakening case isolation', async () => {
+    const migrate = useChatStore.persist.getOptions().migrate;
+    if (!migrate) {
+      throw new Error('Migration chat manquante');
+    }
+
+    const migrated = await migrate(
+      {
+        session: null,
+        messages: [
+          {
+            id: 'logged-out-v5-message',
+            role: 'assistant',
+            content: 'Historique local Alice',
+            createdAt: new Date().toISOString(),
+            metadata: {
+              inferenceBackend: 'on-device',
+              source: 'on-device',
+              localOwnerId: 'account:alice',
+              finishReason: 'eos',
+            },
+          },
+        ],
+        mode: 'chat',
+        quickActions: ['code', 'summarize', 'explain'],
+      },
+      5,
+    );
+    useChatStore.setState(
+      migrated as Partial<ReturnType<typeof useChatStore.getState>>,
+    );
+
+    await act(async () => {
+      await useChatStore.getState().setSession({
+        username: 'Alice',
+        token: 'alice-token',
+      });
+    });
+
+    expect(useChatStore.getState().messages[0].metadata).toEqual(
+      expect.objectContaining({
+        localOwnerId: 'account:Alice',
+        localOwnerScopeVersion: 2,
+      }),
+    );
+
+    await act(async () => {
+      await useChatStore.getState().setSession({
+        username: 'alice',
+        token: 'lowercase-token',
+      });
+    });
+
+    expect(useChatStore.getState().messages[0].metadata?.localOwnerId).toBe(
+      'account:Alice',
+    );
+  });
+
+  it('does not reclaim a case-isolated v6 owner through the legacy alias', async () => {
+    const migrate = useChatStore.persist.getOptions().migrate;
+    if (!migrate) {
+      throw new Error('Migration chat manquante');
+    }
+
+    const migrated = await migrate(
+      {
+        session: null,
+        messages: [
+          {
+            id: 'v6-lowercase-account-message',
+            role: 'assistant',
+            content: 'Donnée du compte minuscule',
+            createdAt: new Date().toISOString(),
+            metadata: {
+              inferenceBackend: 'on-device',
+              source: 'on-device',
+              localOwnerId: 'account:alice',
+              finishReason: 'eos',
+            },
+          },
+        ],
+        mode: 'chat',
+        quickActions: ['code', 'summarize', 'explain'],
+      },
+      6,
+    );
+    useChatStore.setState(
+      migrated as Partial<ReturnType<typeof useChatStore.getState>>,
+    );
+
+    await act(async () => {
+      await useChatStore.getState().setSession({
+        username: 'Alice',
+        token: 'uppercase-token',
+      });
+    });
+
+    expect(useChatStore.getState().messages[0].metadata).toEqual(
+      expect.objectContaining({
+        localOwnerId: 'account:alice',
+        localOwnerScopeVersion: 2,
+      }),
+    );
+    expect(
+      useChatStore
+        .getState()
+        .messages.filter((message) =>
+          isConversationMessageVisible(message, 'on-device', 'account:Alice'),
+        ),
+    ).toHaveLength(0);
   });
 });

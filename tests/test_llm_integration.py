@@ -744,6 +744,36 @@ async def test_generate_response_applies_guard_before_cache_or_provider(
 
 
 @pytest.mark.asyncio
+async def test_generate_response_guards_the_formatted_provider_prompt(
+    fake_llm_integration: llm_integration.LLMIntegration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guarded_prompts: list[str] = []
+
+    def guard(prompt: str, _context: object) -> dict[str, str] | None:
+        guarded_prompts.append(prompt)
+        if "alice@example.com" not in prompt:
+            return None
+        return {
+            "error": "approval_required",
+            "token_ref": "approval-ref",
+            "message": "approval required",
+        }
+
+    monkeypatch.setattr(llm_integration, "pre_generation_guard", guard)
+
+    with pytest.raises(llm_integration.GuardRejectionError):
+        await fake_llm_integration.generate_response(
+            "Summarize my history",
+            formatted_prompt="History: alice@example.com",
+            context={"user_id": "alice"},
+        )
+
+    assert len(guarded_prompts) == 1
+    assert "alice@example.com" in guarded_prompts[0]
+
+
+@pytest.mark.asyncio
 async def test_internal_guard_pass_skips_one_nested_guard_and_cannot_be_reused(
     fake_llm_integration: llm_integration.LLMIntegration,
     monkeypatch: pytest.MonkeyPatch,
@@ -764,10 +794,24 @@ async def test_internal_guard_pass_skips_one_nested_guard_and_cannot_be_reused(
     monkeypatch.setattr(
         fake_llm_integration, "_call_local_provider", provider, raising=False
     )
-    guard_pass = llm_integration._issue_pre_generation_guard_pass()
+    legacy_formatted_prompt = (
+        f"{llm_integration.CHATML_BEGIN_OF_TEXT}"
+        f"{llm_integration.CHATML_START_HEADER}user"
+        f"{llm_integration.CHATML_END_HEADER}\n\napproved nested prompt"
+        f"{llm_integration.CHATML_END_OF_TURN}"
+        f"{llm_integration.CHATML_START_HEADER}assistant"
+        f"{llm_integration.CHATML_END_HEADER}\n\n"
+    )
+    formatted_prompt = fake_llm_integration.prepare_generation_prompt(
+        "approved nested prompt", legacy_formatted_prompt
+    )
+    guard_pass = llm_integration._issue_pre_generation_guard_pass(
+        formatted_prompt
+    )
 
     result = await fake_llm_integration.generate_response(
         "approved nested prompt",
+        formatted_prompt=legacy_formatted_prompt,
         context={"user_id": "alice"},
         _guard_pass=guard_pass,
     )
@@ -778,8 +822,18 @@ async def test_internal_guard_pass_skips_one_nested_guard_and_cannot_be_reused(
     with pytest.raises(RuntimeError, match="reused"):
         await fake_llm_integration.generate_response(
             "approved nested prompt",
+            formatted_prompt=legacy_formatted_prompt,
             context={"user_id": "alice"},
             _guard_pass=guard_pass,
+        )
+    changed_pass = llm_integration._issue_pre_generation_guard_pass(
+        formatted_prompt
+    )
+    with pytest.raises(RuntimeError, match="invalid"):
+        await fake_llm_integration.generate_response(
+            "changed nested prompt",
+            context={"user_id": "alice"},
+            _guard_pass=changed_pass,
         )
     with pytest.raises(RuntimeError, match="invalid"):
         await fake_llm_integration.generate_response(

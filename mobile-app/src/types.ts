@@ -66,6 +66,7 @@ export type MessageMetadata = {
   tokensPerSecond?: number;
   finishReason?: string | null;
   localOwnerId?: string;
+  localOwnerScopeVersion?: 1 | 2;
   confidence?: number;
   processingTime?: number;
   speechTurn?: SpeechTurn | null;
